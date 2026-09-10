@@ -18,7 +18,7 @@ const BACKUP_KEY = 'fumbbl40k.settings.bak';
 /** An unparseable primary is parked here (not destroyed) before defaults may overwrite it. */
 const CORRUPT_KEY = 'fumbbl40k.settings.corrupt';
 /** Bump when a default change must be FORCED onto existing installs (see load()). */
-const SETTINGS_VERSION = 32; // v32: illustrated skill badges are the default family
+const SETTINGS_VERSION = 33; // v33: Acasas (strong) is the default turf
 
 /** Load-path health (P1 08-18: blank credentials). notices non-empty = a degraded settings read
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
@@ -519,7 +519,7 @@ const DEFAULTS: AppSettings = {
   clickDismissCinematics: false,
   playAuthToken: '',
   requirePlayAuthToken: false, // owner 2026-07-04: play auth is server-determined now (token UI deprecated)
-  turf: 'pixel-weather', // Owner 09-05: the Pixel weather family (sprite-style, ref set) is the install default.
+  turf: 'acasas-weather-fx', // Owner 09-10: Acasas (strong) is the bundle default (was Pixel, 09-05). Installer-only family — a public checkout without it falls back to the first available turf at mount (SpectateView).
   hudCoachOpacity: 0.9,
   hudScoreboardOpacity: 0.9,
   hudQuickBarOpacity: 0.9,
@@ -1053,6 +1053,12 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if ((raw.settingsVersion ?? 0) < 32 && !v26UserOverrideMigrationPending) {
       merged.skillBadgeFamily = 'illustrated';
       merged.settingsVersion = 32;
+    }
+    // v33 (owner 09-10): Acasas (strong) becomes the bundle default turf. Installs still following the v17 Pixel default
+    // move once; every explicitly selected turf stays untouched (the mount-time catalog check handles a checkout without the family).
+    if ((raw.settingsVersion ?? 0) < 33 && !v26UserOverrideMigrationPending) {
+      if (merged.turf === 'pixel-weather') merged.turf = 'acasas-weather-fx';
+      merged.settingsVersion = 33;
     }
     // Owner 09-10: the public edition has no fork / local-dev targets — force Official FUMBBL on load.
     if (!FORK_EDITION && merged.activeServerTarget !== 'fumbbl') { merged.activeServerTarget = 'fumbbl'; merged.url = FUMBBL_WS_URL; }
