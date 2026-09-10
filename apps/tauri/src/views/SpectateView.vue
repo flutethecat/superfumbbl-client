@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue';
+import { FORK_EDITION } from '../game/edition';
 import {
   cachedBundledFumbblAsset,
   PitchRenderer,
@@ -1522,11 +1523,14 @@ async function submitReport() {
     // Fork account = the config-web credential (mirrors forkChallenge's forkCreds). When the tester
     // has no fork coach set we fall back to whatever the active target resolves, so an anonymous
     // spectator can still file something rather than being silently blocked.
-    const creds = settings.coach40k.trim()
-      ? { coach: settings.coach40k, password: coachPassword() }
-      : resolveJoinCreds();
+    const creds = !FORK_EDITION
+      ? { coach: settings.coach.trim() || 'anonymous', password: '' } // owner 09-10: public edition files under the FUMBBL coach
+      : settings.coach40k.trim()
+        ? { coach: settings.coach40k, password: coachPassword() }
+        : resolveJoinCreds();
     const payload = buildBugReportPayload({
       description,
+      publicEdition: !FORK_EDITION,
       gameId: reportGameId.value,
       gameService: reportGameService.value,
       clientVersion: APP_VERSION,

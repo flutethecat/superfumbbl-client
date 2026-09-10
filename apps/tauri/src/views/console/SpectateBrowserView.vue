@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { FORK_EDITION } from '../../game/edition';
 import fumbblLogoUrl from '../../assets/resources/fumbbl-logo.png';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, applyServerTarget } from '../../game/settings';
@@ -258,7 +259,7 @@ onBeforeUnmount(() => {
           :aria-pressed="spectateSection === 'fumbbl'" title="FUMBBL" @click="selectSpectateServer('fumbbl')">
           <img :src="fumbblLogoUrl" alt="FUMBBL" />
         </button>
-        <button type="button" class="server-plate server-plate-super" :data-active="spectateSection === 'fork'"
+        <button v-if="FORK_EDITION" type="button" class="server-plate server-plate-super" :data-active="spectateSection === 'fork'"
           :aria-pressed="spectateSection === 'fork'" title="Super FUMBBL" @click="selectSpectateServer('fork')">
           <img :src="superFumbblLogoUrl" alt="Super FUMBBL" />
         </button>

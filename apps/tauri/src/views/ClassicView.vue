@@ -19,6 +19,7 @@
  * The frame (scoreboard/sidebars/log/menu, 4 layouts) is FC2; dialogs are FC3.
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type WatchStopHandle } from 'vue';
+import { FORK_EDITION } from '../game/edition';
 import { isOnPitch, PitchRenderer, skillIconUrl, presentationMs } from '@fumbbl40k/ffb-pitch';
 import { effectiveArmour, effectiveMovement, type GameJson, type PlayerJson } from '@fumbbl40k/ffb-protocol';
 import { gameStore } from '../game/store';
@@ -3128,7 +3129,7 @@ watch(() => ui.browserOpen, (open) => { if (open) void refreshBrowser(); });
         <div class="cv-browse-bar">
           <div class="cv-browse-servers" role="group" aria-label="Browse server">
             <button type="button" :data-active="settings.activeServerTarget === 'fumbbl'" @click="setBrowserServer('fumbbl')">FUMBBL</button>
-            <button type="button" :data-active="settings.activeServerTarget === 'local'" @click="setBrowserServer('local')">Super FUMBBL</button>
+            <button v-if="FORK_EDITION" type="button" :data-active="settings.activeServerTarget === 'local'" @click="setBrowserServer('local')">Super FUMBBL</button>
           </div>
           <input v-model="browserFilter" type="search" class="cv-browse-filter" placeholder="Filter (coach / team / id…)" />
           <button type="button" class="cv-browse-x" title="Refresh the list" @click="refreshBrowser()">↻</button>

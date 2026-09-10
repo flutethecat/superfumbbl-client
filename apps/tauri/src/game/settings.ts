@@ -1,4 +1,5 @@
 import { reactive, watch } from 'vue';
+import { FORK_EDITION } from './edition';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
@@ -44,6 +45,7 @@ let diskAuthority = false;
  *  (Local dev uses the separate 'local' SERVER_TARGET = localhost.) */
 export const FORK_SERVER_HOST = 'superfumbbltest.duckdns.org';
 export const FORK_WS_URL = `ws://${FORK_SERVER_HOST}:22227/command`;
+export const FUMBBL_WS_URL = 'ws://fumbbl.com:22223/command';
 
 export interface AppSettings {
   // hotkeys (KeyboardEvent.code values)
@@ -440,14 +442,14 @@ const DEFAULTS: AppSettings = {
   skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
   skillIconPackInstallId: null,
   assetPackAssignments: { skillIcons: '', playerSprites: '', walkSheets: '', soundEvents: '', teamLogos: '', blockDice: '' },
-  url: FORK_WS_URL, // owner 2026-07-13: match the default target ('fork' below) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
+  url: FORK_EDITION ? FORK_WS_URL : FUMBBL_WS_URL, // owner 2026-07-13: match the default target ('fork' below; public edition = Official FUMBBL) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
   coach: '',
   password: '',
   coach40k: '',
   compression: true,
   // Owner 2026-07-07: TEST builds default to the FORK server. ⚠ RC/public builds MUST ship this
   // 'fumbbl' (see docs/release-checklist.md). Only affects fresh installs; a user's pick wins.
-  activeServerTarget: 'fork',
+  activeServerTarget: FORK_EDITION ? 'fork' : 'fumbbl', // owner 09-10: the public edition has no fork target
   forkHost: '', // #102: empty → use the baked DDNS FORK_SERVER_HOST; a non-empty value overrides the fork host (game WS + config-web) at runtime, no rebuild
   botConfigUrl: '', // empty → derive http://<forkHost>:4310 (Tournament Bot config-web / fork-JNLP endpoint)
   renderScale: 0, // owner 09-05: Auto (= devicePixelRatio) — a 1x canvas upscaled on a hi-DPI screen read soft everywhere
@@ -1052,6 +1054,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       merged.skillBadgeFamily = 'illustrated';
       merged.settingsVersion = 32;
     }
+    // Owner 09-10: the public edition has no fork / local-dev targets — force Official FUMBBL on load.
+    if (!FORK_EDITION && merged.activeServerTarget !== 'fumbbl') { merged.activeServerTarget = 'fumbbl'; merged.url = FUMBBL_WS_URL; }
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a
     // fresh install needs no migration, and a transiently-null read of an EXISTING blob must
@@ -1482,13 +1486,15 @@ export const FUMBBL_SITE = import.meta.env.DEV ? '/fumbbl-site' : 'https://fumbb
 
 /** The backend presets the launch picker offers. The hosted public server
  *  (self-host-plan §1 row 3) is added once a host exists. */
-export const SERVER_TARGETS: ServerTarget[] = [
-  { id: 'fumbbl', label: 'Official FUMBBL', url: 'ws://fumbbl.com:22223/command', auth: 'fumbbl', compression: true },
+const ALL_SERVER_TARGETS: ServerTarget[] = [
+  { id: 'fumbbl', label: 'Official FUMBBL', url: FUMBBL_WS_URL, auth: 'fumbbl', compression: true },
   { id: 'local', label: 'Super FUMBBL — local dev', url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
   // Owner 2026-07-07: the FORK server (external IPv4). TEST builds default to this (see the
   // activeServerTarget default below); RC/public builds default to 'fumbbl' (docs/release-checklist.md).
   { id: 'fork', label: `Super FUMBBL — fork (${FORK_SERVER_HOST})`, url: FORK_WS_URL, auth: 'standalone', compression: true },
 ];
+// Owner 09-10: the public edition offers Official FUMBBL only.
+export const SERVER_TARGETS: ServerTarget[] = ALL_SERVER_TARGETS.filter((t) => FORK_EDITION || t.id === 'fumbbl');
 
 /** The FORK server's ws URL. Owner 2026-07-21 (#102): resolves to the baked DDNS FORK_SERVER_HOST by default;
  *  an explicit `settings.forkHost` (empty by default) overrides it at runtime — belt-and-braces for a future

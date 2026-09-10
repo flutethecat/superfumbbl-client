@@ -19,6 +19,10 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 const devLetter = (process.env.FUMBBL_DEV_LETTER ?? '').trim();
 const appVersion = pkg.version + devLetter; // e.g. "0.2.8d" (dev) or "0.2.8" (published)
 const assetPackBuilder = process.env.F40KMOD_BUILDER_UI === '1';
+// Owner 09-10 (public repo): the EDITION — 'fork' (private tree, default) or 'public' (the export rewrites
+// apps/tauri/edition.json). Public = Official FUMBBL only on the play path; the fork blades, targets, accounts,
+// Discord SSO and tournament polling are compiled out. Bug reports stay (config-web accepts a public-edition report).
+const edition = String(JSON.parse(readFileSync(new URL('./edition.json', import.meta.url), 'utf8')).edition ?? 'fork');
 let gitSha = 'nogit';
 try { gitSha = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim(); } catch { /* not a git checkout */ }
 
@@ -44,6 +48,7 @@ export default defineConfig({
   // bytes inside JavaScript and make the installer-content gate ambiguous.
   build: { assetsInlineLimit: 0 },
   define: {
+    __FORK_EDITION__: JSON.stringify(edition !== 'public'),
     __APP_VERSION__: JSON.stringify(appVersion),
     __GIT_SHA__: JSON.stringify(gitSha),
     __ASSET_PACK_BUILDER__: JSON.stringify(assetPackBuilder),

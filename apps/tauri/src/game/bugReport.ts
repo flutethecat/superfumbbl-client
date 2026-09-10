@@ -112,6 +112,8 @@ export interface BugReportInput {
   clientVersion: string;
   /** Fork account (the config-web credential) — coach name + CLEAR password, hashed here, never sent. */
   creds: BugReportCreds;
+  /** Owner 09-10: public edition — no fork account; config-web accepts the report under `fumbbl:<coach>`. */
+  publicEdition?: boolean;
   wireLog: BugReportLogRead | null;
   appLog: string | null;
   /** The current settings JSON (owner 08-19: triage sees settings instantly). Already secret-free
@@ -206,8 +208,9 @@ export function buildBugReportPayload(input: BugReportInput): Record<string, unk
   const wireLogText = input.wireLog ? truncateKeepingTail(input.wireLog.text) : null;
   const payload: Record<string, unknown> = {
     coach: input.creds.coach.trim(),
-    // Pre-hashed. The clear text never reaches the wire — see the module header.
-    passwordMd5: md5Hex(input.creds.password),
+    // Pre-hashed. The clear text never reaches the wire — see the module header. Public edition: no fork password —
+    // the report is accepted unauthenticated and filed as `fumbbl:<coach>` (rate-limited per coach server-side).
+    ...(input.publicEdition ? { publicEdition: true } : { passwordMd5: md5Hex(input.creds.password) }),
     description,
     // Explicit null (not omitted) so the server can tell "no game" from "an old client that never sent it".
     gameId: input.gameId ?? null,

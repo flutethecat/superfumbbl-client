@@ -21,6 +21,7 @@ import {
 } from '../../game/jnlpRouting';
 import { teamLogoUrl } from '../../game/teamLogos';
 import CreateGameModal from './play/CreateGameModal.vue';
+import { FORK_EDITION } from '../../game/edition';
 
 interface TeamPreview {
   name: string;
@@ -228,7 +229,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
             <strong>PLAY ON FUMBBL</strong>
             <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /></span>
           </button>
-          <button class="entry-card" type="button" @click="createGameOpen = true">
+          <button v-if="FORK_EDITION" class="entry-card" type="button" @click="createGameOpen = true">
             <strong>PLAY ON SUPER FUMBBL</strong>
             <span class="logo-plate super-plate">
               <img :src="superFumbblLogoUrl" alt="Super FUMBBL" />
@@ -338,7 +339,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
         @change="openJnlpFile"
       />
     </section>
-    <CreateGameModal v-if="createGameOpen" @close="createGameOpen = false" />
+    <CreateGameModal v-if="FORK_EDITION && createGameOpen" @close="createGameOpen = false" />
   </main>
 </template>
 

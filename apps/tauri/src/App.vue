@@ -13,6 +13,7 @@ import RejoinProgressModal from './views/console/play/RejoinProgressModal.vue';
 import ReplayLauncherView from './views/ReplayLauncherView.vue';
 import AssetPackSettings from './components/AssetPackSettings.vue';
 import AccountSettings from './components/AccountSettings.vue';
+import { FORK_EDITION } from './game/edition';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
@@ -213,13 +214,14 @@ onMounted(async () => {
 });
 let stopTournamentNotificationPolling: (() => void) | undefined;
 onMounted(async () => {
+  if (!FORK_EDITION) return; // owner 09-10: no fork account / config-web session in the public edition
   try {
     const restored = await rehydrateAccountSession();
     if (!restored) {
       if (!settings.coach40k.trim() || !coachPassword()) return;
       await authenticateAccount(settings.coach40k, coachPassword());
     }
-    stopTournamentNotificationPolling = startTournamentNotificationPolling();
+    if (FORK_EDITION) stopTournamentNotificationPolling = startTournamentNotificationPolling(); // owner 09-10: fork edition only
   } catch {
     // Account pane surfaces actionable auth errors; ordinary game startup remains available.
   }
@@ -1378,8 +1380,10 @@ function captureKey(event: KeyboardEvent) {
         <button class="blade" type="button" :data-active="view === 'play'" @click="selectBlade('play')">Play</button>
         <button class="blade" type="button" :data-active="view === 'spectate'" @click="selectBlade('spectate')">Spectate</button>
         <button class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
+        <template v-if="FORK_EDITION">
         <span class="blade-ribbon-sep" aria-hidden="true"></span>
         <button class="blade" type="button" :data-active="view === 'team'" @click="selectBlade('team')">Team</button>
+        </template>
         <!-- Tournaments / Statistics ribbon entries pulled (owner 09-07: "for now") — like the League/Players/Store
              entries removed 08-18 ("scope those back in later"): AppView values + mounts kept for the return; the
              scheduled-match notification can still route to the tournaments view. -->
@@ -1442,9 +1446,9 @@ function captureKey(event: KeyboardEvent) {
       <PlayView v-if="view === 'play'" />
       <SpectateBrowserView v-else-if="view === 'spectate'" @spectate="openSpectateGame" />
       <ReplayLauncherView v-else-if="view === 'replay'" />
-      <TeamBuilderView v-else-if="view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
-      <TournamentsView v-else-if="view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
-      <StatisticsView v-else-if="view === 'statistics'" />
+      <TeamBuilderView v-else-if="FORK_EDITION && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
+      <TournamentsView v-else-if="FORK_EDITION && view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
+      <StatisticsView v-else-if="FORK_EDITION && view === 'statistics'" />
       <div v-else-if="view === 'league'" class="ui-placeholder">League — Place Holder</div>
       <div v-else-if="view === 'players'" class="ui-placeholder">Players — Place Holder</div>
       <div v-else-if="view === 'store'" class="ui-placeholder">Store — Place Holder</div>
@@ -1557,7 +1561,7 @@ function captureKey(event: KeyboardEvent) {
         <h2 tabindex="-1">{{ activeSettingsSection.label }}</h2>
         <!-- ============================ GENERAL ============================ -->
         <section v-if="settingsTab === 'general'">
-          <AccountSettings />
+          <AccountSettings v-if="FORK_EDITION" />
 
           <fieldset class="settings-group">
             <legend>Connection</legend>
@@ -1567,7 +1571,7 @@ function captureKey(event: KeyboardEvent) {
             <p class="settings-immediate-note">Account and verification changes take effect immediately and are not undone by Cancel.</p>
             <p class="creds-status">
               <span>FUMBBL: <b>{{ settings.coach.trim() || '—' }}</b></span>
-              <span class="connection-fork-status">
+              <span v-if="FORK_EDITION" class="connection-fork-status">
                 <span>Super FUMBBL:
                   <b v-if="forkChallenge.kind === 'ok'">✓ {{ settings.coach40k.trim() }}</b>
                   <button
@@ -1589,7 +1593,7 @@ function captureKey(event: KeyboardEvent) {
             <label>Server
               <input v-model="settings.url" placeholder="ws://host:port/command" />
             </label>
-            <label>Tournament Bot URL <span class="hint-inline">(optional — blank = https://&lt;fork host&gt;, or http://&lt;local host&gt;:4310)</span>
+            <label v-if="FORK_EDITION">Tournament Bot URL <span class="hint-inline">(optional — blank = https://&lt;fork host&gt;, or http://&lt;local host&gt;:4310)</span>
               <input v-model="settings.botConfigUrl" type="text" placeholder="bot URL (optional)" />
             </label>
             <label class="row"><input v-model="settings.compression" type="checkbox" /> LZ-String compression</label>
@@ -2572,14 +2576,16 @@ function captureKey(event: KeyboardEvent) {
     <div v-if="credsOpen" class="launch-splash splash-dark">
       <form class="splash-content splash-creds" @submit.prevent="finishCreds()">
         <img class="splash-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
-        <p>Set up your accounts — a <b>FUMBBL</b> login lets you spectate live matches; a <b>Super FUMBBL</b>
+        <p v-if="FORK_EDITION">Set up your accounts — a <b>FUMBBL</b> login lets you spectate live matches; a <b>Super FUMBBL</b>
           account lets you play on the fork. You can change these any time in <b>Settings → General</b>.</p>
+        <p v-else>Set up your <b>FUMBBL</b> login — it lets you spectate live matches and play from a FUMBBL game link.
+          You can change it any time in <b>Settings → General</b>.</p>
         <div class="setup-entries">
           <button type="button" class="setup-btn" @click="setupMenu = 'fumbbl'">
             <span class="setup-title">Set Up FUMBBL</span>
             <span class="setup-sub">Official account — spectate live · <b>{{ settings.coach.trim() || 'not set' }}</b></span>
           </button>
-          <button type="button" class="setup-btn setup-super" @click="setupMenu = 'super'; superLoginOpen = false">
+          <button v-if="FORK_EDITION" type="button" class="setup-btn setup-super" @click="setupMenu = 'super'; superLoginOpen = false">
             <span class="setup-title">Set Up Super FUMBBL</span>
             <span class="setup-sub">Fork account &amp; teams — play on the fork · <b>{{ settings.coach40k.trim() || 'not set' }}</b></span>
           </button>
@@ -2638,7 +2644,7 @@ function captureKey(event: KeyboardEvent) {
       </div>
 
       <!-- "Set Up Super FUMBBL" sub-menu: create a fork account / log in / how to set up teams. -->
-      <div v-if="setupMenu === 'super'" class="modal-backdrop creds-menu-backdrop" @click.self="closeSetupMenu">
+      <div v-if="FORK_EDITION && setupMenu === 'super'" class="modal-backdrop creds-menu-backdrop" @click.self="closeSetupMenu">
         <div class="creds-menu">
           <div class="creds-menu-head">
             <h2>Set Up Super FUMBBL</h2>
