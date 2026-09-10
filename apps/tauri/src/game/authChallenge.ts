@@ -5,7 +5,7 @@
  * their info here so we know it works." The dialog has two tabs and they are NOT symmetrical, so the
  * honest answer differs per tab:
  *
- *  • FUMBBL40k (fork) — a REAL credential challenge. config-web's `POST /api/fork/login` is exactly a
+ *  • Super FUMBBL (fork) — a REAL credential challenge. config-web's `POST /api/fork/login` is exactly a
  *    "are these creds good" oracle, so the button proves coach+password end to end. It reuses
  *    configWebAuth's own login path, which means the pre-hashed payload (`passwordMd5`, never the
  *    clear text) and the single held-token slot are shared, not duplicated here.
@@ -45,7 +45,7 @@ export function isChecking(state: ChallengeState): boolean {
   return state.kind === 'checking';
 }
 
-// ─── FUMBBL40k (fork) ────────────────────────────────────────────────────────────────────────────
+// ─── Super FUMBBL (fork) ────────────────────────────────────────────────────────────────────────────
 
 /**
  * Outcome → what the user reads. Split out from the call so the mapping is testable without a

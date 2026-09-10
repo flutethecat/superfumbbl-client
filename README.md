@@ -2,7 +2,7 @@
 
 A fork of FFB-Client built on Pixi/Vue in a Rust wrapper.
 
-Public export of the private working repository (branch `order-66` @ `bda6540df102e0bde631b725c1490d206f8a63cb`, 2026-09-10).
+Public export of the private working repository (branch `order-66` @ `a5097235973e0032dbf67c370481925e21a25e76`, 2026-09-10).
 The tree holds what building the client needs; development history, tests and internal notes stay in the private repository.
 
 ## Build

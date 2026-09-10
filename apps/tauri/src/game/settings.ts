@@ -36,7 +36,7 @@ function noteSettingsIssue(msg: string): void {
  *  must never write defaults over a blob that reads fine at persist time. */
 let diskAuthority = false;
 
-/** Owner 2026-07-21 (#102): the FUMBBL40k FORK server HOST — a DDNS hostname, single source. Distributed/tester
+/** Owner 2026-07-21 (#102): the Super FUMBBL FORK server HOST — a DDNS hostname, single source. Distributed/tester
  *  builds must always reach the fork here; the connection (settings.url) + config-web (:4310) resolve to this.
  *  DDNS (superfumbbltest.duckdns.org) tracks the fork host's dynamic ISP IP, so an IP change needs NO rebuild —
  *  this replaces the old hardcoded raw IP that broke every distributed build when the ISP reassigned it (#102).
@@ -81,7 +81,7 @@ export interface AppSettings {
   /** FUMBBL (official) account credentials. */
   coach: string;
   password: string;
-  /** Owner 2026-07-04: FUMBBL40k (fork) account credentials — kept SEPARATE from
+  /** Owner 2026-07-04: Super FUMBBL (fork) account credentials — kept SEPARATE from
    *  the FUMBBL account so a coach can log into either service. Used when the
    *  active server target is our fork (auth 'standalone'). */
   coach40k: string;
@@ -1478,10 +1478,10 @@ export const FUMBBL_SITE = import.meta.env.DEV ? '/fumbbl-site' : 'https://fumbb
  *  (self-host-plan §1 row 3) is added once a host exists. */
 export const SERVER_TARGETS: ServerTarget[] = [
   { id: 'fumbbl', label: 'Official FUMBBL', url: 'ws://fumbbl.com:22223/command', auth: 'fumbbl', compression: true },
-  { id: 'local', label: 'FUMBBL40k — local dev', url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
+  { id: 'local', label: 'Super FUMBBL — local dev', url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
   // Owner 2026-07-07: the FORK server (external IPv4). TEST builds default to this (see the
   // activeServerTarget default below); RC/public builds default to 'fumbbl' (docs/release-checklist.md).
-  { id: 'fork', label: `FUMBBL40k — fork (${FORK_SERVER_HOST})`, url: FORK_WS_URL, auth: 'standalone', compression: true },
+  { id: 'fork', label: `Super FUMBBL — fork (${FORK_SERVER_HOST})`, url: FORK_WS_URL, auth: 'standalone', compression: true },
 ];
 
 /** The FORK server's ws URL. Owner 2026-07-21 (#102): resolves to the baked DDNS FORK_SERVER_HOST by default;
@@ -1585,7 +1585,7 @@ export function setForkHost(host: string): void {
 export function resolveJoinCreds(): { coach: string; password: string } {
   const target = activeServerTarget();
   if (target.auth === 'standalone') {
-    // FUMBBL40k fork: use the FORK credentials; fall back to the dev TestCoach.
+    // Super FUMBBL fork: use the FORK credentials; fall back to the dev TestCoach.
     if (settings.coach40k.trim()) return { coach: settings.coach40k, password: coachPassword40k() };
     return { coach: 'TestCoach', password: 'test' };
   }

@@ -256,7 +256,7 @@ import skillDescriptions from './assets/skillDescriptions.json';
 import helmetIconUrl from './assets/resources/football-helmet.png';
 import tabblLogoUrl from './assets/resources/tabbl-logo.png';
 // Owner 2026-07-11: rebrand to the working name "Super FUMBBL" (display only — server/identifier/
-// installer names stay FUMBBL40k). The processed logo (green plate keyed to transparency).
+// installer names stay Super FUMBBL). The processed logo (green plate keyed to transparency).
 import superFumbblLogoUrl from './assets/resources/super-fumbbl-logo.png';
 
 // Launch flow: optional intro, FUMBBL login, then tutorial. Twitch parent must match the host.
@@ -284,7 +284,7 @@ const skipSplash =
 // "Help / Tutorial" entry (see guideOpen below).
 const startAtCreds = !skipSplash && !settings.hideCredsSplash && (!settings.completedFirstRun || !settings.coach.trim()); // owner 08-18: hideCredsSplash = the splash's own opt-out
 const credsOpen = ref(startAtCreds);
-// Owner 2026-07-04: the tabbed credentials menu (FUMBBL | FUMBBL40k), opened by a
+// Owner 2026-07-04: the tabbed credentials menu (FUMBBL | Super FUMBBL), opened by a
 // button from the launch splash or Settings → Connection.
 const credsMenuOpen = ref(false);
 const credsMenuTab = ref<'fumbbl' | 'fumbbl40k'>('fumbbl');
@@ -1568,7 +1568,7 @@ function captureKey(event: KeyboardEvent) {
             <p class="creds-status">
               <span>FUMBBL: <b>{{ settings.coach.trim() || '—' }}</b></span>
               <span class="connection-fork-status">
-                <span>FUMBBL40k:
+                <span>Super FUMBBL:
                   <b v-if="forkChallenge.kind === 'ok'">✓ {{ settings.coach40k.trim() }}</b>
                   <button
                     v-else
@@ -2241,7 +2241,7 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <span>UI mode</span>
               <select v-model="settings.uiMode">
-                <option value="fumbbl40k">FUMBBL40k (default)</option>
+                <option value="fumbbl40k">Super FUMBBL (default)</option>
                 <option value="classic">FUMBBL Classic</option>
               </select>
             </label>
@@ -2459,7 +2459,7 @@ function captureKey(event: KeyboardEvent) {
           <p class="hint">Super FUMBBL is released under the MIT License (also in the LICENSE file at the project root).</p>
           <pre class="license-text">{{ CLIENT_MIT_LICENSE }}</pre>
           <h3 class="credits-head license-head">Upstream FFB license</h3>
-          <p class="hint">FUMBBL40k builds on the FFB client/server by Christer Kaivo-oja, also released under the MIT License.</p>
+          <p class="hint">Super FUMBBL builds on the FFB client/server by Christer Kaivo-oja, also released under the MIT License.</p>
           <pre class="license-text">{{ CHRISTER_MIT_LICENSE }}</pre>
 
           <!-- FUMBBL Contributors mirror (owner 2026-07-23). Mirrors
@@ -2710,7 +2710,7 @@ function captureKey(event: KeyboardEvent) {
     </div>
 
     <!-- Owner 2026-07-04: tabbed LOGIN CREDENTIALS menu — FUMBBL (official account)
-         + FUMBBL40k (fork account), each entered separately. Opened by the button
+         + Super FUMBBL (fork account), each entered separately. Opened by the button
          on the launch splash or Settings → Connection. -->
     <div v-if="credsMenuOpen" class="modal-backdrop creds-menu-backdrop" @click.self="closeCredsMenu">
       <div ref="credsMenuDialog" class="creds-menu" role="dialog" aria-modal="true" aria-labelledby="credentials-dialog-title"
@@ -2721,7 +2721,7 @@ function captureKey(event: KeyboardEvent) {
         </div>
         <div class="creds-tabs">
           <button :data-active="credsMenuTab === 'fumbbl'" @click="credsMenuTab = 'fumbbl'">FUMBBL</button>
-          <button :data-active="credsMenuTab === 'fumbbl40k'" @click="credsMenuTab = 'fumbbl40k'">FUMBBL40k</button>
+          <button :data-active="credsMenuTab === 'fumbbl40k'" @click="credsMenuTab = 'fumbbl40k'">Super FUMBBL</button>
         </div>
         <section v-if="credsMenuTab === 'fumbbl'" class="creds-panel">
           <p class="hint">Your official <b>FUMBBL</b> account — required to spectate live matches.</p>
@@ -2746,12 +2746,12 @@ function captureKey(event: KeyboardEvent) {
           </div>
         </section>
         <section v-else class="creds-panel">
-          <p class="hint">Your <b>FUMBBL40k</b> (fork) account — used to play on the FUMBBL40k server.</p>
+          <p class="hint">Your <b>Super FUMBBL</b> (fork) account — used to play on the Super FUMBBL server.</p>
           <label class="creds-field">Coach name
-            <input v-model="settings.coach40k" type="text" autocomplete="username" placeholder="your FUMBBL40k coach name" />
+            <input v-model="settings.coach40k" type="text" autocomplete="username" placeholder="your Super FUMBBL coach name" />
           </label>
           <label class="creds-field">Password
-            <input v-model="coachPasswordModel" type="password" autocomplete="current-password" placeholder="FUMBBL40k password" />
+            <input v-model="coachPasswordModel" type="password" autocomplete="current-password" placeholder="Super FUMBBL password" />
             <!-- Non-blocking honesty: the OS credential store is unusable, so the password is session-only. -->
             <p v-if="credentialStore.notice" class="hint">{{ credentialStore.notice }}</p>
           </label>
@@ -2771,7 +2771,7 @@ function captureKey(event: KeyboardEvent) {
           <!-- Owner 2026-07-08: register a fork account straight from here — no FUMBBL account needed. -->
           <div class="creds-register">
             <button type="button" class="creds-register-btn" @click="openRegisterModal">Register a new fork account ✦</button>
-            <p class="hint">No FUMBBL40k account yet? Register one here — no FUMBBL account needed.</p>
+            <p class="hint">No Super FUMBBL account yet? Register one here — no FUMBBL account needed.</p>
           </div>
         </section>
         <p class="creds-menu-note">Stored locally on this machine only — never sent anywhere but the server you connect to.</p>
@@ -2787,7 +2787,7 @@ function captureKey(event: KeyboardEvent) {
       <form ref="registerDialog" class="creds-menu register-modal" role="dialog" aria-modal="true"
         aria-labelledby="register-dialog-title" @keydown="trapRegisterFocus" @submit.prevent="registerForkAccount">
         <div class="creds-menu-head">
-          <h2 id="register-dialog-title">Register a FUMBBL40k account</h2>
+          <h2 id="register-dialog-title">Register a Super FUMBBL account</h2>
           <button type="button" class="creds-menu-close" @click="closeRegisterModal">✕</button>
         </div>
         <div class="creds-panel">
@@ -4040,7 +4040,7 @@ textarea:focus-visible,
 .creds-status { display: flex; gap: 1.2rem; justify-content: center; margin: 0.5rem 0 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
 .creds-status b { color: var(--ui-text); }
 .connection-fork-status { display: flex; flex-direction: column; }
-/* owner 2026-07-04: tabbed FUMBBL / FUMBBL40k credentials menu */
+/* owner 2026-07-04: tabbed FUMBBL / Super FUMBBL credentials menu */
 .creds-menu-backdrop { z-index: 110; } /* above the settings modal (z 100) + launch splash */
 .creds-menu {
   width: 380px;
@@ -4087,7 +4087,7 @@ textarea:focus-visible,
   cursor: pointer;
 }
 .creds-menu-done:hover { filter: brightness(1.15); }
-/* owner 2026-07-08: register-a-fork-account control in the FUMBBL40k creds tab */
+/* owner 2026-07-08: register-a-fork-account control in the Super FUMBBL creds tab */
 /* owner 2026-08-18: per-tab auth challenge. Secondary styling on purpose — Done stays the primary
    action, since checking is optional and a coach who skips it must not feel blocked. */
 .creds-challenge { margin-top: 0.7rem; padding-top: 0.7rem; border-top: 1px solid #2c332c; }

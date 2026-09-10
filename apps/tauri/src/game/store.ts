@@ -17772,7 +17772,7 @@ export const gameStore = {
     const lines = state.log.map((e) => `[${e.kind}] ${e.text}`);
     const u = state.unknownCall;
     return [
-      `FUMBBL40k unknown-call report — ${new Date().toISOString()}`,
+      `Super FUMBBL unknown-call report — ${new Date().toISOString()}`,
       `Unknown dialog: ${u?.id ?? '?'}`,
       u?.catalogArgs ? `Catalog expects: ${u.catalogArgs}` : 'Catalog: (no entry)',
       u?.description ? `User note: ${u.description}` : '',

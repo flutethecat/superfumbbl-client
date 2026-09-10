@@ -32,7 +32,7 @@ function loadEditor(identity: AccountIdentity) {
 
 async function authenticate() {
   const coach = settings.coach40k.trim();
-  if (!coach || !loginPassword.value) { status.value = 'Enter your FUMBBL40k coach and password.'; return; }
+  if (!coach || !loginPassword.value) { status.value = 'Enter your Super FUMBBL coach and password.'; return; }
   busy.value = true;
   try {
     account.value = await authenticateAccount(coach, loginPassword.value);
@@ -54,7 +54,7 @@ async function refresh() {
 async function openDiscordSso() {
   if (busy.value) return;
   const coach = settings.coach40k.trim();
-  if (!coach) { status.value = 'Enter your FUMBBL40k coach before signing in with Discord.'; return; }
+  if (!coach) { status.value = 'Enter your Super FUMBBL coach before signing in with Discord.'; return; }
   const controller = new AbortController();
   discordAbort = controller;
   busy.value = true;
@@ -122,7 +122,7 @@ onBeforeUnmount(() => discordAbort?.abort());
   <fieldset class="settings-group account-card">
     <legend>Account</legend>
     <template v-if="!account">
-      <label>FUMBBL40k coach <input v-model="settings.coach40k" autocomplete="username" /></label>
+      <label>Super FUMBBL coach <input v-model="settings.coach40k" autocomplete="username" /></label>
       <button type="button" :disabled="busy" @click="openDiscordSso">{{ busy ? 'Waiting for Discord…' : 'Sign in with Discord' }}</button>
       <button v-if="busy" type="button" @click="cancelDiscordSso">Cancel sign-in</button>
       <p class="hint">Discord opens in your system browser and returns a one-time session to this client.</p>

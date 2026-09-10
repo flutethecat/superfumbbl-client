@@ -2453,7 +2453,7 @@ const filteredMatches = computed(() => {
 async function refreshBrowser(): Promise<void> {
   if (settings.activeServerTarget !== 'fumbbl') {
     browserMatches.value = [];
-    browserStatus.value = 'The local FUMBBL40k server has no live-game list — enter a Game id and Spectate, or Load demo.';
+    browserStatus.value = 'The local Super FUMBBL server has no live-game list — enter a Game id and Spectate, or Load demo.';
     return;
   }
   browserStatus.value = 'Loading live games…';
@@ -2496,7 +2496,7 @@ watch(() => ui.browserOpen, (open) => { if (open) void refreshBrowser(); });
       <span class="cv-title">FUMBBL Classic</span>
       <span class="cv-badge">preview — {{ layoutName }} layout</span>
       <span class="cv-spacer" />
-      <button class="cv-menu-btn" title="Switch back to the FUMBBL40k UI" @click="backToDefault">Exit Classic mode</button>
+      <button class="cv-menu-btn" title="Switch back to the Super FUMBBL UI" @click="backToDefault">Exit Classic mode</button>
     </header>
 
     <div v-if="gameStore.state.opponentChoicePending" class="cv-opponent-decision-pill"
@@ -3128,7 +3128,7 @@ watch(() => ui.browserOpen, (open) => { if (open) void refreshBrowser(); });
         <div class="cv-browse-bar">
           <div class="cv-browse-servers" role="group" aria-label="Browse server">
             <button type="button" :data-active="settings.activeServerTarget === 'fumbbl'" @click="setBrowserServer('fumbbl')">FUMBBL</button>
-            <button type="button" :data-active="settings.activeServerTarget === 'local'" @click="setBrowserServer('local')">FUMBBL40k</button>
+            <button type="button" :data-active="settings.activeServerTarget === 'local'" @click="setBrowserServer('local')">Super FUMBBL</button>
           </div>
           <input v-model="browserFilter" type="search" class="cv-browse-filter" placeholder="Filter (coach / team / id…)" />
           <button type="button" class="cv-browse-x" title="Refresh the list" @click="refreshBrowser()">↻</button>

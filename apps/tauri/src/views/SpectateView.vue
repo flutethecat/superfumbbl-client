@@ -9125,7 +9125,7 @@ function openCreateGame() {
 }
 async function loadLibrary() {
   const coach = resolveJoinCreds().coach;
-  if (!coach) { cgStatus.value = 'Set your FUMBBL40k coach name first (Settings → Connection).'; return; }
+  if (!coach) { cgStatus.value = 'Set your Super FUMBBL coach name first (Settings → Connection).'; return; }
   try {
     const d = await botGet('library', { coach });
     cgLibrary.value = (d.teams as LibraryTeam[]) ?? [];
@@ -9276,7 +9276,7 @@ watch(() => ui.browserOpen, (open) => {
     stopBrowserPoll();
   }
 });
-// owner 2026-07-09: the FUMBBL/FUMBBL40k server toggle now lives in the header (App.vue). When the
+// owner 2026-07-09: the FUMBBL/Super FUMBBL server toggle now lives in the header (App.vue). When the
 // active server changes while the browser is open, reload the list + restart the poll for it.
 watch(() => settings.activeServerTarget, () => {
   if (ui.browserOpen) {
@@ -9287,13 +9287,13 @@ watch(() => settings.activeServerTarget, () => {
 onBeforeUnmount(() => stopBrowserPoll());
 
 /** Load the browser's live-game list for the ACTIVE server (owner 2026-07-03 r6f).
- *  Official FUMBBL publishes a match list; the local FUMBBL40k fork has no website
+ *  Official FUMBBL publishes a match list; the local Super FUMBBL fork has no website
  *  match API, so it points the user at Game id / Load demo instead. */
 async function refreshBrowser() {
   if (settings.activeServerTarget !== 'fumbbl') {
     browserMatches.value = [];
     browserStatus.value =
-      'The local FUMBBL40k server has no live-game list — enter a Game id and Spectate, or Load demo.';
+      'The local Super FUMBBL server has no live-game list — enter a Game id and Spectate, or Load demo.';
     return;
   }
   browserStatus.value = 'Loading live games…';
@@ -10381,14 +10381,14 @@ function sendChat() {
 
     <!-- B3-9: FUMBBL game browser — the PRIMARY game-entry (owner 2026-07-03 r6f
          Option A). Opened from the header "Browse" button as a centered modal;
-         holds the FUMBBL / FUMBBL40k server toggle, the game-id (Spectate) /
+         holds the FUMBBL / Super FUMBBL server toggle, the game-id (Spectate) /
          game-name (Play) entry, Load demo, and the live match list. -->
     <div v-if="rejoinBrowserVisible" class="modal-backdrop browse-backdrop" @click.self="ui.browserOpen = false">
       <div class="game-browser">
         <div class="gb-toolbar">
-          <!-- owner 2026-07-09: the FUMBBL / FUMBBL40k server toggle moved UP to the header (server
+          <!-- owner 2026-07-09: the FUMBBL / Super FUMBBL server toggle moved UP to the header (server
                is chosen first, before Play/Spectate). This toolbar shows the active server as a label. -->
-          <span class="gb-server-label" :data-server="settings.activeServerTarget">{{ settings.activeServerTarget === 'fumbbl' ? 'FUMBBL' : 'FUMBBL40k' }}</span>
+          <span class="gb-server-label" :data-server="settings.activeServerTarget">{{ settings.activeServerTarget === 'fumbbl' ? 'FUMBBL' : 'Super FUMBBL' }}</span>
           <!-- owner 2026-07-08 (UI restructure): the fork server IP + Bot URL moved to
                Settings → Connection (out of the browser bar). -->
           <input v-model="browserFilter" type="search" class="gb-filter"
@@ -16094,7 +16094,7 @@ function sendChat() {
   padding: 0.2rem 0.7rem;
   cursor: pointer;
 }
-/* owner 2026-07-03 r6f: game-browser toolbar — the FUMBBL / FUMBBL40k server toggle
+/* owner 2026-07-03 r6f: game-browser toolbar — the FUMBBL / Super FUMBBL server toggle
    (a segmented switch) + a refresh button. */
 .gb-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 /* owner 2026-07-09: server chosen in the header now; the browser shows the active server as a pill label. */
@@ -16107,7 +16107,7 @@ function sendChat() {
   font-size: max(var(--ui-min-text-size, 12px), 0.78rem);
   font-weight: 700;
   color: #eafbea;
-  background: #3a5f3f; /* FUMBBL40k (fork) green */
+  background: #3a5f3f; /* Super FUMBBL (fork) green */
 }
 .game-browser .gb-server-label[data-server='fumbbl'] {
   background: #2f4a70; /* FUMBBL blue */
