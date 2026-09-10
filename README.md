@@ -1,21 +1,33 @@
 # Super FUMBBL client
+This is a fork of Christerk/FFB-Client built on Pixi/Vue in a Rust wrapper. The client has been rebuilt from the ground up to generate the same shapes back to FFB-Server (another ChristerK fork) and permit play on upstream FUMBBL.com and any FFB-Server fork that carries the same command shape.  This client is a personal project but could not have been built without the contributions of the giants who've come before us such as Christer, Candlejack, Garcangel, and the entire FFB crew. Nor could it have been completed without the assistance of the trusty TABBL crew: hype261, WillShoebox, UnderTheGlow, Torokokill. Neither should I forget to mention the contributions of folks like TheArtemisBlack, PurpleChest, and others, who've given feedback on the project.
 
-A fork of FFB-Client built on Pixi/Vue in a Rust wrapper.
+## AI Notice:
+This, however, is a project that was created with heavy use of AI. If you're ethically opposed to that (and there are good reasons to be) then this is likely not the project for you. One of our long-term goals is to replace the art with art created by real live humans, the way it ought to be, but the labor cost to do so was outside the realm of what I alone could contribute. I'll leave this up to the community to complete. The project in its current iteration is functional and works without any additional modifications. Should you want to modify the project though then please do so.
 
-Public export of the private working repository (branch `order-66` @ `f8d3922d7d3e88bb648cae44fa10a4b2bf765b71`, 2026-09-10).
-The tree holds what building the client needs; development history, tests and internal notes stay in the private repository.
+## What's new?
 
-## Build
+### Skill icons, sprites, and more have all been added.
+<img width="556" height="334" alt="image" src="https://github.com/user-attachments/assets/7471c053-6b67-4929-a2c2-6444af06469f" />
 
+### On-pitch toasts and markings:
+<img width="515" height="354" alt="image" src="https://github.com/user-attachments/assets/683f0427-e9ac-4fd8-a771-7f837a6401f5" />
+<img width="345" height="310" alt="image" src="https://github.com/user-attachments/assets/4fd2d38a-b4dc-41c0-9ce4-105e8456e432" />
+
+### Classic FUMBBL functionality for Skill Markings:
+<img width="537" height="419" alt="image" src="https://github.com/user-attachments/assets/a6029232-b45f-4174-8e5f-396f88a5eb19" />
+
+### An East-West mode to support the psychos who like that:
+<img width="738" height="418" alt="image" src="https://github.com/user-attachments/assets/42bdf896-f9f0-45ff-b33c-48f2d4fc6b0c" />
+
+
+## If you want to build it yourself:
 ```bash
 pnpm install
 pnpm --filter @fumbbl40k/app build
 ```
-
 Requires Node, pnpm and the Tauri v2 toolchain (Rust). `pnpm --filter @fumbbl40k/app dev` runs the desktop app in development.
 
 ## Not in this tree
-
 Installer-only licensed content ships inside the installer under its licence and is not redistributed here:
 - `apps/tauri/public/fumbbl-assets/`
 - `apps/tauri/src/assets/block_skull.png`
@@ -24,15 +36,11 @@ Installer-only licensed content ships inside the installer under its licence and
 - `packages/ffb-pitch/assets/textures/`
 - `packages/ffb-pitch/assets/acasas-weather/`
 - `packages/ffb-pitch/assets/acasas-weather-fx/`
-
 Some sounds will be missing and not available in the client. As well as the default textures which ship inside the installer bundle that we distribute. For full functionality, please use the attached installer. If you're OK with the ones we've included (they work) then you're good to go!
 
 ## Licences
-
 **Code:** MIT — see `LICENSE`. Upstream FFB client/server by Christer Kaivo-oja, also MIT.
-
 **Third-party assets** (full records in `docs/licenses/`, `ATTRIBUTION.md` and the in-app Credits pane):
-
 - **CC0 1.0** — referee whistle by SpliceSound, "Drifting into Dreamland" by Breviceps, "Videogame Menu Button Click"
   by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
 - **CC BY 4.0** — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff
@@ -47,5 +55,3 @@ Some sounds will be missing and not available in the client. As well as the defa
 **Super FUMBBL original art — MIT.** Everything else (sprites, star players, crests, skill badges, decorations, pitches,
 banners, block dice, kickoff banners, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
 Codex and Gemini image models from Super FUMBBL prompts, and is released under the same MIT licence as the code (`LICENSE`).
-
-<sub>Export check: 1789 files; no excluded path, env file or secret-shaped string; 1487 media files hash-checked against the upstream FFB resource tree (no match).</sub>
