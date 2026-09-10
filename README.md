@@ -18,7 +18,9 @@ This, however, is a project that was created with heavy use of AI. If you're eth
 
 
 ### An East-West mode to support the psychos who like that:
-<img width="738" height="418" alt="image" src="https://github.com/user-attachments/assets/42bdf896-f9f0-45ff-b33c-48f2d4fc6b0c" />
+<img width="558" height="446" alt="image" src="https://github.com/user-attachments/assets/321e381b-dbb7-4be4-8cd6-5008309e5925" />
+
+
 
 ### Classic UI Functionality:
 <img width="636" height="129" alt="image" src="https://github.com/user-attachments/assets/20af3f64-bb70-416d-b744-28beeb6c9c9e" />
