@@ -64,10 +64,11 @@ export function classifyGameEntry(args: readonly string[]): GameEntryClassificat
   const teamAway = has('-teamaway');
 
   if (mode === '-replay') {
-    if (gameId && !coach && !teamId && !teamName && !teamHome && !teamAway) {
-      return { kind: 'replay', reason: 'upstream -replay -gameId shape' };
-    }
-    return { kind: 'ambiguous', reason: 'replay token does not match the upstream replay shape' };
+    // Owner 09-10: upstream ClientParameters.validate() REPLAY only requires gameId > 0 and ignores every other
+    // argument (FUMBBL's replay links carry extras such as -coach). Matching upstream exactly means a replay link
+    // opens straight into the replay instead of the "replay or live?" prompt.
+    if (gameId) return { kind: 'replay', reason: 'upstream -replay -gameId shape' };
+    return { kind: 'ambiguous', reason: 'replay token without a positive gameId' };
   }
 
   if (mode === '-spectator') {

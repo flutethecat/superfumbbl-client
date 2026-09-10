@@ -2,7 +2,7 @@
 
 A fork of FFB-Client built on Pixi/Vue in a Rust wrapper.
 
-Public export of the private working repository (branch `order-66` @ `38f1ef910e4a635ea5d69cdbda119cee70ed725d`, 2026-09-10).
+Public export of the private working repository (branch `order-66` @ `f8d3922d7d3e88bb648cae44fa10a4b2bf765b71`, 2026-09-10).
 The tree holds what building the client needs; development history, tests and internal notes stay in the private repository.
 
 ## Build
@@ -44,7 +44,8 @@ Some sounds will be missing and not available in the client. As well as the defa
   Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 
-Everything else (sprites, star players, crests, skill badges, decorations, pitches, banners, block dice) is original
-Super FUMBBL art, produced with PixelLab and the OpenAI, Codex and Gemini image models from Super FUMBBL prompts.
+**Super FUMBBL original art — MIT.** Everything else (sprites, star players, crests, skill badges, decorations, pitches,
+banners, block dice, kickoff banners, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
+Codex and Gemini image models from Super FUMBBL prompts, and is released under the same MIT licence as the code (`LICENSE`).
 
 <sub>Export check: 1789 files; no excluded path, env file or secret-shaped string; 1487 media files hash-checked against the upstream FFB resource tree (no match).</sub>
