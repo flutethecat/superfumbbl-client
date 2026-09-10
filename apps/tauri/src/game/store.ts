@@ -6332,6 +6332,33 @@ function applyFrame(frame: QueuedFrame) {
       }
     }
   }
+  // Owner 09-10: FOUL APPEARANCE — ReportFoulAppearanceRoll{playerId = the ATTACKER rolling to overcome it, defenderId =
+  // the foul-looking player, successful = the attacker got past}. A FAILED roll raises the skill pill on the defender
+  // ("used Foul Appearance") AND a second pill on the disgusted attacker, the Tentacles / Horns two-ended shape.
+  // Presentation only; a re-roll produces its own report.
+  {
+    const repulsed = reports.find((r) => String(r.reportId) === 'foulAppearanceRoll' && (r as { successful?: unknown }).successful === false);
+    if (repulsed) {
+      const g = game.value;
+      const squareOf = (id: string): [number, number] | null => {
+        const c = g.fieldModel.playerDataArray.find((d) => d.playerId === id)?.playerCoordinate;
+        return c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
+      };
+      const attackerId = String((repulsed as { playerId?: unknown }).playerId ?? '');
+      const holderId = String((repulsed as { defenderId?: unknown }).defenderId ?? '')
+        || String((g as { defenderId?: string | null }).defenderId ?? '');
+      const holderSq = holderId ? squareOf(holderId) : null;
+      const attackerSq = attackerId && attackerId !== holderId ? squareOf(attackerId) : null;
+      if (holderSq) {
+        state.skillUsed = {
+          playerId: holderId, skill: 'Foul Appearance', square: holderSq, name: playerName(g, holderId),
+          toast: `${playerName(g, holderId)} used Foul Appearance!`,
+          also: attackerSq ? { playerId: attackerId, square: attackerSq, toast: `${playerName(g, attackerId)} is disgusted by Foul Appearance!` } : undefined,
+          seq: (state.skillUsed?.seq ?? 0) + 1,
+        };
+      }
+    }
+  }
   // Owner 07-06: JUMP/LEAP (leapRoll) — renderer arcs the sprite on its next move (markLeap consumed by the next tween); fires on success OR failure.
   const leapReport = reports.find((r) => String(r.reportId) === 'leapRoll');
   if (leapReport?.playerId) {

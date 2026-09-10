@@ -2,7 +2,7 @@
 
 A fork of FFB-Client built on Pixi/Vue in a Rust wrapper.
 
-Public export of the private working repository (branch `order-66` @ `a5097235973e0032dbf67c370481925e21a25e76`, 2026-09-10).
+Public export of the private working repository (branch `order-66` @ `38f1ef910e4a635ea5d69cdbda119cee70ed725d`, 2026-09-10).
 The tree holds what building the client needs; development history, tests and internal notes stay in the private repository.
 
 ## Build
@@ -29,7 +29,22 @@ Some sounds will be missing and not available in the client. As well as the defa
 
 ## Licences
 
-MIT — see `LICENSE` (upstream FFB by Christer Kaivo-oja, also MIT). Third-party asset licences and provenance:
-`docs/licenses/`, `ATTRIBUTION.md`, and the in-app Credits pane.
+**Code:** MIT — see `LICENSE`. Upstream FFB client/server by Christer Kaivo-oja, also MIT.
+
+**Third-party assets** (full records in `docs/licenses/`, `ATTRIBUTION.md` and the in-app Credits pane):
+
+- **CC0 1.0** — referee whistle by SpliceSound, "Drifting into Dreamland" by Breviceps, "Videogame Menu Button Click"
+  by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
+- **CC BY 4.0** — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff
+  (freesound.org). Ship in the installer.
+- **SIL Open Font License 1.1** — Nuffle by Neale Davidson (Pixel Sagas); the licence text ships beside the font.
+- **Flaticon licence (attribution)** — American football helmet icon by justicon.
+- **Licensed purchases, use in the product only** — SakPix "Football Championship Megapack" (stadium props, in this
+  tree as derivative crops); Acasas / unTied pitch textures via GameDev Market; The Sound Guild, Gamemaster Audio and
+  Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
+- **FUMBBL logo** — used under FUMBBL's branding guidelines.
+
+Everything else (sprites, star players, crests, skill badges, decorations, pitches, banners, block dice) is original
+Super FUMBBL art, produced with PixelLab and the OpenAI, Codex and Gemini image models from Super FUMBBL prompts.
 
 <sub>Export check: 1789 files; no excluded path, env file or secret-shaped string; 1487 media files hash-checked against the upstream FFB resource tree (no match).</sub>
