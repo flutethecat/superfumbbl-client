@@ -8,7 +8,7 @@ import {
   type SkillIconContext,
   type SkillIconStyle,
 } from '@fumbbl40k/ffb-pitch';
-import skillDescriptions from '../assets/skillDescriptions.json';
+import skillNames from '../assets/skillNames.json';
 import builtInAssetTargets from '../assets/assetTargetRaces.json';
 import {
   assetMods,
@@ -53,7 +53,7 @@ export const ASSET_TARGET_CATALOG_STORAGE_KEY = 'fumbbl40k.asset-targets.v1';
 
 export const SKILL_TARGET_CHOICES: readonly SkillTargetChoice[] = (() => {
   const choices = new Map<string, SkillTargetChoice>();
-  for (const label of Object.keys(skillDescriptions as Record<string, string>).sort((a, b) => a.localeCompare(b))) {
+  for (const label of [...(skillNames as string[])].sort((a, b) => a.localeCompare(b))) {
     const id = canonicalSkillIconKey(label);
     if (id && !choices.has(id)) choices.set(id, { id, label });
   }

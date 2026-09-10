@@ -3,7 +3,7 @@ import { settings } from './settings';
 /**
  * Owner 2026-07-10: DEVELOPER mode detection. Unlocks the Settings → Developer section + the live
  * Developer log panel. Desktop: the real `-dev` (or `--dev`) CLI argument via the Tauri `launch_args`
- * command (same mechanism as the SailThe7Seas `-arrrr` gate). Dev/browser: a `?dev` URL query or
+ * command. Dev/browser: a `?dev` URL query or
  * `VITE_DEV_PANEL=true` (the skipSplash convention). Sets `settings.devMode` (persisted) so a later
  * normal launch keeps it available until the owner toggles it off.
  */

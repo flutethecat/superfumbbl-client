@@ -303,7 +303,6 @@ import {
 // consolidated here rather than re-converting a 4th local copy; signatures are a drop-in match.
 import { botGet, botPost } from '../game/forkChallenge';
 import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsMissing } from '../game/fumbblAuth';
-import { sevenSeas } from '../game/sailThe7Seas';
 import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
@@ -311,7 +310,6 @@ import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, cap
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
-import skillDescriptions from '../assets/skillDescriptions.json';
 // Owner 2026-07-06: supporter names for the crowd "I ♥ name" signs. The CSV is the
 // single source of truth — add names to apps/tauri/src/assets/givethanks.csv and
 // they are incorporated on the next build (Vite ?raw import, header row skipped).
@@ -6280,23 +6278,8 @@ function startCardResize(event: PointerEvent) {
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
 }
-const SKILL_DESCRIPTIONS = skillDescriptions as Record<string, string>;
-
-// Owner 2026-07-04: the skill-DESCRIPTION half of the hover tooltip is
-// DEPRECATED — the hover still names the skill (icons are cryptic without it),
-// but the rules text stays hidden. The lookup code + skillDescriptions.json are
-// kept in the base code. Now under SailThe7Seas control: a "-arrrr" launch sets
-// SKILL_DESC_TOOLTIPS_ENABLED = true at application launch.
-const SKILL_DESC_TOOLTIPS_ENABLED = computed(() => sevenSeas.SKILL_DESC_TOOLTIPS_ENABLED);
-
-function skillDescription(skill: string): string {
-  // wire names vary in spacing/case ("Sure Hands" vs "SureHands")
-  const normalized = skill.toLowerCase().replace(/[^a-z]/g, '');
-  for (const [name, text] of Object.entries(SKILL_DESCRIPTIONS)) {
-    if (name.toLowerCase().replace(/[^a-z]/g, '') === normalized) return text;
-  }
-  return 'No description available.';
-}
+// Owner 09-10: the rules-text skill descriptions (and the SailThe7Seas gate that unlocked them) are removed — the
+// hover tooltip names the skill only.
 
 // Resolve a player + their team side by id (shared by the popup card and the selected-player portrait).
 function playerSideById(playerId: string | null | undefined): { player: PlayerJson; side: 'home' | 'away' } | null {
@@ -7350,7 +7333,6 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         children: starRules.map((rule) => ({
           label: rule,
           disabled: true, // informational — server-enforced, no client action
-          hint: skillDescription(rule),
         })),
       });
     }
@@ -12805,7 +12787,7 @@ function sendChat() {
           </div>
           <PlayerDetailSkillList v-if="popupInfo.skills.length" :skills="popupInfo.skills" :mode="skillMode" :icon-style="effectiveIconStyle"
             :position-id="popupPlayer?.player.positionId" :side="popupInfo.side"
-            :descriptions="SKILL_DESCRIPTIONS" :show-descriptions="SKILL_DESC_TOOLTIPS_ENABLED" />
+            />
         </div>
       </div>
     </div>

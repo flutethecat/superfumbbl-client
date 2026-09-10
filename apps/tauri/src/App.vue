@@ -254,7 +254,7 @@ import {
   trapDialogFocus,
   type SettingsTab,
 } from './game/settingsDialog';
-import skillDescriptions from './assets/skillDescriptions.json';
+import skillNames from './assets/skillNames.json'; // owner 09-10: skill NAMES only (the rules-text descriptions file is gone)
 import helmetIconUrl from './assets/resources/football-helmet.png';
 import tabblLogoUrl from './assets/resources/tabbl-logo.png';
 // Owner 2026-07-11: rebrand to the working name "Super FUMBBL" (display only — server/identifier/
@@ -773,10 +773,10 @@ function removeMarkingRule(index: number) {
 }
 
 // --- Per-skill display config (owner 2026-07-03 r6f) ------------------------
-// A menu over EVERY skill in the game (keys of skillDescriptions.json), grouped
+// A menu over EVERY skill in the game (skillNames.json), grouped
 // into "Skill Icons" and "Skill Markers". Each skill has a MY TEAM (home coach)
 // and OPPOSITION (away coach) behaviour dropdown; Markers add a per-skill glyph.
-const allSkills = Object.keys(skillDescriptions as Record<string, unknown>).sort((a, b) => a.localeCompare(b));
+const allSkills = [...(skillNames as string[])].sort((a, b) => a.localeCompare(b));
 const skillConfigGroup = ref<'icons' | 'markers'>('icons');
 const skillFilter = ref('');
 const showImportInstructions = ref(false);

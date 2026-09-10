@@ -1,6 +1,5 @@
 import { createApp } from 'vue';
 import App from './App.vue';
-import { detectSailThe7Seas } from './game/sailThe7Seas';
 import { initCredentials } from './game/credentials';
 import { initSettingsFile, settings } from './game/settings';
 import {
@@ -14,9 +13,7 @@ import {
  * it up on first render. The Settings pane opts back out to Arial/Helvetica.
  */
 async function boot() {
-  // Owner 2026-07-04: SailThe7Seas — a "-arrrr" launch (dev mirrors: ?arrrr /
-  // VITE_ARRRR=true) enables every gated asset BEFORE the app mounts.
-  await detectSailThe7Seas();
+  // Owner 09-10: the SailThe7Seas "-arrrr" gate and the rules-text skill descriptions it unlocked are REMOVED.
   // Adopt the settings FILE (owner 08-19: durable store off WebView2 localStorage) BEFORE
   // credentials, so a recovery-file password is captured for the keychain migration below.
   await initSettingsFile();

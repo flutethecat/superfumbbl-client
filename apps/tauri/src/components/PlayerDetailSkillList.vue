@@ -11,14 +11,10 @@ const props = withDefaults(defineProps<{
   iconStyle?: SkillIconStyle;
   positionId?: string | null;
   side?: 'home' | 'away' | null;
-  descriptions?: Readonly<Record<string, string>> | null;
-  showDescriptions?: boolean;
 }>(), {
   iconStyle: 'bb3',
   positionId: null,
   side: null,
-  descriptions: null,
-  showDescriptions: false,
 });
 
 const iconContext = computed(() => ({ positionId: props.positionId, side: props.side }));
@@ -38,20 +34,14 @@ function initials(skill: string): string {
     : words.slice(0, 2).map((word) => word[0]!.toUpperCase()).join('');
 }
 
-function description(skill: PlayerDetailSkill): string {
-  if (!props.showDescriptions || !props.descriptions) return '';
-  const normalized = skill.name.toLowerCase().replace(/[^a-z]/g, '');
-  return Object.entries(props.descriptions)
-    .find(([name]) => name.toLowerCase().replace(/[^a-z]/g, '') === normalized)?.[1] ?? '';
-}
+// Owner 09-10: the tooltip carries the skill name only (rules-text descriptions removed).
 function tooltipText(skill: PlayerDetailSkill): string {
-  const d = description(skill);
-  return d ? `${skill.label} — ${d}` : skill.label;
+  return skill.label;
 }
 
 // Owner 09-09: the tooltip is TELEPORTED to <body> and fixed-positioned — inside the scrollable player card the
 // old ::after bubble was clipped by the card's overflow (a chip on the card's left edge read "RAWLER"). It carries
-// the full skill name, a close-up of the icon and the description, and is clamped inside the viewport.
+// the full skill name and a close-up of the icon, and is clamped inside the viewport.
 const TIP_MARGIN = 8;
 // Owner 09-09: the bubble is content-sized (a name-only tip is tight), then measured and clamped to the viewport.
 const tip = reactive<{ skill: PlayerDetailSkill | null; left: number; top: number; below: boolean }>({
@@ -102,7 +92,6 @@ function hideTip(): void { tip.skill = null; }
       </span>
       <span class="skill-tip-body">
         <b class="skill-tip-name">{{ tip.skill.label }}</b>
-        <span v-if="description(tip.skill)" class="skill-tip-desc">{{ description(tip.skill) }}</span>
       </span>
     </div>
   </Teleport>

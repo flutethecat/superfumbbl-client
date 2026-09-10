@@ -177,8 +177,7 @@ fn cold_start_jnlp(reader: &dyn JnlpFileReader) -> Option<Result<String, String>
     Some(read_jnlp(reader, &path))
 }
 
-/// Owner 2026-07-04: raw process launch arguments for the frontend's
-/// SailThe7Seas gate — launching with "-arrrr" enables the gated assets.
+/// Raw process launch arguments for the frontend (the `-dev` developer-panel unlock, see devMode.ts).
 #[tauri::command]
 fn launch_args() -> Vec<String> {
     std::env::args().collect()
