@@ -2,7 +2,7 @@
 This is a fork of Christerk/FFB-Client built on Pixi/Vue in a Rust wrapper. The client has been rebuilt from the ground up to generate the same shapes back to FFB-Server (another ChristerK fork) and permit play on upstream FUMBBL.com and any FFB-Server fork that carries the same command shape.  This client is a personal project but could not have been built without the contributions of the giants who've come before us such as Christer, Candlejack, Garcangel, and the entire FFB crew. Nor could it have been completed without the assistance of the trusty TABBL crew: hype261, WillShoebox, UnderTheGlow, Torokokill. Neither should I forget to mention the contributions of folks like TheArtemisBlack, PurpleChest, and others, who've given feedback on the project.
 
 ## AI Notice:
-This, however, is a project that was created with heavy use of AI. If you're ethically opposed to that (and there are good reasons to be) then this is likely not the project for you. One of our long-term goals is to replace the art with art created by real live humans, the way it ought to be, but the labor cost to do so was outside the realm of what I alone could contribute. I'll leave this up to the community to complete. The project in its current iteration is functional and works without any additional modifications. Should you want to modify the project though then please do so.
+This, however, is a project that was created with heavy use of AI. If you're ethically opposed to that (and there are good reasons to be) then this is likely not the project for you. One of our long-term goals is to replace the sprites with art created by real live humans, the way it ought to be, but the labor cost to do so was outside the realm of what I alone could contribute. The project in its current iteration is functional and works without any additional modifications, all skills and star player actions should work as expected.
 
 ## What's new?
 
@@ -14,18 +14,29 @@ This, however, is a project that was created with heavy use of AI. If you're eth
 <img width="345" height="310" alt="image" src="https://github.com/user-attachments/assets/4fd2d38a-b4dc-41c0-9ce4-105e8456e432" />
 
 ### Classic FUMBBL functionality for Skill Markings:
-<img width="537" height="419" alt="image" src="https://github.com/user-attachments/assets/a6029232-b45f-4174-8e5f-396f88a5eb19" />
+<img width="320" height="485" alt="image" src="https://github.com/user-attachments/assets/2bd63271-046e-4b44-bc8f-52b3236506f8" />
+
 
 ### An East-West mode to support the psychos who like that:
 <img width="738" height="418" alt="image" src="https://github.com/user-attachments/assets/42bdf896-f9f0-45ff-b33c-48f2d4fc6b0c" />
 
+### Classic UI Functionality:
+<img width="636" height="129" alt="image" src="https://github.com/user-attachments/assets/20af3f64-bb70-416d-b744-28beeb6c9c9e" />
+<img width="638" height="183" alt="image" src="https://github.com/user-attachments/assets/6d90d81f-57b4-4916-87cb-cb972f7e296f" />
 
-## If you want to build it yourself:
+
+
+
+## How to install?:
+Bundled release:
+https://github.com/flutethecat/superfumbbl-client/releases/tag/v1.0.0
+
 ```bash
 pnpm install
 pnpm --filter @fumbbl40k/app build
 ```
 Requires Node, pnpm and the Tauri v2 toolchain (Rust). `pnpm --filter @fumbbl40k/app dev` runs the desktop app in development.
+-# NOTE: Some artifacts are missing from the self built installer as we do not have the license to distribute.
 
 ## Not in this tree
 Installer-only licensed content ships inside the installer under its licence and is not redistributed here:
