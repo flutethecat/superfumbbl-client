@@ -1,0 +1,8719 @@
+{
+ "_about": "Bundled Super FUMBBL walk sheets (owner-original claude-v01 sets, Tier D). 1152x1024 = the 128 px PixelLab MASTERS (8 rows S,SE,E,NE,N,NW,W,SW x 9 cols, col 0 idle, 128 px frames drawn at HALF a world px per art px; the loader keeps the 64-unit layout grid via source.resolution). All 326 sheets are masters (art repo github.com/flutethecat/super-fumbbl-art, synced to a1eb46b2 on 2026-09-06: Blitzer-tier restage, Human/Orc/Necromantic sets, Orc fix round). The treeman tier (Altern x3 rosters, Loren; art repo bcf80c75, 2026-09-06) ships 144 px masters (1296x1152, manifest frame: 72, footY 68) drawn on the same grid \u2014 1.125x the figure with no resampling. home = BLUE kit (claude-v01-blue for Human/Necro/Orc; recolor.py 352->225 'claude-v01-away' team-stage for the other 28 rosters), away = RED kit (claude-v01). Every roster ships both sides (owner 2026-09-05). STAR PLAYERS (2026-09-09): race 'stars' carries the 66 BB2025 star players (role = star name lower-cased a-z0-9; Deeproot/Maple on the 144 px treeman grid, frame 72). A star is resolved by its position NAME regardless of the hiring roster (bundledWalk.ts resolveBundledWalkRole falls through to 'stars'); games preload only the stars actually on the two rosters.",
+ "sheets": [
+  {
+   "race": "amazon",
+   "role": "eaglewarrior",
+   "side": "home",
+   "file": "amazon/eaglewarrior-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "eaglewarrior",
+   "side": "away",
+   "file": "amazon/eaglewarrior-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "jaguarwarriorblocker",
+   "side": "home",
+   "file": "amazon/jaguarwarriorblocker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "jaguarwarriorblocker",
+   "side": "away",
+   "file": "amazon/jaguarwarriorblocker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "piranhawarrior",
+   "side": "home",
+   "file": "amazon/piranhawarrior-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "piranhawarrior",
+   "side": "away",
+   "file": "amazon/piranhawarrior-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "pythonwarrior",
+   "side": "home",
+   "file": "amazon/pythonwarrior-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "amazon",
+   "role": "pythonwarrior",
+   "side": "away",
+   "file": "amazon/pythonwarrior-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "blackorc",
+   "side": "home",
+   "file": "blackorc/blackorc-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "blackorc",
+   "side": "away",
+   "file": "blackorc/blackorc-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "goblinbruiser",
+   "side": "home",
+   "file": "blackorc/goblinbruiser-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "goblinbruiser",
+   "side": "away",
+   "file": "blackorc/goblinbruiser-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "trainedtroll",
+   "side": "home",
+   "file": "blackorc/trainedtroll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "blackorc",
+   "role": "trainedtroll",
+   "side": "away",
+   "file": "blackorc/trainedtroll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonnianknightcatcher",
+   "side": "home",
+   "file": "bretonnian/bretonnianknightcatcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonnianknightcatcher",
+   "side": "away",
+   "file": "bretonnian/bretonnianknightcatcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonnianknightthrower",
+   "side": "home",
+   "file": "bretonnian/bretonnianknightthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonnianknightthrower",
+   "side": "away",
+   "file": "bretonnian/bretonnianknightthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonniansquire",
+   "side": "home",
+   "file": "bretonnian/bretonniansquire-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "bretonniansquire",
+   "side": "away",
+   "file": "bretonnian/bretonniansquire-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "grailknight",
+   "side": "home",
+   "file": "bretonnian/grailknight-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "bretonnian",
+   "role": "grailknight",
+   "side": "away",
+   "file": "bretonnian/grailknight-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "beastmanrunnerlineman",
+   "side": "home",
+   "file": "chaoschosen/beastmanrunnerlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "beastmanrunnerlineman",
+   "side": "away",
+   "file": "chaoschosen/beastmanrunnerlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "chaoschosen",
+   "side": "home",
+   "file": "chaoschosen/chaoschosen-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "chaoschosen",
+   "side": "away",
+   "file": "chaoschosen/chaoschosen-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "chaostroll",
+   "side": "home",
+   "file": "chaoschosen/chaostroll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "chaostroll",
+   "side": "away",
+   "file": "chaoschosen/chaostroll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "minotaur",
+   "side": "home",
+   "file": "chaoschosen/minotaur-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "minotaur",
+   "side": "away",
+   "file": "chaoschosen/minotaur-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "ogre",
+   "side": "home",
+   "file": "chaoschosen/ogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaoschosen",
+   "role": "ogre",
+   "side": "away",
+   "file": "chaoschosen/ogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "bullcentaurblitzer",
+   "side": "home",
+   "file": "chaosdwarf/bullcentaurblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "bullcentaurblitzer",
+   "side": "away",
+   "file": "chaosdwarf/bullcentaurblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "chaosdwarfblocker",
+   "side": "home",
+   "file": "chaosdwarf/chaosdwarfblocker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "chaosdwarfblocker",
+   "side": "away",
+   "file": "chaosdwarf/chaosdwarfblocker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "flamesmith",
+   "side": "home",
+   "file": "chaosdwarf/flamesmith-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "flamesmith",
+   "side": "away",
+   "file": "chaosdwarf/flamesmith-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "hobgoblinlineman",
+   "side": "home",
+   "file": "chaosdwarf/hobgoblinlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "hobgoblinlineman",
+   "side": "away",
+   "file": "chaosdwarf/hobgoblinlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "minotaur",
+   "side": "home",
+   "file": "chaosdwarf/minotaur-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "minotaur",
+   "side": "away",
+   "file": "chaosdwarf/minotaur-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "sneakystabba",
+   "side": "home",
+   "file": "chaosdwarf/sneakystabba-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosdwarf",
+   "role": "sneakystabba",
+   "side": "away",
+   "file": "chaosdwarf/sneakystabba-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "minotaur",
+   "side": "home",
+   "file": "chaosrenegade/minotaur-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "minotaur",
+   "side": "away",
+   "file": "chaosrenegade/minotaur-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "ogre",
+   "side": "home",
+   "file": "chaosrenegade/ogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "ogre",
+   "side": "away",
+   "file": "chaosrenegade/ogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "ratogre",
+   "side": "home",
+   "file": "chaosrenegade/ratogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "ratogre",
+   "side": "away",
+   "file": "chaosrenegade/ratogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadedarkelf",
+   "side": "home",
+   "file": "chaosrenegade/renegadedarkelf-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadedarkelf",
+   "side": "away",
+   "file": "chaosrenegade/renegadedarkelf-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadegoblin",
+   "side": "home",
+   "file": "chaosrenegade/renegadegoblin-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadegoblin",
+   "side": "away",
+   "file": "chaosrenegade/renegadegoblin-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadehuman",
+   "side": "home",
+   "file": "chaosrenegade/renegadehuman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadehuman",
+   "side": "away",
+   "file": "chaosrenegade/renegadehuman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadehumanthrower",
+   "side": "home",
+   "file": "chaosrenegade/renegadehumanthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadehumanthrower",
+   "side": "away",
+   "file": "chaosrenegade/renegadehumanthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadeorc",
+   "side": "home",
+   "file": "chaosrenegade/renegadeorc-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadeorc",
+   "side": "away",
+   "file": "chaosrenegade/renegadeorc-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadeskaven",
+   "side": "home",
+   "file": "chaosrenegade/renegadeskaven-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "renegadeskaven",
+   "side": "away",
+   "file": "chaosrenegade/renegadeskaven-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "troll",
+   "side": "home",
+   "file": "chaosrenegade/troll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "chaosrenegade",
+   "role": "troll",
+   "side": "away",
+   "file": "chaosrenegade/troll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfassassin",
+   "side": "home",
+   "file": "darkelf/darkelfassassin-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfassassin",
+   "side": "away",
+   "file": "darkelf/darkelfassassin-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfblitzer",
+   "side": "home",
+   "file": "darkelf/darkelfblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfblitzer",
+   "side": "away",
+   "file": "darkelf/darkelfblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelflineman",
+   "side": "home",
+   "file": "darkelf/darkelflineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelflineman",
+   "side": "away",
+   "file": "darkelf/darkelflineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfrunner",
+   "side": "home",
+   "file": "darkelf/darkelfrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "darkelfrunner",
+   "side": "away",
+   "file": "darkelf/darkelfrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "witchelf",
+   "side": "home",
+   "file": "darkelf/witchelf-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "darkelf",
+   "role": "witchelf",
+   "side": "away",
+   "file": "darkelf/witchelf-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "deathroller",
+   "side": "home",
+   "file": "dwarf/deathroller-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "deathroller",
+   "side": "away",
+   "file": "dwarf/deathroller-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfblitzer",
+   "side": "home",
+   "file": "dwarf/dwarfblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfblitzer",
+   "side": "away",
+   "file": "dwarf/dwarfblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfblockerlineman",
+   "side": "home",
+   "file": "dwarf/dwarfblockerlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfblockerlineman",
+   "side": "away",
+   "file": "dwarf/dwarfblockerlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfrunner",
+   "side": "home",
+   "file": "dwarf/dwarfrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "dwarfrunner",
+   "side": "away",
+   "file": "dwarf/dwarfrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "trollslayer",
+   "side": "home",
+   "file": "dwarf/trollslayer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "dwarf",
+   "role": "trollslayer",
+   "side": "away",
+   "file": "dwarf/trollslayer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfblitzer",
+   "side": "home",
+   "file": "elvenunion/elfblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfblitzer",
+   "side": "away",
+   "file": "elvenunion/elfblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfcatcher",
+   "side": "home",
+   "file": "elvenunion/elfcatcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfcatcher",
+   "side": "away",
+   "file": "elvenunion/elfcatcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elflineman",
+   "side": "home",
+   "file": "elvenunion/elflineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elflineman",
+   "side": "away",
+   "file": "elvenunion/elflineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfthrower",
+   "side": "home",
+   "file": "elvenunion/elfthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "elvenunion",
+   "role": "elfthrower",
+   "side": "away",
+   "file": "elvenunion/elfthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "alternforesttreeman",
+   "side": "home",
+   "file": "gnome/alternforesttreeman-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "gnome",
+   "role": "alternforesttreeman",
+   "side": "away",
+   "file": "gnome/alternforesttreeman-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "gnome",
+   "role": "gnomebeastmaster",
+   "side": "home",
+   "file": "gnome/gnomebeastmaster-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "gnomebeastmaster",
+   "side": "away",
+   "file": "gnome/gnomebeastmaster-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "gnomeillusionist",
+   "side": "home",
+   "file": "gnome/gnomeillusionist-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "gnomeillusionist",
+   "side": "away",
+   "file": "gnome/gnomeillusionist-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "gnomelineman",
+   "side": "home",
+   "file": "gnome/gnomelineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "gnomelineman",
+   "side": "away",
+   "file": "gnome/gnomelineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "woodlandfox",
+   "side": "home",
+   "file": "gnome/woodlandfox-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "gnome",
+   "role": "woodlandfox",
+   "side": "away",
+   "file": "gnome/woodlandfox-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "bomma",
+   "side": "home",
+   "file": "goblin/bomma-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "bomma",
+   "side": "away",
+   "file": "goblin/bomma-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "doomdiver",
+   "side": "home",
+   "file": "goblin/doomdiver-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "doomdiver",
+   "side": "away",
+   "file": "goblin/doomdiver-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "fanatic",
+   "side": "home",
+   "file": "goblin/fanatic-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "fanatic",
+   "side": "away",
+   "file": "goblin/fanatic-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "goblinlineman",
+   "side": "home",
+   "file": "goblin/goblinlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "goblinlineman",
+   "side": "away",
+   "file": "goblin/goblinlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "looney",
+   "side": "home",
+   "file": "goblin/looney-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "looney",
+   "side": "away",
+   "file": "goblin/looney-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "ooligan",
+   "side": "home",
+   "file": "goblin/ooligan-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "ooligan",
+   "side": "away",
+   "file": "goblin/ooligan-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "pogoer",
+   "side": "home",
+   "file": "goblin/pogoer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "pogoer",
+   "side": "away",
+   "file": "goblin/pogoer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "trainedtroll",
+   "side": "home",
+   "file": "goblin/trainedtroll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "goblin",
+   "role": "trainedtroll",
+   "side": "away",
+   "file": "goblin/trainedtroll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "alternforesttreeman",
+   "side": "home",
+   "file": "halfling/alternforesttreeman-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "halfling",
+   "role": "alternforesttreeman",
+   "side": "away",
+   "file": "halfling/alternforesttreeman-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "halfling",
+   "role": "halflingcatcher",
+   "side": "home",
+   "file": "halfling/halflingcatcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "halflingcatcher",
+   "side": "away",
+   "file": "halfling/halflingcatcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "halflinghefty",
+   "side": "home",
+   "file": "halfling/halflinghefty-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "halflinghefty",
+   "side": "away",
+   "file": "halfling/halflinghefty-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "halflinghopeful",
+   "side": "home",
+   "file": "halfling/halflinghopeful-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "halfling",
+   "role": "halflinghopeful",
+   "side": "away",
+   "file": "halfling/halflinghopeful-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "dragonprince",
+   "side": "home",
+   "file": "highelf/dragonprince-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "dragonprince",
+   "side": "away",
+   "file": "highelf/dragonprince-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "highelflineman",
+   "side": "home",
+   "file": "highelf/highelflineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "highelflineman",
+   "side": "away",
+   "file": "highelf/highelflineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "phoenixwarrior",
+   "side": "home",
+   "file": "highelf/phoenixwarrior-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "phoenixwarrior",
+   "side": "away",
+   "file": "highelf/phoenixwarrior-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "whitelion",
+   "side": "home",
+   "file": "highelf/whitelion-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "highelf",
+   "role": "whitelion",
+   "side": "away",
+   "file": "highelf/whitelion-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "blitzer",
+   "side": "away",
+   "file": "human/blitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "blitzer",
+   "side": "home",
+   "file": "human/blitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "catcher",
+   "side": "away",
+   "file": "human/catcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "catcher",
+   "side": "home",
+   "file": "human/catcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "halflinghopeful",
+   "side": "away",
+   "file": "human/halflinghopeful-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "halflinghopeful",
+   "side": "home",
+   "file": "human/halflinghopeful-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "lineman",
+   "side": "away",
+   "file": "human/lineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "lineman",
+   "side": "home",
+   "file": "human/lineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "ogre",
+   "side": "away",
+   "file": "human/ogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "ogre",
+   "side": "home",
+   "file": "human/ogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "thrower",
+   "side": "away",
+   "file": "human/thrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "human",
+   "role": "thrower",
+   "side": "home",
+   "file": "human/thrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "bodyguard",
+   "side": "home",
+   "file": "imperialnobility/bodyguard-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "bodyguard",
+   "side": "away",
+   "file": "imperialnobility/bodyguard-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "imperialretainer",
+   "side": "home",
+   "file": "imperialnobility/imperialretainer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "imperialretainer",
+   "side": "away",
+   "file": "imperialnobility/imperialretainer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "imperialthrower",
+   "side": "home",
+   "file": "imperialnobility/imperialthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "imperialthrower",
+   "side": "away",
+   "file": "imperialnobility/imperialthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "nobleblitzer",
+   "side": "home",
+   "file": "imperialnobility/nobleblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "nobleblitzer",
+   "side": "away",
+   "file": "imperialnobility/nobleblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "ogre",
+   "side": "home",
+   "file": "imperialnobility/ogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "imperialnobility",
+   "role": "ogre",
+   "side": "away",
+   "file": "imperialnobility/ogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodbornmarauder",
+   "side": "home",
+   "file": "khorne/bloodbornmarauder-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodbornmarauder",
+   "side": "away",
+   "file": "khorne/bloodbornmarauder-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodseeker",
+   "side": "home",
+   "file": "khorne/bloodseeker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodseeker",
+   "side": "away",
+   "file": "khorne/bloodseeker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodspawn",
+   "side": "home",
+   "file": "khorne/bloodspawn-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "bloodspawn",
+   "side": "away",
+   "file": "khorne/bloodspawn-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "khorngor",
+   "side": "home",
+   "file": "khorne/khorngor-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "khorne",
+   "role": "khorngor",
+   "side": "away",
+   "file": "khorne/khorngor-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "chameleonskink",
+   "side": "home",
+   "file": "lizardmen/chameleonskink-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "chameleonskink",
+   "side": "away",
+   "file": "lizardmen/chameleonskink-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "kroxigor",
+   "side": "home",
+   "file": "lizardmen/kroxigor-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "kroxigor",
+   "side": "away",
+   "file": "lizardmen/kroxigor-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "saurusblocker",
+   "side": "home",
+   "file": "lizardmen/saurusblocker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "saurusblocker",
+   "side": "away",
+   "file": "lizardmen/saurusblocker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "skinklineman",
+   "side": "home",
+   "file": "lizardmen/skinklineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "lizardmen",
+   "role": "skinklineman",
+   "side": "away",
+   "file": "lizardmen/skinklineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "fleshgolem",
+   "side": "away",
+   "file": "necromantichorror/fleshgolem-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "fleshgolem",
+   "side": "home",
+   "file": "necromantichorror/fleshgolem-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "ghoulrunner",
+   "side": "away",
+   "file": "necromantichorror/ghoulrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "ghoulrunner",
+   "side": "home",
+   "file": "necromantichorror/ghoulrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "werewolf",
+   "side": "away",
+   "file": "necromantichorror/werewolf-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "werewolf",
+   "side": "home",
+   "file": "necromantichorror/werewolf-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "wraith",
+   "side": "away",
+   "file": "necromantichorror/wraith-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "wraith",
+   "side": "home",
+   "file": "necromantichorror/wraith-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "zombie",
+   "side": "away",
+   "file": "necromantichorror/zombie-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "necromantichorror",
+   "role": "zombie",
+   "side": "home",
+   "file": "necromantichorror/zombie-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "beerboar",
+   "side": "home",
+   "file": "norse/beerboar-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "beerboar",
+   "side": "away",
+   "file": "norse/beerboar-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "norseberserker",
+   "side": "home",
+   "file": "norse/norseberserker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "norseberserker",
+   "side": "away",
+   "file": "norse/norseberserker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "norseraider",
+   "side": "home",
+   "file": "norse/norseraider-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "norseraider",
+   "side": "away",
+   "file": "norse/norseraider-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "ulfwerener",
+   "side": "home",
+   "file": "norse/ulfwerener-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "ulfwerener",
+   "side": "away",
+   "file": "norse/ulfwerener-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "valkyrie",
+   "side": "home",
+   "file": "norse/valkyrie-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "valkyrie",
+   "side": "away",
+   "file": "norse/valkyrie-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "yhetee",
+   "side": "home",
+   "file": "norse/yhetee-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "norse",
+   "role": "yhetee",
+   "side": "away",
+   "file": "norse/yhetee-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "bloater",
+   "side": "home",
+   "file": "nurgle/bloater-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "bloater",
+   "side": "away",
+   "file": "nurgle/bloater-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "pestigor",
+   "side": "home",
+   "file": "nurgle/pestigor-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "pestigor",
+   "side": "away",
+   "file": "nurgle/pestigor-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "rotspawn",
+   "side": "home",
+   "file": "nurgle/rotspawn-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "rotspawn",
+   "side": "away",
+   "file": "nurgle/rotspawn-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "rotterlineman",
+   "side": "home",
+   "file": "nurgle/rotterlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "nurgle",
+   "role": "rotterlineman",
+   "side": "away",
+   "file": "nurgle/rotterlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "gnoblarlineman",
+   "side": "home",
+   "file": "ogre/gnoblarlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "gnoblarlineman",
+   "side": "away",
+   "file": "ogre/gnoblarlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "ogreblocker",
+   "side": "home",
+   "file": "ogre/ogreblocker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "ogreblocker",
+   "side": "away",
+   "file": "ogre/ogreblocker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "ogreruntpunter",
+   "side": "home",
+   "file": "ogre/ogreruntpunter-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "ogre",
+   "role": "ogreruntpunter",
+   "side": "away",
+   "file": "ogre/ogreruntpunter-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "alternforesttreeman",
+   "side": "home",
+   "file": "oldworldalliance/alternforesttreeman-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "alternforesttreeman",
+   "side": "away",
+   "file": "oldworldalliance/alternforesttreeman-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarfblitzer",
+   "side": "home",
+   "file": "oldworldalliance/dwarfblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarfblitzer",
+   "side": "away",
+   "file": "oldworldalliance/dwarfblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarflineman",
+   "side": "home",
+   "file": "oldworldalliance/dwarflineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarflineman",
+   "side": "away",
+   "file": "oldworldalliance/dwarflineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarfrunner",
+   "side": "home",
+   "file": "oldworldalliance/dwarfrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "dwarfrunner",
+   "side": "away",
+   "file": "oldworldalliance/dwarfrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "halflinghopeful",
+   "side": "home",
+   "file": "oldworldalliance/halflinghopeful-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "halflinghopeful",
+   "side": "away",
+   "file": "oldworldalliance/halflinghopeful-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanblitzer",
+   "side": "home",
+   "file": "oldworldalliance/humanblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanblitzer",
+   "side": "away",
+   "file": "oldworldalliance/humanblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humancatcher",
+   "side": "home",
+   "file": "oldworldalliance/humancatcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humancatcher",
+   "side": "away",
+   "file": "oldworldalliance/humancatcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanlineman",
+   "side": "home",
+   "file": "oldworldalliance/humanlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanlineman",
+   "side": "away",
+   "file": "oldworldalliance/humanlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanthrower",
+   "side": "home",
+   "file": "oldworldalliance/humanthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "humanthrower",
+   "side": "away",
+   "file": "oldworldalliance/humanthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "ogre",
+   "side": "home",
+   "file": "oldworldalliance/ogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "ogre",
+   "side": "away",
+   "file": "oldworldalliance/ogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "trollslayer",
+   "side": "home",
+   "file": "oldworldalliance/trollslayer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "oldworldalliance",
+   "role": "trollslayer",
+   "side": "away",
+   "file": "oldworldalliance/trollslayer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "blackorcblocker",
+   "side": "away",
+   "file": "orc/blackorcblocker-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "blackorcblocker",
+   "side": "home",
+   "file": "orc/blackorcblocker-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "blitzer",
+   "side": "away",
+   "file": "orc/blitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "blitzer",
+   "side": "home",
+   "file": "orc/blitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "goblin",
+   "side": "away",
+   "file": "orc/goblin-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "goblin",
+   "side": "home",
+   "file": "orc/goblin-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "lineman",
+   "side": "away",
+   "file": "orc/lineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "lineman",
+   "side": "home",
+   "file": "orc/lineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "thrower",
+   "side": "away",
+   "file": "orc/thrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "thrower",
+   "side": "home",
+   "file": "orc/thrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "troll",
+   "side": "away",
+   "file": "orc/troll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "orc",
+   "role": "troll",
+   "side": "home",
+   "file": "orc/troll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "ghoulrunner",
+   "side": "home",
+   "file": "shamblingundead/ghoulrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "ghoulrunner",
+   "side": "away",
+   "file": "shamblingundead/ghoulrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "mummy",
+   "side": "home",
+   "file": "shamblingundead/mummy-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "mummy",
+   "side": "away",
+   "file": "shamblingundead/mummy-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "skeletonlineman",
+   "side": "home",
+   "file": "shamblingundead/skeletonlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "skeletonlineman",
+   "side": "away",
+   "file": "shamblingundead/skeletonlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "wightblitzer",
+   "side": "home",
+   "file": "shamblingundead/wightblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "wightblitzer",
+   "side": "away",
+   "file": "shamblingundead/wightblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "zombielineman",
+   "side": "home",
+   "file": "shamblingundead/zombielineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "shamblingundead",
+   "role": "zombielineman",
+   "side": "away",
+   "file": "shamblingundead/zombielineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "blitzer",
+   "side": "home",
+   "file": "skaven/blitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "blitzer",
+   "side": "away",
+   "file": "skaven/blitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "gutterrunner",
+   "side": "home",
+   "file": "skaven/gutterrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "gutterrunner",
+   "side": "away",
+   "file": "skaven/gutterrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "ratogre",
+   "side": "home",
+   "file": "skaven/ratogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "ratogre",
+   "side": "away",
+   "file": "skaven/ratogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "skavenclanrat",
+   "side": "home",
+   "file": "skaven/skavenclanrat-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "skavenclanrat",
+   "side": "away",
+   "file": "skaven/skavenclanrat-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "skaventhrower",
+   "side": "home",
+   "file": "skaven/skaventhrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "skaven",
+   "role": "skaventhrower",
+   "side": "away",
+   "file": "skaven/skaventhrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "blitzer",
+   "side": "home",
+   "file": "slann/blitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "blitzer",
+   "side": "away",
+   "file": "slann/blitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "catcher",
+   "side": "home",
+   "file": "slann/catcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "catcher",
+   "side": "away",
+   "file": "slann/catcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "kroxigor",
+   "side": "home",
+   "file": "slann/kroxigor-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "kroxigor",
+   "side": "away",
+   "file": "slann/kroxigor-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "lineman",
+   "side": "home",
+   "file": "slann/lineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "slann",
+   "role": "lineman",
+   "side": "away",
+   "file": "slann/lineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "fungusflinga",
+   "side": "home",
+   "file": "snotling/fungusflinga-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "fungusflinga",
+   "side": "away",
+   "file": "snotling/fungusflinga-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "funhoppa",
+   "side": "home",
+   "file": "snotling/funhoppa-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "funhoppa",
+   "side": "away",
+   "file": "snotling/funhoppa-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "pumpwagon",
+   "side": "home",
+   "file": "snotling/pumpwagon-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "pumpwagon",
+   "side": "away",
+   "file": "snotling/pumpwagon-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "snotlinglineman",
+   "side": "home",
+   "file": "snotling/snotlinglineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "snotlinglineman",
+   "side": "away",
+   "file": "snotling/snotlinglineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "stiltyrunna",
+   "side": "home",
+   "file": "snotling/stiltyrunna-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "stiltyrunna",
+   "side": "away",
+   "file": "snotling/stiltyrunna-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "trainedtroll",
+   "side": "home",
+   "file": "snotling/trainedtroll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "snotling",
+   "role": "trainedtroll",
+   "side": "away",
+   "file": "snotling/trainedtroll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "skeletonlineman",
+   "side": "home",
+   "file": "tombkings/skeletonlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "skeletonlineman",
+   "side": "away",
+   "file": "tombkings/skeletonlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombguardian",
+   "side": "home",
+   "file": "tombkings/tombguardian-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombguardian",
+   "side": "away",
+   "file": "tombkings/tombguardian-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombkingsblitzer",
+   "side": "home",
+   "file": "tombkings/tombkingsblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombkingsblitzer",
+   "side": "away",
+   "file": "tombkings/tombkingsblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombkingsthrower",
+   "side": "home",
+   "file": "tombkings/tombkingsthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "tombkings",
+   "role": "tombkingsthrower",
+   "side": "away",
+   "file": "tombkings/tombkingsthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "goblinlineman",
+   "side": "home",
+   "file": "underworlddenizens/goblinlineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "goblinlineman",
+   "side": "away",
+   "file": "underworlddenizens/goblinlineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "gutterrunner",
+   "side": "home",
+   "file": "underworlddenizens/gutterrunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "gutterrunner",
+   "side": "away",
+   "file": "underworlddenizens/gutterrunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "ratogre",
+   "side": "home",
+   "file": "underworlddenizens/ratogre-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "ratogre",
+   "side": "away",
+   "file": "underworlddenizens/ratogre-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skavenblitzer",
+   "side": "home",
+   "file": "underworlddenizens/skavenblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skavenblitzer",
+   "side": "away",
+   "file": "underworlddenizens/skavenblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skavenclanrat",
+   "side": "home",
+   "file": "underworlddenizens/skavenclanrat-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skavenclanrat",
+   "side": "away",
+   "file": "underworlddenizens/skavenclanrat-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skaventhrower",
+   "side": "home",
+   "file": "underworlddenizens/skaventhrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "skaventhrower",
+   "side": "away",
+   "file": "underworlddenizens/skaventhrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "snotlinglineman",
+   "side": "home",
+   "file": "underworlddenizens/snotlinglineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "snotlinglineman",
+   "side": "away",
+   "file": "underworlddenizens/snotlinglineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "troll",
+   "side": "home",
+   "file": "underworlddenizens/troll-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "underworlddenizens",
+   "role": "troll",
+   "side": "away",
+   "file": "underworlddenizens/troll-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "thralllineman",
+   "side": "home",
+   "file": "vampire/thralllineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "thralllineman",
+   "side": "away",
+   "file": "vampire/thralllineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampireblitzer",
+   "side": "home",
+   "file": "vampire/vampireblitzer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampireblitzer",
+   "side": "away",
+   "file": "vampire/vampireblitzer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampirerunner",
+   "side": "home",
+   "file": "vampire/vampirerunner-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampirerunner",
+   "side": "away",
+   "file": "vampire/vampirerunner-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampirethrower",
+   "side": "home",
+   "file": "vampire/vampirethrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vampirethrower",
+   "side": "away",
+   "file": "vampire/vampirethrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vargheist",
+   "side": "home",
+   "file": "vampire/vargheist-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "vampire",
+   "role": "vargheist",
+   "side": "away",
+   "file": "vampire/vargheist-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "lorenforesttreeman",
+   "side": "home",
+   "file": "woodelf/lorenforesttreeman-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "woodelf",
+   "role": "lorenforesttreeman",
+   "side": "away",
+   "file": "woodelf/lorenforesttreeman-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "woodelf",
+   "role": "wardancer",
+   "side": "home",
+   "file": "woodelf/wardancer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "wardancer",
+   "side": "away",
+   "file": "woodelf/wardancer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelfcatcher",
+   "side": "home",
+   "file": "woodelf/woodelfcatcher-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelfcatcher",
+   "side": "away",
+   "file": "woodelf/woodelfcatcher-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelflineman",
+   "side": "home",
+   "file": "woodelf/woodelflineman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelflineman",
+   "side": "away",
+   "file": "woodelf/woodelflineman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelfthrower",
+   "side": "home",
+   "file": "woodelf/woodelfthrower-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "woodelf",
+   "role": "woodelfthrower",
+   "side": "away",
+   "file": "woodelf/woodelfthrower-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grak",
+   "side": "home",
+   "file": "stars/grak-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grak",
+   "side": "away",
+   "file": "stars/grak-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "crumbleberry",
+   "side": "home",
+   "file": "stars/crumbleberry-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "crumbleberry",
+   "side": "away",
+   "file": "stars/crumbleberry-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "karlavonkill",
+   "side": "home",
+   "file": "stars/karlavonkill-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "karlavonkill",
+   "side": "away",
+   "file": "stars/karlavonkill-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "morgnthorg",
+   "side": "home",
+   "file": "stars/morgnthorg-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "morgnthorg",
+   "side": "away",
+   "file": "stars/morgnthorg-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "zolcaththezoat",
+   "side": "home",
+   "file": "stars/zolcaththezoat-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "zolcaththezoat",
+   "side": "away",
+   "file": "stars/zolcaththezoat-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "akhornethesquirrel",
+   "side": "home",
+   "file": "stars/akhornethesquirrel-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "akhornethesquirrel",
+   "side": "away",
+   "file": "stars/akhornethesquirrel-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "boakonsstriktr",
+   "side": "home",
+   "file": "stars/boakonsstriktr-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "boakonsstriktr",
+   "side": "away",
+   "file": "stars/boakonsstriktr-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "estellelaveneaux",
+   "side": "home",
+   "file": "stars/estellelaveneaux-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "estellelaveneaux",
+   "side": "away",
+   "file": "stars/estellelaveneaux-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glotlstop",
+   "side": "home",
+   "file": "stars/glotlstop-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glotlstop",
+   "side": "away",
+   "file": "stars/glotlstop-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "dribl",
+   "side": "home",
+   "file": "stars/dribl-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "dribl",
+   "side": "away",
+   "file": "stars/dribl-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "drull",
+   "side": "home",
+   "file": "stars/drull-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "drull",
+   "side": "away",
+   "file": "stars/drull-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "anqipanqi",
+   "side": "home",
+   "file": "stars/anqipanqi-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "anqipanqi",
+   "side": "away",
+   "file": "stars/anqipanqi-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "theblackgobbo",
+   "side": "home",
+   "file": "stars/theblackgobbo-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "theblackgobbo",
+   "side": "away",
+   "file": "stars/theblackgobbo-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "varagghoulchewer",
+   "side": "home",
+   "file": "stars/varagghoulchewer-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "varagghoulchewer",
+   "side": "away",
+   "file": "stars/varagghoulchewer-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "fungustheloon",
+   "side": "home",
+   "file": "stars/fungustheloon-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "fungustheloon",
+   "side": "away",
+   "file": "stars/fungustheloon-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "bomberdribblesnot",
+   "side": "home",
+   "file": "stars/bomberdribblesnot-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "bomberdribblesnot",
+   "side": "away",
+   "file": "stars/bomberdribblesnot-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ripperbolgrot",
+   "side": "home",
+   "file": "stars/ripperbolgrot-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ripperbolgrot",
+   "side": "away",
+   "file": "stars/ripperbolgrot-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "nobblablackwart",
+   "side": "home",
+   "file": "stars/nobblablackwart-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "nobblablackwart",
+   "side": "away",
+   "file": "stars/nobblablackwart-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "scrappasorehead",
+   "side": "home",
+   "file": "stars/scrappasorehead-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "scrappasorehead",
+   "side": "away",
+   "file": "stars/scrappasorehead-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "htharktheunstoppable",
+   "side": "home",
+   "file": "stars/htharktheunstoppable-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "htharktheunstoppable",
+   "side": "away",
+   "file": "stars/htharktheunstoppable-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rashnakbackstabber",
+   "side": "home",
+   "file": "stars/rashnakbackstabber-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rashnakbackstabber",
+   "side": "away",
+   "file": "stars/rashnakbackstabber-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "griffoberwald",
+   "side": "home",
+   "file": "stars/griffoberwald-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "griffoberwald",
+   "side": "away",
+   "file": "stars/griffoberwald-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "helmutwulf",
+   "side": "home",
+   "file": "stars/helmutwulf-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "helmutwulf",
+   "side": "away",
+   "file": "stars/helmutwulf-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "mightyzug",
+   "side": "home",
+   "file": "stars/mightyzug-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "mightyzug",
+   "side": "away",
+   "file": "stars/mightyzug-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grombrindal",
+   "side": "home",
+   "file": "stars/grombrindal-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grombrindal",
+   "side": "away",
+   "file": "stars/grombrindal-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "barikfarblast",
+   "side": "home",
+   "file": "stars/barikfarblast-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "barikfarblast",
+   "side": "away",
+   "file": "stars/barikfarblast-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ivareriksson",
+   "side": "home",
+   "file": "stars/ivareriksson-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ivareriksson",
+   "side": "away",
+   "file": "stars/ivareriksson-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skrorgsnowpelt",
+   "side": "home",
+   "file": "stars/skrorgsnowpelt-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skrorgsnowpelt",
+   "side": "away",
+   "file": "stars/skrorgsnowpelt-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "thorssonstoutmead",
+   "side": "home",
+   "file": "stars/thorssonstoutmead-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "thorssonstoutmead",
+   "side": "away",
+   "file": "stars/thorssonstoutmead-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "puggybaconbreath",
+   "side": "home",
+   "file": "stars/puggybaconbreath-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "puggybaconbreath",
+   "side": "away",
+   "file": "stars/puggybaconbreath-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "cindypiewhistle",
+   "side": "home",
+   "file": "stars/cindypiewhistle-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "cindypiewhistle",
+   "side": "away",
+   "file": "stars/cindypiewhistle-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "josefbugman",
+   "side": "home",
+   "file": "stars/josefbugman-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "josefbugman",
+   "side": "away",
+   "file": "stars/josefbugman-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "lordborakthedespoiler",
+   "side": "home",
+   "file": "stars/lordborakthedespoiler-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "lordborakthedespoiler",
+   "side": "away",
+   "file": "stars/lordborakthedespoiler-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grashnakblackhoof",
+   "side": "home",
+   "file": "stars/grashnakblackhoof-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grashnakblackhoof",
+   "side": "away",
+   "file": "stars/grashnakblackhoof-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "scylaanfingrimm",
+   "side": "home",
+   "file": "stars/scylaanfingrimm-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "scylaanfingrimm",
+   "side": "away",
+   "file": "stars/scylaanfingrimm-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "maxspleenripper",
+   "side": "home",
+   "file": "stars/maxspleenripper-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "maxspleenripper",
+   "side": "away",
+   "file": "stars/maxspleenripper-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "bilerotvomitflesh",
+   "side": "home",
+   "file": "stars/bilerotvomitflesh-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "bilerotvomitflesh",
+   "side": "away",
+   "file": "stars/bilerotvomitflesh-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "gufflepusmaw",
+   "side": "home",
+   "file": "stars/gufflepusmaw-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "gufflepusmaw",
+   "side": "away",
+   "file": "stars/gufflepusmaw-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "withergraspdoubledrool",
+   "side": "home",
+   "file": "stars/withergraspdoubledrool-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "withergraspdoubledrool",
+   "side": "away",
+   "file": "stars/withergraspdoubledrool-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "zzhargmadeye",
+   "side": "home",
+   "file": "stars/zzhargmadeye-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "zzhargmadeye",
+   "side": "away",
+   "file": "stars/zzhargmadeye-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "eldrilsidewinder",
+   "side": "home",
+   "file": "stars/eldrilsidewinder-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "eldrilsidewinder",
+   "side": "away",
+   "file": "stars/eldrilsidewinder-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glorielsummerbloom",
+   "side": "home",
+   "file": "stars/glorielsummerbloom-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glorielsummerbloom",
+   "side": "away",
+   "file": "stars/glorielsummerbloom-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "roxannadarknail",
+   "side": "home",
+   "file": "stars/roxannadarknail-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "roxannadarknail",
+   "side": "away",
+   "file": "stars/roxannadarknail-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "lucienswift",
+   "side": "home",
+   "file": "stars/lucienswift-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "lucienswift",
+   "side": "away",
+   "file": "stars/lucienswift-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "valenswift",
+   "side": "home",
+   "file": "stars/valenswift-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "valenswift",
+   "side": "away",
+   "file": "stars/valenswift-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "kirothkrakeneye",
+   "side": "home",
+   "file": "stars/kirothkrakeneye-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "kirothkrakeneye",
+   "side": "away",
+   "file": "stars/kirothkrakeneye-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "jordellfreshbreeze",
+   "side": "home",
+   "file": "stars/jordellfreshbreeze-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "jordellfreshbreeze",
+   "side": "away",
+   "file": "stars/jordellfreshbreeze-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "jeremiahkool",
+   "side": "home",
+   "file": "stars/jeremiahkool-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "jeremiahkool",
+   "side": "away",
+   "file": "stars/jeremiahkool-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grimironjaw",
+   "side": "home",
+   "file": "stars/grimironjaw-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "grimironjaw",
+   "side": "away",
+   "file": "stars/grimironjaw-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skrullhalfheight",
+   "side": "home",
+   "file": "stars/skrullhalfheight-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skrullhalfheight",
+   "side": "away",
+   "file": "stars/skrullhalfheight-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rumbelowsheepskin",
+   "side": "home",
+   "file": "stars/rumbelowsheepskin-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rumbelowsheepskin",
+   "side": "away",
+   "file": "stars/rumbelowsheepskin-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rodneyroachbait",
+   "side": "home",
+   "file": "stars/rodneyroachbait-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rodneyroachbait",
+   "side": "away",
+   "file": "stars/rodneyroachbait-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rowanaforestfoot",
+   "side": "home",
+   "file": "stars/rowanaforestfoot-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "rowanaforestfoot",
+   "side": "away",
+   "file": "stars/rowanaforestfoot-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "swiftvineglimmershard",
+   "side": "home",
+   "file": "stars/swiftvineglimmershard-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "swiftvineglimmershard",
+   "side": "away",
+   "file": "stars/swiftvineglimmershard-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "willowrosebark",
+   "side": "home",
+   "file": "stars/willowrosebark-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "willowrosebark",
+   "side": "away",
+   "file": "stars/willowrosebark-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glartsmashrip",
+   "side": "home",
+   "file": "stars/glartsmashrip-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "glartsmashrip",
+   "side": "away",
+   "file": "stars/glartsmashrip-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "hakflemskuttlespike",
+   "side": "home",
+   "file": "stars/hakflemskuttlespike-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "hakflemskuttlespike",
+   "side": "away",
+   "file": "stars/hakflemskuttlespike-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "kreekrustgouger",
+   "side": "home",
+   "file": "stars/kreekrustgouger-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "kreekrustgouger",
+   "side": "away",
+   "file": "stars/kreekrustgouger-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skitterstabstab",
+   "side": "home",
+   "file": "stars/skitterstabstab-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "skitterstabstab",
+   "side": "away",
+   "file": "stars/skitterstabstab-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "gretchenwchter",
+   "side": "home",
+   "file": "stars/gretchenwchter-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "gretchenwchter",
+   "side": "away",
+   "file": "stars/gretchenwchter-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "wilhelmchaney",
+   "side": "home",
+   "file": "stars/wilhelmchaney-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "wilhelmchaney",
+   "side": "away",
+   "file": "stars/wilhelmchaney-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "countluthorvondrakenborg",
+   "side": "home",
+   "file": "stars/countluthorvondrakenborg-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "countluthorvondrakenborg",
+   "side": "away",
+   "file": "stars/countluthorvondrakenborg-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "captainkarinavonriesz",
+   "side": "home",
+   "file": "stars/captainkarinavonriesz-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "captainkarinavonriesz",
+   "side": "away",
+   "file": "stars/captainkarinavonriesz-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ivantheanimaldeathshroud",
+   "side": "home",
+   "file": "stars/ivantheanimaldeathshroud-home.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "ivantheanimaldeathshroud",
+   "side": "away",
+   "file": "stars/ivantheanimaldeathshroud-away.png",
+   "footY": 60,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ]
+  },
+  {
+   "race": "stars",
+   "role": "deeprootstrongbranch",
+   "side": "home",
+   "file": "stars/deeprootstrongbranch-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "stars",
+   "role": "deeprootstrongbranch",
+   "side": "away",
+   "file": "stars/deeprootstrongbranch-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "stars",
+   "role": "maplehighgrove",
+   "side": "home",
+   "file": "stars/maplehighgrove-home.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  },
+  {
+   "race": "stars",
+   "role": "maplehighgrove",
+   "side": "away",
+   "file": "stars/maplehighgrove-away.png",
+   "footY": 68,
+   "columns": 9,
+   "fps": 10,
+   "rows": [
+    "S",
+    "SE",
+    "E",
+    "NE",
+    "N",
+    "NW",
+    "W",
+    "SW"
+   ],
+   "frame": 72
+  }
+ ]
+}

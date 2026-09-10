@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Ogre crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M20 38 L18 27 C18 23 23 22 25 26 L24 18 C24 14 30 14 31 18 L32 14 C33 10 38 12 38 16 L38 20 C41 16 46 19 44 23 L41 31 C48 33 47 41 41 45 L35 50 H25 Z" fill="#E3B58F" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M18 39 Q32 31 46 39 L42 50 H22 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M24 42 Q32 36 40 42 L38 48 H26 Z" fill="#6E7683"/>
+  <path d="M29 39 L35 39 L32 49 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

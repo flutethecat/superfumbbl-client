@@ -1,0 +1,56 @@
+{
+  "_meta": {
+    "source": "http://bloodbowlbase.ru/bb2025/teams/<Team_Name>/ (owner-designated rules reference)",
+    "ruleset": "bb2025",
+    "captured": "2026-07-02",
+    "note": "Reference/fallback list of positional STARTING skills. The primary runtime mechanism derives baselines from the live roster wire data (team.roster.positionArray[].skillArray); this file backs display logic when roster data is unavailable and documents the rules source. Traits with values keep their notation, e.g. 'Loner (4+)'.",
+    "todoTeams": [
+      "Amazon", "Bretonnian", "Chaos_Chosen", "Chaos_Dwarf", "Chaos_Renegades", "Dark_Elf", "Elven_Union",
+      "Gnome", "Goblin", "Halfling", "High_Elf", "Imperial_Nobility", "Khorne", "Lizardmen",
+      "Necromantic_Horror", "Norse", "Nurgle", "Ogre", "Old_World_Alliance", "Shambling_Undead",
+      "Snotling", "Tomb_Kings", "Underworld_Denizens", "Vampire"
+    ]
+  },
+  "Human": {
+    "Human Lineman": [],
+    "Halfling Hopeful": ["Dodge", "Right Stuff", "Stunty"],
+    "Human Catcher": ["Catch", "Dodge"],
+    "Human Thrower": ["Pass", "Sure Hands"],
+    "Human Blitzer": ["Block", "Tackle"],
+    "Ogre": ["Bone Head", "Loner (3+)", "Mighty Blow", "Thick Skull", "Throw Team-mate"]
+  },
+  "Orc": {
+    "Orc Lineman": [],
+    "Goblin Lineman": ["Dodge", "Right Stuff", "Stunty"],
+    "Orc Thrower": ["Pass", "Sure Hands"],
+    "Orc Blitzer": ["Block", "Break Tackle"],
+    "Big Un Blocker": ["Mighty Blow", "Taunt", "Thick Skull", "Unsteady"],
+    "Troll": ["Always Hungry", "Loner (4+)", "Mighty Blow", "Projectile Vomit", "Really Stupid", "Regeneration", "Throw Team-mate"]
+  },
+  "Skaven": {
+    "Skaven Clanrat": [],
+    "Skaven Thrower": ["Pass", "Sure Hands"],
+    "Gutter Runner": ["Dodge", "Stab"],
+    "Skaven Blitzer": ["Block", "Strip Ball"],
+    "Rat Ogre": ["Animal Savagery", "Frenzy", "Loner (4+)", "Mighty Blow", "Prehensile Tail"]
+  },
+  "Dwarf": {
+    "Dwarf Lineman": ["Block", "Defensive", "Thick Skull"],
+    "Dwarf Runner": ["Sprint", "Sure Hands", "Thick Skull"],
+    "Dwarf Blitzer": ["Block", "Diving Tackle", "Tackle", "Thick Skull"],
+    "Troll Slayer": ["Block", "Dauntless", "Frenzy", "Hatred (Troll)", "Thick Skull"],
+    "Deathroller": ["Break Tackle", "Dirty Player", "Juggernaut", "Loner (4+)", "Mighty Blow", "No Ball", "Secret Weapon", "Stand Firm"]
+  },
+  "Wood Elf": {
+    "Wood Elf Lineman": [],
+    "Wood Elf Thrower": ["Pass", "Safe Pair of Hands"],
+    "Wood Elf Catcher": ["Catch", "Dodge", "Sprint"],
+    "Wardancer": ["Block", "Dodge", "Leap"],
+    "Loren Forest Treeman": ["Loner (4+)", "Mighty Blow", "Stand Firm", "Strong Arm", "Take Root", "Thick Skull", "Throw Team-mate"]
+  },
+  "Black Orc": {
+    "Goblin Bruiser": ["Dodge", "Right Stuff", "Stunty", "Thick Skull"],
+    "Black Orc": ["Brawler", "Grab"],
+    "Trained Troll": ["Always Hungry", "Mighty Blow", "Projectile Vomit", "Really Stupid", "Regeneration", "Throw Team-mate"]
+  }
+}

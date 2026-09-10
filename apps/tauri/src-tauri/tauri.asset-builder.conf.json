@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "F40KModBuilder",
+  "mainBinaryName": "f40kmod-builder",
+  "version": "0.3.20",
+  "identifier": "com.fumbbl40k.assetpackbuilder",
+  "build": {
+    "beforeBuildCommand": "pnpm build:vite",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Super FUMBBL Asset Pack Builder",
+        "width": 1180,
+        "height": 860,
+        "minWidth": 760,
+        "minHeight": 620,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "TABBL / flutethecat",
+    "category": "Utility",
+    "shortDescription": "Create and validate Super FUMBBL asset mod packs",
+    "longDescription": "A standalone desktop editor for creating, validating, and exporting F40KMod presentation packs containing player sprites, skill icons, pitch images, and sounds.",
+    "createUpdaterArtifacts": false
+  }
+}

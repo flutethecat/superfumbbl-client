@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Goblin crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M24 23 L10 18 L17 34 L21 32 C20 42 25 49 32 51 C39 49 44 42 43 32 L47 34 L54 18 L40 23 C36 19 28 19 24 23 Z" fill="#5FA84B" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M22 29 L29 27 L27 33 Z M42 29 L35 27 L37 33 Z" fill="#0E0F12"/>
+  <path d="M23 38 Q32 46 41 38 Q39 49 32 50 Q25 49 23 38 Z" fill="#0E0F12"/>
+  <path d="M26 40 L29 46 L32 41 L35 46 L38 40 Z" fill="#E9E2CF"/>
+  <path d="M30 33 L35 36 L29 37 Z" fill="#2F6A2A"/>
+</svg>

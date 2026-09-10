@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Norse crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M18 50 L43 15 M46 50 L21 15" fill="none" stroke="#6B4A2B" stroke-width="4" stroke-linecap="round"/>
+  <path d="M37 17 L45 11 L52 16 L50 24 L42 21 Z M27 17 L19 11 L12 16 L14 24 L22 21 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M25 29 C18 30 12 26 12 20 C12 16 14 13 18 12 C16 18 19 22 27 21 Z M39 29 C46 30 52 26 52 20 C52 16 50 13 46 12 C48 18 45 22 37 21 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M19 37 Q20 20 32 18 Q44 20 45 37 L42 45 Q32 48 22 45 Z" fill="#6E7683" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M23 31 Q32 25 41 31" fill="none" stroke="#B9BFC9" stroke-width="2" stroke-linecap="round"/>
+  <path d="M29 27 H35 L34 46 H30 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+</svg>

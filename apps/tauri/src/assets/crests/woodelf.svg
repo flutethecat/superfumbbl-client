@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Wood Elf crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 13 C42 16 49 25 47 35 C44 46 35 50 32 54 C29 50 20 46 17 35 C15 25 22 16 32 13 Z" fill="#5FA84B" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M32 18 V48 M32 29 L23 24 M32 36 L43 28 M32 42 L24 38" fill="none" stroke="#2F6A2A" stroke-width="2" stroke-linecap="round"/>
+  <path d="M18 47 L44 18" fill="none" stroke="#E9E2CF" stroke-width="3" stroke-linecap="round"/>
+  <path d="M42 16 L50 12 L47 21 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M19 44 L14 52 L23 48 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

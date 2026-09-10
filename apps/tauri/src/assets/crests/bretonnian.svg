@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Bretonnian crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M22 17 L26 10 L32 15 L38 10 L42 17 L39 22 H25 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 19 C25 25 24 31 27 36 C22 33 18 34 16 39 C20 45 26 43 29 40 C28 47 27 51 23 54 H41 C37 51 36 47 35 40 C38 43 44 45 48 39 C46 34 42 33 37 36 C40 31 39 25 32 19 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 23 V50" fill="none" stroke="#8C6A1F" stroke-width="2" stroke-linecap="round"/>
+</svg>

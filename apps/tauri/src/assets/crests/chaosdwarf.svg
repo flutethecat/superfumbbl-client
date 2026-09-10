@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chaos Dwarf crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M28 29 C20 32 12 29 11 22 C10 16 14 11 20 11 C16 14 16 19 19 21 C22 23 25 20 28 17 Z M36 29 C44 32 52 29 53 22 C54 16 50 11 44 11 C48 14 48 19 45 21 C42 23 39 20 36 17 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M24 27 L25 14 L29 7 H35 L39 14 L40 27 Z" fill="#0E0F12" stroke="#8C6A1F" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M21 25 H43 L41 31 H23 Z" fill="#0E0F12" stroke="#8C6A1F" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M22 30 L32 24 L42 30 L40 43 L32 51 L24 43 Z" fill="#8C6A1F" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M25 33 L30 31 L29 36 Z M39 33 L34 31 L35 36 Z" fill="#0E0F12"/>
+  <path d="M26 41 L32 38 L38 41 L35 48 H29 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="High Elf crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M31 26 C23 16 15 17 12 24 C18 24 20 29 14 33 C21 35 25 39 28 45 L34 35 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M33 26 C41 16 49 17 52 24 C46 24 44 29 50 33 C43 35 39 39 36 45 L30 35 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 13 C39 19 39 27 34 31 C38 37 38 44 32 52 C26 44 26 37 30 31 C25 27 26 19 32 13 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M32 23 C36 29 34 35 32 39 C30 35 28 29 32 23 Z" fill="#7CB7E6"/>
+  <circle cx="34" cy="20" r="1.5" fill="#0E0F12"/>
+</svg>

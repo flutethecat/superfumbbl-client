@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Elven Union crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M31 24 C24 16 16 16 13 19 C19 21 20 25 14 27 C20 30 23 33 25 39 L33 33 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M33 24 C40 16 48 16 51 19 C45 21 44 25 50 27 C44 30 41 33 39 39 L31 33 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 18 C39 27 40 38 32 50 C24 38 25 27 32 18 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M32 24 V44" fill="none" stroke="#8C6A1F" stroke-width="2" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Skaven crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M24 24 L13 17 L17 31 L22 32 C22 41 26 47 32 52 C38 47 42 41 42 32 L47 31 L51 17 L40 24 C36 20 28 20 24 24 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M24 31 L30 28 L28 35 Z M40 31 L34 28 L36 35 Z" fill="#0E0F12"/>
+  <path d="M32 32 L38 43 H26 Z" fill="#8FA83A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M29 44 L32 51 L35 44" fill="none" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+</svg>

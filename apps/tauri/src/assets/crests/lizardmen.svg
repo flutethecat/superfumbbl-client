@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Lizardmen crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 7 V10 M22 11 L24 14 M42 11 L40 14 M18 20 H22 M42 20 H46" fill="none" stroke="#D9A93A" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="19" r="7" fill="#D9A93A" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M27 29 H37 V35 H42 V42 H47 V50 H17 V42 H22 V35 H27 Z" fill="#5FA84B" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M22 42 H42 M27 35 H37" fill="none" stroke="#2F6A2A" stroke-width="3"/>
+  <path d="M29 50 V43 H35 V50" fill="#2F6A2A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+</svg>

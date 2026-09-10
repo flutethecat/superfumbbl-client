@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Shambling Undead crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M43 12 C34 14 31 23 36 29 C39 33 46 33 50 28 C43 29 39 25 39 21 C39 17 40 14 43 12 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M13 43 Q32 35 51 43 V51 H13 Z" fill="#0E0F12" stroke="#6E7683" stroke-width="2"/>
+  <path d="M24 42 L22 31 C21 27 25 25 28 29 L28 18 C28 14 33 14 34 18 L35 28 L39 23 C42 20 45 24 42 28 L39 35 L46 38 L42 45 Z" fill="#E3B58F" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M27 24 L34 24 M28 32 L36 31" fill="none" stroke="#8A1C1C" stroke-width="2" stroke-linecap="round"/>
+</svg>

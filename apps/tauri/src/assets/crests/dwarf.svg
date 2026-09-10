@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Dwarf crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M13 17 H22 V15 H42 V17 H51 V27 H42 V29 H22 V27 H13 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M28 27 H35 L34 36 H29 Z" fill="#6B4A2B" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 38 L40 44 L36 48 L40 53 H34 L32 50 L30 53 H24 L28 48 L24 44 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M17 19 H31" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Chaos Renegade crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <polygon points="32,16 35,27 43,21 39,29 49,32 39,35 43,44 35,38 32,49 29,38 21,44 25,35 15,32 25,29 21,21 29,27" fill="#0E0F12" stroke="#6E7683" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M19 19 C12 25 12 34 17 41 M45 19 C52 25 52 34 47 41" fill="none" stroke="#B9BFC9" stroke-width="5" stroke-linecap="round"/>
+  <path d="M16 22 L22 27 M14 33 L21 33 M48 22 L42 27 M50 33 L43 33" fill="none" stroke="#0E0F12" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M19 45 L14 52 M45 45 L50 52" fill="none" stroke="#B9BFC9" stroke-width="4" stroke-linecap="round"/>
+</svg>

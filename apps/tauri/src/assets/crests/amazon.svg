@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Amazon crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M22 26 C13 21 13 13 16 9 C22 13 25 19 26 25 Z" fill="#7CB7E6" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M42 26 C51 21 51 13 48 9 C42 13 39 19 38 25 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2"/>
+  <path d="M18 28 L23 19 L32 16 L41 19 L46 28 L42 44 L32 51 L22 44 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M23 27 L29 25 L27 31 Z M41 27 L35 25 L37 31 Z" fill="#0E0F12"/>
+  <circle cx="27" cy="27" r="2" fill="#D9A93A"/>
+  <circle cx="37" cy="27" r="2" fill="#D9A93A"/>
+  <path d="M24 37 Q32 42 40 37 L38 46 L34 40 L30 40 L26 46 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Black Orc crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M17 47 L39 19 L46 15 L47 23 L22 51 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M47 47 L25 19 L18 15 L17 23 L42 51 Z" fill="#6E7683" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M20 24 L27 16 H37 L44 24 L42 40 L36 47 H28 L22 40 Z" fill="#0E0F12" stroke="#6E7683" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M24 29 L30 26 L29 33 Z M40 29 L34 26 L35 33 Z" fill="#E9E2CF"/>
+  <path d="M25 39 L28 34 L30 43 H34 L36 34 L39 39 L36 48 H28 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

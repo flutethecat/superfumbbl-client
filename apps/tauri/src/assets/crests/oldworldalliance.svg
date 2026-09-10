@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Old World Alliance crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 15 L15 25 V42 L32 52 Z" fill="#6E7683" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 15 L49 25 V42 L32 52 Z" fill="#B9BFC9" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M15 42 L32 31 L49 42 L32 52 Z" fill="#D9A93A" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M18 26 H29 L27 31 H24 V40 H21 V31 H18 Z" fill="#E9E2CF"/>
+  <path d="M35 27 Q41 21 47 27 V34 H44 V29 H37 V34 H34 Z" fill="#0E0F12"/>
+  <path d="M24 42 Q32 36 40 42 L37 47 H27 Z" fill="#8C6A1F"/>
+</svg>

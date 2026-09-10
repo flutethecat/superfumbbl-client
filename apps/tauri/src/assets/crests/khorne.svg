@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Khorne crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <polygon points="32,10 37,24 48,15 41,28 54,25 44,33 53,43 40,38 43,52 34,41 28,53 28,40 15,45 23,34 11,28 26,29" fill="#0E0F12" stroke="#8A1C1C" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M23 25 L28 19 H36 L41 25 L39 38 L35 42 H29 L25 38 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M26 29 L31 27 L30 33 Z M38 29 L33 27 L34 33 Z" fill="#0E0F12"/>
+  <path d="M28 38 L30 34 L32 39 L34 34 L36 38 L35 44 H29 Z" fill="#0E0F12"/>
+</svg>

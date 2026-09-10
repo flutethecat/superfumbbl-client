@@ -1,0 +1,1049 @@
+{
+ "count": 174,
+ "icons": [
+  {
+   "name": "Catch",
+   "key": "catch",
+   "label": "CA",
+   "category": "Agility"
+  },
+  {
+   "name": "Diving Catch",
+   "key": "divingcatch",
+   "label": "DC",
+   "category": "Agility"
+  },
+  {
+   "name": "Diving Tackle",
+   "key": "divingtackle",
+   "label": "DT",
+   "category": "Agility"
+  },
+  {
+   "name": "Dodge",
+   "key": "dodge",
+   "label": "DO",
+   "category": "Agility"
+  },
+  {
+   "name": "Defensive",
+   "key": "defensive",
+   "label": "DE",
+   "category": "Agility"
+  },
+  {
+   "name": "Hit And Run",
+   "key": "hitandrun",
+   "label": "HAR",
+   "category": "Agility"
+  },
+  {
+   "name": "Jump Up",
+   "key": "jumpup",
+   "label": "JU",
+   "category": "Agility"
+  },
+  {
+   "name": "Leap",
+   "key": "leap",
+   "label": "LE",
+   "category": "Agility"
+  },
+  {
+   "name": "Safe Pair Of Hands",
+   "key": "safepairofhands",
+   "label": "SPO",
+   "category": "Agility"
+  },
+  {
+   "name": "Sidestep",
+   "key": "sidestep",
+   "label": "SI",
+   "category": "Agility"
+  },
+  {
+   "name": "Sprint",
+   "key": "sprint",
+   "label": "SP",
+   "category": "Agility"
+  },
+  {
+   "name": "Sure Feet",
+   "key": "surefeet",
+   "label": "SF",
+   "category": "Agility"
+  },
+  {
+   "name": "Dirty Player",
+   "key": "dirtyplayer",
+   "label": "DP",
+   "category": "Devious"
+  },
+  {
+   "name": "Eye Gouge",
+   "key": "eyegouge",
+   "label": "EG",
+   "category": "Devious"
+  },
+  {
+   "name": "Fumblerooski",
+   "key": "fumblerooski",
+   "label": "FU",
+   "category": "Devious"
+  },
+  {
+   "name": "Lethal Flight",
+   "key": "lethalflight",
+   "label": "LF",
+   "category": "Devious"
+  },
+  {
+   "name": "Lone Fouler",
+   "key": "lonefouler",
+   "label": "LF",
+   "category": "Devious"
+  },
+  {
+   "name": "Pile Driver",
+   "key": "piledriver",
+   "label": "PD",
+   "category": "Devious"
+  },
+  {
+   "name": "Put The Boot In",
+   "key": "putthebootin",
+   "label": "PTB",
+   "category": "Devious"
+  },
+  {
+   "name": "Quick Foul",
+   "key": "quickfoul",
+   "label": "QF",
+   "category": "Devious"
+  },
+  {
+   "name": "Saboteur",
+   "key": "saboteur",
+   "label": "SA",
+   "category": "Devious"
+  },
+  {
+   "name": "Shadowing",
+   "key": "shadowing",
+   "label": "SH",
+   "category": "Devious"
+  },
+  {
+   "name": "Sneaky Git",
+   "key": "sneakygit",
+   "label": "SG",
+   "category": "Devious"
+  },
+  {
+   "name": "Violent Innovator",
+   "key": "violentinnovator",
+   "label": "VI",
+   "category": "Devious"
+  },
+  {
+   "name": "Block",
+   "key": "block",
+   "label": "BL",
+   "category": "General"
+  },
+  {
+   "name": "Dauntless",
+   "key": "dauntless",
+   "label": "DA",
+   "category": "General"
+  },
+  {
+   "name": "Fend",
+   "key": "fend",
+   "label": "FE",
+   "category": "General"
+  },
+  {
+   "name": "Frenzy",
+   "key": "frenzy",
+   "label": "FR",
+   "category": "General"
+  },
+  {
+   "name": "Kick",
+   "key": "kick",
+   "label": "KI",
+   "category": "General"
+  },
+  {
+   "name": "Pro",
+   "key": "pro",
+   "label": "PR",
+   "category": "General"
+  },
+  {
+   "name": "Steady Footing",
+   "key": "steadyfooting",
+   "label": "SF",
+   "category": "General"
+  },
+  {
+   "name": "Strip Ball",
+   "key": "stripball",
+   "label": "SB",
+   "category": "General"
+  },
+  {
+   "name": "Sure Hands",
+   "key": "surehands",
+   "label": "SH",
+   "category": "General"
+  },
+  {
+   "name": "Tackle",
+   "key": "tackle",
+   "label": "TA",
+   "category": "General"
+  },
+  {
+   "name": "Taunt",
+   "key": "taunt",
+   "label": "TA",
+   "category": "General"
+  },
+  {
+   "name": "Wrestle",
+   "key": "wrestle",
+   "label": "WR",
+   "category": "General"
+  },
+  {
+   "name": "Big Hand",
+   "key": "bighand",
+   "label": "BH",
+   "category": "Mutation"
+  },
+  {
+   "name": "Claws",
+   "key": "claw",
+   "label": "CL",
+   "category": "Mutation"
+  },
+  {
+   "name": "Disturbing Presence",
+   "key": "disturbingpresence",
+   "label": "DP",
+   "category": "Mutation"
+  },
+  {
+   "name": "Extra Arms",
+   "key": "extraarms",
+   "label": "EA",
+   "category": "Mutation"
+  },
+  {
+   "name": "Foul Appearance",
+   "key": "foulappearence",
+   "label": "FA",
+   "category": "Mutation"
+  },
+  {
+   "name": "Horns",
+   "key": "horns",
+   "label": "HO",
+   "category": "Mutation"
+  },
+  {
+   "name": "Iron Hard Skin",
+   "key": "ironhardskin",
+   "label": "IHS",
+   "category": "Mutation"
+  },
+  {
+   "name": "Monstrous Mouth",
+   "key": "monstrousmouth",
+   "label": "MM",
+   "category": "Mutation"
+  },
+  {
+   "name": "Prehensile Tail",
+   "key": "prehensiletail",
+   "label": "PT",
+   "category": "Mutation"
+  },
+  {
+   "name": "Tentacles",
+   "key": "tentacles",
+   "label": "TE",
+   "category": "Mutation"
+  },
+  {
+   "name": "Two Heads",
+   "key": "twoheads",
+   "label": "TH",
+   "category": "Mutation"
+  },
+  {
+   "name": "Very Long Legs",
+   "key": "verylonglegs",
+   "label": "VLL",
+   "category": "Mutation"
+  },
+  {
+   "name": "Accurate",
+   "key": "accurate",
+   "label": "AC",
+   "category": "Passing"
+  },
+  {
+   "name": "Cannoneer",
+   "key": "cannoneer",
+   "label": "CA",
+   "category": "Passing"
+  },
+  {
+   "name": "Cloud Burster",
+   "key": "cloudburster",
+   "label": "CB",
+   "category": "Passing"
+  },
+  {
+   "name": "Dump-Off",
+   "key": "dumpoff",
+   "label": "DO",
+   "category": "Passing"
+  },
+  {
+   "name": "Give And Go",
+   "key": "giveandgo",
+   "label": "GAG",
+   "category": "Passing"
+  },
+  {
+   "name": "Hail Mary Pass",
+   "key": "hailmarypass",
+   "label": "HMP",
+   "category": "Passing"
+  },
+  {
+   "name": "Leader",
+   "key": "leader",
+   "label": "LE",
+   "category": "Passing"
+  },
+  {
+   "name": "Nerves Of Steel",
+   "key": "nervesofsteel",
+   "label": "NOS",
+   "category": "Passing"
+  },
+  {
+   "name": "On The Ball",
+   "key": "ontheball",
+   "label": "OTB",
+   "category": "Passing"
+  },
+  {
+   "name": "Pass",
+   "key": "pass",
+   "label": "PA",
+   "category": "Passing"
+  },
+  {
+   "name": "Punt",
+   "key": "punt",
+   "label": "PU",
+   "category": "Passing"
+  },
+  {
+   "name": "Safe Pass",
+   "key": "safepass",
+   "label": "SP",
+   "category": "Passing"
+  },
+  {
+   "name": "Arm Bar",
+   "key": "armbar",
+   "label": "AB",
+   "category": "Strength"
+  },
+  {
+   "name": "Brawler",
+   "key": "brawler",
+   "label": "BR",
+   "category": "Strength"
+  },
+  {
+   "name": "Break Tackle",
+   "key": "breaktackle",
+   "label": "BT",
+   "category": "Strength"
+  },
+  {
+   "name": "Bullseye",
+   "key": "bullseye",
+   "label": "BU",
+   "category": "Strength"
+  },
+  {
+   "name": "Grab",
+   "key": "grab",
+   "label": "GR",
+   "category": "Strength"
+  },
+  {
+   "name": "Guard",
+   "key": "guard",
+   "label": "GU",
+   "category": "Strength"
+  },
+  {
+   "name": "Juggernaut",
+   "key": "juggernaut",
+   "label": "JU",
+   "category": "Strength"
+  },
+  {
+   "name": "Mighty Blow",
+   "key": "mightyblow",
+   "label": "MB",
+   "category": "Strength"
+  },
+  {
+   "name": "Multiple Block",
+   "key": "multipleblock",
+   "label": "MB",
+   "category": "Strength"
+  },
+  {
+   "name": "Stand Firm",
+   "key": "standfirm",
+   "label": "SF",
+   "category": "Strength"
+  },
+  {
+   "name": "Strong Arm",
+   "key": "strongarm",
+   "label": "SA",
+   "category": "Strength"
+  },
+  {
+   "name": "Thick Skull",
+   "key": "thickskull",
+   "label": "TS",
+   "category": "Strength"
+  },
+  {
+   "name": "Always Hungry",
+   "key": "alwayshungry",
+   "label": "AH",
+   "category": "Trait"
+  },
+  {
+   "name": "Animal Savagery",
+   "key": "animalsavagery",
+   "label": "AS",
+   "category": "Trait"
+  },
+  {
+   "name": "Ball & Chain",
+   "key": "ballchain",
+   "label": "BC",
+   "category": "Trait"
+  },
+  {
+   "name": "Bombardier",
+   "key": "bombardier",
+   "label": "BO",
+   "category": "Trait"
+  },
+  {
+   "name": "Bone Head",
+   "key": "bonehead",
+   "label": "BH",
+   "category": "Trait"
+  },
+  {
+   "name": "Breathe Fire",
+   "key": "breathefire",
+   "label": "BF",
+   "category": "Trait"
+  },
+  {
+   "name": "Chainsaw",
+   "key": "chainsaw",
+   "label": "CH",
+   "category": "Trait"
+  },
+  {
+   "name": "Decay",
+   "key": "decay",
+   "label": "DE",
+   "category": "Trait"
+  },
+  {
+   "name": "Drunkard",
+   "key": "drunkard",
+   "label": "DR",
+   "category": "Trait"
+  },
+  {
+   "name": "Hypnotic Gaze",
+   "key": "hypnoticgaze",
+   "label": "HG",
+   "category": "Trait"
+  },
+  {
+   "name": "Insignificant",
+   "key": "insignificant",
+   "label": "IN",
+   "category": "Trait"
+  },
+  {
+   "name": "Kick Team-Mate",
+   "key": "kickteammate",
+   "label": "KTM",
+   "category": "Trait"
+  },
+  {
+   "name": "My Ball",
+   "key": "myball",
+   "label": "MB",
+   "category": "Trait"
+  },
+  {
+   "name": "No Ball",
+   "key": "noball",
+   "label": "NB",
+   "category": "Trait"
+  },
+  {
+   "name": "Pick-Me-Up",
+   "key": "pickmeup",
+   "label": "PMU",
+   "category": "Trait"
+  },
+  {
+   "name": "Plague Ridden",
+   "key": "plagueridden",
+   "label": "PR",
+   "category": "Trait"
+  },
+  {
+   "name": "Pogo",
+   "key": "pogo",
+   "label": "PO",
+   "category": "Trait"
+  },
+  {
+   "name": "Projectile Vomit",
+   "key": "projectilevomit",
+   "label": "PV",
+   "category": "Trait"
+  },
+  {
+   "name": "Really Stupid",
+   "key": "reallystupid",
+   "label": "RS",
+   "category": "Trait"
+  },
+  {
+   "name": "Regeneration",
+   "key": "regeneration",
+   "label": "RE",
+   "category": "Trait"
+  },
+  {
+   "name": "Right Stuff",
+   "key": "rightstuff",
+   "label": "RS",
+   "category": "Trait"
+  },
+  {
+   "name": "Secret Weapon",
+   "key": "secretweapon",
+   "label": "SW",
+   "category": "Trait"
+  },
+  {
+   "name": "Stab",
+   "key": "stab",
+   "label": "ST",
+   "category": "Trait"
+  },
+  {
+   "name": "Stunty",
+   "key": "stunty",
+   "label": "ST",
+   "category": "Trait"
+  },
+  {
+   "name": "Swoop",
+   "key": "swoop",
+   "label": "SW",
+   "category": "Trait"
+  },
+  {
+   "name": "Take Root",
+   "key": "takeroot",
+   "label": "TR",
+   "category": "Trait"
+  },
+  {
+   "name": "Throw Team-Mate",
+   "key": "throwteammate",
+   "label": "TTM",
+   "category": "Trait"
+  },
+  {
+   "name": "Timmm-Ber!",
+   "key": "timmmber",
+   "label": "TB",
+   "category": "Trait"
+  },
+  {
+   "name": "Titchy",
+   "key": "titchy",
+   "label": "TI",
+   "category": "Trait"
+  },
+  {
+   "name": "Trickster",
+   "key": "trickster",
+   "label": "TR",
+   "category": "Trait"
+  },
+  {
+   "name": "Unchannelled Fury",
+   "key": "unchannelledfury",
+   "label": "UF",
+   "category": "Trait"
+  },
+  {
+   "name": "Unsteady",
+   "key": "unsteady",
+   "label": "UN",
+   "category": "Trait"
+  },
+  {
+   "name": "A Sneaky Pair",
+   "key": "asneakypair",
+   "label": "ASP",
+   "category": "Trait"
+  },
+  {
+   "name": "All You Can Eat",
+   "key": "allyoucaneat",
+   "label": "AYC",
+   "category": "Trait"
+  },
+  {
+   "name": "Animosity",
+   "key": "animosity",
+   "label": "AN",
+   "category": "Trait"
+  },
+  {
+   "name": "Baleful Hex",
+   "key": "balefulhex",
+   "label": "BH",
+   "category": "Trait"
+  },
+  {
+   "name": "Beer Barrel Bash!",
+   "key": "beerbarrelbash",
+   "label": "BBB",
+   "category": "Trait"
+  },
+  {
+   "name": "Black Ink",
+   "key": "blackink",
+   "label": "BI",
+   "category": "Trait"
+  },
+  {
+   "name": "Blast It!",
+   "key": "blastit",
+   "label": "BI",
+   "category": "Trait"
+  },
+  {
+   "name": "Blind Rage",
+   "key": "blindrage",
+   "label": "BR",
+   "category": "Trait"
+  },
+  {
+   "name": "Bloodlust",
+   "key": "bloodlust",
+   "label": "BL",
+   "category": "Trait"
+  },
+  {
+   "name": "Bounding Leap",
+   "key": "boundingleap",
+   "label": "BL",
+   "category": "Trait"
+  },
+  {
+   "name": "Bugman's XXXXXX",
+   "key": "bugmansxxxxxx",
+   "label": "BSX",
+   "category": "Trait"
+  },
+  {
+   "name": "Catch of the Day",
+   "key": "catchoftheday",
+   "label": "COT",
+   "category": "Trait"
+  },
+  {
+   "name": "Crushing Blow",
+   "key": "crushingblow",
+   "label": "CB",
+   "category": "Trait"
+  },
+  {
+   "name": "Dwarfen Grit",
+   "key": "dwarfengrit",
+   "label": "DG",
+   "category": "Trait"
+  },
+  {
+   "name": "Dwarven Scourge",
+   "key": "dwarvenscourge",
+   "label": "DS",
+   "category": "Trait"
+  },
+  {
+   "name": "Frenzied Rush",
+   "key": "frenziedrush",
+   "label": "FR",
+   "category": "Trait"
+  },
+  {
+   "name": "Furious Outburst",
+   "key": "furiousoutburst",
+   "label": "FO",
+   "category": "Trait"
+  },
+  {
+   "name": "Fury of the Blood God",
+   "key": "furyofthebloodgod",
+   "label": "FOT",
+   "category": "Trait"
+  },
+  {
+   "name": "Gored By The Bull",
+   "key": "goredbythebull",
+   "label": "GBT",
+   "category": "Trait"
+  },
+  {
+   "name": "Halfling Luck",
+   "key": "halflingluck",
+   "label": "HL",
+   "category": "Trait"
+  },
+  {
+   "name": "Hatred",
+   "key": "hatred",
+   "label": "HA",
+   "category": "Trait"
+  },
+  {
+   "name": "I'll be back!",
+   "key": "illbeback",
+   "label": "ILB",
+   "category": "Trait"
+  },
+  {
+   "name": "Incorporeal",
+   "key": "incorporeal",
+   "label": "IN",
+   "category": "Trait"
+  },
+  {
+   "name": "Indomitable",
+   "key": "indomitable",
+   "label": "IN",
+   "category": "Trait"
+  },
+  {
+   "name": "Kaboom!",
+   "key": "kaboom",
+   "label": "KA",
+   "category": "Trait"
+  },
+  {
+   "name": "Keen Player",
+   "key": "keenplayer",
+   "label": "KP",
+   "category": "Trait"
+  },
+  {
+   "name": "Kick 'em while they're down!",
+   "key": "kickemwhiletheyredown",
+   "label": "KEW",
+   "category": "Trait"
+  },
+  {
+   "name": "Krump and Smash",
+   "key": "krumpandsmash",
+   "label": "KAS",
+   "category": "Trait"
+  },
+  {
+   "name": "Loner",
+   "key": "loner",
+   "label": "LO",
+   "category": "Trait"
+  },
+  {
+   "name": "Look Into My Eyes",
+   "key": "lookintomyeyes",
+   "label": "LIM",
+   "category": "Trait"
+  },
+  {
+   "name": "Lord of Chaos",
+   "key": "lordofchaos",
+   "label": "LOC",
+   "category": "Trait"
+  },
+  {
+   "name": "Master Assassin",
+   "key": "masterassassin",
+   "label": "MA",
+   "category": "Trait"
+  },
+  {
+   "name": "Maximum Carnage",
+   "key": "maximumcarnage",
+   "label": "MC",
+   "category": "Trait"
+  },
+  {
+   "name": "Mesmerising Dance",
+   "key": "mesmerisingdance",
+   "label": "MD",
+   "category": "Trait"
+  },
+  {
+   "name": "Old Pro",
+   "key": "oldpro",
+   "label": "OP",
+   "category": "Trait"
+  },
+  {
+   "name": "Primal Savagery",
+   "key": "primalsavagery",
+   "label": "PS",
+   "category": "Trait"
+  },
+  {
+   "name": "Pump Up The Crowd",
+   "key": "pumpupthecrowd",
+   "label": "PUT",
+   "category": "Trait"
+  },
+  {
+   "name": "Putrid Regurgitation",
+   "key": "putridregurgitation",
+   "label": "PR",
+   "category": "Trait"
+  },
+  {
+   "name": "Quick Bite",
+   "key": "quickbite",
+   "label": "QB",
+   "category": "Trait"
+  },
+  {
+   "name": "Raiding Party",
+   "key": "raidingparty",
+   "label": "RP",
+   "category": "Trait"
+  },
+  {
+   "name": "Ram",
+   "key": "ram",
+   "label": "RA",
+   "category": "Trait"
+  },
+  {
+   "name": "Reliable",
+   "key": "reliable",
+   "label": "RE",
+   "category": "Trait"
+  },
+  {
+   "name": "Savage Blow",
+   "key": "savageblow",
+   "label": "SB",
+   "category": "Trait"
+  },
+  {
+   "name": "Savage Mauling",
+   "key": "savagemauling",
+   "label": "SM",
+   "category": "Trait"
+  },
+  {
+   "name": "Shot to Nothing",
+   "key": "shottonothing",
+   "label": "STN",
+   "category": "Trait"
+  },
+  {
+   "name": "Slashing Nails",
+   "key": "slashingnails",
+   "label": "SN",
+   "category": "Trait"
+  },
+  {
+   "name": "Slayer",
+   "key": "slayer",
+   "label": "SL",
+   "category": "Trait"
+  },
+  {
+   "name": "Sneakiest of the Lot",
+   "key": "sneakiestofthelot",
+   "label": "SOT",
+   "category": "Trait"
+  },
+  {
+   "name": "Star of the Show",
+   "key": "staroftheshow",
+   "label": "SOT",
+   "category": "Trait"
+  },
+  {
+   "name": "Strong Passing Game",
+   "key": "strongpassinggame",
+   "label": "SPG",
+   "category": "Trait"
+  },
+  {
+   "name": "Swift As The Breeze",
+   "key": "swiftasthebreeze",
+   "label": "SAT",
+   "category": "Trait"
+  },
+  {
+   "name": "Tasty Morsel",
+   "key": "tastymorsel",
+   "label": "TM",
+   "category": "Trait"
+  },
+  {
+   "name": "Team Captain",
+   "key": "teamcaptain",
+   "label": "TC",
+   "category": "Trait"
+  },
+  {
+   "name": "The Ballista",
+   "key": "theballista",
+   "label": "TB",
+   "category": "Trait"
+  },
+  {
+   "name": "The Flashing Blade",
+   "key": "theflashingblade",
+   "label": "TFB",
+   "category": "Trait"
+  },
+  {
+   "name": "Thinking Man's Troll",
+   "key": "thinkingmanstroll",
+   "label": "TMS",
+   "category": "Trait"
+  },
+  {
+   "name": "Toxin Connoisseur",
+   "key": "toxinconnoisseur",
+   "label": "TC",
+   "category": "Trait"
+  },
+  {
+   "name": "Treacherous",
+   "key": "treacherous",
+   "label": "TR",
+   "category": "Trait"
+  },
+  {
+   "name": "Unstoppable Momentum",
+   "key": "unstoppablemomentum",
+   "label": "UM",
+   "category": "Trait"
+  },
+  {
+   "name": "Vicious Vines",
+   "key": "viciousvines",
+   "label": "VV",
+   "category": "Trait"
+  },
+  {
+   "name": "Watch Out!",
+   "key": "watchout",
+   "label": "WO",
+   "category": "Trait"
+  },
+  {
+   "name": "Whirling Dervish",
+   "key": "whirlingdervish",
+   "label": "WD",
+   "category": "Trait"
+  },
+  {
+   "name": "Wisdom of the White Dwarf",
+   "key": "wisdomofthewhitedwarf",
+   "label": "WOT",
+   "category": "Trait"
+  },
+  {
+   "name": "Woodland Fury",
+   "key": "woodlandfury",
+   "label": "WF",
+   "category": "Trait"
+  },
+  {
+   "name": "Working in Tandem",
+   "key": "workingintandem",
+   "label": "WIT",
+   "category": "Trait"
+  },
+  {
+   "name": "Yoink!",
+   "key": "yoink",
+   "label": "YO",
+   "category": "Trait"
+  },
+  {
+   "name": "\"Blastin' Solves Everything\"",
+   "key": "blastinsolveseverything",
+   "label": "BSE",
+   "category": "Trait"
+  },
+  {
+   "name": "\"Excuse Me, Are You a Zoat?\"",
+   "key": "excusemeareyouazoat",
+   "label": "EMA",
+   "category": "Trait"
+  },
+  {
+   "name": "I'll Carry You",
+   "key": "illcarryyou",
+   "label": "ILC",
+   "category": "Trait"
+  },
+  {
+   "name": "Consummate Professional",
+   "key": "consummateprofessional",
+   "label": "CP",
+   "category": "Trait"
+  }
+ ]
+}

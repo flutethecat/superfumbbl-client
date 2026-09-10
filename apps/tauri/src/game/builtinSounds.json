@@ -1,0 +1,96 @@
+{
+  "block": "block.ogg",
+  "blunder": "blunder.ogg",
+  "bounce": "bounce.ogg",
+  "catch": "catch.ogg",
+  "chainsaw": "chainsaw.ogg",
+  "click": "click.ogg",
+  "ding": "ding.ogg",
+  "dodge": "dodge.ogg",
+  "duh": "duh.ogg",
+  "ew": "ew.ogg",
+  "explode": "explode.ogg",
+  "fall": "fall.ogg",
+  "fireball": "fireball.ogg",
+  "breatheFire": "breatheFire.ogg",
+  "foul": "foul.ogg",
+  "hypno": "hypno.ogg",
+  "injury": "injury.ogg",
+  "kick": "kick.ogg",
+  "ko": "ko.ogg",
+  "metal": "metal.ogg",
+  "nomnom": "nomnom.ogg",
+  "organ": "organ.ogg",
+  "pickup": "pickup.ogg",
+  "pumpcrowd": "pumpcrowd.ogg",
+  "question": "question.ogg",
+  "rip": "rip.ogg",
+  "roar": "roar.ogg",
+  "root": "root.ogg",
+  "slurp": "slurp.ogg",
+  "stab": "stab.ogg",
+  "step": {
+    "styles": {
+      "tick": "step/tick.ogg",
+      "footsteps": {
+        "rain": [
+          "step/footsteps/rain/1.ogg",
+          "step/footsteps/rain/2.ogg",
+          "step/footsteps/rain/3.ogg",
+          "step/footsteps/rain/4.ogg",
+          "step/footsteps/rain/5.ogg"
+        ],
+        "nice": [
+          "step/footsteps/nice/1.ogg",
+          "step/footsteps/nice/2.ogg",
+          "step/footsteps/nice/3.ogg",
+          "step/footsteps/nice/4.ogg",
+          "step/footsteps/nice/5.ogg"
+        ],
+        "sunny": [
+          "step/footsteps/sunny/1.ogg",
+          "step/footsteps/sunny/2.ogg",
+          "step/footsteps/sunny/3.ogg",
+          "step/footsteps/sunny/4.ogg",
+          "step/footsteps/sunny/5.ogg"
+        ],
+        "heat": [
+          "step/footsteps/heat/1.ogg",
+          "step/footsteps/heat/2.ogg",
+          "step/footsteps/heat/3.ogg",
+          "step/footsteps/heat/4.ogg",
+          "step/footsteps/heat/5.ogg"
+        ],
+        "blizzard": [
+          "step/footsteps/blizzard/1.ogg",
+          "step/footsteps/blizzard/2.ogg",
+          "step/footsteps/blizzard/3.ogg",
+          "step/footsteps/blizzard/4.ogg",
+          "step/footsteps/blizzard/5.ogg"
+        ],
+        "intro": [
+          "step/footsteps/intro/1.ogg",
+          "step/footsteps/intro/2.ogg",
+          "step/footsteps/intro/3.ogg",
+          "step/footsteps/intro/4.ogg",
+          "step/footsteps/intro/5.ogg"
+        ]
+      }
+    },
+    "default": "tick"
+  },
+  "swoop": "swoop.ogg",
+  "throw": "throw.ogg",
+  "touchdown": "touchdown.ogg",
+  "trapdoor": "trapdoor.ogg",
+  "vomit": "vomit.ogg",
+  "whistle": "whistle.ogg",
+  "woooaaah": "woooaaah.ogg",
+  "yoink": "yoink.ogg",
+  "zap": "zap.ogg",
+  "sad_trombone": "sad_trombone.wav",
+  "boing": "boing.ogg",
+  "angel": "angel.ogg",
+  "chatToast": "chatToast.ogg",
+  "setupPlace": "setupPlace.ogg"
+}

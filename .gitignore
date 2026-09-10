@@ -1,0 +1,46 @@
+node_modules/
+dist/
+
+# Build-time secrets (the single FUMBBL API application token — see apps/tauri/.env.example).
+# NEVER commit a real .env; only .env.example (placeholders) is tracked.
+.env
+.env.*
+!.env.example
+/Sounds/
+target/
+*.log
+.DS_Store
+coverage/
+.vite/
+src-tauri/gen/
+.godot/
+
+# bot-sim private per-run logs (regenerated; keep context + coverage report)
+sim/logs/*.log
+
+# --- Tree sweep (owner 2026-07-14, Yularen dispositions): raw wire-capture drive dumps + generated
+#     build/deploy/sim artifacts + scratch asset-source dirs. Test-referenced captures load via the
+#     corpus-*.jsonl glob (goldenMaster corpusFiles) and stay TRACKED — only raw dumps are ignored. ---
+fixtures/fumbbl-captures/gbot-*.jsonl
+fixtures/fumbbl-captures/g19*.jsonl
+fixtures/fumbbl-captures/live-g*.jsonl
+fixtures/fumbbl-captures/live-g*.script.json
+dist-manifest/build-*.json
+dist-manifest/latest-build.json
+sim/logs/*.out
+# Scratch / working asset-source dirs (the app builds from apps/tauri/src/assets, not these root dirs).
+/Icons/
+/Sprites/
+/fonts/
+/scratch-logo/
+
+# Proprietary/third-party art source dumps — never publish (owner 08-28, asset-provenance Law 4)
+/Sprites/
+/SkillIcons/
+/fixtures/
+/FumbblWebsite/
+/research/
+/mods/fumbbl-original-sprites/*
+!/mods/fumbbl-original-sprites/README.md
+!/mods/fumbbl-original-sprites/build.mjs
+!/mods/fumbbl-original-sprites/verify.mjs

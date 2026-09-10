@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Vampire crest">
+  <path d="M32 3 L57 11 V32 C57 45 47 55 32 61 C17 55 7 45 7 32 V11 Z" fill="var(--crest-team, #C2333C)" stroke="#0E0F12" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M10 31 V13 L32 6" fill="none" stroke="#E9E2CF" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+  <path d="M55 13 V32 C55 43 46 52 32 58" fill="none" stroke="var(--crest-team-dark, #7E1F27)" stroke-width="2" stroke-linecap="round"/>
+  <path d="M31 24 C24 16 15 17 11 24 C18 23 19 29 14 33 C21 32 24 37 25 42 L32 35 L39 42 C40 37 43 32 50 33 C45 29 46 23 53 24 C49 17 40 16 33 24 Z" fill="#0E0F12" stroke="#6E7683" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M25 36 Q32 43 39 36 L37 47 L33 39 L31 39 L27 47 Z" fill="#E9E2CF" stroke="#0E0F12" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="28" cy="28" r="2" fill="#8A1C1C"/>
+  <circle cx="36" cy="28" r="2" fill="#8A1C1C"/>
+  <path d="M32 45 C27 51 29 55 32 57 C35 55 37 51 32 45 Z" fill="#8A1C1C" stroke="#0E0F12" stroke-width="1.5"/>
+</svg>

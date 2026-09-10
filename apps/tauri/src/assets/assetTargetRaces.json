@@ -1,0 +1,2378 @@
+{
+  "teams": [
+    {
+      "teamId": "race:albionfae",
+      "label": "Albionfae",
+      "positions": [
+        {
+          "positionId": "albionfae.brownie",
+          "label": "Brownie"
+        },
+        {
+          "positionId": "albionfae.fenbeast",
+          "label": "Fenbeast"
+        },
+        {
+          "positionId": "albionfae.leprechaun",
+          "label": "Leprechaun"
+        },
+        {
+          "positionId": "albionfae.pixie",
+          "label": "Pixie"
+        }
+      ]
+    },
+    {
+      "teamId": "race:amazon",
+      "label": "Amazon",
+      "positions": [
+        {
+          "positionId": "amazon.eaglewarriorthrower",
+          "label": "Eaglewarriorthrower"
+        },
+        {
+          "positionId": "amazon.jaguarwarriorblocker",
+          "label": "Jaguarwarriorblocker"
+        },
+        {
+          "positionId": "amazon.kokakalimblitzer",
+          "label": "Kokakalimblitzer"
+        },
+        {
+          "positionId": "amazon.piranhawarriorblitzer",
+          "label": "Piranhawarriorblitzer"
+        },
+        {
+          "positionId": "amazon.piranhawarriorcatcher",
+          "label": "Piranhawarriorcatcher"
+        },
+        {
+          "positionId": "amazon.triballinewoman",
+          "label": "Triballinewoman"
+        }
+      ]
+    },
+    {
+      "teamId": "race:blackorc",
+      "label": "Blackorc",
+      "positions": [
+        {
+          "positionId": "blackorc.blackorc",
+          "label": "Blackorc"
+        },
+        {
+          "positionId": "blackorc.goblinbruiserlineman",
+          "label": "Goblinbruiserlineman"
+        },
+        {
+          "positionId": "blackorc.trainedtroll",
+          "label": "Trainedtroll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:bretonnian",
+      "label": "Bretonnian",
+      "positions": [
+        {
+          "positionId": "bretonnian.blitzers",
+          "label": "Blitzers"
+        },
+        {
+          "positionId": "bretonnian.linemen",
+          "label": "Linemen"
+        },
+        {
+          "positionId": "bretonnian.yeomen",
+          "label": "Yeomen"
+        }
+      ]
+    },
+    {
+      "teamId": "race:chaoschosen",
+      "label": "Chaoschosen",
+      "positions": [
+        {
+          "positionId": "chaoschosen.beastmanrunner",
+          "label": "Beastmanrunner"
+        },
+        {
+          "positionId": "chaoschosen.chaosogre",
+          "label": "Chaosogre"
+        },
+        {
+          "positionId": "chaoschosen.chaostroll",
+          "label": "Chaostroll"
+        },
+        {
+          "positionId": "chaoschosen.chosenblocker",
+          "label": "Chosenblocker"
+        },
+        {
+          "positionId": "chaoschosen.minotaur",
+          "label": "Minotaur"
+        }
+      ]
+    },
+    {
+      "teamId": "race:chaosdwarf",
+      "label": "Chaosdwarf",
+      "positions": [
+        {
+          "positionId": "chaosdwarf.bullcentaurblitzer",
+          "label": "Bullcentaurblitzer"
+        },
+        {
+          "positionId": "chaosdwarf.chaosdwarfblocker",
+          "label": "Chaosdwarfblocker"
+        },
+        {
+          "positionId": "chaosdwarf.chaosdwarfflamesmith",
+          "label": "Chaosdwarfflamesmith"
+        },
+        {
+          "positionId": "chaosdwarf.enslavedminotaur",
+          "label": "Enslavedminotaur"
+        },
+        {
+          "positionId": "chaosdwarf.hobgoblin",
+          "label": "Hobgoblin"
+        },
+        {
+          "positionId": "chaosdwarf.hobgoblinsneakystabba",
+          "label": "Hobgoblinsneakystabba"
+        }
+      ]
+    },
+    {
+      "teamId": "race:chaoshalfling",
+      "label": "Chaoshalfling",
+      "positions": [
+        {
+          "positionId": "chaoshalfling.carver",
+          "label": "Carver"
+        },
+        {
+          "positionId": "chaoshalfling.chaoshalfling",
+          "label": "Chaoshalfling"
+        },
+        {
+          "positionId": "chaoshalfling.chaosspawn",
+          "label": "Chaosspawn"
+        },
+        {
+          "positionId": "chaoshalfling.headcarver",
+          "label": "Headcarver"
+        }
+      ]
+    },
+    {
+      "teamId": "race:chaosrenegade",
+      "label": "Chaosrenegade",
+      "positions": [
+        {
+          "positionId": "chaosrenegade.minotaur",
+          "label": "Minotaur"
+        },
+        {
+          "positionId": "chaosrenegade.ogre",
+          "label": "Ogre"
+        },
+        {
+          "positionId": "chaosrenegade.renegadedarkelflineman",
+          "label": "Renegadedarkelflineman"
+        },
+        {
+          "positionId": "chaosrenegade.renegadegoblin",
+          "label": "Renegadegoblin"
+        },
+        {
+          "positionId": "chaosrenegade.renegadehumanlineman",
+          "label": "Renegadehumanlineman"
+        },
+        {
+          "positionId": "chaosrenegade.renegadehumanthrower",
+          "label": "Renegadehumanthrower"
+        },
+        {
+          "positionId": "chaosrenegade.renegadeorclineman",
+          "label": "Renegadeorclineman"
+        },
+        {
+          "positionId": "chaosrenegade.renegaderatogre",
+          "label": "Renegaderatogre"
+        },
+        {
+          "positionId": "chaosrenegade.renegadeskavenlineman",
+          "label": "Renegadeskavenlineman"
+        },
+        {
+          "positionId": "chaosrenegade.troll",
+          "label": "Troll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:daemonsofkhorne",
+      "label": "Daemonsofkhorne",
+      "positions": [
+        {
+          "positionId": "daemonsofkhorne.bloodletterdaemon",
+          "label": "Bloodletterdaemon"
+        },
+        {
+          "positionId": "daemonsofkhorne.bloodthirster",
+          "label": "Bloodthirster"
+        },
+        {
+          "positionId": "daemonsofkhorne.khorneherald",
+          "label": "Khorneherald"
+        },
+        {
+          "positionId": "daemonsofkhorne.pitfighter",
+          "label": "Pitfighter"
+        }
+      ]
+    },
+    {
+      "teamId": "race:darkelf",
+      "label": "Darkelf",
+      "positions": [
+        {
+          "positionId": "darkelf.assassin",
+          "label": "Assassin"
+        },
+        {
+          "positionId": "darkelf.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "darkelf.darkelflineman",
+          "label": "Darkelflineman"
+        },
+        {
+          "positionId": "darkelf.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "darkelf.runner",
+          "label": "Runner"
+        },
+        {
+          "positionId": "darkelf.witchelf",
+          "label": "Witchelf"
+        }
+      ]
+    },
+    {
+      "teamId": "race:dwarf",
+      "label": "Dwarf",
+      "positions": [
+        {
+          "positionId": "dwarf.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "dwarf.blocker",
+          "label": "Blocker"
+        },
+        {
+          "positionId": "dwarf.deathroller",
+          "label": "Deathroller"
+        },
+        {
+          "positionId": "dwarf.runner",
+          "label": "Runner"
+        },
+        {
+          "positionId": "dwarf.trollslayer",
+          "label": "Trollslayer"
+        }
+      ]
+    },
+    {
+      "teamId": "race:elvenunion",
+      "label": "Elvenunion",
+      "positions": [
+        {
+          "positionId": "elvenunion.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "elvenunion.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "elvenunion.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "elvenunion.thrower",
+          "label": "Thrower"
+        }
+      ]
+    },
+    {
+      "teamId": "race:eshinadepts",
+      "label": "Eshinadepts",
+      "positions": [
+        {
+          "positionId": "eshinadepts.adept",
+          "label": "Adept"
+        },
+        {
+          "positionId": "eshinadepts.assassin",
+          "label": "Assassin"
+        },
+        {
+          "positionId": "eshinadepts.nightrunner",
+          "label": "Nightrunner"
+        },
+        {
+          "positionId": "eshinadepts.stalker",
+          "label": "Stalker"
+        }
+      ]
+    },
+    {
+      "teamId": "race:forestgoblin",
+      "label": "Forestgoblin",
+      "positions": [
+        {
+          "positionId": "forestgoblin.forestgoblin",
+          "label": "Forestgoblin"
+        },
+        {
+          "positionId": "forestgoblin.shaman",
+          "label": "Shaman"
+        },
+        {
+          "positionId": "forestgoblin.spiderrider",
+          "label": "Spiderrider"
+        },
+        {
+          "positionId": "forestgoblin.stikka",
+          "label": "Stikka"
+        }
+      ]
+    },
+    {
+      "teamId": "race:gnoblar",
+      "label": "Gnoblar",
+      "positions": [
+        {
+          "positionId": "gnoblar.gnoblar",
+          "label": "Gnoblar"
+        },
+        {
+          "positionId": "gnoblar.gnoblarbully",
+          "label": "Gnoblarbully"
+        },
+        {
+          "positionId": "gnoblar.ogregorger",
+          "label": "Ogregorger"
+        },
+        {
+          "positionId": "gnoblar.ogreirongut",
+          "label": "Ogreirongut"
+        },
+        {
+          "positionId": "gnoblar.ogremaneater",
+          "label": "Ogremaneater"
+        },
+        {
+          "positionId": "gnoblar.trapper",
+          "label": "Trapper"
+        }
+      ]
+    },
+    {
+      "teamId": "race:gnome",
+      "label": "Gnome",
+      "positions": [
+        {
+          "positionId": "gnome.alternforesttreeman",
+          "label": "Alternforesttreeman"
+        },
+        {
+          "positionId": "gnome.daredevil",
+          "label": "Daredevil"
+        },
+        {
+          "positionId": "gnome.dwarvencannon",
+          "label": "Dwarvencannon"
+        },
+        {
+          "positionId": "gnome.gnome",
+          "label": "Gnome"
+        },
+        {
+          "positionId": "gnome.gnomebeastmaster",
+          "label": "Gnomebeastmaster"
+        },
+        {
+          "positionId": "gnome.gnomeillusionist",
+          "label": "Gnomeillusionist"
+        },
+        {
+          "positionId": "gnome.gnomelineman",
+          "label": "Gnomelineman"
+        },
+        {
+          "positionId": "gnome.madbommaz",
+          "label": "Madbommaz"
+        },
+        {
+          "positionId": "gnome.squigslayer",
+          "label": "Squigslayer"
+        },
+        {
+          "positionId": "gnome.woodlandfox",
+          "label": "Woodlandfox"
+        }
+      ]
+    },
+    {
+      "teamId": "race:gnomesffbtest",
+      "label": "Gnomesffbtest",
+      "positions": [
+        {
+          "positionId": "gnomesffbtest.alternforesttreeman",
+          "label": "Alternforesttreeman"
+        }
+      ]
+    },
+    {
+      "teamId": "race:goblin",
+      "label": "Goblin",
+      "positions": [
+        {
+          "positionId": "goblin.bomma",
+          "label": "Bomma"
+        },
+        {
+          "positionId": "goblin.doomdiver",
+          "label": "Doomdiver"
+        },
+        {
+          "positionId": "goblin.fanatic",
+          "label": "Fanatic"
+        },
+        {
+          "positionId": "goblin.goblin",
+          "label": "Goblin"
+        },
+        {
+          "positionId": "goblin.looney",
+          "label": "Looney"
+        },
+        {
+          "positionId": "goblin.ooligan",
+          "label": "Ooligan"
+        },
+        {
+          "positionId": "goblin.pogoer",
+          "label": "Pogoer"
+        },
+        {
+          "positionId": "goblin.troll",
+          "label": "Troll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:goblincheaters",
+      "label": "Goblincheaters",
+      "positions": [
+        {
+          "positionId": "goblincheaters.bomber",
+          "label": "Bomber"
+        },
+        {
+          "positionId": "goblincheaters.fanatic",
+          "label": "Fanatic"
+        },
+        {
+          "positionId": "goblincheaters.goblin",
+          "label": "Goblin"
+        },
+        {
+          "positionId": "goblincheaters.kicker",
+          "label": "Kicker"
+        },
+        {
+          "positionId": "goblincheaters.looney",
+          "label": "Looney"
+        },
+        {
+          "positionId": "goblincheaters.pogostick",
+          "label": "Pogostick"
+        }
+      ]
+    },
+    {
+      "teamId": "race:halfling",
+      "label": "Halfling",
+      "positions": [
+        {
+          "positionId": "halfling.halflingcatcher",
+          "label": "Halflingcatcher"
+        },
+        {
+          "positionId": "halfling.halflinghefty",
+          "label": "Halflinghefty"
+        },
+        {
+          "positionId": "halfling.halflinghopeful",
+          "label": "Halflinghopeful"
+        },
+        {
+          "positionId": "halfling.treeman",
+          "label": "Treeman"
+        }
+      ]
+    },
+    {
+      "teamId": "race:highelf",
+      "label": "Highelf",
+      "positions": [
+        {
+          "positionId": "highelf.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "highelf.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "highelf.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "highelf.thrower",
+          "label": "Thrower"
+        }
+      ]
+    },
+    {
+      "teamId": "race:horrorsoftzeentch",
+      "label": "Horrorsoftzeentch",
+      "positions": [
+        {
+          "positionId": "horrorsoftzeentch.firewyrm",
+          "label": "Firewyrm"
+        },
+        {
+          "positionId": "horrorsoftzeentch.flamer",
+          "label": "Flamer"
+        },
+        {
+          "positionId": "horrorsoftzeentch.greaterhorror",
+          "label": "Greaterhorror"
+        },
+        {
+          "positionId": "horrorsoftzeentch.horror",
+          "label": "Horror"
+        }
+      ]
+    },
+    {
+      "teamId": "race:human",
+      "label": "Human",
+      "positions": [
+        {
+          "positionId": "human.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "human.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "human.halflinghopeful",
+          "label": "Halflinghopeful"
+        },
+        {
+          "positionId": "human.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "human.ogre",
+          "label": "Ogre"
+        },
+        {
+          "positionId": "human.thrower",
+          "label": "Thrower"
+        }
+      ]
+    },
+    {
+      "teamId": "race:imperialnobility",
+      "label": "Imperialnobility",
+      "positions": [
+        {
+          "positionId": "imperialnobility.bodyguard",
+          "label": "Bodyguard"
+        },
+        {
+          "positionId": "imperialnobility.imperialretainerlineman",
+          "label": "Imperialretainerlineman"
+        },
+        {
+          "positionId": "imperialnobility.imperialthrower",
+          "label": "Imperialthrower"
+        },
+        {
+          "positionId": "imperialnobility.nobleblitzer",
+          "label": "Nobleblitzer"
+        },
+        {
+          "positionId": "imperialnobility.ogre",
+          "label": "Ogre"
+        }
+      ]
+    },
+    {
+      "teamId": "race:khorne",
+      "label": "Khorne",
+      "positions": [
+        {
+          "positionId": "khorne.bloodbornmarauderlineman",
+          "label": "Bloodbornmarauderlineman"
+        },
+        {
+          "positionId": "khorne.bloodseeker",
+          "label": "Bloodseeker"
+        },
+        {
+          "positionId": "khorne.bloodspawn",
+          "label": "Bloodspawn"
+        },
+        {
+          "positionId": "khorne.khorngor",
+          "label": "Khorngor"
+        }
+      ]
+    },
+    {
+      "teamId": "race:lizardmen",
+      "label": "Lizardmen",
+      "positions": [
+        {
+          "positionId": "lizardmen.chameleonskink",
+          "label": "Chameleonskink"
+        },
+        {
+          "positionId": "lizardmen.kroxigor",
+          "label": "Kroxigor"
+        },
+        {
+          "positionId": "lizardmen.saurusblocker",
+          "label": "Saurusblocker"
+        },
+        {
+          "positionId": "lizardmen.skinkrunner",
+          "label": "Skinkrunner"
+        }
+      ]
+    },
+    {
+      "teamId": "race:necromantichorror",
+      "label": "Necromantichorror",
+      "positions": [
+        {
+          "positionId": "necromantichorror.fleshgolem",
+          "label": "Fleshgolem"
+        },
+        {
+          "positionId": "necromantichorror.ghoulrunner",
+          "label": "Ghoulrunner"
+        },
+        {
+          "positionId": "necromantichorror.werewolf",
+          "label": "Werewolf"
+        },
+        {
+          "positionId": "necromantichorror.wightblitzer",
+          "label": "Wightblitzer"
+        },
+        {
+          "positionId": "necromantichorror.wraith",
+          "label": "Wraith"
+        },
+        {
+          "positionId": "necromantichorror.zombie",
+          "label": "Zombie"
+        }
+      ]
+    },
+    {
+      "teamId": "race:norse",
+      "label": "Norse",
+      "positions": [
+        {
+          "positionId": "norse.beerboar",
+          "label": "Beerboar"
+        },
+        {
+          "positionId": "norse.berserker",
+          "label": "Berserker"
+        },
+        {
+          "positionId": "norse.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "norse.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "norse.snowtroll",
+          "label": "Snowtroll"
+        },
+        {
+          "positionId": "norse.thrower",
+          "label": "Thrower"
+        },
+        {
+          "positionId": "norse.ulfwerenar",
+          "label": "Ulfwerenar"
+        },
+        {
+          "positionId": "norse.valkyrie",
+          "label": "Valkyrie"
+        }
+      ]
+    },
+    {
+      "teamId": "race:nurgle",
+      "label": "Nurgle",
+      "positions": [
+        {
+          "positionId": "nurgle.bloater",
+          "label": "Bloater"
+        },
+        {
+          "positionId": "nurgle.pestigor",
+          "label": "Pestigor"
+        },
+        {
+          "positionId": "nurgle.rotspawn",
+          "label": "Rotspawn"
+        },
+        {
+          "positionId": "nurgle.rotter",
+          "label": "Rotter"
+        }
+      ]
+    },
+    {
+      "teamId": "race:nurglings",
+      "label": "Nurglings",
+      "positions": [
+        {
+          "positionId": "nurglings.beast",
+          "label": "Beast"
+        },
+        {
+          "positionId": "nurglings.nurgling",
+          "label": "Nurgling"
+        },
+        {
+          "positionId": "nurglings.plaguebearer",
+          "label": "Plaguebearer"
+        },
+        {
+          "positionId": "nurglings.putrifier",
+          "label": "Putrifier"
+        }
+      ]
+    },
+    {
+      "teamId": "race:ogre",
+      "label": "Ogre",
+      "positions": [
+        {
+          "positionId": "ogre.gnoblar",
+          "label": "Gnoblar"
+        },
+        {
+          "positionId": "ogre.gnoblarlineman",
+          "label": "Gnoblarlineman"
+        },
+        {
+          "positionId": "ogre.ogre",
+          "label": "Ogre"
+        },
+        {
+          "positionId": "ogre.ogreruntpunter",
+          "label": "Ogreruntpunter"
+        },
+        {
+          "positionId": "ogre.runtpunter",
+          "label": "Runtpunter"
+        }
+      ]
+    },
+    {
+      "teamId": "race:oldworldalliance",
+      "label": "Oldworldalliance",
+      "positions": [
+        {
+          "positionId": "oldworldalliance.alternforesttreeman",
+          "label": "Alternforesttreeman"
+        },
+        {
+          "positionId": "oldworldalliance.dwarfblitzer",
+          "label": "Dwarfblitzer"
+        },
+        {
+          "positionId": "oldworldalliance.dwarfblocker",
+          "label": "Dwarfblocker"
+        },
+        {
+          "positionId": "oldworldalliance.dwarfrunner",
+          "label": "Dwarfrunner"
+        },
+        {
+          "positionId": "oldworldalliance.dwarftrollslayer",
+          "label": "Dwarftrollslayer"
+        },
+        {
+          "positionId": "oldworldalliance.halflinghopeful",
+          "label": "Halflinghopeful"
+        },
+        {
+          "positionId": "oldworldalliance.humanblitzer",
+          "label": "Humanblitzer"
+        },
+        {
+          "positionId": "oldworldalliance.humancatcher",
+          "label": "Humancatcher"
+        },
+        {
+          "positionId": "oldworldalliance.humanlineman",
+          "label": "Humanlineman"
+        },
+        {
+          "positionId": "oldworldalliance.humanthrower",
+          "label": "Humanthrower"
+        },
+        {
+          "positionId": "oldworldalliance.ogre",
+          "label": "Ogre"
+        }
+      ]
+    },
+    {
+      "teamId": "race:orc",
+      "label": "Orc",
+      "positions": [
+        {
+          "positionId": "orc.bigunblocker",
+          "label": "Bigunblocker"
+        },
+        {
+          "positionId": "orc.blackorcblocker",
+          "label": "Blackorcblocker"
+        },
+        {
+          "positionId": "orc.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "orc.goblin",
+          "label": "Goblin"
+        },
+        {
+          "positionId": "orc.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "orc.thrower",
+          "label": "Thrower"
+        },
+        {
+          "positionId": "orc.troll",
+          "label": "Troll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:prizeplayers",
+      "label": "Prizeplayers",
+      "positions": [
+        {
+          "positionId": "prizeplayers.sandskeleton",
+          "label": "Sandskeleton"
+        }
+      ]
+    },
+    {
+      "teamId": "race:prohalflings",
+      "label": "Prohalflings",
+      "positions": [
+        {
+          "positionId": "prohalflings.borrower",
+          "label": "Borrower"
+        },
+        {
+          "positionId": "prohalflings.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "prohalflings.halfling",
+          "label": "Halfling"
+        },
+        {
+          "positionId": "prohalflings.mootguard",
+          "label": "Mootguard"
+        },
+        {
+          "positionId": "prohalflings.punter",
+          "label": "Punter"
+        },
+        {
+          "positionId": "prohalflings.treeman",
+          "label": "Treeman"
+        }
+      ]
+    },
+    {
+      "teamId": "race:pygmy",
+      "label": "Pygmy",
+      "positions": [
+        {
+          "positionId": "pygmy.alligatorwarrior",
+          "label": "Alligatorwarrior"
+        },
+        {
+          "positionId": "pygmy.eaglewarrior",
+          "label": "Eaglewarrior"
+        },
+        {
+          "positionId": "pygmy.jaguarwarrior",
+          "label": "Jaguarwarrior"
+        },
+        {
+          "positionId": "pygmy.kroxigor",
+          "label": "Kroxigor"
+        },
+        {
+          "positionId": "pygmy.pygmy",
+          "label": "Pygmy"
+        }
+      ]
+    },
+    {
+      "teamId": "race:shamblingundead",
+      "label": "Shamblingundead",
+      "positions": [
+        {
+          "positionId": "shamblingundead.ghoulrunner",
+          "label": "Ghoulrunner"
+        },
+        {
+          "positionId": "shamblingundead.mummy",
+          "label": "Mummy"
+        },
+        {
+          "positionId": "shamblingundead.skeleton",
+          "label": "Skeleton"
+        },
+        {
+          "positionId": "shamblingundead.wightblitzer",
+          "label": "Wightblitzer"
+        },
+        {
+          "positionId": "shamblingundead.zombie",
+          "label": "Zombie"
+        }
+      ]
+    },
+    {
+      "teamId": "race:simyin",
+      "label": "Simyin",
+      "positions": [
+        {
+          "positionId": "simyin.bonobo",
+          "label": "Bonobo"
+        },
+        {
+          "positionId": "simyin.chimpanzee",
+          "label": "Chimpanzee"
+        },
+        {
+          "positionId": "simyin.gorilla",
+          "label": "Gorilla"
+        },
+        {
+          "positionId": "simyin.orangutan",
+          "label": "Orangutan"
+        },
+        {
+          "positionId": "simyin.silverback",
+          "label": "Silverback"
+        }
+      ]
+    },
+    {
+      "teamId": "race:skaven",
+      "label": "Skaven",
+      "positions": [
+        {
+          "positionId": "skaven.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "skaven.gutterrunner",
+          "label": "Gutterrunner"
+        },
+        {
+          "positionId": "skaven.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "skaven.ratogre",
+          "label": "Ratogre"
+        },
+        {
+          "positionId": "skaven.thrower",
+          "label": "Thrower"
+        }
+      ]
+    },
+    {
+      "teamId": "race:skink",
+      "label": "Skink",
+      "positions": [
+        {
+          "positionId": "skink.adeptofsotek",
+          "label": "Adeptofsotek"
+        },
+        {
+          "positionId": "skink.raptor",
+          "label": "Raptor"
+        },
+        {
+          "positionId": "skink.skink",
+          "label": "Skink"
+        },
+        {
+          "positionId": "skink.whiptail",
+          "label": "Whiptail"
+        }
+      ]
+    },
+    {
+      "teamId": "race:skryreslaves",
+      "label": "Skryreslaves",
+      "positions": [
+        {
+          "positionId": "skryreslaves.doomwheel",
+          "label": "Doomwheel"
+        },
+        {
+          "positionId": "skryreslaves.jezzail",
+          "label": "Jezzail"
+        },
+        {
+          "positionId": "skryreslaves.mechavermin",
+          "label": "Mechavermin"
+        },
+        {
+          "positionId": "skryreslaves.poisonedwindglobadier",
+          "label": "Poisonedwindglobadier"
+        },
+        {
+          "positionId": "skryreslaves.slave",
+          "label": "Slave"
+        }
+      ]
+    },
+    {
+      "teamId": "race:slann",
+      "label": "Slann",
+      "positions": [
+        {
+          "positionId": "slann.blitzer",
+          "label": "Blitzer"
+        },
+        {
+          "positionId": "slann.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "slann.kroxigor",
+          "label": "Kroxigor"
+        },
+        {
+          "positionId": "slann.lineman",
+          "label": "Lineman"
+        }
+      ]
+    },
+    {
+      "teamId": "race:snotling",
+      "label": "Snotling",
+      "positions": [
+        {
+          "positionId": "snotling.fungusflinga",
+          "label": "Fungusflinga"
+        },
+        {
+          "positionId": "snotling.funhoppa",
+          "label": "Funhoppa"
+        },
+        {
+          "positionId": "snotling.pumpwagon",
+          "label": "Pumpwagon"
+        },
+        {
+          "positionId": "snotling.snotling",
+          "label": "Snotling"
+        },
+        {
+          "positionId": "snotling.snotlinggoon",
+          "label": "Snotlinggoon"
+        },
+        {
+          "positionId": "snotling.snotlingmob",
+          "label": "Snotlingmob"
+        },
+        {
+          "positionId": "snotling.splattawagon",
+          "label": "Splattawagon"
+        },
+        {
+          "positionId": "snotling.stiltyrunna",
+          "label": "Stiltyrunna"
+        },
+        {
+          "positionId": "snotling.troll",
+          "label": "Troll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:squigherders",
+      "label": "Squigherders",
+      "positions": [
+        {
+          "positionId": "squigherders.squig",
+          "label": "Squig"
+        },
+        {
+          "positionId": "squigherders.squigherder",
+          "label": "Squigherder"
+        },
+        {
+          "positionId": "squigherders.squighopper",
+          "label": "Squighopper"
+        }
+      ]
+    },
+    {
+      "teamId": "race:strigoyan",
+      "label": "Strigoyan",
+      "positions": [
+        {
+          "positionId": "strigoyan.cryptghoul",
+          "label": "Cryptghoul"
+        },
+        {
+          "positionId": "strigoyan.strigoyanlord",
+          "label": "Strigoyanlord"
+        },
+        {
+          "positionId": "strigoyan.thrall",
+          "label": "Thrall"
+        }
+      ]
+    },
+    {
+      "teamId": "race:tombkings",
+      "label": "Tombkings",
+      "positions": [
+        {
+          "positionId": "tombkings.anointedblitzer",
+          "label": "Anointedblitzer"
+        },
+        {
+          "positionId": "tombkings.anointedthrower",
+          "label": "Anointedthrower"
+        },
+        {
+          "positionId": "tombkings.skeletonlineman",
+          "label": "Skeletonlineman"
+        },
+        {
+          "positionId": "tombkings.tombguardian",
+          "label": "Tombguardian"
+        }
+      ]
+    },
+    {
+      "teamId": "race:underworlddenizens",
+      "label": "Underworlddenizens",
+      "positions": [
+        {
+          "positionId": "underworlddenizens.goblin",
+          "label": "Goblin"
+        },
+        {
+          "positionId": "underworlddenizens.gutterrunner",
+          "label": "Gutterrunner"
+        },
+        {
+          "positionId": "underworlddenizens.mutantratogre",
+          "label": "Mutantratogre"
+        },
+        {
+          "positionId": "underworlddenizens.skavenblitzer",
+          "label": "Skavenblitzer"
+        },
+        {
+          "positionId": "underworlddenizens.skavenlineman",
+          "label": "Skavenlineman"
+        },
+        {
+          "positionId": "underworlddenizens.skaventhrower",
+          "label": "Skaventhrower"
+        },
+        {
+          "positionId": "underworlddenizens.underworldsnotlings",
+          "label": "Underworldsnotlings"
+        },
+        {
+          "positionId": "underworlddenizens.underworldtroll",
+          "label": "Underworldtroll"
+        }
+      ]
+    },
+    {
+      "teamId": "race:vampire",
+      "label": "Vampire",
+      "positions": [
+        {
+          "positionId": "vampire.thrall",
+          "label": "Thrall"
+        },
+        {
+          "positionId": "vampire.vampire",
+          "label": "Vampire"
+        },
+        {
+          "positionId": "vampire.vampireblitzer",
+          "label": "Vampireblitzer"
+        },
+        {
+          "positionId": "vampire.vampirerunner",
+          "label": "Vampirerunner"
+        },
+        {
+          "positionId": "vampire.vampirethrower",
+          "label": "Vampirethrower"
+        },
+        {
+          "positionId": "vampire.vargheist",
+          "label": "Vargheist"
+        }
+      ]
+    },
+    {
+      "teamId": "race:vampire(sep23test)",
+      "label": "Vampire(Sep23test)",
+      "positions": [
+        {
+          "positionId": "vampire(sep23test).thralllineman",
+          "label": "Thralllineman"
+        },
+        {
+          "positionId": "vampire(sep23test).vampireblitzer",
+          "label": "Vampireblitzer"
+        },
+        {
+          "positionId": "vampire(sep23test).vampirerunner",
+          "label": "Vampirerunner"
+        },
+        {
+          "positionId": "vampire(sep23test).vampirethrower",
+          "label": "Vampirethrower"
+        },
+        {
+          "positionId": "vampire(sep23test).vargheist",
+          "label": "Vargheist"
+        }
+      ]
+    },
+    {
+      "teamId": "race:woodelf",
+      "label": "Woodelf",
+      "positions": [
+        {
+          "positionId": "woodelf.catcher",
+          "label": "Catcher"
+        },
+        {
+          "positionId": "woodelf.lineman",
+          "label": "Lineman"
+        },
+        {
+          "positionId": "woodelf.lorenforesttreeman",
+          "label": "Lorenforesttreeman"
+        },
+        {
+          "positionId": "woodelf.thrower",
+          "label": "Thrower"
+        },
+        {
+          "positionId": "woodelf.treeman",
+          "label": "Treeman"
+        },
+        {
+          "positionId": "woodelf.wardancer",
+          "label": "Wardancer"
+        }
+      ]
+    }
+  ],
+  "positions": [
+    {
+      "positionId": "albionfae.brownie",
+      "label": "Brownie"
+    },
+    {
+      "positionId": "albionfae.fenbeast",
+      "label": "Fenbeast"
+    },
+    {
+      "positionId": "albionfae.leprechaun",
+      "label": "Leprechaun"
+    },
+    {
+      "positionId": "albionfae.pixie",
+      "label": "Pixie"
+    },
+    {
+      "positionId": "amazon.eaglewarriorthrower",
+      "label": "Eaglewarriorthrower"
+    },
+    {
+      "positionId": "amazon.jaguarwarriorblocker",
+      "label": "Jaguarwarriorblocker"
+    },
+    {
+      "positionId": "amazon.kokakalimblitzer",
+      "label": "Kokakalimblitzer"
+    },
+    {
+      "positionId": "amazon.piranhawarriorblitzer",
+      "label": "Piranhawarriorblitzer"
+    },
+    {
+      "positionId": "amazon.piranhawarriorcatcher",
+      "label": "Piranhawarriorcatcher"
+    },
+    {
+      "positionId": "amazon.triballinewoman",
+      "label": "Triballinewoman"
+    },
+    {
+      "positionId": "blackorc.blackorc",
+      "label": "Blackorc"
+    },
+    {
+      "positionId": "blackorc.goblinbruiserlineman",
+      "label": "Goblinbruiserlineman"
+    },
+    {
+      "positionId": "blackorc.trainedtroll",
+      "label": "Trainedtroll"
+    },
+    {
+      "positionId": "bretonnian.blitzers",
+      "label": "Blitzers"
+    },
+    {
+      "positionId": "bretonnian.linemen",
+      "label": "Linemen"
+    },
+    {
+      "positionId": "bretonnian.yeomen",
+      "label": "Yeomen"
+    },
+    {
+      "positionId": "chaoschosen.beastmanrunner",
+      "label": "Beastmanrunner"
+    },
+    {
+      "positionId": "chaoschosen.chaosogre",
+      "label": "Chaosogre"
+    },
+    {
+      "positionId": "chaoschosen.chaostroll",
+      "label": "Chaostroll"
+    },
+    {
+      "positionId": "chaoschosen.chosenblocker",
+      "label": "Chosenblocker"
+    },
+    {
+      "positionId": "chaoschosen.minotaur",
+      "label": "Minotaur"
+    },
+    {
+      "positionId": "chaosdwarf.bullcentaurblitzer",
+      "label": "Bullcentaurblitzer"
+    },
+    {
+      "positionId": "chaosdwarf.chaosdwarfblocker",
+      "label": "Chaosdwarfblocker"
+    },
+    {
+      "positionId": "chaosdwarf.chaosdwarfflamesmith",
+      "label": "Chaosdwarfflamesmith"
+    },
+    {
+      "positionId": "chaosdwarf.enslavedminotaur",
+      "label": "Enslavedminotaur"
+    },
+    {
+      "positionId": "chaosdwarf.hobgoblin",
+      "label": "Hobgoblin"
+    },
+    {
+      "positionId": "chaosdwarf.hobgoblinsneakystabba",
+      "label": "Hobgoblinsneakystabba"
+    },
+    {
+      "positionId": "chaoshalfling.carver",
+      "label": "Carver"
+    },
+    {
+      "positionId": "chaoshalfling.chaoshalfling",
+      "label": "Chaoshalfling"
+    },
+    {
+      "positionId": "chaoshalfling.chaosspawn",
+      "label": "Chaosspawn"
+    },
+    {
+      "positionId": "chaoshalfling.headcarver",
+      "label": "Headcarver"
+    },
+    {
+      "positionId": "chaosrenegade.minotaur",
+      "label": "Minotaur"
+    },
+    {
+      "positionId": "chaosrenegade.ogre",
+      "label": "Ogre"
+    },
+    {
+      "positionId": "chaosrenegade.renegadedarkelflineman",
+      "label": "Renegadedarkelflineman"
+    },
+    {
+      "positionId": "chaosrenegade.renegadegoblin",
+      "label": "Renegadegoblin"
+    },
+    {
+      "positionId": "chaosrenegade.renegadehumanlineman",
+      "label": "Renegadehumanlineman"
+    },
+    {
+      "positionId": "chaosrenegade.renegadehumanthrower",
+      "label": "Renegadehumanthrower"
+    },
+    {
+      "positionId": "chaosrenegade.renegadeorclineman",
+      "label": "Renegadeorclineman"
+    },
+    {
+      "positionId": "chaosrenegade.renegaderatogre",
+      "label": "Renegaderatogre"
+    },
+    {
+      "positionId": "chaosrenegade.renegadeskavenlineman",
+      "label": "Renegadeskavenlineman"
+    },
+    {
+      "positionId": "chaosrenegade.troll",
+      "label": "Troll"
+    },
+    {
+      "positionId": "daemonsofkhorne.bloodletterdaemon",
+      "label": "Bloodletterdaemon"
+    },
+    {
+      "positionId": "daemonsofkhorne.bloodthirster",
+      "label": "Bloodthirster"
+    },
+    {
+      "positionId": "daemonsofkhorne.khorneherald",
+      "label": "Khorneherald"
+    },
+    {
+      "positionId": "daemonsofkhorne.pitfighter",
+      "label": "Pitfighter"
+    },
+    {
+      "positionId": "darkelf.assassin",
+      "label": "Assassin"
+    },
+    {
+      "positionId": "darkelf.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "darkelf.darkelflineman",
+      "label": "Darkelflineman"
+    },
+    {
+      "positionId": "darkelf.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "darkelf.runner",
+      "label": "Runner"
+    },
+    {
+      "positionId": "darkelf.witchelf",
+      "label": "Witchelf"
+    },
+    {
+      "positionId": "dwarf.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "dwarf.blocker",
+      "label": "Blocker"
+    },
+    {
+      "positionId": "dwarf.deathroller",
+      "label": "Deathroller"
+    },
+    {
+      "positionId": "dwarf.runner",
+      "label": "Runner"
+    },
+    {
+      "positionId": "dwarf.trollslayer",
+      "label": "Trollslayer"
+    },
+    {
+      "positionId": "elvenunion.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "elvenunion.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "elvenunion.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "elvenunion.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "eshinadepts.adept",
+      "label": "Adept"
+    },
+    {
+      "positionId": "eshinadepts.assassin",
+      "label": "Assassin"
+    },
+    {
+      "positionId": "eshinadepts.nightrunner",
+      "label": "Nightrunner"
+    },
+    {
+      "positionId": "eshinadepts.stalker",
+      "label": "Stalker"
+    },
+    {
+      "positionId": "forestgoblin.forestgoblin",
+      "label": "Forestgoblin"
+    },
+    {
+      "positionId": "forestgoblin.shaman",
+      "label": "Shaman"
+    },
+    {
+      "positionId": "forestgoblin.spiderrider",
+      "label": "Spiderrider"
+    },
+    {
+      "positionId": "forestgoblin.stikka",
+      "label": "Stikka"
+    },
+    {
+      "positionId": "gnoblar.gnoblar",
+      "label": "Gnoblar"
+    },
+    {
+      "positionId": "gnoblar.gnoblarbully",
+      "label": "Gnoblarbully"
+    },
+    {
+      "positionId": "gnoblar.ogregorger",
+      "label": "Ogregorger"
+    },
+    {
+      "positionId": "gnoblar.ogreirongut",
+      "label": "Ogreirongut"
+    },
+    {
+      "positionId": "gnoblar.ogremaneater",
+      "label": "Ogremaneater"
+    },
+    {
+      "positionId": "gnoblar.trapper",
+      "label": "Trapper"
+    },
+    {
+      "positionId": "gnome.alternforesttreeman",
+      "label": "Alternforesttreeman"
+    },
+    {
+      "positionId": "gnome.daredevil",
+      "label": "Daredevil"
+    },
+    {
+      "positionId": "gnome.dwarvencannon",
+      "label": "Dwarvencannon"
+    },
+    {
+      "positionId": "gnome.gnome",
+      "label": "Gnome"
+    },
+    {
+      "positionId": "gnome.gnomebeastmaster",
+      "label": "Gnomebeastmaster"
+    },
+    {
+      "positionId": "gnome.gnomeillusionist",
+      "label": "Gnomeillusionist"
+    },
+    {
+      "positionId": "gnome.gnomelineman",
+      "label": "Gnomelineman"
+    },
+    {
+      "positionId": "gnome.madbommaz",
+      "label": "Madbommaz"
+    },
+    {
+      "positionId": "gnome.squigslayer",
+      "label": "Squigslayer"
+    },
+    {
+      "positionId": "gnome.woodlandfox",
+      "label": "Woodlandfox"
+    },
+    {
+      "positionId": "gnomesffbtest.alternforesttreeman",
+      "label": "Alternforesttreeman"
+    },
+    {
+      "positionId": "goblin.bomma",
+      "label": "Bomma"
+    },
+    {
+      "positionId": "goblin.doomdiver",
+      "label": "Doomdiver"
+    },
+    {
+      "positionId": "goblin.fanatic",
+      "label": "Fanatic"
+    },
+    {
+      "positionId": "goblin.goblin",
+      "label": "Goblin"
+    },
+    {
+      "positionId": "goblin.looney",
+      "label": "Looney"
+    },
+    {
+      "positionId": "goblin.ooligan",
+      "label": "Ooligan"
+    },
+    {
+      "positionId": "goblin.pogoer",
+      "label": "Pogoer"
+    },
+    {
+      "positionId": "goblin.troll",
+      "label": "Troll"
+    },
+    {
+      "positionId": "goblincheaters.bomber",
+      "label": "Bomber"
+    },
+    {
+      "positionId": "goblincheaters.fanatic",
+      "label": "Fanatic"
+    },
+    {
+      "positionId": "goblincheaters.goblin",
+      "label": "Goblin"
+    },
+    {
+      "positionId": "goblincheaters.kicker",
+      "label": "Kicker"
+    },
+    {
+      "positionId": "goblincheaters.looney",
+      "label": "Looney"
+    },
+    {
+      "positionId": "goblincheaters.pogostick",
+      "label": "Pogostick"
+    },
+    {
+      "positionId": "halfling.halflingcatcher",
+      "label": "Halflingcatcher"
+    },
+    {
+      "positionId": "halfling.halflinghefty",
+      "label": "Halflinghefty"
+    },
+    {
+      "positionId": "halfling.halflinghopeful",
+      "label": "Halflinghopeful"
+    },
+    {
+      "positionId": "halfling.treeman",
+      "label": "Treeman"
+    },
+    {
+      "positionId": "highelf.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "highelf.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "highelf.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "highelf.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "horrorsoftzeentch.firewyrm",
+      "label": "Firewyrm"
+    },
+    {
+      "positionId": "horrorsoftzeentch.flamer",
+      "label": "Flamer"
+    },
+    {
+      "positionId": "horrorsoftzeentch.greaterhorror",
+      "label": "Greaterhorror"
+    },
+    {
+      "positionId": "horrorsoftzeentch.horror",
+      "label": "Horror"
+    },
+    {
+      "positionId": "human.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "human.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "human.halflinghopeful",
+      "label": "Halflinghopeful"
+    },
+    {
+      "positionId": "human.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "human.ogre",
+      "label": "Ogre"
+    },
+    {
+      "positionId": "human.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "imperialnobility.bodyguard",
+      "label": "Bodyguard"
+    },
+    {
+      "positionId": "imperialnobility.imperialretainerlineman",
+      "label": "Imperialretainerlineman"
+    },
+    {
+      "positionId": "imperialnobility.imperialthrower",
+      "label": "Imperialthrower"
+    },
+    {
+      "positionId": "imperialnobility.nobleblitzer",
+      "label": "Nobleblitzer"
+    },
+    {
+      "positionId": "imperialnobility.ogre",
+      "label": "Ogre"
+    },
+    {
+      "positionId": "khorne.bloodbornmarauderlineman",
+      "label": "Bloodbornmarauderlineman"
+    },
+    {
+      "positionId": "khorne.bloodseeker",
+      "label": "Bloodseeker"
+    },
+    {
+      "positionId": "khorne.bloodspawn",
+      "label": "Bloodspawn"
+    },
+    {
+      "positionId": "khorne.khorngor",
+      "label": "Khorngor"
+    },
+    {
+      "positionId": "lizardmen.chameleonskink",
+      "label": "Chameleonskink"
+    },
+    {
+      "positionId": "lizardmen.kroxigor",
+      "label": "Kroxigor"
+    },
+    {
+      "positionId": "lizardmen.saurusblocker",
+      "label": "Saurusblocker"
+    },
+    {
+      "positionId": "lizardmen.skinkrunner",
+      "label": "Skinkrunner"
+    },
+    {
+      "positionId": "necromantichorror.fleshgolem",
+      "label": "Fleshgolem"
+    },
+    {
+      "positionId": "necromantichorror.ghoulrunner",
+      "label": "Ghoulrunner"
+    },
+    {
+      "positionId": "necromantichorror.werewolf",
+      "label": "Werewolf"
+    },
+    {
+      "positionId": "necromantichorror.wightblitzer",
+      "label": "Wightblitzer"
+    },
+    {
+      "positionId": "necromantichorror.wraith",
+      "label": "Wraith"
+    },
+    {
+      "positionId": "necromantichorror.zombie",
+      "label": "Zombie"
+    },
+    {
+      "positionId": "norse.beerboar",
+      "label": "Beerboar"
+    },
+    {
+      "positionId": "norse.berserker",
+      "label": "Berserker"
+    },
+    {
+      "positionId": "norse.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "norse.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "norse.snowtroll",
+      "label": "Snowtroll"
+    },
+    {
+      "positionId": "norse.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "norse.ulfwerenar",
+      "label": "Ulfwerenar"
+    },
+    {
+      "positionId": "norse.valkyrie",
+      "label": "Valkyrie"
+    },
+    {
+      "positionId": "nurgle.bloater",
+      "label": "Bloater"
+    },
+    {
+      "positionId": "nurgle.pestigor",
+      "label": "Pestigor"
+    },
+    {
+      "positionId": "nurgle.rotspawn",
+      "label": "Rotspawn"
+    },
+    {
+      "positionId": "nurgle.rotter",
+      "label": "Rotter"
+    },
+    {
+      "positionId": "nurglings.beast",
+      "label": "Beast"
+    },
+    {
+      "positionId": "nurglings.nurgling",
+      "label": "Nurgling"
+    },
+    {
+      "positionId": "nurglings.plaguebearer",
+      "label": "Plaguebearer"
+    },
+    {
+      "positionId": "nurglings.putrifier",
+      "label": "Putrifier"
+    },
+    {
+      "positionId": "ogre.gnoblar",
+      "label": "Gnoblar"
+    },
+    {
+      "positionId": "ogre.gnoblarlineman",
+      "label": "Gnoblarlineman"
+    },
+    {
+      "positionId": "ogre.ogre",
+      "label": "Ogre"
+    },
+    {
+      "positionId": "ogre.ogreruntpunter",
+      "label": "Ogreruntpunter"
+    },
+    {
+      "positionId": "ogre.runtpunter",
+      "label": "Runtpunter"
+    },
+    {
+      "positionId": "oldworldalliance.alternforesttreeman",
+      "label": "Alternforesttreeman"
+    },
+    {
+      "positionId": "oldworldalliance.dwarfblitzer",
+      "label": "Dwarfblitzer"
+    },
+    {
+      "positionId": "oldworldalliance.dwarfblocker",
+      "label": "Dwarfblocker"
+    },
+    {
+      "positionId": "oldworldalliance.dwarfrunner",
+      "label": "Dwarfrunner"
+    },
+    {
+      "positionId": "oldworldalliance.dwarftrollslayer",
+      "label": "Dwarftrollslayer"
+    },
+    {
+      "positionId": "oldworldalliance.halflinghopeful",
+      "label": "Halflinghopeful"
+    },
+    {
+      "positionId": "oldworldalliance.humanblitzer",
+      "label": "Humanblitzer"
+    },
+    {
+      "positionId": "oldworldalliance.humancatcher",
+      "label": "Humancatcher"
+    },
+    {
+      "positionId": "oldworldalliance.humanlineman",
+      "label": "Humanlineman"
+    },
+    {
+      "positionId": "oldworldalliance.humanthrower",
+      "label": "Humanthrower"
+    },
+    {
+      "positionId": "oldworldalliance.ogre",
+      "label": "Ogre"
+    },
+    {
+      "positionId": "orc.bigunblocker",
+      "label": "Bigunblocker"
+    },
+    {
+      "positionId": "orc.blackorcblocker",
+      "label": "Blackorcblocker"
+    },
+    {
+      "positionId": "orc.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "orc.goblin",
+      "label": "Goblin"
+    },
+    {
+      "positionId": "orc.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "orc.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "orc.troll",
+      "label": "Troll"
+    },
+    {
+      "positionId": "prizeplayers.sandskeleton",
+      "label": "Sandskeleton"
+    },
+    {
+      "positionId": "prohalflings.borrower",
+      "label": "Borrower"
+    },
+    {
+      "positionId": "prohalflings.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "prohalflings.halfling",
+      "label": "Halfling"
+    },
+    {
+      "positionId": "prohalflings.mootguard",
+      "label": "Mootguard"
+    },
+    {
+      "positionId": "prohalflings.punter",
+      "label": "Punter"
+    },
+    {
+      "positionId": "prohalflings.treeman",
+      "label": "Treeman"
+    },
+    {
+      "positionId": "pygmy.alligatorwarrior",
+      "label": "Alligatorwarrior"
+    },
+    {
+      "positionId": "pygmy.eaglewarrior",
+      "label": "Eaglewarrior"
+    },
+    {
+      "positionId": "pygmy.jaguarwarrior",
+      "label": "Jaguarwarrior"
+    },
+    {
+      "positionId": "pygmy.kroxigor",
+      "label": "Kroxigor"
+    },
+    {
+      "positionId": "pygmy.pygmy",
+      "label": "Pygmy"
+    },
+    {
+      "positionId": "shamblingundead.ghoulrunner",
+      "label": "Ghoulrunner"
+    },
+    {
+      "positionId": "shamblingundead.mummy",
+      "label": "Mummy"
+    },
+    {
+      "positionId": "shamblingundead.skeleton",
+      "label": "Skeleton"
+    },
+    {
+      "positionId": "shamblingundead.wightblitzer",
+      "label": "Wightblitzer"
+    },
+    {
+      "positionId": "shamblingundead.zombie",
+      "label": "Zombie"
+    },
+    {
+      "positionId": "simyin.bonobo",
+      "label": "Bonobo"
+    },
+    {
+      "positionId": "simyin.chimpanzee",
+      "label": "Chimpanzee"
+    },
+    {
+      "positionId": "simyin.gorilla",
+      "label": "Gorilla"
+    },
+    {
+      "positionId": "simyin.orangutan",
+      "label": "Orangutan"
+    },
+    {
+      "positionId": "simyin.silverback",
+      "label": "Silverback"
+    },
+    {
+      "positionId": "skaven.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "skaven.gutterrunner",
+      "label": "Gutterrunner"
+    },
+    {
+      "positionId": "skaven.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "skaven.ratogre",
+      "label": "Ratogre"
+    },
+    {
+      "positionId": "skaven.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "skink.adeptofsotek",
+      "label": "Adeptofsotek"
+    },
+    {
+      "positionId": "skink.raptor",
+      "label": "Raptor"
+    },
+    {
+      "positionId": "skink.skink",
+      "label": "Skink"
+    },
+    {
+      "positionId": "skink.whiptail",
+      "label": "Whiptail"
+    },
+    {
+      "positionId": "skryreslaves.doomwheel",
+      "label": "Doomwheel"
+    },
+    {
+      "positionId": "skryreslaves.jezzail",
+      "label": "Jezzail"
+    },
+    {
+      "positionId": "skryreslaves.mechavermin",
+      "label": "Mechavermin"
+    },
+    {
+      "positionId": "skryreslaves.poisonedwindglobadier",
+      "label": "Poisonedwindglobadier"
+    },
+    {
+      "positionId": "skryreslaves.slave",
+      "label": "Slave"
+    },
+    {
+      "positionId": "slann.blitzer",
+      "label": "Blitzer"
+    },
+    {
+      "positionId": "slann.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "slann.kroxigor",
+      "label": "Kroxigor"
+    },
+    {
+      "positionId": "slann.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "snotling.fungusflinga",
+      "label": "Fungusflinga"
+    },
+    {
+      "positionId": "snotling.funhoppa",
+      "label": "Funhoppa"
+    },
+    {
+      "positionId": "snotling.pumpwagon",
+      "label": "Pumpwagon"
+    },
+    {
+      "positionId": "snotling.snotling",
+      "label": "Snotling"
+    },
+    {
+      "positionId": "snotling.snotlinggoon",
+      "label": "Snotlinggoon"
+    },
+    {
+      "positionId": "snotling.snotlingmob",
+      "label": "Snotlingmob"
+    },
+    {
+      "positionId": "snotling.splattawagon",
+      "label": "Splattawagon"
+    },
+    {
+      "positionId": "snotling.stiltyrunna",
+      "label": "Stiltyrunna"
+    },
+    {
+      "positionId": "snotling.troll",
+      "label": "Troll"
+    },
+    {
+      "positionId": "squigherders.squig",
+      "label": "Squig"
+    },
+    {
+      "positionId": "squigherders.squigherder",
+      "label": "Squigherder"
+    },
+    {
+      "positionId": "squigherders.squighopper",
+      "label": "Squighopper"
+    },
+    {
+      "positionId": "strigoyan.cryptghoul",
+      "label": "Cryptghoul"
+    },
+    {
+      "positionId": "strigoyan.strigoyanlord",
+      "label": "Strigoyanlord"
+    },
+    {
+      "positionId": "strigoyan.thrall",
+      "label": "Thrall"
+    },
+    {
+      "positionId": "tombkings.anointedblitzer",
+      "label": "Anointedblitzer"
+    },
+    {
+      "positionId": "tombkings.anointedthrower",
+      "label": "Anointedthrower"
+    },
+    {
+      "positionId": "tombkings.skeletonlineman",
+      "label": "Skeletonlineman"
+    },
+    {
+      "positionId": "tombkings.tombguardian",
+      "label": "Tombguardian"
+    },
+    {
+      "positionId": "underworlddenizens.goblin",
+      "label": "Goblin"
+    },
+    {
+      "positionId": "underworlddenizens.gutterrunner",
+      "label": "Gutterrunner"
+    },
+    {
+      "positionId": "underworlddenizens.mutantratogre",
+      "label": "Mutantratogre"
+    },
+    {
+      "positionId": "underworlddenizens.skavenblitzer",
+      "label": "Skavenblitzer"
+    },
+    {
+      "positionId": "underworlddenizens.skavenlineman",
+      "label": "Skavenlineman"
+    },
+    {
+      "positionId": "underworlddenizens.skaventhrower",
+      "label": "Skaventhrower"
+    },
+    {
+      "positionId": "underworlddenizens.underworldsnotlings",
+      "label": "Underworldsnotlings"
+    },
+    {
+      "positionId": "underworlddenizens.underworldtroll",
+      "label": "Underworldtroll"
+    },
+    {
+      "positionId": "vampire.thrall",
+      "label": "Thrall"
+    },
+    {
+      "positionId": "vampire.vampire",
+      "label": "Vampire"
+    },
+    {
+      "positionId": "vampire.vampireblitzer",
+      "label": "Vampireblitzer"
+    },
+    {
+      "positionId": "vampire.vampirerunner",
+      "label": "Vampirerunner"
+    },
+    {
+      "positionId": "vampire.vampirethrower",
+      "label": "Vampirethrower"
+    },
+    {
+      "positionId": "vampire.vargheist",
+      "label": "Vargheist"
+    },
+    {
+      "positionId": "vampire(sep23test).thralllineman",
+      "label": "Thralllineman"
+    },
+    {
+      "positionId": "vampire(sep23test).vampireblitzer",
+      "label": "Vampireblitzer"
+    },
+    {
+      "positionId": "vampire(sep23test).vampirerunner",
+      "label": "Vampirerunner"
+    },
+    {
+      "positionId": "vampire(sep23test).vampirethrower",
+      "label": "Vampirethrower"
+    },
+    {
+      "positionId": "vampire(sep23test).vargheist",
+      "label": "Vargheist"
+    },
+    {
+      "positionId": "woodelf.catcher",
+      "label": "Catcher"
+    },
+    {
+      "positionId": "woodelf.lineman",
+      "label": "Lineman"
+    },
+    {
+      "positionId": "woodelf.lorenforesttreeman",
+      "label": "Lorenforesttreeman"
+    },
+    {
+      "positionId": "woodelf.thrower",
+      "label": "Thrower"
+    },
+    {
+      "positionId": "woodelf.treeman",
+      "label": "Treeman"
+    },
+    {
+      "positionId": "woodelf.wardancer",
+      "label": "Wardancer"
+    }
+  ]
+}
