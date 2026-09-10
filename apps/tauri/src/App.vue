@@ -559,40 +559,21 @@ async function copyWireLogPath() {
   wireLogCopied.value = true;
   setTimeout(() => { wireLogCopied.value = false; }, 1500);
 }
-// Dev controls (owner 2026-07-03 r6f): the Protocol console is now tucked behind a
-// "Dev controls" section in the hamburger menu rather than a top-nav button.
-const devOpen = ref(false);
+// Protocol console (owner 09-10): fork-edition dev tool, reached from the Esc menu (the hamburger is retired).
 function openConsole() {
   view.value = 'console';
-  menuOpen.value = false;
+  ui.gameMenuOpen = false;
 }
 
-/** Owner 2026-07-02: hamburger menu at the top left hosts the settings page. */
-const menuOpen = ref(false);
-const hamburgerButton = ref<HTMLButtonElement | null>(null);
-// Owner: the menu binds to the hamburger's ACTUAL location — the panel was hard-anchored top-right
-// (top:52px/right:12px) and detached from the button whenever a layout places it elsewhere (owner saw a
-// bottom-right hamburger with a top-right menu). Measure the button at open time: right-align to it,
-// open downward from the top half of the viewport and UPWARD from the bottom half, viewport-clamped.
-const menuAnchor = ref<Record<string, string> | null>(null);
-function computeMenuAnchor(el: HTMLElement | null): Record<string, string> | null {
-  const rect = el?.getBoundingClientRect();
-  if (!rect) return null;
-  const right = `${Math.max(8, window.innerWidth - rect.right)}px`;
-  return rect.top > window.innerHeight / 2
-    ? { top: 'auto', bottom: `${window.innerHeight - rect.top + 8}px`, right, maxHeight: `${Math.max(120, rect.top - 20)}px` }
-    : { top: `${rect.bottom + 8}px`, bottom: 'auto', right, maxHeight: `${Math.max(120, window.innerHeight - rect.bottom - 20)}px` };
+// Owner 09-10: the hamburger menu is retired. Outside a game, Esc opens the same Game Menu the pitch uses (Settings,
+// Help / Field Manual) so the console keeps a keyboard route to them; in-game SpectateView owns the Esc binding.
+function escConsoleMenu(e: KeyboardEvent): void {
+  if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || guideOpen.value || credsMenuOpen.value) return;
+  if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
+  ui.gameMenuOpen = !ui.gameMenuOpen;
 }
-function toggleAppMenu(): void {
-  if (!menuOpen.value) menuAnchor.value = computeMenuAnchor(hamburgerButton.value);
-  menuOpen.value = !menuOpen.value;
-}
-// In-game the opener is SpectateView's quick-bar ☰ (not the shell-header hamburger,
-// which isn't mounted there) — measure IT, or the panel falls back to top-right.
-function openGameMenu(): void {
-  menuAnchor.value = computeMenuAnchor(document.querySelector<HTMLElement>('.quick-menu[aria-label="Menu"]'));
-  menuOpen.value = true;
-}
+onMounted(() => window.addEventListener('keydown', escConsoleMenu));
+onBeforeUnmount(() => window.removeEventListener('keydown', escConsoleMenu));
 const replayFileInput = ref<HTMLInputElement | null>(null);
 const replayFileBusy = ref(false);
 const replayFileError = ref('');
@@ -626,7 +607,7 @@ function replayFileSessionIsCurrent(snapshot: ReplayFileSessionSnapshot): boolea
     && current.replayActive === snapshot.replayActive;
 }
 function restoreReplayFileFocus(): void {
-  requestAnimationFrame(() => hamburgerButton.value?.focus());
+  requestAnimationFrame(() => appMenuFocusFallback()?.focus());
 }
 function openReplayFilePicker(): void {
   if (gameStore.replay.loading || replayFileBusy.value) return;
@@ -636,7 +617,6 @@ function openReplayFilePicker(): void {
   }
   replayFileError.value = '';
   replayFileTicket = sharedReplayFileImporter.begin(replayFileSessionSnapshot());
-  menuOpen.value = false;
   replayFileInput.value?.click();
 }
 function cancelReplayFilePicker(): void {
@@ -971,9 +951,8 @@ const settingsDialog = ref<HTMLElement | null>(null);
 let settingsOpener: HTMLElement | null = null;
 
 function appMenuFocusFallback(): HTMLElement | null {
-  return hamburgerButton.value
-    ?? document.querySelector<HTMLElement>('.hamburger')
-    ?? document.querySelector<HTMLElement>('.quick-menu[aria-label="Menu"]');
+  return document.querySelector<HTMLElement>('.blade[data-active="true"]')
+    ?? document.querySelector<HTMLElement>('.icon-button[title="Settings"]');
 }
 function settingsModalFocusFallback(): HTMLElement | null {
   return settingsDialog.value?.querySelector<HTMLElement>('.settings-x') ?? appMenuFocusFallback();
@@ -987,7 +966,6 @@ function openSettings(tab: unknown = 'general') {
     ? document.activeElement : null;
   ui.settingsTab = resolveSettingsTab(tab);
   ui.settingsOpen = true;
-  menuOpen.value = false;
   ui.gameMenuOpen = false;
 }
 
@@ -1354,8 +1332,7 @@ function captureKey(event: KeyboardEvent) {
     </svg>
     <header v-if="!gameStore.game.value || settings.uiMode === 'classic'" class="shell-header"
       :class="{ 'header-compact': !!gameStore.game.value }">
-      <button ref="hamburgerButton" class="hamburger" type="button" title="Menu"
-        :aria-expanded="menuOpen" :aria-busy="replayFileBusy" @click="toggleAppMenu">☰</button>
+      <!-- Owner 09-10: the ☰ hamburger + its dropdown are gone — Settings and Help live in the Esc menu (and the quick bar in-game). -->
       <!-- Owner ruling (08-18): the header server plates are DEPRECATED as CONTROLS — the blades now own
            target selection (Play blade cards, Spectate's own selector, TeamBuilder etc). The FUMBBL plate
            is removed entirely; Super FUMBBL stays as pure INERT branding (a logo, not a button) — no click
@@ -1402,23 +1379,6 @@ function captureKey(event: KeyboardEvent) {
       </template>
     </nav>
 
-    <div v-if="menuOpen" class="app-menu" @click.self="menuOpen = false">
-      <div class="app-menu-panel" :style="menuAnchor ?? undefined">
-        <!-- Owner ruling (console shell restructure): the fork quick-play stopgap is retired — the Play blade
-             (ribbon default) now owns both "PLAY ON FUMBBL" / "PLAY ON SUPER FUMBBL" entry cards directly. -->
-        <button type="button" :disabled="replayFileBusy || gameStore.replay.loading" :aria-busy="replayFileBusy"
-          @click="openReplayFilePicker">{{ replayFileBusy ? 'Reading Replay File…' : 'Load Replay File' }}</button>
-        <!-- owner 2026-07-04: a single Settings entry into the full settings tree
-             (the individual tabs live inside the modal). -->
-        <button @click="openSettings()">Settings</button>
-        <!-- owner 2026-07-14: the getting-started guide is surfaced on demand here (no longer auto-launch).
-             owner 2026-08-27: it's the paginated Field Manual now. -->
-        <button @click="menuOpen = false; guideOpen = true">Help / Field Manual</button>
-        <!-- owner 2026-07-03 r6f: dev-only tools hidden behind a Dev controls toggle -->
-        <button class="menu-section" @click="devOpen = !devOpen">Dev controls {{ devOpen ? '▾' : '▸' }}</button>
-        <button v-if="devOpen" class="menu-sub" @click="openConsole()">Protocol console</button>
-      </div>
-    </div>
     <input ref="replayFileInput" type="file" hidden
       accept="application/json,application/x-java-jnlp-file,text/xml,.json,.ffbreplay,.jnlp"
       aria-hidden="true" tabindex="-1" @change="loadReplayFileFromMenu" @cancel="cancelReplayFilePicker" />
@@ -1443,7 +1403,7 @@ function captureKey(event: KeyboardEvent) {
          mounts instead of SpectateView when the mode is set (shared store). -->
     <template v-if="!!gameStore.game.value">
       <ClassicView v-if="settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
-      <SpectateView v-else :mode="liveGameMode" @end-game-exit="onEndGameExit" @open-menu="openGameMenu" />
+      <SpectateView v-else :mode="liveGameMode" @end-game-exit="onEndGameExit" />
     </template>
     <!-- Owner ruling (console shell restructure): Play blade is up for BOTH server plates — the "PLAY ON
          SUPER FUMBBL" entry card (CreateGameModal) replaces the old fork stopgap that routed here into
@@ -1505,6 +1465,9 @@ function captureKey(event: KeyboardEvent) {
           <button :disabled="!gameStats" :title="gameStats ? '' : 'No game loaded'"
             @click="statsOpen = true">Game statistics</button>
           <button @click="openSettings('general')">Settings</button>
+          <!-- Owner 09-10: Help moved here from the retired hamburger; the Protocol console is a fork-edition dev tool. -->
+          <button @click="ui.gameMenuOpen = false; guideOpen = true">Help / Field Manual</button>
+          <button v-if="FORK_EDITION" @click="openConsole()">Protocol console</button>
           <button :disabled="!gameStore.game.value"
             :title="gameStore.game.value ? '' : 'No game loaded'"
             @click="requestLeaveGame()">Return to Menu</button>
@@ -1577,10 +1540,9 @@ function captureKey(event: KeyboardEvent) {
 
           <fieldset class="settings-group">
             <legend>Connection</legend>
-            <label>Login credentials
+            <label class="creds-open-row"><!-- owner 09-10: "Login credentials" caption cut -->
               <button type="button" class="creds-open-btn" @click="openCredsMenu('fumbbl')">Manage login credentials ▸</button>
             </label>
-            <p class="settings-immediate-note">Account and verification changes take effect immediately and are not undone by Cancel.</p>
             <p class="creds-status">
               <span>FUMBBL: <b>{{ settings.coach.trim() || '—' }}</b></span>
               <span v-if="FORK_EDITION" class="connection-fork-status">
@@ -1602,13 +1564,14 @@ function captureKey(event: KeyboardEvent) {
               </span>
             </p>
             <p class="hint">Credentials are stored locally on this machine only.</p>
-            <label>Server
+            <!-- Owner 09-10: the raw server URL is a fork-edition control; the public edition is FUMBBL-only. -->
+            <label v-if="FORK_EDITION">Server
               <input v-model="settings.url" placeholder="ws://host:port/command" />
             </label>
             <label v-if="FORK_EDITION">Tournament Bot URL <span class="hint-inline">(optional — blank = https://&lt;fork host&gt;, or http://&lt;local host&gt;:4310)</span>
               <input v-model="settings.botConfigUrl" type="text" placeholder="bot URL (optional)" />
             </label>
-            <label class="row"><input v-model="settings.compression" type="checkbox" /> LZ-String compression</label>
+            <label v-if="FORK_EDITION" class="row"><input v-model="settings.compression" type="checkbox" /> LZ-String compression</label>
           </fieldset>
 
           <fieldset class="settings-group">
@@ -2871,13 +2834,14 @@ function captureKey(event: KeyboardEvent) {
          above the version stamp — same quiet/muted styling family, bottom-left, under every panel (owner 08-18 2nd). -->
     <div class="corner-stamp">
       <div class="header-identity" aria-label="Signed in accounts">
-        <span class="identity-label">Signed in as</span>
+        <!-- Owner 09-10: the public edition shows just the coach name (no "Signed in as" / service labels, no fork account). -->
+        <span v-if="FORK_EDITION" class="identity-label">Signed in as</span>
         <span class="identity-account">
-          <span class="identity-service">FUMBBL</span>
+          <span v-if="FORK_EDITION" class="identity-service">FUMBBL</span>
           <span class="identity-name" :class="{ 'is-signed-out': !settings.coach.trim() }"
             :title="settings.coach.trim() || 'Signed out'">{{ settings.coach.trim() || '—' }}</span>
         </span>
-        <span class="identity-account">
+        <span v-if="FORK_EDITION" class="identity-account">
           <span class="identity-service">SuperFUMBBL</span>
           <span class="identity-name" :class="{ 'is-signed-out': !settings.coach40k.trim() }"
             :title="settings.coach40k.trim() || 'Signed out'">{{ settings.coach40k.trim() || '—' }}</span>

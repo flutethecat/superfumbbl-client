@@ -350,7 +350,6 @@ const props = withDefaults(defineProps<{ mode?: 'spectate' | 'play' | 'replay' }
 // 'end-game-exit' — App.vue tears the game down (confirm-free; the game is over) and lands on a BLADE.
 const emit = defineEmits<{
   (e: 'end-game-exit', exit: EndGameExit): void;
-  (e: 'open-menu'): void;
 }>();
 const isPlayMode = computed(() => props.mode === 'play');
 const rejoinBrowserVisible = computed(() => shouldShowRejoinBrowser(
@@ -10817,7 +10816,6 @@ function sendChat() {
               </span>
             </button>
             <img class="quick-super-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
-            <button class="quick-menu" type="button" title="Menu" aria-label="Menu" @click="emit('open-menu')">☰</button>
           </div>
         </nav>
 

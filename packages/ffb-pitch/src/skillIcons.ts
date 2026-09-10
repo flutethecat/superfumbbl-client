@@ -320,7 +320,9 @@ const BUNDLED_SKILL_BADGE_LARGE_FAMILIES: Readonly<Record<BundledSkillBadgeFamil
   default: new Map(Object.entries(bundledSkillArtLargeUrls).map(([path, url]) => [keyOf(path), url])),
   illustrated: new Map(Object.entries(bundledIllustratedSkillArtLargeUrls).map(([path, url]) => [keyOf(path), url])),
 };
-let bundledSkillBadgeFamily: BundledSkillBadgeFamily = 'default';
+// Owner 09-10: the illustrated family is the install default (settings v32) — start there so the FIRST icon load
+// fetches the right family instead of loading the flat set, showing initials badges, then reloading on the switch.
+let bundledSkillBadgeFamily: BundledSkillBadgeFamily = 'illustrated';
 const statusIconKeys = new Set(bundledSkillIconUrls.keys());
 function applyBundledFamilyUrls(): void {
   for (const key of [...bundledSkillIconUrls.keys()]) if (!statusIconKeys.has(key)) bundledSkillIconUrls.delete(key);
