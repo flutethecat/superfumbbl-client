@@ -25,7 +25,7 @@ Installer-only licensed content ships inside the installer under its licence and
 - `packages/ffb-pitch/assets/acasas-weather/`
 - `packages/ffb-pitch/assets/acasas-weather-fx/`
 
-A build from this tree therefore has no bundled sound effects and falls back to the built-in pitch art.
+Some sounds will be missing and not available in the client. As well as the default textures which ship inside the installer bundle that we distribute. For full functionality, please use the attached installer. If you're OK with the ones we've included (they work) then you're good to go!
 
 ## Licences
 
