@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import fumbblLogoUrl from '../assets/resources/fumbbl-logo.png';
+import { FORK_EDITION } from '../game/edition';
 import { gameStore } from '../game/store';
 import { activeServerTarget, applyServerTarget, resolveJoinCreds, settings } from '../game/settings';
 import { coachPassword } from '../game/credentials';
@@ -127,7 +128,7 @@ async function loadFile(event: Event): Promise<void> {
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
-onMounted(() => { refreshMyGames(); });
+onMounted(() => { if (FORK_EDITION) refreshMyGames(); }); // owner 09-10: no fork games list in the public edition
 </script>
 
 <template>
@@ -137,14 +138,15 @@ onMounted(() => { refreshMyGames(); });
         <div>
           <span class="replay-kicker">Match archive</span>
           <h1>Open a match replay</h1>
-          <p>Choose a Super FUMBBL match or open a replay file from this device.</p>
+          <p v-if="FORK_EDITION">Choose a Super FUMBBL match or open a replay file from this device.</p>
+          <p v-else>Open a FUMBBL replay file from this device.</p>
         </div>
         <span class="read-only-chip">Read only</span>
       </header>
 
       <!-- Presentational port of CreateGameModal.vue:62-84. -->
-      <div class="replay-grid">
-        <section class="replay-panel gb-mygames" aria-labelledby="my-games-title">
+      <div class="replay-grid" :data-panels="FORK_EDITION ? 2 : 1">
+        <section v-if="FORK_EDITION" class="replay-panel gb-mygames" aria-labelledby="my-games-title">
           <div class="panel-head gb-mygames-head">
             <div class="panel-title">
               <span class="panel-index" aria-hidden="true">01</span>
@@ -184,7 +186,7 @@ onMounted(() => { refreshMyGames(); });
         <section class="replay-panel file-panel" aria-labelledby="file-replay-title">
           <div class="panel-head">
             <div class="panel-title">
-              <span class="panel-index" aria-hidden="true">02</span>
+              <span class="panel-index" aria-hidden="true">{{ FORK_EDITION ? '02' : '01' }}</span>
               <div>
                 <span class="panel-label">Local archive</span>
                 <h2 id="file-replay-title">Open a replay file</h2>
@@ -265,6 +267,8 @@ h1 { margin-top: 3px; color: var(--ui-text); font-size: max(var(--ui-min-primary
   text-transform: uppercase;
 }
 .replay-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); gap: clamp(14px, 1.4vw, 22px); align-items: stretch; }
+/* Owner 09-10: the public edition has only the local archive — one centred panel, sized to the viewport. */
+.replay-grid[data-panels="1"] { grid-template-columns: minmax(280px, min(520px, 100%)); justify-content: center; }
 .replay-panel {
   min-width: 0;
   display: flex;

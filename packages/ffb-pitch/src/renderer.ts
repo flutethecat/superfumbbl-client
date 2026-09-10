@@ -331,6 +331,12 @@ const BUNDLED_WEATHER_PITCHES: Record<string, Record<string, string>> = {
   ...(ACASAS_WEATHER ? { grass1: { blizzard: ACASAS_WEATHER.nice!, heat: ACASAS_WEATHER.nice!, nice: ACASAS_WEATHER.nice!, rain: ACASAS_WEATHER.nice!, sunny: ACASAS_WEATHER.nice! } } : {}),
 };
 
+/** Owner 09-10: the turf families this BUILD bundles, known before any pitch mounts — the Settings picker seeds its
+ *  catalog from this so an installer shows Acasas/Basic from the console (previously a static two-entry list until
+ *  the pitch view refreshed it). Pack-bound FUMBBL pitches are added at mount by `turfOptions()`. */
+export function bundledTurfOptions(): string[] {
+  return [...Object.keys(BUNDLED_WEATHER_PITCHES), ...(BUNDLED_WEATHER_PITCHES.grass1 ? [] : ['grass1'])];
+}
 function isWeatherPitchTheme(theme: string): boolean {
   return theme in BUNDLED_WEATHER_PITCHES || theme in FUMBBL_PITCHES;
 }
@@ -13899,13 +13905,13 @@ export class PitchRenderer {
             ringNode.addChild(this.buildStarBase(TILE_H * 0.32, TILE_W * 0.34, Math.min(1, d)));
           } else {
             const ringColor = this.ringColorOverride ?? positionRingColor(player, team);
-            ringNode.addChild(this.buildRingGlow(TILE_H * 0.32, TILE_W * 0.3, TILE_H * 0.18, ringColor, Math.min(1, d)));
+            ringNode.addChild(this.buildRingGlow(TILE_H * 0.32, TILE_W * 0.3, TILE_H * 0.18, ringColor, Math.min(1, d), d));
             ringNode.addChild(
               new Graphics()
                 .ellipse(0, TILE_H * 0.32, TILE_W * 0.3, TILE_H * 0.18)
                 .fill({ color: ringColor, alpha: Math.min(1, 0.3 * d) })
                 .ellipse(0, TILE_H * 0.32, TILE_W * 0.3, TILE_H * 0.18)
-                .stroke({ color: ringColor, width: 2, alpha: Math.min(1, 0.95 * d) })
+                .stroke({ color: ringColor, width: 2 * d, alpha: Math.min(1, 0.95 * d) }) // owner 09-10: density also scales the stroke
                 .ellipse(0, TILE_H * 0.32, TILE_W * 0.23, TILE_H * 0.13)
                 .stroke({ color: body, width: 1.2, alpha: Math.min(1, 0.8 * d) }),
             );
@@ -14096,12 +14102,14 @@ export class PitchRenderer {
         ringNode.addChild(this.buildStarBase(cy, rx * 1.1, Math.min(1, d)));
       } else {
         const rc = this.ringColorOverride ?? positionRingColor(player, team);
-        ringNode.addChild(this.buildRingGlow(cy, rx, ry, rc, Math.min(1, d)));
+        ringNode.addChild(this.buildRingGlow(cy, rx, ry, rc, Math.min(1, d), d));
         // Owner 09-05: on walkers (bodyRing false) the ring now outlines the SHADOW exactly, so its dark fill stacked
         // under the 0.7 shadow and read too dark — the fill stays classic-only; the shadow alone carries the 70%.
         const ring = new Graphics();
         if (bodyRing) ring.ellipse(0, cy, rx, ry).fill({ color: 0x000000, alpha: Math.min(1, 0.3 * d) });
-        ring.ellipse(0, cy, rx, ry).stroke({ color: rc, width: 3.6, alpha: Math.min(1, 0.95 * d) }); // owner 09-06: heavier ring stroke (2.4 -> 3.6)
+        // Owner 09-10: density scales the stroke WIDTH and the glow spread too — alpha alone was capped at 1 and sat under
+        // the 70% ground shadow, so the slider read as doing nothing on walkers.
+        ring.ellipse(0, cy, rx, ry).stroke({ color: rc, width: 3.6 * d, alpha: Math.min(1, 0.95 * d) }); // owner 09-06: heavier ring stroke (2.4 -> 3.6)
         if (bodyRing) {
           ring.ellipse(0, cy, TILE_W * 0.21, TILE_H * 0.15)
             .stroke({ color: body, width: 1.2, alpha: Math.min(1, 0.8 * d) });
@@ -16006,11 +16014,14 @@ export class PitchRenderer {
   /** Owner 2026-07-04: a soft ADDITIVE "colour-dodge" glow behind a position ring
    *  so it pops off the grass (the deep/green rings were hard to read). Additive
    *  blend brightens whatever's beneath, tuned low so light rings don't blow out. */
-  private buildRingGlow(cy: number, rx: number, ry: number, color: number, alpha: number): Graphics {
+  /** `spread` (owner 09-10) = the ring-density factor: >1 widens the glow halo, <1 tightens it. */
+  private buildRingGlow(cy: number, rx: number, ry: number, color: number, alpha: number, spread = 1): Graphics {
+    const outer = 1 + 0.42 * spread;
+    const inner = 1 + 0.2 * spread;
     const g = new Graphics()
-      .ellipse(0, cy, rx * 1.42, ry * 1.42)
+      .ellipse(0, cy, rx * outer, ry * outer)
       .fill({ color, alpha: 0.16 * alpha })
-      .ellipse(0, cy, rx * 1.2, ry * 1.2)
+      .ellipse(0, cy, rx * inner, ry * inner)
       .fill({ color, alpha: 0.22 * alpha });
     g.blendMode = 'add';
     return g;

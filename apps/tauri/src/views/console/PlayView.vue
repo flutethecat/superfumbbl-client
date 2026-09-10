@@ -218,7 +218,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
 
 <template>
   <main class="play-view" aria-label="FUMBBL Play">
-    <section class="play-card" aria-labelledby="play-title">
+    <section class="play-card" :data-entries="fumbblLobby ? null : (FORK_EDITION ? 2 : 1)" aria-labelledby="play-title">
       <!-- Owner ruling (08-18, annotated screenshot): the "PLAY BLADE" eyebrow, the subtitle, and the
            bottom ".jnlp route" note are removed — the heading + two entry cards carry the blade on
            their own. -->
@@ -351,7 +351,10 @@ h1, p { margin: 0; }
 button { padding: 10px 14px; color: #eee; text-align: center; border: 1px solid #666; background: #292929; cursor: pointer; }
 .primary { color: #fff; border-color: #a62020; background: #7d0808; }
 .primary:disabled { opacity: .45; cursor: default; }
-.entry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+/* Owner 09-10: the grid sizes to however many entries the edition offers — one card (public edition) fills the panel,
+   which itself shrinks to fit; two cards share it. */
+.entry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 13px; }
+.play-card[data-entries="1"] { width: fit-content; min-width: min(320px, 92vw); max-width: min(520px, 92vw); }
 .entry-card { display: grid; grid-template-rows: auto 92px; gap: 10px; min-width: 0; padding: 13px; border-color: #666; background: #292929; }
 .entry-card:hover { border-color: #a62020; background: #351313; }
 .entry-card:focus-visible { outline: 2px solid #d6ad62; outline-offset: 2px; }

@@ -1009,6 +1009,10 @@ const settingsTransactionBusy = computed(() => settingsTransactionIsBusy({
 // the bundled Super FUMBBL Placeholder set (always), the FUMBBL Classic/Checkers modes only when an
 // installed pack supplies FUMBBL iconsets, and one entry per installed sprite/walk-sheet pack.
 const FUMBBL_ICONSET_CAPABILITIES = ['player-iconsets', 'fumbbl-id-images'];
+// Owner 09-10: colourblind correction — a shell-wide colour-matrix filter (see the <svg> defs in the template) plus the
+// green→blue UI-accent remap for the red-green modes.
+const colorblindAccent = computed(() => settings.colorblindMode === 'deuteranopia' || settings.colorblindMode === 'protanopia');
+const colorblindFilterStyle = computed(() => settings.colorblindMode === 'off' ? undefined : { filter: `url(#cb-${settings.colorblindMode})` });
 const fumbblSpriteModesAvailable = computed(() =>
   assetMods.installed.some((pack) => pack.capabilities.some((name) => FUMBBL_ICONSET_CAPABILITIES.includes(name))));
 const spritePackOptions = computed(() =>
@@ -1339,7 +1343,15 @@ function captureKey(event: KeyboardEvent) {
 </script>
 
 <template>
-  <main v-if="!firstOpenGateOpen" class="shell" :class="{ 'cb-redgreen': settings.colorblindMode === 'redgreen' }">
+  <main v-if="!firstOpenGateOpen" class="shell" :class="{ 'cb-accent': colorblindAccent }" :style="colorblindFilterStyle">
+    <!-- Owner 09-10: colourblind correction filters (daltonization: the channel difference a dichromat cannot see is
+         shifted into channels they can). Applied as a CSS filter on the shell, so the WebGL pitch and the DOM get the
+         same treatment with no asset conversion. Matrices = I + M·(I − S), S = Machado 2009 full-severity simulation. -->
+    <svg class="cb-filter-defs" aria-hidden="true" focusable="false" width="0" height="0">
+      <filter id="cb-deuteranopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0.163 0.725 0.112 0 0  0.455 -0.645 1.191 0 0  0 0 0 1 0" /></filter>
+      <filter id="cb-protanopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0.479 0.477 0.044 0 0  0.597 -0.689 1.091 0 0  0 0 0 1 0" /></filter>
+      <filter id="cb-tritanopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.741 -0.407 0.666 0 0  0.075 0.585 0.340 0 0  0 0 1 0 0  0 0 0 1 0" /></filter>
+    </svg>
     <header v-if="!gameStore.game.value || settings.uiMode === 'classic'" class="shell-header"
       :class="{ 'header-compact': !!gameStore.game.value }">
       <button ref="hamburgerButton" class="hamburger" type="button" title="Menu"
@@ -1734,6 +1746,9 @@ function captureKey(event: KeyboardEvent) {
               <input v-model="settings.debugLog" type="checkbox" />
               <span>Verbose log (all events, not just dice rolls)</span>
             </label>
+            <!-- Owner 09-10: the wire-log file + dev panel toggles are fork-edition diagnostics; the public edition keeps
+                 the wire log ON silently (it rides bug reports) and never shows the panel. -->
+            <template v-if="FORK_EDITION">
             <label class="row">
               <input v-model="settings.wireLog" type="checkbox" />
               <span>Verbose wire log → file (one per game)</span>
@@ -1754,6 +1769,7 @@ function captureKey(event: KeyboardEvent) {
               <span>Show developer log panel</span>
             </label>
             <span class="hint">The dev stream is always captured (it rides bug reports); this only shows the live panel.</span>
+            </template>
           </fieldset>
         </section>
 
@@ -1784,7 +1800,9 @@ function captureKey(event: KeyboardEvent) {
               <span>Colourblind mode</span>
               <select v-model="settings.colorblindMode">
                 <option value="off">Off</option>
-                <option value="redgreen">Red-green (remap green accents to blue)</option>
+                <option value="deuteranopia">Deuteranopia (red-green, most common)</option>
+                <option value="protanopia">Protanopia (red-green)</option>
+                <option value="tritanopia">Tritanopia (blue-yellow)</option>
               </select>
             </label>
           </fieldset>
@@ -1911,16 +1929,12 @@ function captureKey(event: KeyboardEvent) {
                 <option v-for="pack in spritePackOptions" :key="pack.installId" :value="spritePackValue(pack)">{{ pack.name }} {{ pack.version }}</option>
               </select>
             </label>
-            <p class="hint">Super FUMBBL is the built-in set: animated walk cycles for every BB2025 roster (Human, Necromantic Horror and Orc carry separate home/away kits; other teams share one kit), placeholder tokens for anything else. Installed sprite mods appear here by name and take precedence for the players they cover.<template v-if="fumbblSpriteModesAvailable"> FUMBBL Classic and Checkers draw from the installed FUMBBL iconset pack.</template></p>
+            <!-- Owner 09-10: sprite-set explainer paragraph cut. -->
             <label class="row">
               <input v-model="settings.walkAnimation" type="checkbox" />
               <span>Animate player walk cycles</span>
             </label>
-            <label class="row">
-              <span>Walk-cycle FPS (optional)</span>
-              <input v-model.number="settings.walkFps" type="number" min="1" max="30" step="1"
-                placeholder="Sheet default" :disabled="!settings.walkAnimation" />
-            </label>
+            <!-- Owner 09-10: the FPS override row is cut — every walk sheet runs at its authored 10 fps (settings.walkFps stays null). -->
             <label class="row">
               <input v-model="settings.walkFaceCamera" type="checkbox" />
               <span>Idle players face the camera (home team faces south)</span>
@@ -1962,8 +1976,8 @@ function captureKey(event: KeyboardEvent) {
               <select v-model.number="settings.moveSpeedMs">
                 <option :value="50">50ms — fastest</option>
                 <option :value="100">100ms</option>
-                <option :value="150">150ms (default)</option>
-                <option :value="200">200ms</option>
+                <option :value="150">150ms</option>
+                <option :value="200">200ms (default)</option>
                 <option :value="300">300ms</option>
                 <option :value="400">400ms — slowest</option>
               </select>
@@ -2224,12 +2238,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">A STUN either interrupts with the full injury banner, or shows a light
               tag over the stunned player's token. KO &amp; casualties use the token-anchored toast.</p>
-            <label class="row">
-              <span>Casualty splash</span>
-              <input type="checkbox" v-model="settings.casualtySplash" />
-            </label>
-            <p class="hint">The full-width casualty banner. Off by default — the red casualty toast over
-              the square carries it; turn this on to also show the big splash.</p>
+            <!-- Owner 09-10: the casualty splash toggle is cut — the red casualty toast over the square carries it (settings.casualtySplash stays off). -->
           </fieldset>
         </section>
 
@@ -3030,6 +3039,7 @@ function captureKey(event: KeyboardEvent) {
 body {
   margin: 0;
 }
+.cb-filter-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .shell {
   display: flex;
   flex-direction: column;
@@ -4191,23 +4201,23 @@ textarea:focus-visible,
 /* Red-green colourblind mode (owner 2026-07-03 r3): the app's success/primary
    accents are green (#3a5f3f family), confusable with red danger/away states for
    red-green colourblind users. Remap those greens to a distinguishable blue so
-   green-vs-red reads as blue-vs-red. Applied via `.cb-redgreen` on the shell.
+   green-vs-red reads as blue-vs-red. Applied via `.cb-accent` on the shell (deuteranopia/protanopia modes).
    Global styles (App.vue + SpectateView are un-scoped) so this reaches both. */
-.cb-redgreen .menubar button,
-.cb-redgreen .game-browser button,
-.cb-redgreen .marking-add button,
-.cb-redgreen .settings-pane .actions .primary,
-.cb-redgreen .confirm-move,
-.cb-redgreen .apo-actions .apo-use,
-.cb-redgreen .sc-yes {
+.cb-accent .menubar button,
+.cb-accent .game-browser button,
+.cb-accent .marking-add button,
+.cb-accent .settings-pane .actions .primary,
+.cb-accent .confirm-move,
+.cb-accent .apo-actions .apo-use,
+.cb-accent .sc-yes {
   background: #2f6fb0;
   border-color: #4a86c8;
 }
-.cb-redgreen .menubar button:hover,
-.cb-redgreen .game-menu button:hover:not(:disabled),
-.cb-redgreen .end-turn:hover:not(:disabled),
-.cb-redgreen .confirm-move:hover,
-.cb-redgreen .sc-yes:hover {
+.cb-accent .menubar button:hover,
+.cb-accent .game-menu button:hover:not(:disabled),
+.cb-accent .end-turn:hover:not(:disabled),
+.cb-accent .confirm-move:hover,
+.cb-accent .sc-yes:hover {
   background: #3d84cf;
 }
 </style>

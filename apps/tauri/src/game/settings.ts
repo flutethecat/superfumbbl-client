@@ -2,6 +2,7 @@ import { reactive, watch } from 'vue';
 import { FORK_EDITION } from './edition';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
+import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
 
 /**
@@ -18,7 +19,7 @@ const BACKUP_KEY = 'fumbbl40k.settings.bak';
 /** An unparseable primary is parked here (not destroyed) before defaults may overwrite it. */
 const CORRUPT_KEY = 'fumbbl40k.settings.corrupt';
 /** Bump when a default change must be FORCED onto existing installs (see load()). */
-const SETTINGS_VERSION = 33; // v33: Acasas (strong) is the default turf
+const SETTINGS_VERSION = 34; // v34: movement animation default 200ms
 
 /** Load-path health (P1 08-18: blank credentials). notices non-empty = a degraded settings read
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
@@ -259,8 +260,9 @@ export interface AppSettings {
   /** Owner 2026-07-04f: colour of the pitch MARKINGS (Mark Square/Row/Column
    *  light columns). Accessibility setting; default red. */
   markColor: string;
-  /** Red-green colourblind mode: remaps confusable green UI accents to blue. */
-  colorblindMode: 'off' | 'redgreen';
+  /** Colourblind mode (owner 09-10): a daltonization colour-matrix filter over the whole shell (pitch canvas + UI) —
+   *  no asset conversion. deuteranopia/protanopia also keep the green→blue UI-accent remap; 'redgreen' (legacy) = deuteranopia. */
+  colorblindMode: 'off' | 'redgreen' | 'deuteranopia' | 'protanopia' | 'tritanopia';
   /** UI theme engine (owner 2026-07-14, spec black-red-ui-scheme.md): a preset or a custom Primary/Secondary
    *  pair drives the derived `--ui-*` token set (Settings → Accessibility). Default = the Black/Red headline. */
   uiTheme: 'brand-red' | 'fumbbl' | 'custom';
@@ -481,7 +483,7 @@ const DEFAULTS: AppSettings = {
   uniformFigures: false, // owner 09-10: N-S OFF by default (classic depth scaling); was on 09-09
   uniformFiguresEw: true, // owner 09-10: E-W on by default, independent
   actionDecorations: 'art', // owner 09-06: artwork by default; emoji kept as the Appearance option
-  moveSpeedMs: 150,
+  moveSpeedMs: 200, // owner 09-10: back to 200ms — headroom for renderer latency by default
   blockTumbleMs: 250,
   blockDice3d: true,
   trailColor: 'auto',
@@ -617,7 +619,9 @@ export const TURF_LABELS: Record<string, string> = {
 /** Available turf themes for the Settings picker. Populated at runtime from
  *  `renderer.turfOptions()` on mount (SpectateView) so the picker always mirrors
  *  what the renderer actually has loaded. */
-export const turfCatalog = reactive<{ options: string[] }>({ options: ['default-weather', 'pixel-weather'] });
+// Owner 09-10: seeded from the build's bundled families (Acasas/Basic included in installer builds) so the picker is
+// right from the console; the pitch view refreshes it with pack-bound pitches on mount.
+export const turfCatalog = reactive<{ options: string[] }>({ options: bundledTurfOptions() });
 
 /** Reader for the fork coach password, INJECTED by game/credentials.ts at import time. Injection
  *  (rather than an import) keeps settings ↔ credentials acyclic; credentials.ts needs load()'s
@@ -1060,8 +1064,20 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       if (merged.turf === 'pixel-weather') merged.turf = 'acasas-weather-fx';
       merged.settingsVersion = 33;
     }
+    // v34 (owner 09-10): movement animation default returns to 200ms (renderer-latency headroom). Installs still on the
+    // v14 150ms default move once; every explicit speed pick stays untouched.
+    if ((raw.settingsVersion ?? 0) < 34 && !v26UserOverrideMigrationPending) {
+      if (merged.moveSpeedMs === 150) merged.moveSpeedMs = 200;
+      merged.settingsVersion = 34;
+    }
     // Owner 09-10: the public edition has no fork / local-dev targets — force Official FUMBBL on load.
     if (!FORK_EDITION && merged.activeServerTarget !== 'fumbbl') { merged.activeServerTarget = 'fumbbl'; merged.url = FUMBBL_WS_URL; }
+    // Owner 09-10: public edition — wire log file always on (bug reports carry it), developer panel never shown.
+    if (!FORK_EDITION) { merged.wireLog = true; merged.devPanelOpen = false; }
+    merged.casualtySplash = false; // owner 09-10: toggle cut from Settings; the token-anchored toast carries casualties
+    // Owner 09-10: the legacy red-green accent remap becomes the deuteranopia filter; anything unknown → off.
+    if ((merged.colorblindMode as string) === 'redgreen') merged.colorblindMode = 'deuteranopia';
+    if (!['off', 'deuteranopia', 'protanopia', 'tritanopia'].includes(merged.colorblindMode)) merged.colorblindMode = 'off';
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a
     // fresh install needs no migration, and a transiently-null read of an EXISTING blob must

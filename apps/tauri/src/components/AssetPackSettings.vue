@@ -187,9 +187,15 @@ async function selectDraft(event: Event): Promise<void> {
   });
 }
 
-async function renameDraft(): Promise<void> {
+/** Owner 09-10: "Save draft" — every upload is already persisted to the draft folder as it lands; this commits the
+ *  pack name and tells the author the work is safe to leave and resume from the draft picker (it replaced Rename). */
+async function saveDraft(): Promise<void> {
   if (!draft.value) return;
-  await run(async () => { draft.value = await updateAssetDraft(draft.value!.draftId, draftName.value); await reloadDrafts(draft.value!.draftId); });
+  await run(async () => {
+    draft.value = await updateAssetDraft(draft.value!.draftId, draftName.value.trim() || draft.value!.name);
+    await reloadDrafts(draft.value!.draftId);
+    editorNotice.value = `Draft “${draft.value!.name}” saved — pick it up any time from the draft list.`;
+  });
 }
 
 async function removeDraft(): Promise<void> {
@@ -501,7 +507,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
       </select>
       <input v-model="draftName" maxlength="120" placeholder="Pack name" />
       <button type="button" :disabled="editorBusy" @click="newDraft">New</button>
-      <button type="button" :disabled="!draft || editorBusy" @click="renameDraft">Rename</button>
+      <button type="button" class="save-draft" :disabled="!draft || editorBusy" @click="saveDraft">Save draft</button>
       <button type="button" :disabled="!draft || editorBusy" @click="removeDraft">Delete draft</button>
     </div>
 
@@ -535,7 +541,6 @@ onMounted(() => { void run(() => reloadDrafts()); });
       </details>
       <details open>
         <summary>Walk sheets (optional)</summary>
-        <p class="hint">Walk sheets need Super FUMBBL 0.3.21 or later; older clients will refuse this pack.</p>
         <div class="target-grid">
           <span>Use the player-sprite team and position target above.</span>
           <button type="button" :disabled="editorBusy" @click="addWalkSheetFor('any')">Choose walk sheet PNG…</button>
@@ -557,12 +562,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
             <option :value="ADVANCED_TARGET">Advanced: enter a canonical skill ID</option>
           </select></label>
           <label v-if="skillChoice === ADVANCED_TARGET" class="advanced-target">Canonical skill ID <input data-testid="skill-id" v-model="skill" spellcheck="false" /></label>
-          <label>Position (optional) <select data-testid="skill-position-select" :value="skillPositionChoice" @change="chooseSkillPosition">
-            <option value="">Any position</option>
-            <option v-for="position in knownSkillPositions" :key="position.positionId" :value="position.positionId">{{ position.label }}</option>
-            <option :value="ADVANCED_TARGET">Advanced: enter a stable position ID</option>
-          </select></label>
-          <label v-if="skillPositionChoice === ADVANCED_TARGET" class="advanced-target">Stable position ID <input data-testid="skill-position-id" v-model="skillPositionId" spellcheck="false" /></label>
+          <!-- Owner 09-10: the per-position skill-icon target is cut from the builder — icons bind to the skill (any position). -->
           <label>Side <select v-model="skillSide"><option value="any">Any</option><option value="home">Home</option><option value="away">Away</option></select></label>
           <button type="button" :disabled="editorBusy" @click="addSkillIcon">Choose PNG or GIF…</button>
         </div>
@@ -570,7 +570,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
           <div class="asset-row asset-row-head"><strong>Skill</strong><strong>Target</strong><strong>Icon</strong></div>
           <div v-for="choice in SKILL_TARGET_CHOICES" :key="choice.id" class="asset-row">
             <span>{{ choice.label }}</span>
-            <small>{{ skillPositionId || 'Any position' }} · {{ skillSide }}</small>
+            <small>{{ skillSide }}</small>
             <button type="button" :disabled="editorBusy" @click="addSkillIconFor(choice.id)">Upload…</button>
           </div>
         </div>
