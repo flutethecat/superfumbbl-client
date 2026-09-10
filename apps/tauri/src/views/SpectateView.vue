@@ -16521,6 +16521,7 @@ function sendChat() {
 .log-panel[data-swapped='true'] {
   left: 14px;
   right: auto;
+  bottom: 27px; /* owner 09-10: the default Log sits 27px off the bottom edge (the Quick bar is on the right in this layout) */
 }
 .log-panel .tabs { cursor: move; } /* B2-9: drag handle */
 /* B9-12: explicit floating-window drag grip so it's always grabbable, even after
