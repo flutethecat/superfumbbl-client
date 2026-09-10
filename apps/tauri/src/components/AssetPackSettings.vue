@@ -453,8 +453,8 @@ onMounted(() => { void run(() => reloadDrafts()); });
       <span>{{ capability.label }}</span>
       <select :value="assignmentSelectValue(capability.key)" :disabled="!!assetMods.pendingAssignments"
         @change="changeAssignment(capability.key, $event)">
-        <option value="">Built-in default</option>
-        <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">Illustrated - Default</option>
+        <option value="">{{ capability.key === 'skillIcons' ? 'Flat badges (built-in)' : 'Built-in default' }}</option>
+        <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">Illustrated (built-in default)</option>
         <option v-for="pack in installedPacks.filter((candidate) => packSupports(candidate, capability.key))"
           :key="pack.installId" :value="pack.installId">{{ pack.name }} {{ pack.version }}</option>
       </select>

@@ -2456,7 +2456,8 @@ function captureKey(event: KeyboardEvent) {
             <li><span>FUMBBL logo — used under FUMBBL's branding guidelines (FUMBBL Branding page). FUMBBL is Christer Kaivo-oja's site; Super FUMBBL is an independent client.</span></li>
           </ul>
           <h3 class="credits-head license-head">License</h3>
-          <p class="hint">Super FUMBBL is released under the MIT License (also in the LICENSE file at the project root).</p>
+          <p class="hint">Super FUMBBL's code is released under the MIT License (also in the LICENSE file at the project root).</p>
+          <p class="hint">Super FUMBBL's original artwork (sprites, crests, skill badges, decorations, pitches, banners, dice, wordmark) is licensed under the Super FUMBBL Media License: use, modify and distribute for non-commercial purposes; no selling the assets or using them on merchandise; credit Super FUMBBL with a link and indicate any changes. Full text: docs/licenses/super-fumbbl-media-license.md.</p>
           <pre class="license-text">{{ CLIENT_MIT_LICENSE }}</pre>
           <h3 class="credits-head license-head">Upstream FFB license</h3>
           <p class="hint">Super FUMBBL builds on the FFB client/server by Christer Kaivo-oja, also released under the MIT License.</p>

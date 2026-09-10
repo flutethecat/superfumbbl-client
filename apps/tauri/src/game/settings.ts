@@ -17,7 +17,7 @@ const BACKUP_KEY = 'fumbbl40k.settings.bak';
 /** An unparseable primary is parked here (not destroyed) before defaults may overwrite it. */
 const CORRUPT_KEY = 'fumbbl40k.settings.corrupt';
 /** Bump when a default change must be FORCED onto existing installs (see load()). */
-const SETTINGS_VERSION = 31; // v31: uniform figure scale is per orientation (E-W on by default)
+const SETTINGS_VERSION = 32; // v32: illustrated skill badges are the default family
 
 /** Load-path health (P1 08-18: blank credentials). notices non-empty = a degraded settings read
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
@@ -437,7 +437,7 @@ const DEFAULTS: AppSettings = {
   skillMarkingFont: 'arial',
   skillMarkingSize: 12,
   skillIconStyle: 'bb3',
-  skillBadgeFamily: 'default',
+  skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
   skillIconPackInstallId: null,
   assetPackAssignments: { skillIcons: '', playerSprites: '', walkSheets: '', soundEvents: '', teamLogos: '', blockDice: '' },
   url: FORK_WS_URL, // owner 2026-07-13: match the default target ('fork' below) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
@@ -850,7 +850,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       teamLogos: installedIdentity(rawAssignments?.teamLogos), // owner 09-07
       blockDice: installedIdentity(rawAssignments?.blockDice),
     };
-    merged.skillBadgeFamily = raw.skillBadgeFamily === 'illustrated' ? 'illustrated' : 'default'; // owner 09-09
+    merged.skillBadgeFamily = raw.skillBadgeFamily === 'default' ? 'default' : 'illustrated'; // owner 09-10: illustrated unless the flat set was chosen
     // Owner 2026-07-05 migration: FORCE the new defaults onto pre-v2 installs (whose
     // persisted settings still carry the old walk / 60% values). Runs once — after
     // it stamps settingsVersion, future user changes to these keys stick.
@@ -1045,6 +1045,12 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if ((raw.settingsVersion ?? 0) < 31 && !v26UserOverrideMigrationPending) {
       merged.uniformFigures = false;
       merged.settingsVersion = 31;
+    }
+    // v32 (owner 09-10): the illustrated skill badges become the default family — the earlier defaults merge stamped
+    // 'default' (the flat set) into every blob, so an untouched pre-v32 value moves to 'illustrated' here.
+    if ((raw.settingsVersion ?? 0) < 32 && !v26UserOverrideMigrationPending) {
+      merged.skillBadgeFamily = 'illustrated';
+      merged.settingsVersion = 32;
     }
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a

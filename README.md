@@ -39,8 +39,11 @@ Installer-only licensed content ships inside the installer under its licence and
 Some sounds will be missing and not available in the client. As well as the default textures which ship inside the installer bundle that we distribute. For full functionality, please use the attached installer. If you're OK with the ones we've included (they work) then you're good to go!
 
 ## Licences
+
 **Code:** MIT — see `LICENSE`. Upstream FFB client/server by Christer Kaivo-oja, also MIT.
+
 **Third-party assets** (full records in `docs/licenses/`, `ATTRIBUTION.md` and the in-app Credits pane):
+
 - **CC0 1.0** — referee whistle by SpliceSound, "Drifting into Dreamland" by Breviceps, "Videogame Menu Button Click"
   by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
 - **CC BY 4.0** — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff
@@ -52,6 +55,8 @@ Some sounds will be missing and not available in the client. As well as the defa
   Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 
-**Super FUMBBL original art — MIT.** Everything else (sprites, star players, crests, skill badges, decorations, pitches,
-banners, block dice, kickoff banners, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
-Codex and Gemini image models from Super FUMBBL prompts, and is released under the same MIT licence as the code (`LICENSE`).
+**Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
+decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
+Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Super FUMBBL Media License
+(`docs/licenses/super-fumbbl-media-license.md`): free to use, modify and distribute for non-commercial purposes, no selling
+the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code is MIT.
