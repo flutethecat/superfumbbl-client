@@ -69,7 +69,6 @@ Some sounds will be missing and not available in the client. As well as the defa
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 
 **Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
-decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
-Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Super FUMBBL Media License
-(`docs/licenses/super-fumbbl-media-license.md`): free to use, modify and distribute for non-commercial purposes, no selling
-the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code is MIT.
+decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab, Claude Code, and OpenAI
+Codex support. In addition, Gemini image models were used for the creation of some Super FUMBBL assets. All of these assets are licensed under the Modern FUMBBL Media License.(https://fumbbl.com/p/attribution): free to use, modify and distribute for non-commercial purposes, no selling
+the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code itself for these and their integration is covered under the MIT license.
