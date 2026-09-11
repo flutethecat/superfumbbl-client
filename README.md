@@ -26,10 +26,9 @@ This, however, is a project that was created with heavy use of AI. If you're eth
 <img width="636" height="129" alt="image" src="https://github.com/user-attachments/assets/20af3f64-bb70-416d-b744-28beeb6c9c9e" />
 <img width="638" height="183" alt="image" src="https://github.com/user-attachments/assets/6d90d81f-57b4-4916-87cb-cb972f7e296f" />
 
-
-
-
 ## How to install?:
+We recommend the bundled release below for most users. It contains all assets and is configured to function as designed. We also offer self build routes for those who would like to do so, however not all assets are contained within as we do not have the rights to include them as individual files where they may be redistributed.
+
 Bundled release:
 https://github.com/flutethecat/superfumbbl-client/releases/tag/v1.0.0
 
@@ -38,20 +37,8 @@ pnpm install
 pnpm --filter @fumbbl40k/app build
 ```
 Requires Node, pnpm and the Tauri v2 toolchain (Rust). `pnpm --filter @fumbbl40k/app dev` runs the desktop app in development.
--# NOTE: Some artifacts are missing from the self built installer as we do not have the license to distribute.
 
-## Not in this tree
-Installer-only licensed content ships inside the installer under its licence and is not redistributed here:
-- `apps/tauri/public/fumbbl-assets/`
-- `apps/tauri/src/assets/block_skull.png`
-- `apps/tauri/src/assets/coin_skull.png`
-- `apps/tauri/src/assets/sounds/`
-- `packages/ffb-pitch/assets/textures/`
-- `packages/ffb-pitch/assets/acasas-weather/`
-- `packages/ffb-pitch/assets/acasas-weather-fx/`
-Some sounds will be missing and not available in the client. As well as the default textures which ship inside the installer bundle that we distribute. For full functionality, please use the attached installer. If you're OK with the ones we've included (they work) then you're good to go!
-
-## Licences
+## Licenses
 
 **Code:** MIT — see `LICENSE`. Upstream FFB client/server by Christer Kaivo-oja, also MIT.
 
@@ -71,4 +58,4 @@ Some sounds will be missing and not available in the client. As well as the defa
 **Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
 decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab, Claude Code, and OpenAI
 Codex support. In addition, Gemini image models were used for the creation of some Super FUMBBL assets. All of these assets are licensed under the Modern FUMBBL Media License.(https://fumbbl.com/p/attribution): free to use, modify and distribute for non-commercial purposes, no selling
-the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code itself for these and their integration is covered under the MIT license.
+the assets or putting them on merchandise, credit FUMBBL with a link and indicate changes. Please also include contribution notes for the Super FUMBBL team. While this is not a requirement under the MFML, it is an ask. The code itself for these and their integration is covered under the MIT license.
