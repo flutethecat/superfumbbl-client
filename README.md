@@ -59,3 +59,26 @@ Requires Node, pnpm and the Tauri v2 toolchain (Rust). `pnpm --filter @fumbbl40k
 decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab, Claude Code, and OpenAI
 Codex support. In addition, Gemini image models were used for the creation of some Super FUMBBL assets. All of these assets are licensed under the Modern FUMBBL Media License.(https://fumbbl.com/p/attribution): free to use, modify and distribute for non-commercial purposes, no selling
 the assets or putting them on merchandise, credit FUMBBL with a link and indicate changes. Please also include contribution notes for the Super FUMBBL team. While this is not a requirement under the MFML, it is an ask. The code itself for these and their integration is covered under the MIT license.
+
+## Licences
+
+**Code:** MIT — see `LICENSE`. Upstream FFB client/server by Christer Kaivo-oja, also MIT.
+
+**Third-party assets** (full records in `docs/licenses/`, `ATTRIBUTION.md` and the in-app Credits pane):
+
+- **CC0 1.0** — referee whistle by SpliceSound, "Drifting into Dreamland" by Breviceps, "Videogame Menu Button Click"
+  by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
+- **CC BY 4.0** — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff
+  (freesound.org). Ship in the installer.
+- **SIL Open Font License 1.1** — Nuffle by Neale Davidson (Pixel Sagas); the licence text ships beside the font.
+- **Flaticon licence (attribution)** — American football helmet icon by justicon.
+- **Licensed purchases, use in the product only** — SakPix "Football Championship Megapack" (stadium props, in this
+  tree as derivative crops); Acasas / unTied pitch textures via GameDev Market; The Sound Guild, Gamemaster Audio and
+  Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
+- **FUMBBL logo** — used under FUMBBL's branding guidelines.
+
+**Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
+decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
+Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Super FUMBBL Media License
+(`docs/licenses/super-fumbbl-media-license.md`): free to use, modify and distribute for non-commercial purposes, no selling
+the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code is MIT.

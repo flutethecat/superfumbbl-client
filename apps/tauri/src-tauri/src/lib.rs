@@ -601,6 +601,17 @@ pub fn run() {
     builder
         .manage(pending)
         .manage(asset_mods::AssetPackState::default())
+        // Diagnostics: FUMBBL_DEVTOOLS=1 opens the web inspector at launch. The native
+        // context menu is suppressed in the UI, so this is the only way to reach the
+        // console in a release build (e.g. a blank window on a new platform).
+        .setup(|app| {
+            if std::env::var_os("FUMBBL_DEVTOOLS").is_some() {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+            Ok(())
+        })
         // HTTP plugin: authenticated Config-Web/FUMBBL API traffic only. Media
         // assets are local-pack resolved and the CDN is absent from capabilities.
         .plugin(tauri_plugin_http::init())

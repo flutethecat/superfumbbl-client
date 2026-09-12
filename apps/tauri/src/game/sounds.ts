@@ -105,16 +105,25 @@ const SOUND_ASSET_URLS = import.meta.glob('../assets/sounds/**/*.{ogg,wav}', {
   import: 'default',
 }) as Record<string, string>;
 
-function resolveAssetPath(relativePath: string): string {
+const missingBuiltinSounds: string[] = [];
+
+/** A built-in sound file that is not in this build. The public source tree ships without the
+ *  licensed sound library (see .gitignore), so a self-build must boot with those events silent
+ *  rather than fail at module evaluation and leave a blank window. */
+function resolveAssetPath(relativePath: string): string | undefined {
   const url = SOUND_ASSET_URLS[`../assets/sounds/${relativePath}`];
-  if (!url) throw new Error(`Missing built-in sound asset: ${relativePath}`);
+  if (!url) missingBuiltinSounds.push(relativePath);
   return url;
 }
 
-function resolveManifestLeaf(value: BuiltinSoundLeaf): ResolvedBuiltinSoundLeaf {
+function resolvePaths(paths: readonly string[]): string[] {
+  return paths.map(resolveAssetPath).filter((url): url is string => url !== undefined);
+}
+
+function resolveManifestLeaf(value: BuiltinSoundLeaf): ResolvedBuiltinSoundLeaf | undefined {
   if (typeof value === 'string') return resolveAssetPath(value);
-  if (Array.isArray(value)) return value.map(resolveAssetPath);
-  return Object.fromEntries(Object.entries(value).map(([weather, paths]) => [weather, paths.map(resolveAssetPath)]));
+  if (Array.isArray(value)) return resolvePaths(value);
+  return Object.fromEntries(Object.entries(value).map(([weather, paths]) => [weather, resolvePaths(paths)]));
 }
 
 function isBuiltinSoundStyles(value: BuiltinSoundManifestValue): value is BuiltinSoundStyles {
@@ -123,12 +132,14 @@ function isBuiltinSoundStyles(value: BuiltinSoundManifestValue): value is Builti
   return candidate.styles != null && typeof candidate.styles === 'object' && typeof candidate.default === 'string';
 }
 
-function resolveManifestValue(value: BuiltinSoundManifestValue): ResolvedBuiltinSoundValue {
+function resolveManifestValue(value: BuiltinSoundManifestValue): ResolvedBuiltinSoundValue | undefined {
   if (isBuiltinSoundStyles(value)) {
-    return {
-      styles: Object.fromEntries(Object.entries(value.styles).map(([style, leaf]) => [style, resolveManifestLeaf(leaf)])),
-      default: value.default,
-    };
+    const styles: Record<string, ResolvedBuiltinSoundLeaf> = {};
+    for (const [style, leaf] of Object.entries(value.styles)) {
+      const resolved = resolveManifestLeaf(leaf);
+      if (resolved !== undefined) styles[style] = resolved;
+    }
+    return { styles, default: value.default };
   }
   return resolveManifestLeaf(value);
 }
@@ -145,8 +156,17 @@ if (builtinSounds.sad_trombone !== 'sad_trombone.wav') {
 
 const BUILTIN_SOUND_URLS: ReadonlyMap<string, ResolvedBuiltinSoundValue> = new Map(
   Object.entries(builtinSounds as Record<string, BuiltinSoundManifestValue>)
-    .map(([soundId, value]) => [soundId, resolveManifestValue(value)]),
+    .flatMap(([soundId, value]) => {
+      const resolved = resolveManifestValue(value);
+      return resolved === undefined ? [] : [[soundId, resolved] as const];
+    }),
 );
+if (missingBuiltinSounds.length > 0) {
+  console.warn(
+    `${missingBuiltinSounds.length} built-in sound file(s) are not in this build; those events stay silent `
+    + `until an asset pack or a Settings › Sounds override supplies them: ${missingBuiltinSounds.join(', ')}`,
+  );
+}
 const builtinRoundRobinCursors = new Map<string, number>();
 let currentSoundWeather: string | null = null;
 

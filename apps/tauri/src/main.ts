@@ -1,4 +1,5 @@
 import { createApp } from 'vue';
+import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import App from './App.vue';
 import { initCredentials } from './game/credentials';
 import { initSettingsFile, settings } from './game/settings';
@@ -13,6 +14,9 @@ import {
  * it up on first render. The Settings pane opts back out to Arial/Helvetica.
  */
 async function boot() {
+  // Bundled Pixi textures resolve against the page origin on every platform (macOS/Linux run
+  // at tauri://localhost, where Pixi's default root derivation breaks). Must precede any load.
+  configurePixiAssetOrigin();
   // Owner 09-10: the SailThe7Seas "-arrrr" gate and the rules-text skill descriptions it unlocked are REMOVED.
   // Adopt the settings FILE (owner 08-19: durable store off WebView2 localStorage) BEFORE
   // credentials, so a recovery-file password is captured for the keychain migration below.

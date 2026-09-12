@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-single-instance = "2"
 # Used for authenticated Config-Web and FUMBBL API calls. Media references are
 # resolved only through an explicitly selected local asset pack.

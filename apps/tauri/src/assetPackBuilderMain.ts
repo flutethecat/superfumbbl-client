@@ -1,7 +1,9 @@
 import { createApp } from 'vue';
+import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import AssetPackBuilderApp from './AssetPackBuilderApp.vue';
 
 async function bootAssetPackBuilder(): Promise<void> {
+  configurePixiAssetOrigin();
   try {
     const nuffle = new FontFace('Nuffle', 'url(/fonts/Nuffle.otf)');
     await nuffle.load();
