@@ -77,8 +77,8 @@ the assets or putting them on merchandise, credit FUMBBL with a link and indicat
   Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 
-**Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
+**Super FUMBBL original art — Modern FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
 decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
-Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Super FUMBBL Media License
-(`docs/licenses/super-fumbbl-media-license.md`): free to use, modify and distribute for non-commercial purposes, no selling
-the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code is MIT.
+Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Modern FUMBBL Media License
+(`[Fumbbl Attribution Page](https://fumbbl.com/p/attribution)`): free to use, modify and distribute for non-commercial purposes, no selling
+the assets or putting them on merchandise, credit FUMBBL with a link and indicate changes. The code is MIT. See the license page for all official details.
