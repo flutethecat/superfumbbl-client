@@ -1,6 +1,6 @@
 # FUMBBL Contributors (mirrored attribution)
 
-> **Source of truth: <https://fumbbl.com/p/attribution>** — this file mirrors that page. For the most up-to-date list, please visit FUMBBL's attribution page.
+> **Source of truth: <https://fumbbl.com/p/attribution>** — this file mirrors that page. For the most up-to-date list, please visit FUMBBL's attribution page. We list this here as a historical document. These assets should not be present in our client but we credit their contributions to upstream as part of the historical legacy of the FUMBBL project.
 
 This page lists people who have contributed assets (images, sounds, code, etc) to FUMBBL,
 with information on what they have contributed and additional information requested as part
