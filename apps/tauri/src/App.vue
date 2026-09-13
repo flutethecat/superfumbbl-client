@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect, defineAsyncComponent, type Component } from 'vue';
 import SpectateView from './views/SpectateView.vue';
-import ClassicView from './views/ClassicView.vue';
+// Owner 09-12: FUMBBL Classic is a fork-edition feature. The public export omits ClassicView.vue entirely (see
+// public-export.exclude); the glob tolerates the missing file, so the public build carries no Classic code.
+const classicModules = import.meta.glob('./views/ClassicView.vue');
+const ClassicView = FORK_EDITION && classicModules['./views/ClassicView.vue']
+  ? defineAsyncComponent(classicModules['./views/ClassicView.vue'] as () => Promise<{ default: Component }>)
+  : null;
 import ProtocolConsole from './views/ProtocolConsole.vue';
 import DevPanel from './views/DevPanel.vue';
 import PlayView from './views/console/PlayView.vue';
@@ -1402,7 +1407,7 @@ function captureKey(event: KeyboardEvent) {
     <!-- owner 2026-07-08 (FC): view-layer fork — the FUMBBL-Classic presentation
          mounts instead of SpectateView when the mode is set (shared store). -->
     <template v-if="!!gameStore.game.value">
-      <ClassicView v-if="settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
+      <component :is="ClassicView" v-if="ClassicView && settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
       <SpectateView v-else :mode="liveGameMode" @end-game-exit="onEndGameExit" />
     </template>
     <!-- Owner ruling (console shell restructure): Play blade is up for BOTH server plates — the "PLAY ON
@@ -1730,6 +1735,18 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <input v-model="settings.devPanelOpen" type="checkbox" />
               <span>Show developer log panel</span>
+            </label>
+            <label v-if="settings.devMode" class="row">
+              <span>Coach brain</span>
+              <select :value="settings.coachBrain" @change="gameStore.setCoachBrain(($event.target as HTMLSelectElement).value as typeof settings.coachBrain)">
+                <option value="none">none</option>
+                <option value="random">random</option>
+                <option value="fly-chaos">fly-chaos</option>
+              </select>
+            </label>
+            <label v-if="settings.devMode && settings.coachBrain === 'fly-chaos'" class="row">
+              <span>Fly brain URL</span>
+              <input v-model="settings.flyBrainUrl" type="text" />
             </label>
             <span class="hint">The dev stream is always captured (it rides bug reports); this only shows the live panel.</span>
             </template>
@@ -2214,14 +2231,14 @@ function captureKey(event: KeyboardEvent) {
         <section v-if="settingsTab === 'ui'">
           <fieldset class="settings-group">
             <legend>HUD layout</legend>
-            <label class="row">
+            <label v-if="FORK_EDITION" class="row">
               <span>UI mode</span>
               <select v-model="settings.uiMode">
                 <option value="fumbbl40k">Super FUMBBL (default)</option>
                 <option value="classic">FUMBBL Classic</option>
               </select>
             </label>
-            <p class="hint">FUMBBL Classic mirrors the classic Java client's layout &amp; prompts (preview).</p>
+            <p v-if="FORK_EDITION" class="hint">FUMBBL Classic mirrors the classic Java client's layout &amp; prompts (preview).</p>
             <label v-if="settings.uiMode === 'fumbbl40k'" class="row">
               <span>Modern HUD style</span>
               <select v-model="settings.modernHudStyle">

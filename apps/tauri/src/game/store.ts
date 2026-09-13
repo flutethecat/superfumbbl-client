@@ -29,7 +29,8 @@ import { oldProArmorDice, savageMaulingInjuryResult } from './skillUseCardPresen
 import { PRAYER_TABLE, prayerForPlayerEventMessage, type PrayerCatalogEntry } from './prayerCatalog';
 import { applyServerAddPlayer } from './serverAddPlayer';
 import { playSound, setSoundsSuppressed, setSoundWeather } from './sounds';
-import { settings } from './settings';
+import { settings, FORK_SERVER_HOST } from './settings';
+import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
 import { starUseSkillElection, starRuleById } from './logic/coachActionDispatch';
 import {
@@ -17208,6 +17209,62 @@ watch(
   },
 );
 
+// Live drive 09-12 (game 948): a FREE step (no dodge/GFI/pickup roll) keeps state.movementIntent alive until the
+// activation ends (presentation state, see settleMovementIntentAfterFrame), so gating the driver on `!movementIntent`
+// froze it after the first plain step. The driver only needs the step's ECHO: the server placed the player on the
+// requested square (or the step failed and the reroll dialog gate owns the wait).
+function unsettledMovementIntent(): boolean {
+  const intent = state.movementIntent;
+  const g = game.value;
+  if (!intent || !g || intent.failureConfirmed) return false;
+  const pd = g.fieldModel.playerDataArray.find((p) => p.playerId === intent.playerId);
+  const at = pd?.playerCoordinate;
+  return !(at && at[0] === intent.to[0] && at[1] === intent.to[1]);
+}
+// Fork-only lazy import keeps the brain runtime out of the public edition.
+if (FORK_EDITION) {
+  let coachDriver: Promise<ReturnType<typeof import('./logic/coachBrain')['createCoachDriver']>> | null = null;
+  watch([game, () => settings.coachBrain, () => settings.forkHost, () => play.active,
+    () => state.sessionState, () => state.gameClock], () => {
+    if (!coachDriver && settings.coachBrain === 'none') return;
+    coachDriver ??= import('./logic/coachBrain').then(({ createCoachDriver, coachHostAllowed, coachTurnClockMs }) => createCoachDriver({
+      read: () => {
+        const g = game.value;
+        if (!g || !session) return null;
+        const url = lastConnect?.mode === 'player' ? lastConnect.params.url : '';
+        return {
+          game: g, sessionKey: session, revision: lastAppliedCommandNr,
+          context: { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome },
+          enabled: settings.coachBrain !== 'none' && play.active && !interactiveSetup
+            && !replay.active && playPermitted() && session.connection.isOpen
+            && coachHostAllowed(url, FORK_SERVER_HOST, settings.forkHost)
+            && !playback.catchingUp && playback.queue.length === 0
+            && !unsettledMovementIntent() && !endTurnInFlight && !blockInFlight
+            && commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN }),
+          turnClockMs: coachTurnClockMs(g, state.gameClock?.turnTime ?? Number(g.turnTime ?? 0)),
+          moveOffered: (playerId, square) => !!currentMoveOffer(playerId, square),
+        };
+      },
+      // All existing senders still pass sendCommand's dialog/turn/move-rail gate (store.ts ~12837).
+      send: (intent, obs) => {
+        switch (intent.kind) {
+          case 'select': gameStore.declareAction(intent.playerId, 'move', false); break;
+          case 'declare': { const who = intent.playerId ?? obs.selectedPlayerId; if (who) gameStore.declareAction(who, intent.action, false); break; }
+          case 'move': return !!obs.selectedPlayerId && gameStore.stepMove(obs.selectedPlayerId, intent.path[0]!);
+          case 'block': return !!obs.selectedPlayerId && gameStore.sendBlock(obs.selectedPlayerId, intent.defenderId);
+          case 'endMove': gameStore.endActivation({ blitzConfirmed: true }); break;
+          case 'endTurn': gameStore.playerEndTurn(); break;
+          case 'pass': break;
+        }
+      },
+      report: (message) => log('system', message),
+    }));
+    void coachDriver.then((driver) => driver.wake()).catch((error: unknown) => {
+      log('system', `Coach brain could not start: ${String(error)}`);
+    });
+  }, { immediate: true });
+}
+
 // Treat admin-message plus near-immediate socket close as terminal server shutdown.
 const SHUTDOWN_ADMIN_WINDOW_MS = 3000;
 let lastAdminMessageAt = 0;
@@ -18091,6 +18148,10 @@ export const gameStore = {
   /** Owner 2026-07-04: turn hand-placement setup on/off (off = auto-formation). */
   setInteractiveSetup(on: boolean) {
     interactiveSetup = on;
+  },
+
+  setCoachBrain(id: 'none' | 'random' | 'fly-chaos') {
+    settings.coachBrain = FORK_EDITION && (id === 'random' || id === 'fly-chaos') ? id : 'none';
   },
 
   /** Owner 2026-07-08 (test aid): auto-finalize the PREGAME dialogs even on an

@@ -26,6 +26,9 @@ importers:
       '@fumbbl40k/ffb-protocol':
         specifier: workspace:*
         version: link:../../packages/ffb-protocol
+      '@fumbbl40k/fly-coach':
+        specifier: workspace:*
+        version: link:../../packages/fly-coach
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.11.1
@@ -113,6 +116,12 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.21.0
+
+  packages/fly-coach:
+    dependencies:
+      '@fumbbl40k/ffb-protocol':
+        specifier: workspace:*
+        version: link:../ffb-protocol
 
 packages:
 

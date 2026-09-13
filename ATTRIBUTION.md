@@ -1,6 +1,9 @@
 # FUMBBL Contributors (mirrored attribution)
 
-> **Source of truth: <https://fumbbl.com/p/attribution>** — this file mirrors that page. For the most up-to-date list, please visit FUMBBL's attribution page. We list this here as a historical document. These assets should not be present in our client but we credit their contributions to upstream as part of the historical legacy of the FUMBBL project.
+> **Source of truth: <https://fumbbl.com/p/attribution>** — this file mirrors that page so the
+> credits ship with FUMBBL40k (which uses FUMBBL/FFB assets). Check the source page for
+> updates and corrections; if it changes, re-mirror it here and in the client's
+> Credits/License pane (App.vue). Mirrored 2026-07-23.
 
 This page lists people who have contributed assets (images, sounds, code, etc) to FUMBBL,
 with information on what they have contributed and additional information requested as part
@@ -98,6 +101,3 @@ marks).
 - **Whatball** — Pitches: Default (edited by Garion)
 - **Angelux** — Pitches: Tomb Kings (edited by Garion)
 - **ZioCrock** — Pitches: Amazon, High Elf, Lizardman (all edited by Garion)
-
-## Super FUMBBL
-- **FluteTheCat** - All code, artwork, and contributions.

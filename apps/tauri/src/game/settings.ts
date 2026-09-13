@@ -220,6 +220,8 @@ export interface AppSettings {
   /** Owner 2026-07-10: DEVELOPER mode — unlocked by the `-dev` exe arg / `?dev`. Gates the
    *  Settings → Developer section + the live Developer log panel. */
   devMode: boolean;
+  coachBrain: 'none' | 'random' | 'fly-chaos';
+  flyBrainUrl: string;
   /** Developer log panel visible. */
   devPanelOpen: boolean;
   /** Feed wire traffic (reports/dialogs/turnMode + outbound commands) into the Developer log. */
@@ -510,6 +512,8 @@ const DEFAULTS: AppSettings = {
   friendlyPlayerSwitch: true,
   leftClickOpensContextMenu: false,
   devMode: false,
+  coachBrain: 'none',
+  flyBrainUrl: 'http://127.0.0.1:8766',
   devPanelOpen: false,
   devWireCapture: true,
   debugLog: false,
@@ -885,6 +889,9 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // unchecked the now-removed toggle would persist `false`). This makes it impossible for a stale settings file
     // to resurrect the legacy planner. Phase ② excises the flag + dead legacy consumers progressively.
     merged.order66 = true;
+    merged.coachBrain = FORK_EDITION && (raw.coachBrain === 'random' || raw.coachBrain === 'fly-chaos') ? raw.coachBrain : 'none';
+    merged.flyBrainUrl = typeof raw.flyBrainUrl === 'string' && raw.flyBrainUrl.trim()
+      ? raw.flyBrainUrl.trim() : DEFAULTS.flyBrainUrl;
     merged.declareBlitzBehavior = raw.declareBlitzBehavior === 'modern' ? 'modern' : 'fumbbl';
     merged.friendlyPlayerSwitch = raw.friendlyPlayerSwitch !== false;
     merged.leftClickOpensContextMenu = raw.leftClickOpensContextMenu === true;
@@ -1074,6 +1081,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if (!FORK_EDITION && merged.activeServerTarget !== 'fumbbl') { merged.activeServerTarget = 'fumbbl'; merged.url = FUMBBL_WS_URL; }
     // Owner 09-10: public edition — wire log file always on (bug reports carry it), developer panel never shown.
     if (!FORK_EDITION) { merged.wireLog = true; merged.devPanelOpen = false; }
+    if (!FORK_EDITION) merged.uiMode = 'fumbbl40k'; // owner 09-12: FUMBBL Classic is fork-edition only
     merged.casualtySplash = false; // owner 09-10: toggle cut from Settings; the token-anchored toast carries casualties
     // Owner 09-10: the legacy red-green accent remap becomes the deuteranopia filter; anything unknown → off.
     if ((merged.colorblindMode as string) === 'redgreen') merged.colorblindMode = 'deuteranopia';
