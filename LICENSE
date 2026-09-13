@@ -1,3 +1,5 @@
+
+# CODE ONLY
 MIT License
 
 Copyright (c) 2024 Christer Kaivo-oja (upstream FFB)
@@ -21,7 +23,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Third-party assets (full records in docs/licenses/, ATTRIBUTION.md and the in-app Credits pane):
+# Other assets:
 
 CC0 1.0 — referee whistle by SpliceSound, "Drifting into Dreamland" by Breviceps, "Videogame Menu Button Click" by Christopherderp (all freesound.org). No attribution required; credited anyway. Ship in the installer.
 CC BY 4.0 — "Boxing Bell 1" by Benboncan, "Dramatic Organ A" by InspectorJ, "Chainsaw" by ItsTheGoodstuff (freesound.org). Ship in the installer.
