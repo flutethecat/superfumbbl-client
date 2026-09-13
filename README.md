@@ -1,3 +1,6 @@
+<img width="725" height="248" alt="image" src="https://github.com/user-attachments/assets/0f6bf103-9d54-486f-a122-ec70cf60fb7a" />
+
+
 # Super FUMBBL client
 This is a fork of Christerk/FFB-Client built on Pixi/Vue in a Rust wrapper. The client has been rebuilt from the ground up to generate the same shapes back to FFB-Server (another ChristerK fork) and permit play on upstream FUMBBL.com and any FFB-Server fork that carries the same command shape.  This client is a personal project but could not have been built without the contributions of the giants who've come before us such as Christer, Candlejack, Garcangel, and the entire FFB crew. Nor could it have been completed without the assistance of the trusty TABBL crew: hype261, WillShoebox, UnderTheGlow, Torokokill. Neither should I forget to mention the contributions of folks like TheArtemisBlack, PurpleChest, Warpstone, and MrCushtie and others, who've given feedback, time, and play tested for me.
 
