@@ -1,0 +1,11 @@
+{
+  "name": "@fumbbl40k/fly-coach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@fumbbl40k/ffb-protocol": "workspace:*"
+  }
+}
