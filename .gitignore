@@ -44,3 +44,7 @@ sim/logs/*.out
 !/mods/fumbbl-original-sprites/README.md
 !/mods/fumbbl-original-sprites/build.mjs
 !/mods/fumbbl-original-sprites/verify.mjs
+
+# python bytecode (tools/fly-brain-server)
+__pycache__/
+*.pyc

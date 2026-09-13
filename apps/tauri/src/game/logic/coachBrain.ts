@@ -1,8 +1,14 @@
 import type { FieldCoordinateJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import {
-  FlyChaosCoach, RandomLegalCoach, type CoachIntent,
+  RandomLegalCoach, type CoachIntent,
   type CoachObservation as BrainObservation, type MoveSquareFact,
-} from '@fumbbl40k/fly-coach';
+} from './coachContract';
+// Owner 09-12: the fly runtime (packages/fly-coach) is fork-only and ABSENT from the public export; the glob
+// tolerates the missing package, so the public build carries no fly code and 'fly-chaos' resolves to no brain.
+interface FlyDecisionLike { verdict: string; counts: Record<string, number>; wall_ms: number }
+type FlyModule = { FlyChaosCoach: new (url: string, seed: number, options: { onDecision?: (d: FlyDecisionLike | null) => void }) => CoachBrain };
+const flyModules = import.meta.glob<FlyModule>('../../../../../packages/fly-coach/src/flyChaosCoach.ts');
+const FLY_MODULE = '../../../../../packages/fly-coach/src/flyChaosCoach.ts';
 import {
   adjacentBlockableEnemyIds, availableActions, normSquare,
   type CoachAction,
@@ -22,15 +28,19 @@ export interface CoachBrain {
   decide(obs: CoachObservation, signal: AbortSignal): Promise<CoachIntent>;
 }
 
-export function createCoachBrain(config: Pick<AppSettings, 'coachBrain' | 'flyBrainUrl'>,
-  seed: number, report: (message: string) => void): CoachBrain | null {
+export async function createCoachBrain(config: Pick<AppSettings, 'coachBrain' | 'flyBrainUrl'>,
+  seed: number, report: (message: string) => void): Promise<CoachBrain | null> {
   if (config.coachBrain === 'random') return new RandomLegalCoach(String(seed));
-  if (config.coachBrain === 'fly-chaos') return new FlyChaosCoach(config.flyBrainUrl, seed, {
+  if (config.coachBrain !== 'fly-chaos') return null;
+  // Single-file glob: take whatever key Vite/vitest produced (relative in dev, /@fs or absolute elsewhere).
+  const load = flyModules[FLY_MODULE] ?? Object.values(flyModules)[0];
+  if (!load) { report('Coach brain: the fly runtime is not part of this build'); return null; }
+  const { FlyChaosCoach } = await load();
+  return new FlyChaosCoach(config.flyBrainUrl, seed, {
     onDecision: (decision) => report(`fly: ${JSON.stringify(decision
       ? { verdict: decision.verdict, counts: decision.counts, wall_ms: decision.wall_ms }
       : { verdict: null, counts: null, fallback: 'pass' })}`),
   });
-  return null;
 }
 
 /** Check the connected URL, never the selected preset or an editable URL alone. */
@@ -303,7 +313,13 @@ export function createCoachDriver(ports: CoachDriverPorts) {
     const nextBrain = configurationKey(frame);
     if (nextBrain !== brainKey) {
       brainKey = nextBrain;
-      brain = ports.brain ?? createCoachBrain(settings, frame.game.gameId, ports.report);
+      brain = ports.brain ?? null;
+      if (!ports.brain) {
+        const key = nextBrain;
+        void createCoachBrain(settings, frame.game.gameId, ports.report).then((created) => {
+          if (brainKey === key && !stopped) { brain = created; schedule(); }
+        });
+      }
       fallback = new RandomLegalCoach(`${frame.game.gameId}:fallback`);
     }
     if (pending) {
