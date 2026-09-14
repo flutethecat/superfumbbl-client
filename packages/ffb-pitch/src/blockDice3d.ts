@@ -260,10 +260,11 @@ export async function createBlockDiceRow(host: HTMLElement, options: BlockDiceRo
   }
 }
 
-type LoadedModel = { THREE: typeof import('three'); gltf: Awaited<ReturnType<InstanceType<typeof import('three/examples/jsm/loaders/GLTFLoader.js')['GLTFLoader']>['loadAsync']>> };
+export type LoadedModel = { THREE: typeof import('three'); gltf: Awaited<ReturnType<InstanceType<typeof import('three/examples/jsm/loaders/GLTFLoader.js')['GLTFLoader']>['loadAsync']>> };
 let sharedModelPromise: Promise<LoadedModel> | null = null;
 
-function loadSharedModel(): Promise<LoadedModel> {
+/** Shared by the chooser row and the on-pitch action dice (owner 09-14): one Three.js + GLB load per session. */
+export function loadSharedBlockDiceModel(): Promise<LoadedModel> {
   if (!sharedModelPromise) {
     sharedModelPromise = Promise.all([
       import('three'),
@@ -282,7 +283,7 @@ async function createThreeBlockDiceRuntime(
   onFailure: (error: unknown) => void,
   slots?: () => readonly BlockDiceSlot[],
 ): Promise<BlockDiceRuntime> {
-  const { THREE, gltf } = await loadSharedModel();
+  const { THREE, gltf } = await loadSharedBlockDiceModel();
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -460,7 +461,9 @@ async function createThreeBlockDiceRuntime(
         for (const name of faceMaterials[faceIndex]!) {
           const material = materialForName(name);
           if (!material) continue;
-          material.map = texture ?? embeddedTextures.get(name) ?? null;
+          const next = texture ?? embeddedTextures.get(name) ?? null;
+          material.map = next;
+          material.emissiveMap = next; // the GLB's emissive slot carries the symbol too — a swapped face must not ghost the old art
           material.needsUpdate = true;
         }
       });

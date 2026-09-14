@@ -1,0 +1,28 @@
+diff --git a/lib/scene/sprite/Sprite.js b/lib/scene/sprite/Sprite.js
+index ffd8f56364297368775ab9a2d03dad99c0c6b435..9f1df51553084b7472ff6744b29d8c3049fdd53b 100644
+--- a/lib/scene/sprite/Sprite.js
++++ b/lib/scene/sprite/Sprite.js
+@@ -160,6 +160,9 @@ class Sprite extends ViewContainer.ViewContainer {
+    * sprite.destroy({ texture: true, textureSource: true });
+    */
+   destroy(options = false) {
++    // Super FUMBBL patch (2026-09-14): mirror the texture setter — a destroyed sprite must not stay subscribed to a
++    // shared dynamic texture's update event (otherwise the texture's listener list retains every destroyed sprite).
++    if (this._texture && this._texture.dynamic) this._texture.off("update", this.onViewUpdate, this);
+     super.destroy(options);
+     const destroyTexture = typeof options === "boolean" ? options : options?.texture;
+     if (destroyTexture) {
+diff --git a/lib/scene/sprite/Sprite.mjs b/lib/scene/sprite/Sprite.mjs
+index c340425c8aeddf79ab300e562ee7f9519cd1c9bf..e18f451edb760b093996d0f992fe2b5414cfdd78 100644
+--- a/lib/scene/sprite/Sprite.mjs
++++ b/lib/scene/sprite/Sprite.mjs
+@@ -158,6 +158,9 @@ class Sprite extends ViewContainer {
+    * sprite.destroy({ texture: true, textureSource: true });
+    */
+   destroy(options = false) {
++    // Super FUMBBL patch (2026-09-14): mirror the texture setter — a destroyed sprite must not stay subscribed to a
++    // shared dynamic texture's update event (otherwise the texture's listener list retains every destroyed sprite).
++    if (this._texture && this._texture.dynamic) this._texture.off("update", this.onViewUpdate, this);
+     super.destroy(options);
+     const destroyTexture = typeof options === "boolean" ? options : options?.texture;
+     if (destroyTexture) {

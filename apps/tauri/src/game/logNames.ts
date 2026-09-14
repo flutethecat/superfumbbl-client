@@ -1,3 +1,4 @@
+import type { TeamSide } from './teamSide';
 /**
  * #157-v2 (owner 08-18): player NAMES in the log carry a TEAM tag emitted at FORMAT time
  * (reportFormatter marks each name it resolves from a playerId), so the view never has to
@@ -10,7 +11,7 @@
  * formatted once and kept. Seat-relativisation therefore lives at RENDER time in the view.
  */
 
-export type LogNameTeam = 'home' | 'away';
+export type LogNameTeam = TeamSide;
 
 /** One tagged player name inside a formatted log line. `index` is an offset into the entry text.
  *  Owner 08-19: `playerId` rides along (additive — offsets untouched) so the view can make the

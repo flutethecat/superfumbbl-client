@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@fumbbl40k/ffb-protocol": "workspace:*",
-    "pixi.js": "^8.6.0",
+    "pixi.js": "^8.20.1",
     "three": "0.170.0"
   },
   "devDependencies": {

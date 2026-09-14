@@ -1,4 +1,41 @@
-import { computed, nextTick, reactive, shallowRef, triggerRef, watch } from 'vue';
+import { observedFailedMovementDestination } from './movementOccurrenceProjection';
+import { blockOutcomePresentation } from './blockOutcomePresentation';
+import { ballProjectilePresentation, createBallProjectileContext, KNOWN_PROJECTILE_ANIMATION_TYPES, throwPresentationKind, type BallProjectileContext, type ThrowPresentationKind } from './ballProjectilePresentation';
+export { throwPresentationKind } from './ballProjectilePresentation';
+import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
+import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
+import { apothecaryOutcomePresentation, sendOffOutcomePresentation } from './officialResultPresentation';
+import { pushPresentation, type PendingPush } from './pushPresentation';
+import { injuryPresentation, armourPresentation, type InjuryEvent } from './injuryPresentation';
+import { rerollPresentation } from './rerollPresentation';
+export { reportedAutomaticRerollSkill } from './rerollPresentation';
+import { presentStages } from './replay/presentationStages';
+import { actionRollPresentation, type ActionRollCue } from './actionRollPresentation';
+import { skillUsePresentation } from './skillUsePresentation';
+import { LiveSpectateTransport } from './replay/liveSpectateTransport';
+import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/spectatorPublication';
+import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
+import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
+import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
+import { passDestinationFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+export { passDestinationFromGame } from './passiveSpectatorProjection';
+import { createSkillDecisionProjection, reduceSkillDecisionProjection, type SkillDecisionDetails } from './skillDecisionProjection';
+import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
+import { buildBlockDecision, createBlockContext, reduceBlockContext } from './blockDecisionProjection';
+import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
+import { casualtyRollLabel, casualtyRollBase, injuryTypeName, createCasualtyRollProjection, reduceCasualtyRollProjection, casualtyRollFor } from './casualtyRollProjection';
+import { buildApothecaryDecision, buildApothecaryResult } from './apothecaryDecisionProjection';
+import { buildReRollDecision } from './reRollDecisionProjection';
+import { type ReRollPromptOption, skillNameWithValue, reRollSourceName, playerById, explicitLashOutCapability, primalSavageryAvailable, valuedSkillLabel, lonerValueForPlayer, singleUseReRollName, reRollSkillName, type ReRollPromptPresentation, reRollActionName, ttmSuperbTarget, reRollPromptPresentation, offeredReRollOptions, proCompositeReRollOptions } from './reRollDecisionProjection';
+export { type ReRollPromptOption, skillNameWithValue, reRollSourceName, playerById, explicitLashOutCapability, primalSavageryAvailable, valuedSkillLabel, lonerValueForPlayer, singleUseReRollName, reRollSkillName, type ReRollPromptPresentation, reRollActionName, ttmSuperbTarget, reRollPromptPresentation, offeredReRollOptions, proCompositeReRollOptions } from './reRollDecisionProjection';
+import { serverPassRollTruth, type PassReRollResult, type ServerPassRollTruth, createActionRollProjection, reduceActionRollProjection, actionRollFor } from './actionRollProjection';
+import { inferStandingRerollsFromReplay } from './standingRerollProjection';
+import { reduceEndGameHud } from './endGameHudProjection';
+import { reduceDriveProjection, type DriveProjection } from './driveProjection';
+import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, type BlitzProjection } from './blitzProjection';
+import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
+import { computed, customRef, nextTick, reactive, shallowRef, triggerRef, watch } from 'vue';
+import { boardTurnKey, createBoardProjection, reduceBoardProjection } from './boardProjection';
 import {
   GameSession,
   ModelChangeId,
@@ -13,10 +50,11 @@ import {
   type SessionState,
 } from '@fumbbl40k/ffb-protocol';
 import { SETUP_TEMPLATES, validateSetup, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, TTM_THROW_MS, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, type SetupTemplateSide, type SetupValidation } from '@fumbbl40k/ffb-pitch';
-import { formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
+import { createReportLogContext, formatReportLines, playerName, setBlockDefenderHint, injuryReportDedupeKey } from './reportFormatter';
 import { d6RerollNeeded, d6RerollRoll, reportCarriesDisplayedDice, type D6LogToken } from './d6Log';
 import type { BlockDieLogToken } from './blockDieLog';
 import type { LogNameToken } from './logNames';
+import type { InjuryResultName } from './skillUseCardPresentation';
 import { chatAuthorSide, type ChatAuthorSide } from './chatAuthor';
 import { sequencingCategory } from './logVisibility';
 import { kickoffArcNeedsDecisionDwell } from './kickoffArcDwell';
@@ -25,10 +63,10 @@ import { joinLogLine } from './joinLog';
 import { captureSppBreakdown, collectSppGainParts, type SppGainOccurrence, type SppGainPart } from './sppGainPresentation';
 import type { LogTagToken } from './logTags';
 import { logTimestamp } from './logTime';
-import { oldProArmorDice, savageMaulingInjuryResult } from './skillUseCardPresentation';
+
 import { PRAYER_TABLE, prayerForPlayerEventMessage, type PrayerCatalogEntry } from './prayerCatalog';
 import { applyServerAddPlayer } from './serverAddPlayer';
-import { playSound, setSoundsSuppressed, setSoundWeather } from './sounds';
+import { stopPresentationSounds, playSound, setSoundsSuppressed, setSoundWeather } from './sounds';
 import { settings, FORK_SERVER_HOST } from './settings';
 import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
@@ -240,64 +278,9 @@ const freshEndGameState = (): EndGameState => ({
   defectors: [],
 });
 
-type StandingRerollField = 'rerollPumpUpTheCrowdOneDrive' | 'rerollShowStarOneDrive' | 'singleUseReRolls';
-export type ReplayedStandingRerolls = Record<'home' | 'away', Partial<Record<StandingRerollField, number>>>;
-
+export { inferStandingRerollsFromReplay, type ReplayedStandingRerolls } from './standingRerollProjection';
 function normalizedWireName(value: unknown): string {
   return String(value ?? '').toLowerCase().replace(/[^a-z]/g, '');
-}
-
-/** Fold only the standing re-roll setters needed to repair an upstream TurnData snapshot.
- *  Star's upstream setter currently publishes the Pump model-change id, so its paired
- *  report identifies which field the model-change value belongs to. The value itself
- *  always comes from the model change, never from report text or client arithmetic. */
-export function inferStandingRerollsFromReplay(commands: readonly Record<string, unknown>[]): ReplayedStandingRerolls {
-  const result: ReplayedStandingRerolls = { home: {}, away: {} };
-  for (const command of commands) {
-    const changes = (command.modelChangeList as {
-      modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[];
-    } | undefined)?.modelChangeArray ?? [];
-    if (changes.length === 0) continue;
-    const reports = (command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
-    const reportIds = new Set(reports.map((report) => normalizedWireName(report.reportId)));
-    const reRollSources = new Set(reports
-      .filter((report) => normalizedWireName(report.reportId) === 'reroll')
-      .map((report) => normalizedWireName(report.reRollSource)));
-    const starFrame = reportIds.has('showstarreroll') || reportIds.has('showstarrerolllost')
-      || reRollSources.has('staroftheshow');
-    const pumpFrame = reportIds.has('pumpupthecrowdreroll') || reportIds.has('pumpupthecrowdrerolllost')
-      || reRollSources.has('pumpupthecrowd');
-
-    for (const change of changes) {
-      const side = change.modelChangeKey === 'home' ? 'home' : change.modelChangeKey === 'away' ? 'away' : null;
-      const value = change.modelChangeValue;
-      if (!side || typeof value !== 'number' || !Number.isInteger(value) || value < 0) continue;
-      switch (change.modelChangeId) {
-        case ModelChangeId.TURN_DATA_SET_RE_ROLLS_SHOW_STAR_ONE_DRIVE:
-          result[side].rerollShowStarOneDrive = value;
-          break;
-        case ModelChangeId.TURN_DATA_SET_RE_ROLLS_SINGLE_USE:
-          result[side].singleUseReRolls = value;
-          break;
-        case ModelChangeId.TURN_DATA_SET_RE_ROLLS_PUMP_UP_THE_CROWD_ONE_DRIVE:
-          // Upstream TurnData.setReRollShowStarOneDrive emits this literal Pump id.
-          // A drive-expiry frame can clear both pools together, in which case both
-          // paired loss reports are present and the model-change values are zero.
-          if (starFrame) result[side].rerollShowStarOneDrive = value;
-          if (pumpFrame || !starFrame) result[side].rerollPumpUpTheCrowdOneDrive = value;
-          break;
-      }
-    }
-  }
-  return result;
-}
-
-/** Report-only display classification for automatic skill rerolls with no skillUse dialog. */
-export function reportedAutomaticRerollSkill(report: Record<string, unknown>): string | null {
-  return normalizedWireName(report.reportId) === 'reroll'
-    && normalizedWireName(report.reRollSource) === 'blindrage'
-    ? 'Blind Rage'
-    : null;
 }
 
 // ==== Play gate — owner 07-12: auth-token safeguard REMOVED (FUMBBL authorizes server-side; token rides the join as optional authToken). Outbound turn commands refuse for only the TWO reasons below:
@@ -329,34 +312,7 @@ export interface LogEntry {
 export interface DevLogEntry { t: string; cat: 'log' | 'in' | 'out'; label: string; detail?: string; }
 
 /** B6-1/2: one injury occurrence — drives splash + optional cinematic. */
-export interface InjuryEvent {
-  type: string;
-  player: string;
-  playerId: string;
-  /** B6-1: team the injured player belongs to (banner colour + logo). */
-  side: 'home' | 'away';
-  logoUrl: string | null;
-  /** B7-3: team name shown under the logo. */
-  teamName: string;
-  square: [number, number] | null;
-  foul: boolean;
-  isCasualty: boolean;
-  /** Owner 07-04: FFB PlayerStateBase byte at injury time — drives the rising injury symbol (KO / cross / skull). */
-  injuryBase: number;
-  /** Owner 07-08: server-resolved casualty RESULT string (e.g. "Dead (RIP)") — the server applied the casualty table; the toast maps it by keyword. Null for plain Badly Hurt / KO. */
-  seriousInjury?: string | null;
-  /** #64: split injury taxonomy — `injuryRoll` = the INJURY-ROLL result (STUNNED/KO/CASUALTY); `casualty` = the D16 CASUALTY-ROLL tier/label (+D6 stat for a Lasting Injury). Display-only, derived from injuryBase + seriousInjury. */
-  injuryRoll: string;
-  casualty?: { tier: string; label: string; stat: string | null } | null;
-  /** Owner 07-03: CROWD-PUSH injury (injuryType crowdpush/crowdpushForSpp/ktmCrowd) — crowd-surf cinematic plays BEFORE the injury anim. */
-  crowdSurf?: boolean;
-  /** Owner 07-04: THROW-A-ROCK injury (injuryType throwARock) — rock-throw cinematic plays BEFORE the injury anim. */
-  rockThrow?: boolean;
-  /** A stalling rock hit whose authoritative armour roll held. It gets an impact toast, never an invented injury tier. */
-  rockImpactOnly?: boolean;
-  /** Owner 07-08: VAMPIRE FEED (injuryType "bitten") — 🧛 marker pops over the bitten Thrall BEFORE the injury roll. */
-  bitten?: boolean;
-}
+export type { InjuryEvent } from './injuryPresentation';
 
 /** Owner 07-08: a coach's inducement selection, display-ready — `items` = non-star inducements (key/icon/count), `stars` = star players (name + optional playerId). */
 export interface InducementChoice {
@@ -364,66 +320,12 @@ export interface InducementChoice {
   stars: { positionId: string; name: string; playerId?: string }[];
 }
 
-export interface ReRollPromptOption {
-  label: string;
-  source: string;
-  response: 'reroll' | 'skill' | 'primal-savagery';
-  role: 'source' | 'reroll-skill' | 'modifier';
-}
+
 
 /** Display-only valued-skill label; the server-sent value is never sent back on the wire. */
-export function skillNameWithValue(displayValue: string | undefined, skillName: string): string {
-  const value = displayValue?.trim();
-  return value ? `${skillName} (${value})` : skillName;
-}
 
-export type PassReRollResult = 'Accurate' | 'Inaccurate' | 'Wildly Inaccurate' | 'Fumble';
 
-export interface ServerPassRollTruth {
-  reportId: 'passRoll' | 'throwTeamMateRoll';
-  roll: number;
-  minimumRoll?: number;
-  result?: PassReRollResult;
-  bomb: boolean;
-}
-
-export function classifyPassTestResult(input: {
-  roll: number;
-  passTest: number;
-  negativeModifiers?: number;
-  passResult?: unknown;
-}): PassReRollResult | undefined {
-  const serverResult = String(input.passResult ?? '').toUpperCase();
-  if (serverResult === 'ACCURATE') return 'Accurate';
-  if (serverResult === 'INACCURATE') return 'Inaccurate';
-  if (serverResult === 'WILDLY_INACCURATE') return 'Wildly Inaccurate';
-  if (serverResult === 'FUMBLE' || serverResult === 'SAVED_FUMBLE') return 'Fumble';
-  if (!Number.isInteger(input.roll) || !Number.isFinite(input.passTest)) return undefined;
-  if (input.roll === 1) return 'Fumble';
-  if (input.roll === 6) return 'Accurate';
-  const modifiers = Number.isFinite(input.negativeModifiers) ? input.negativeModifiers ?? 0 : 0;
-  const modifiedRoll = input.roll - modifiers;
-  if (modifiedRoll >= input.passTest) return 'Accurate';
-  return modifiedRoll <= 1 ? 'Fumble' : 'Inaccurate';
-}
-
-export function serverPassRollTruth(report: Record<string, unknown>): ServerPassRollTruth | undefined {
-  const reportId = String(report.reportId);
-  const roll = Number(report.roll);
-  if ((reportId !== 'passRoll' && reportId !== 'throwTeamMateRoll') || !Number.isInteger(roll) || roll < 1 || roll > 6) {
-    return undefined;
-  }
-  const minimum = Number(report.minimumRoll);
-  return {
-    reportId,
-    roll,
-    minimumRoll: Number.isFinite(minimum) && minimum > 0 ? minimum : undefined,
-    result: report.passResult == null
-      ? undefined
-      : classifyPassTestResult({ roll, passTest: minimum, passResult: report.passResult }),
-    bomb: reportId === 'passRoll' && report.bomb === true,
-  };
-}
+export { classifyPassTestResult, serverPassRollTruth, type PassReRollResult, type ServerPassRollTruth } from './actionRollProjection';
 
 /** Screen-space rectangle (host-relative px). */
 export interface PromptRect { left: number; top: number; right: number; bottom: number }
@@ -531,9 +433,29 @@ export function reRollPromptScreenPosition(
   return best ?? base;
 }
 
-const state = reactive({
+const visibleLogLanes = reactive(createLogLanes<LogEntry>());
+let nextVisibleLogOrder = 0;
+let activeLogReceipt: SpectatorReceipt | null = null;
+function withLogReceipt<T>(receipt: SpectatorReceipt | null | undefined, action: () => T): T {
+  const previous = activeLogReceipt;
+  activeLogReceipt = receipt ?? previous;
+  try { return action(); } finally { activeLogReceipt = previous; }
+}
+function replaceVisibleLogEntries(entries: LogEntry[]): void {
+  const old = [...visibleLogLanes.match, ...visibleLogLanes.connection];
+  const match = new Set(visibleLogLanes.match.map((row) => row.entry));
+  visibleLogLanes.match = []; visibleLogLanes.connection = [];
+  for (const entry of entries) {
+    const prior = old.find((row) => row.entry === entry);
+    appendLogLane(visibleLogLanes, match.has(entry) || entry.kind === 'report' ? 'match' : 'connection', prior ?? { entry, order: ++nextVisibleLogOrder, receivedWallAt: Date.now() });
+  }
+}
+
+const spectatorPublication = new SpectatorPublication();
+const legacyState = reactive({
   sessionState: 'idle' as SessionState,
-  log: [] as LogEntry[],
+  get log(): LogEntry[] { return composeLogLanes(visibleLogLanes); },
+  set log(entries: LogEntry[]) { replaceVisibleLogEntries(entries); },
   devLog: [] as DevLogEntry[], // owner 2026-07-10: the Developer panel's live stream (dev mode only)
   demoMode: false,
   /** Owner 07-07: absolute path of the CURRENT verbose wire-log file (one per game; surfaced in Settings). Empty when off. */
@@ -698,7 +620,7 @@ const state = reactive({
     seq: number;
   } | null,
   /** #39 (Meero SR-59): SERVER game clock — RAW mirror of the 1000ms SERVER_GAME_TIME tick (no modelChanges). Display smooths gameTime but RAW-SNAPS turnTime (server stops it during dialogs, no running flag on wire — GC-1). ⚖ GC-2: timeout/WHISTLE are the SERVER's via syncGameModel, NEVER derived from this clock. Presentation-only. */
-  gameClock: null as { gameTime: number; turnTime: number; syncAt: number } | null,
+  gameClock: null as { gameTime: number; turnTime: number; syncAt: number; frozen?: boolean } | null,
   /** `skillUse` dialog: zoom + tooltip; `mine` = acting coach (real YES/NO), spectators see it informationally; minimumRoll<=0 = no roll needed. */
   skillChoice: null as {
     playerId: string;
@@ -717,7 +639,7 @@ const state = reactive({
     /** Blast It! only: server-owned HMP scatter ordinal/direction and first-vs-repeat prompt shape. */
     hmpScatter?: { ordinal: number; direction: string; showNeverUse: boolean };
     /** Savage Mauling only: authoritative result of the injury roll being offered for re-roll. */
-    injuryResult?: string;
+    injuryResult?: InjuryResultName;
     /** Old Pro only: authoritative armour dice offered for its single-die reroll. */
     armorDice?: [number, number];
   } | null,
@@ -835,7 +757,7 @@ const state = reactive({
     mine: boolean;
     /** Passive reveal only: the opposing coach's authoritative blockChoice index, held briefly before teardown. */
     choiceIndex?: number | null;
-    seq: number;
+    seq: number; /** owner 09-14: anchor square for the review-path reveal (live model defenderId already cleared) */ defenderSquare?: [number, number];
   } | null,
   /** B9-2: the ACTIVE player (ACTIVE bit / actingPlayer) — gold-halo + camera track. */
   activePlayerId: null as string | null,
@@ -1222,8 +1144,116 @@ const state = reactive({
   /** #136: opponent LEFT the game (wire ServerCommandLeave) — graceful-leave notice; a hard disconnect surfaces via the close handler. Cleared on game-change. */
   opponentLeft: null as { coach: string; seq: number } | null,
   /** Owner 07-06: top-centre mini splash when a coach spends a TEAM RE-ROLL. */
-  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string } | null,
+  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string } | null,
 });
+const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
+function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof legacyState> {
+  const cached = spectatorHudCache.get(position);
+  if (cached) return cached;
+  const p = position.checkpoint.durableProjection;
+  const passive = position.passive;
+  const seq = position.epoch;
+  const sourceKey = JSON.stringify(p.pendingDecision?.source ?? position.checkpoint.cursor);
+  const hud = {
+    // A published review clock is a sample, never a local stopwatch. syncAt is
+    // intentionally unused for this frozen variant; the view renders raw values.
+    gameClock: position.checkpoint.clock ? { gameTime: position.checkpoint.clock.gameTime,
+      turnTime: position.checkpoint.clock.turnTime, syncAt: 0, frozen: true } : null,
+    fieldFlip: { flip: !p.drive.offenseIsHome, seq },
+    activePlayerId: p.board.activePlayerId, playingIsHome: p.board.playingIsHome ?? !!position.checkpoint.model.homePlaying,
+    actedPlayers: p.board.actedPlayers, recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds,
+    dodgySnackPlayers: p.dodgySnackPlayers, endGame: p.endGame, endGameSettled: passive.endGameSettled,
+    endGameStats: p.endGameHud.stats ? { ...p.endGameHud.stats, seq } : null,
+    defectors: p.endGameHud.defectorNames ? { names: p.endGameHud.defectorNames, seq } : null,
+    ttmHeld: p.heldTeamMate ? { ...p.heldTeamMate, seq } : null,
+    fumblerooskie: p.fumblerooskie ? { ...p.fumblerooskie, seq } : null,
+    blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId, side: p.blitz.side, seq } : null,
+    passDestination: passive.passDestination ? { ...passive.passDestination, seq } : null,
+    opponentReviewingDice: passive.opponentReviewingDice, opponentChoicePending: passive.opponentChoicePending,
+    opponentChoicePendingPlayerId: passive.opponentChoicePending ? passive.opponentChoicePendingPlayerId : null,
+    prayerChoiceWait: passive.prayerChoiceWait ? { ...passive.prayerChoiceWait, seq } : null,
+    onTheBallWaiting: passive.onTheBallWaiting,
+    followupChoice: null,
+    skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
+    reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
+    blockPartial: p.blockCard ? { ...p.blockCard, defenderSquare: p.block.defenderSquare ?? undefined, mine: false, pickable: false, tumbleKey: sourceKey + ':' + p.block.rollOccurrence, seq } : null,
+    apothecaryChoice: p.apothecaryCard ? { ...p.apothecaryCard, key: sourceKey, mine: false, seq } : null,
+    apothecaryD16: p.apothecaryResult ? { ...p.apothecaryResult, mine: false, seq } : null,
+    penaltyShootout: passive.penaltyShootout ? { ...passive.penaltyShootout, seq } : null,
+    concedeNotice: passive.concedeNotice,
+  } satisfies Partial<typeof legacyState>;
+  freezeSpectatorValue(hud);
+  spectatorHudCache.set(position, hud);
+  return hud;
+}
+// Capture neutral defaults before any live frame mutates the legacy store. Published
+// spectators never read an unclassified match field from that mutable store.
+const spectatorNeutralState = JSON.parse(JSON.stringify(legacyState)) as typeof legacyState;
+freezeSpectatorValue(spectatorNeutralState);
+const spectatorConnectionKeys = new Set<PropertyKey>([
+  'sessionState', 'connectionClosed', 'waitingForMatch', 'joinError', 'spectateConnectError',
+  'spectatorCount', 'livePulse', 'adminMessage', 'gameShutdown', 'opponentLeft',
+  'devLog', 'wireLogFile', 'demoMode',
+] satisfies (keyof typeof legacyState)[]);
+const spectatorTransientKeys = new Set<PropertyKey>([
+  'actionDice', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'blockResultStamp',
+  'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
+  'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
+  'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
+  'kickDescend', 'kickClearSeq', 'throwAnim', 'scatterAnim', 'ballCatch', 'ballDirection',
+  'bombBlast', 'fireballAnim', 'zapAnim', 'leap', 'leapFail', 'trickster', 'crowdSurf',
+  'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
+  'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
+  'dodgySnackAnnouncement', 'dodgySnackCine', 'dodgySnackSplash', 'injurySplash', 'injuryPuff',
+  'apothecaryAnim', 'apothecaryAutoReturn', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
+  'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
+  'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
+  'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
+  'blockPartial', 'kickScatterPreview',
+] satisfies (keyof typeof legacyState)[]);
+const spectatorTransientState = reactive<Record<string, unknown>>({});
+function clearSpectatorTransientState(): void {
+  for (const key of Object.keys(spectatorTransientState)) delete spectatorTransientState[key];
+}
+const state = new Proxy(legacyState, {
+  get(target, key, receiver) {
+    const position = spectatorPublication.position.value;
+    if (position) {
+      if (key === 'log') return composeLogLanes<LogEntry>({
+        connection: visibleLogLanes.connection,
+        match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
+          entry: { ...row, kind: 'report' as const, time: logTimestamp(new Date(row.receivedWallAt)), category: sequencingCategory('report', row.text) } })),
+      });
+      // Snap publishes only: a per-event bump here re-ran the view's snapshot rebuild (renderer.refresh()) after
+      // every presented event and destroyed each walk tween a millisecond in (09-14 root cause of "no animations").
+      if (key === 'snapshotEpoch') return position.snapshotEpoch;
+      // A block-choice frame clears the durable offer before its selected die can
+      // be read. The occurrence-keyed review reveal briefly owns this one HUD key.
+      if (key === 'blockPartial' && Object.prototype.hasOwnProperty.call(spectatorTransientState, key)) {
+        return Reflect.get(spectatorTransientState, key);
+      }
+      const hud = spectatorHud(position);
+      if (Object.prototype.hasOwnProperty.call(hud, key)) return Reflect.get(hud, key);
+      if (spectatorTransientKeys.has(key)) {
+        // Read even an absent property so Vue subscribes before the first cue arrives.
+        const transient = Reflect.get(spectatorTransientState, key);
+        return Object.prototype.hasOwnProperty.call(spectatorTransientState, key)
+          ? transient : Reflect.get(spectatorNeutralState, key);
+      }
+      if (!spectatorConnectionKeys.has(key) && Object.prototype.hasOwnProperty.call(spectatorNeutralState, key)) {
+        return Reflect.get(spectatorNeutralState, key);
+      }
+    }
+    return Reflect.get(target, key, receiver);
+  },
+  set(target, key, value, receiver) {
+    if (spectatorPublication.position.value && spectatorTransientKeys.has(key)) {
+      return Reflect.set(spectatorTransientState, key, value);
+    }
+    return Reflect.set(target, key, value, receiver);
+  },
+});
+
 
 function clearFallOver(): void {
   state.fallOver = null;
@@ -1245,23 +1275,28 @@ watch(
 // intentional leave cancel even the short fire-and-forget animation/action beats that
 // do not otherwise retain a handle. Ordinary disconnect/reconnect behaviour is unchanged;
 // only leaveGame() drains the complete registry.
-const gameTimeouts = new Set<ReturnType<typeof setTimeout>>();
-function scheduleGameTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+const gameTimeouts = new Map<ReturnType<typeof setTimeout>, 'presentation' | 'connection'>();
+function scheduleGameTimeout(callback: () => void, delayMs: number, owner: 'presentation' | 'connection' = 'presentation'): ReturnType<typeof setTimeout> {
   let timer: ReturnType<typeof setTimeout>;
   timer = globalThis.setTimeout(() => {
     gameTimeouts.delete(timer);
     callback();
   }, delayMs);
-  gameTimeouts.add(timer);
+  gameTimeouts.set(timer, owner);
   return timer;
 }
 function cancelGameTimeout(timer: ReturnType<typeof setTimeout>): void {
   globalThis.clearTimeout(timer);
   gameTimeouts.delete(timer);
 }
-function clearAllGameTimeouts(): void {
-  for (const timer of gameTimeouts) globalThis.clearTimeout(timer);
-  gameTimeouts.clear();
+function clearAllGameTimeouts(preserveConnection = false): void {
+  for (const [timer, owner] of gameTimeouts) {
+    if (preserveConnection && owner === 'connection') continue;
+    globalThis.clearTimeout(timer); gameTimeouts.delete(timer);
+  }
+}
+function scheduleConnectionTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+  return scheduleGameTimeout(callback, delayMs, 'connection');
 }
 
 // How long each pre-game overlay stays up; also used as the queue's per-step hold so the next cinematic doesn't start until this one clears.
@@ -1276,15 +1311,7 @@ let prayerAnnounceSeq = 0;
 type PendingPrayerEffect = { entry: PrayerCatalogEntry; team: string };
 const pendingPrayerEffects: PendingPrayerEffect[] = [];
 const RIOTOUS_CINE_MS = 4200; // mirrors the SpectateView auto-hide window (masterChef family)
-type ThrowPresentationKind = 'pass' | 'punt' | 'throwTeamMate' | 'throwBomb' | 'throwARock' | 'throwKeg';
-
-const THROW_KIND_BY_WIRE: Readonly<Record<string, Exclude<ThrowPresentationKind, 'punt'>>> = {
-  pass: 'pass', hailMaryPass: 'pass', throwTeamMate: 'throwTeamMate',
-  throwBomb: 'throwBomb', hailMaryBomb: 'throwBomb', throwARock: 'throwARock', throwKeg: 'throwKeg',
-};
-const KNOWN_ANIMATION_TYPES = new Set([
-  'kick', 'bombExplosion', 'trickster', 'spellFireball', 'spellZap', 'spellLightning', 'thenIStartedBlastin', ...Object.keys(THROW_KIND_BY_WIRE),
-]);
+const KNOWN_ANIMATION_TYPES = KNOWN_PROJECTILE_ANIMATION_TYPES;
 const warnedAnimationTypes = new Set<string>();
 /** Presentation-only punt specialization: a punt rides the wire PASS animation (upstream StepPuntDistance.java:161
  *  `new Animation(AnimationType.PASS, ...)`), so the pacing is selected from same-frame server-derived signals —
@@ -1292,22 +1319,6 @@ const warnedAnimationTypes = new Set<string>();
  *  server's own actingPlayer.playerAction still being a punt (covers StepPuntDistance's declined-reroll `leave()`
  *  at :101-104, which emits the animation with no new report). Absent OR unrecognized ⇒ the EXISTING pass/Hail
  *  Mary presentation, never a silent new default. */
-export function throwPresentationKind(
-  animationType: unknown,
-  reports: readonly Record<string, unknown>[],
-  actingPlayerAction?: unknown,
-): ThrowPresentationKind | undefined {
-  const wireType = String(animationType);
-  const baseKind = THROW_KIND_BY_WIRE[wireType];
-  if (wireType !== 'pass' || baseKind !== 'pass') return baseKind;
-  const puntReported = reports.some((report) => {
-    const reportId = String(report.reportId);
-    return reportId === 'puntDistanceRoll' || reportId === 'puntDirectionRoll';
-  });
-  const actingPunt = /^punt/i.test(String(actingPlayerAction ?? ''));
-  return puntReported || actingPunt ? 'punt' : 'pass';
-}
-
 // Owner 2026-07-06: Dodgy Snack — the dual-dice cine + the sent-off splash.
 const DODGY_SNACK_CINE_MS = 2400; // owner 09-09: 3800 -> 2400 (the ball waited at the apex behind it)
 const DODGY_SNACK_ANNOUNCEMENT_MS = 4200;
@@ -1393,40 +1404,6 @@ export function turnoverArmAfterReport(
 }
 
 // Owner 07-04: on-pitch die CAUSE by FFB report id → renderer DIE_CAUSE_TAG glyph; report.reRolled overrides to 'reroll' (team vs skill indistinguishable on the roll report).
-const DIE_CAUSE_BY_REPORT: Record<string, string> = {
-  dodgeRoll: 'dodge',
-  pickUpRoll: 'pickup',
-  goForItRoll: 'gfi',
-  catchRoll: 'catch',
-  passRoll: 'pass',
-  interceptionRoll: 'intercept',
-  leapRoll: 'leap',
-  rightStuffRoll: 'ttm',
-  throwTeamMateRoll: 'ttm',
-  kickTeamMateRoll: 'ttm',
-  confusionRoll: 'trait', // Really Stupid / Bone Head / Take Root / Wild Animal
-  standUpRoll: 'standup', // owner 2026-07-08: stand-up roll (Timmm-ber! assist folds into its modifier)
-  hypnoticGazeRoll: 'gaze',
-  lookIntoMyEyesRoll: 'gaze',
-  bloodLustRoll: 'bloodlust', // owner 2026-07-08: vampire Bloodlust roll → 'B' die tag
-  breatheFire: 'breatheFire', // owner 08-18: Breathe Fire roll rides the same surface, tagged with its skill icon
-  dauntlessRoll: 'dauntless',
-  reRoll: 'reroll',
-  blockReRoll: 'reroll',
-  extraReRoll: 'reroll',
-};
-const DIE_CAUSE_BY_ROLL_MODIFIER: readonly [prefix: string, cause: string][] = [
-  ['Break Tackle', 'breakTackle'],
-];
-function dieCauseFromRollModifiers(modifiers: unknown): string | undefined {
-  if (!Array.isArray(modifiers)) return undefined;
-  for (const modifier of modifiers) {
-    if (typeof modifier !== 'string') continue;
-    const match = DIE_CAUSE_BY_ROLL_MODIFIER.find(([prefix]) => modifier.startsWith(prefix));
-    if (match) return match[1];
-  }
-  return undefined;
-}
 let turnoverArmed = false;
 let turnoverArmedAfterInjury = false;
 let turnoverTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1658,7 +1635,9 @@ function clearRerollSplash(): void {
 }
 // Owner 07-08 rev-9 deprecated the action-reroll splash; owner 08-19 restores it for TEAM rerolls —
 // any TRR use surfaces the splash (dodge/GFI/pickup included). Skill-source rerolls keep the glow-only read.
-const rerollSplashWanted = (isTeam: boolean) => isTeam;
+/** Owner 09-14: a Leader re-roll is a team re-roll in all but name — it gets the splash too ("<Coach> uses their Leader reroll!"). */
+const isLeaderReroll = (raw: string | undefined) => String(raw ?? '').replace(/[^a-z]/gi, '').toLowerCase() === 'leader';
+const rerollSplashWanted = (isTeam: boolean, raw?: string) => isTeam || isLeaderReroll(raw);
 // Owner 07-08 (rev 2/9): FAIL→REROLL staging is STRICTLY SERIAL — the wire delivers fail+spend+result in ONE burst; we show failed die (full display), pause, reroll splash, pause, re-rolled die. Spectator pacing only (holdPlayback no-ops in play). Beats owner-tuned on feel.
 const FAIL_BEAT_MS = 1220; // owner 2026-07-08: −1/3 (was 1830)
 // Owner C3 pt.2: a SUCCESSFUL roll reads ~half the fail beat (owner-tuned to 560); tune here if the feel is off.
@@ -1670,16 +1649,21 @@ const REROLL_BEAT_MS = 1100; // the reroll splash reads before the re-rolled res
 // Owner 2026-07-08 (rev 7): when the SPECTATOR watched the coach's reroll dialog, the coach's pick GLOWS activation-gold for this long before the rest of the events (splash, re-rolled result, downstream) render.
 let rerollStageTimers: ReturnType<typeof setTimeout>[] = [];
 /** Owner 07-06/08: the reroll mini splash — names the SOURCE used; TRR keeps its icon. */
-function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = true) { // owner 09-06: copy
+function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = true, raw?: string) { // owner 09-06: copy
   const g = game.value;
   if (!g || !playerId) return;
+  const leader = isLeaderReroll(raw) || isLeaderReroll(source);
   const isHome = g.teamHome.playerArray.some((p) => p.playerId === playerId);
   const side: 'home' | 'away' = isHome ? 'home' : 'away';
   const team = isHome ? g.teamHome : g.teamAway;
   const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
   if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
   // playerId rides along so the view can anchor the splash over the acting player's token when no card is on-screen (opponent/spectator action rerolls).
-  state.rerollSplash = { side, coach: (team.coach as string | null) ?? '', logo, source, isTeam, playerId, seq: (state.rerollSplash?.seq ?? 0) + 1 };
+  const coach = (team.coach as string | null) ?? '';
+  state.rerollSplash = leader
+    // Leader rides the team rail (TRR icon) but names the skill; the view swaps in the Leader skill icon when skill icons are on.
+    ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: `${coach} uses their Leader reroll!`, playerId, seq: (state.rerollSplash?.seq ?? 0) + 1 }
+    : { side, coach, logo, source, isTeam, playerId, seq: (state.rerollSplash?.seq ?? 0) + 1 };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
@@ -1755,21 +1739,11 @@ function clearPendingRailCommands(): void {
   pendingRailCommands.clear();
 }
 // Team action allowances remain server-owned (`blitzUsed`, `passUsed`, `foulUsed`, `handOverUsed`).
-function currentTurnKey(g: GameJson): string {
-  const gg = g as { half?: number; homePlaying?: boolean; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } };
-  return `${gg.half ?? 0}:${gg.turnDataHome?.turnNr ?? 0}:${gg.turnDataAway?.turnNr ?? 0}:${gg.homePlaying ? 'H' : 'A'}`;
-}
 // #14b TB-5 (Nom Anor wave-3): shared manual/timeout END_TURN ack-window guard. A genuinely LOST send re-opens only on the next server-derived turn-key change / timeout-enforcement falling edge / reconnect reset — NEVER a timer.
 let endTurnInFlight = false;
 let endTurnInFlightTurnKey: string | null = null;
 
 /** #109 (TK g737): DECLARE-time blitz target lives in `fieldModel.targetSelectionState`, NOT `game.defenderId` (which stays '' until the block report). Returns the SELECTED id or ''. ⚖ pure read of the applied model. */
-function selectedBlitzTargetId(g: GameJson): string {
-  const tss = (g.fieldModel as { targetSelectionState?: { playerId?: unknown; targetSelectionStatus?: unknown } | null } | undefined)?.targetSelectionState;
-  if (tss && String(tss.targetSelectionStatus ?? '') === 'SELECTED') return String(tss.playerId ?? '');
-  return '';
-}
-
 /** B8-3: one team's fan-factor determination (dedicated fans + a d3 roll). */
 interface FanFactorRoll {
   fans: number;
@@ -1827,6 +1801,7 @@ function showKickoff(result: string, roll: number[], img: string | null) {
 
 /** B8-2/B8-3: demo-only staggered pre-game cinematic sequence timers. */
 let demoCineTimers: ReturnType<typeof setTimeout>[] = [];
+let demoLoadGeneration = 0;
 
 /** B8-1: centered block-dice cine duration — sourced from PIPELINE_TIMINGS (injury-pacing-review §6a). */
 const blockCineMs = () => PIPELINE_TIMINGS.blockDice.holdMs;
@@ -1967,6 +1942,23 @@ let answeredApothecaryChoiceKey: string | null = null;
 /** Owner 07-06: TARGET-CROSSHAIR beat — crosshair holds this long, THEN the dice tumble (blocks + blitz-blocks). */
 const TARGET_CROSSHAIR_MS = 450; // owner 2026-07-08: trimmed 550→450 (block driver snappier)
 const FOUL_CUE_MS = 700; // owner 2026-07-09: the 🥾 foul-target boot reads a beat before the armour roll
+/** Owner 09-14: "<Player> uses Stab!" reads a beat over the stabber, THEN the armour roll lands on the target. The server
+ *  sends no skillUse report for Stab (bb2020 StabBehaviour: sound + InjuryTypeStab only), so the cue keys off the injury. */
+const STAB_CUE_MS = 650;
+/** The Stab toast cue for a frame: a stab-typed injury ("stab", and the BB2025 fork's "stabForSpp" for a Violent Innovator)
+ *  whose reported attacker HOLDS Stab. InjuryTypeStab is also reused by Spiked Ball (no attacker) and Treacherous (the
+ *  acting player, no Stab skill) — neither is a Stab use, so neither toasts (Astra 09-14). */
+function stabPresentation(reports: readonly Record<string, unknown>[], model: GameJson): { playerId: string; square: [number, number]; name: string } | null {
+  const stab = reports.find((r) => String(r.reportId) === 'injury' && injuryTypeName((r as { injuryType?: unknown }).injuryType).toLowerCase().startsWith('stab'));
+  if (!stab) return null;
+  const attackerId = String((stab as { attackerId?: unknown }).attackerId ?? '');
+  const attacker = attackerId ? playerById(model, attackerId) : null;
+  if (!attacker || !playerHasSkill(attacker, 'Stab')) return null;
+  const c = model.fieldModel.playerDataArray.find((d) => d.playerId === attackerId)?.playerCoordinate;
+  if (!c || !(c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15)) return null;
+  const name = playerName(model, attackerId);
+  return { playerId: attackerId, square: [c[0], c[1]], name };
+}
 const DAUNTLESS_BEAT_MS = 560; // owner 08-18: 700→560
 /** Block-resolution pipeline (injury-pacing-review §6): single owner of block→push→armour→injury→turnover pacing — the resolveDelay anchor + chain beats + the ONE holdPlayback call (the 4 old ad-hoc sites route through it). Reset on game change. */
 const blockPipeline = new BlockPipeline({ hold: (ms) => holdPlayback(ms) });
@@ -1991,13 +1983,10 @@ function teardownAbortedKickEmBlockPresentation(): void {
 // pacing anchor — now lives on the driver as `blockPipeline.resolveDelay()` (identical
 // computation), the single owner of when push/follow/injury/knockdown beats fire.
 /** B9-7: last block's chooser/attacker, carried so a later-frame blockChoice can still name the chooser. */
-let lastBlockAttackerId: string | null = null;
-let lastBlockDefenderId: string | null = null;
+let visibleBlockContext = createBlockContext();
 // #94: this turn's OBSERVED blitz declarer + target (reset per turn); state.blitzTokens derives from these gated on turnData.blitzUsed. Spectate-parity.
-let blitzActor: { id: string; side: boolean; turnKey: string } | null = null;
-let blitzActorTarget = '';
+let visibleBlitzProjection: BlitzProjection | null = null;
 /** Owner 07-06 (#1/#5): the block's DEFENDER square captured at block time — reaction-skill icons anchor HERE, not the (already pushed) live token. */
-let lastBlockDefenderSquare: [number, number] | null = null;
 /** Owner 07-06: `<attacker>:<target>` of the current BLITZ declaration — crosshair fires ONCE at declaration, not per frame. */
 let lastBlitzDeclKey = '';
 /** Owner 07-06: blitz crosshair already shown at DECLARATION — pumpBlockCine must not re-show at the strike. */
@@ -2326,54 +2315,9 @@ function flushPendingKickoffSplash(): void {
   enqueuePromptBehind('kickoffVictimSplash', surface);
 }
 
-const PRAYER_PLAYER_CHOICE_MODES = new Set(['ironman', 'knuckledusters']);
-const rulesVersionOf = (g: GameJson): string => normKey(String(
-  g.gameOptions?.gameOptionArray?.find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue ?? '',
-));
-const isPrayerPlayerChoiceMode = (mode: unknown, g: GameJson) => {
-  const key = normKey(String(mode ?? ''));
-  // BB2025 Blessing is random. The similarly-named BB2020 prayer is coach-selected and still uses this mode.
-  return PRAYER_PLAYER_CHOICE_MODES.has(key) || (key === 'blessedstatueofnuffle' && rulesVersionOf(g) !== 'bb2025');
-};
-const isIntensiveTrainingMode = (mode: unknown) => normKey(String(mode ?? '')) === 'intensivetraining';
-type InteractivePrayerDialog = {
-  kind: 'player' | 'skill';
-  instanceKey: string;
-  ownerTeamId: string;
-  coach: string;
-  team: string;
-  entry: PrayerCatalogEntry | null;
-};
 const prayerDialogDrainArms = new Set<string>();
 
-function interactivePrayerDialog(g: GameJson): InteractivePrayerDialog | null {
-  const dp = g.dialogParameter as {
-    dialogId?: string; teamId?: string; playerId?: string;
-    playerChoiceMode?: string; skillChoiceMode?: string;
-  } | null;
-  const playerMode = dp?.dialogId === 'playerChoice' && isPrayerPlayerChoiceMode(dp.playerChoiceMode, g);
-  const skillMode = dp?.dialogId === 'selectSkill' && isIntensiveTrainingMode(dp.skillChoiceMode);
-  if (!playerMode && !skillMode) return null;
-  const ownerTeam = playerMode
-    ? [g.teamHome, g.teamAway].find((team) => team.teamId === dp!.teamId)
-    : [g.teamHome, g.teamAway].find((team) => team.playerArray.some((player) => player.playerId === dp!.playerId));
-  if (!ownerTeam?.teamId) return null;
-  const modeKey = normKey(String(dp?.playerChoiceMode ?? ''));
-  const entry = skillMode ? PRAYER_TABLE[15] ?? null
-    : modeKey === 'ironman' ? PRAYER_TABLE[3] ?? null
-      : modeKey === 'knuckledusters' ? PRAYER_TABLE[4] ?? null
-        : null;
-  const instanceKey = dialogInstanceKey(g)
-    ?? `${dp!.dialogId}|${dp!.teamId ?? ''}|${dp!.playerId ?? ''}|${dp!.playerChoiceMode ?? dp!.skillChoiceMode ?? ''}`;
-  return {
-    kind: playerMode ? 'player' : 'skill',
-    instanceKey,
-    ownerTeamId: ownerTeam.teamId,
-    coach: ownerTeam.coach || ownerTeam.teamName || 'The opposing coach',
-    team: ownerTeam.teamName || ownerTeam.coach || 'Team',
-    entry,
-  };
-}
+
 
 /**
  * Prayer announcements and their follow-up dialog use one presentation barrier. Returns true when the
@@ -2469,12 +2413,9 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   const prayerWasted: string[] = [];
   const throwAtPlayers: { playerId: string; roll: number; successful: boolean }[] = [];
   // #140 (owner concede item): defected players — captured from ReportDefectingPlayers, surfaced below.
-  let defectors: string[] | null = null;
   // #141 (owner ball-flight item): punt/swoop direction — captured from Report{Punt,Swoop}Direction, surfaced below.
   let ballDir: { playerId: string; direction: string } | null = null;
   // #169 (owner v0.3.9): end-of-match results — winnings (ReportWinnings) + the BB2025 dedicated-fans roll (ReportDedicatedFans, mixed/end); captured here, merged into state.endGameStats below.
-  let winnings: { home: number; away: number } | null = null;
-  let dedFans: { rollHome: number; modHome: number; rollAway: number; modAway: number; concededTeamId: string | null } | null = null;
   let weatherMageResult: { roll: number[]; weather: string } | null = null;
   for (const report of reports) {
     const id = String(report.reportId);
@@ -2510,7 +2451,6 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
         roll: Array.isArray(report.kickoffRoll) ? (report.kickoffRoll as number[]) : [],
       };
       if (kickoffPresentationOccurrence) kickoffPresentationOccurrence.phase = 'eventResolved';
-      state.dodgySnackPlayers = []; // a new drive clears last drive's snack debuff markers
     } else if (id === 'kickoffDodgySnack') {
       dodgySnack = {
         rollHome: Number(report.rollHome ?? 0),
@@ -2577,44 +2517,15 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       if (playerId && Number.isInteger(roll)) {
         throwAtPlayers.push({ playerId, roll, successful: report.successful === true });
       }
-    } else if (id === 'defectingPlayers') {
-      // #140 (owner concede item): after a concession, `defectingArray[i]==true` ⇒ playerIds[i] LEAVES the team. Collect the departed names for the end-screen reveal (Fives). Wire ReportDefectingPlayers.
-      const ids = Array.isArray(report.playerIds) ? (report.playerIds as string[]) : [];
-      const defs = Array.isArray(report.defectingArray) ? (report.defectingArray as unknown[]) : [];
-      const gone = ids.filter((_, i) => !!defs[i]).map((pid) => playerName(game.value, pid));
-      if (gone.length) defectors = gone;
-    } else if (id === 'winnings') {
-      // #169 (owner v0.3.9): post-match GOLD winnings, both teams (wire ReportWinnings). End-screen row (Fives).
-      winnings = { home: Number(report.winningsHome ?? 0), away: Number(report.winningsAway ?? 0) };
-    } else if (id === 'dedicatedFans') {
-      // #169: BB2025 DEDICATED-FANS roll (ReportDedicatedFans, mixed/end — NOT bb2016's fanFactorRoll); the DRAW form is empty → skip.
-      if (report.rollHome != null || report.rollAway != null) dedFans = {
-        rollHome: Number(report.rollHome ?? 0), modHome: Number(report.dedicatedFansModifierHome ?? 0),
-        rollAway: Number(report.rollAway ?? 0), modAway: Number(report.dedicatedFansModifierAway ?? 0),
-        concededTeamId: report.conceded && typeof report.teamId === 'string' ? report.teamId : null,
-      };
     } else if (id === 'puntDirectionRoll' || id === 'swoopDirectionRoll') {
       // #141 (owner ball-flight): the direction a punt/swoop sends the ball/player → Voss's direction arrow. `direction` = the Direction enum display name. Wire Report{Punt,Swoop}Direction.
       const pid = String(report.playerId ?? '');
       const dir = String(report.direction ?? '');
       if (pid && dir) ballDir = { playerId: pid, direction: dir };
-    } else if (id === 'hypnoticGazeRoll') {
-      // Owner 2026-07-08: a SUCCESSFUL Hypnotic Gaze confuses the DEFENDER (CONFUSED 0x200). Track the victim so the renderer shows a 👁 instead of the generic '?'. Pruned to still-confused below.
-      if (report.successful && typeof report.defenderId === 'string') gazeVictimIds.add(report.defenderId);
     }
   }
-  // Prune gaze victims to those STILL confused (they clear it when they act; a fresh game resets the set), then publish the on-pitch confused ones for the renderer's 👁 marker.
-  {
-    const CONFUSED = 0x200;
-    const next: string[] = [];
-    for (const vid of gazeVictimIds) {
-      const d = g.fieldModel.playerDataArray.find((p) => p.playerId === vid);
-      if (d && (((d.playerState as number) ?? 0) & CONFUSED)) next.push(vid);
-      else gazeVictimIds.delete(vid);
-    }
-    if (next.length !== state.gazeVictims.length || next.some((id, i) => id !== state.gazeVictims[i]))
-      state.gazeVictims = next;
-  }
+  state.gazeVictims = reduceGazeVictims(state.gazeVictims, reports, g);
+  state.dodgySnackPlayers = reduceDodgySnackPlayers(state.dodgySnackPlayers, reports, g);
   const home = fanRolls.get('home');
   const away = fanRolls.get('away');
   // B9-13: enforce pregame ORDER Fan Factor → Weather → Coin Toss via the queue (one frame or spread out).
@@ -2701,7 +2612,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   }
   // #71: reveal already presented on the choice round-trip ⇒ SUPPRESS this late report cine; ⚖ backstop asserts the report agrees with the reconstruction (mismatch logged, never re-shown).
   if (!suppressPresentation && coin && coinRevealShown) {
-    if (coin.result !== coinRevealResult) log('system', `⚠ #71 coin mismatch: report ${coin.result} vs derived ${coinRevealResult} (kept derived)`);
+    if (coin.result !== coinRevealResult) logMatch('system', `⚠ #71 coin mismatch: report ${coin.result} vs derived ${coinRevealResult} (kept derived)`);
   } else if (!suppressPresentation && coin) {
     // #103 loser-seat path: LATCH coinRevealShown + pin coinRevealResult + arm the gid SYNCHRONOUSLY here — a same-game resync re-delivering coinThrow re-entered this branch = the ×2 cine on the toss-LOSER seat (the entry path CG-1 left uncovered). Genuine game change resets all three in clearCinematics.
     coinRevealShown = true;
@@ -2711,9 +2622,6 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   }
   if (dodgySnack) {
     const ds = dodgySnack;
-    const sentOff = new Set(dodgySnackSentOff);
-    // On-field affected players (debuffed, not sent off) get the vomit marker.
-    state.dodgySnackPlayers = ds.playerIds.filter((pid) => !sentOff.has(pid));
     if (!suppressPresentation) {
     // Owner 07-06: dual-dice cine AFTER the kick-off splash reads, then the sent-off splashes staggered.
     // Slice 2: `kickoff` (this frame produced a card) OR `state.kickoffCine` (already showing) — the play-mode FIFO
@@ -2763,7 +2671,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
     const onlyRoll = prayerRolls.length === 1 ? prayerRolls[0] : undefined;
     if (onlyRoll && animType) {
       const expected = PRAYER_TABLE[onlyRoll.roll - 1]?.animationType;
-      if (expected && animType !== expected) log('system', `⚠ prayerRoll cross-check: roll ${onlyRoll.roll} expected animationType "${expected}" got "${animType}"`);
+      if (expected && animType !== expected) logMatch('system', `⚠ prayerRoll cross-check: roll ${onlyRoll.roll} expected animationType "${expected}" got "${animType}"`);
     }
     for (const p of prayerRolls) {
       const entry = PRAYER_TABLE[p.roll - 1];
@@ -2831,23 +2739,14 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       }, receiveChoiceGateCapMs());
     }
   }
-  // #140 (owner concede item): surface the defectors for the end-screen reveal (Fives view-watches .seq).
-  if (defectors) {
-    state.defectors = { names: defectors, seq: (state.defectors?.seq ?? 0) + 1 };
-  }
+  const endHud = reduceEndGameHud({ stats: state.endGameStats, defectorNames: state.defectors?.names ?? null }, reports, g);
+  if (endHud.defectorNames !== (state.defectors?.names ?? null)) state.defectors = endHud.defectorNames ? { names: endHud.defectorNames, seq: (state.defectors?.seq ?? 0) + 1 } : null;
+  if (endHud.stats !== state.endGameStats) state.endGameStats = endHud.stats ? { ...endHud.stats, seq: (state.endGameStats?.seq ?? 0) + 1 } : null;
   // #141 (owner ball-flight): surface the punt/swoop direction for Voss's direction arrow (view-watches .seq).
   if (ballDir && !suppressPresentation) {
     state.ballDirection = { ...ballDir, seq: (state.ballDirection?.seq ?? 0) + 1 };
   }
-  // #169: MERGE winnings + dedicated-fans (separate reports, possibly different frames) into one accumulated object; each field keeps its prior value. Cleared on game change.
-  if (winnings || dedFans) {
-    state.endGameStats = {
-      winningsHome: winnings ? winnings.home : (state.endGameStats?.winningsHome ?? null),
-      winningsAway: winnings ? winnings.away : (state.endGameStats?.winningsAway ?? null),
-      dedFans: dedFans ?? state.endGameStats?.dedFans ?? null,
-      seq: (state.endGameStats?.seq ?? 0) + 1,
-    };
-  }
+
 }
 
 /** B6-2: injuries in a single frame play one at a time, not on top of. */
@@ -3040,12 +2939,7 @@ function pumpInjuries() {
 }
 
 /** Wire `injuryType` is a {name} object or bare string — pull the name for classification. */
-function injuryTypeName(v: unknown): string {
-  if (!v) return '';
-  if (typeof v === 'string') return v;
-  if (typeof v === 'object' && v !== null && 'name' in v) return String((v as { name: unknown }).name ?? '');
-  return '';
-}
+
 
 /** Pure FALLS OVER report classifier used by applyFrame after it captures pre-change coordinates. */
 export function buildFallOverCue(
@@ -3071,54 +2965,14 @@ export function buildFallOverCue(
 }
 
 /** Raw PlayerStateBase → label map (apothecary before/after display). ⚠ CONFLATES the D16 tiers (0x06-0x08 are BASE states) — surfaces meaning "which injury-roll / which casualty" use the #64 split below instead. */
-const INJURY_LABELS: Record<number, string> = {
-  0x04: 'STUNNED',
-  0x05: 'KNOCKED OUT',
-  0x06: 'BADLY HURT',
-  0x07: 'SERIOUS INJURY',
-  0x08: 'DEAD',
-};
-
-/** #64 ([RULES] bb2025): INJURY-ROLL result, 3 tiers — STUNNED (0x04) / KNOCKED OUT (0x05) / all casualty bases ≥0x06 collapse to CASUALTY (severity = the separate 5-step below). */
-function injuryRollLabel(base: number): string {
-  if (base === 0x04) return 'STUNNED';
-  if (base === 0x05) return 'KNOCKED OUT';
-  if (base >= 0x06) return 'CASUALTY';
-  return 'INJURED';
-}
-
 /** #64 ([RULES] bb2025 D16 table; [SOURCE] ffb-common/bb2025/SeriousInjury.java): CASUALTY result, 5 tiers from the server's `seriousInjury` string — BH / Seriously Hurt (MNG) / Serious Injury (NI) / Lasting Injury (+D6 stat) / Dead. ⚠ the 3 middle tiers ALL sit at base 0x07 and are told apart ONLY by the string (the conflation this split fixes). Display-only. */
-function casualtyTierLabel(seriousInjury: string | null | undefined, base: number): { tier: string; label: string; stat: string | null } | null {
-  if (base < 0x06) return null; // not a casualty (stun/KO)
-  const s = String(seriousInjury ?? '');
-  if (base === 0x08 || /\bdead\b|\(rip\)/i.test(s)) return { tier: 'DEAD', label: 'Dead', stat: null };
-  // Lasting Injury (SeriousInjury showSiRoll group) — a stat reduction; the (-XX) suffix is the D6-picked stat.
-  const statMatch = s.match(/\(\s*-\s*(AV|MA|PA|AG|ST)\s*\)/i);
-  if (statMatch || /head injury|smashed knee|broken arm|dislocated (?:hip|shoulder)/i.test(s)) {
-    return { tier: 'LASTING_INJURY', label: 'Lasting Injury', stat: statMatch ? `-${(statMatch[1] ?? '').toUpperCase()}` : null };
-  }
-  if (/serious injury|\(ni\)/i.test(s)) return { tier: 'SERIOUS_INJURY', label: 'Serious Injury', stat: null };
-  if (/seriously hurt|\(mng\)/i.test(s)) return { tier: 'SERIOUSLY_HURT', label: 'Seriously Hurt', stat: null };
-  return { tier: 'BADLY_HURT', label: 'Badly Hurt', stat: null }; // base 0x06, or 0x07 with no matched string
-}
+
 
 /** Map raw D16 casualty rolls to labels; fall back when modifiers make the raw tier ambiguous. */
-function casualtyRollLabel(roll: number): string {
-  if (roll < 1 || roll > 16) return '';
-  if (roll >= 15) return 'DEAD';
-  if (roll >= 13) return 'LASTING INJURY';
-  if (roll >= 11) return 'SERIOUS INJURY';
-  if (roll >= 9) return 'SERIOUSLY HURT';
-  return 'BADLY HURT';
-}
+
 
 /** Map raw D16 casualty rolls to expected PlayerState base; the received server base wins. */
-function casualtyRollBase(roll: number): number {
-  if (roll < 1 || roll > 16) return 0;
-  if (roll >= 15) return 0x08;
-  if (roll >= 9) return 0x07;
-  return 0x06;
-}
+
 
 // Apothecary use elections retain the exact server offer and own stale/duplicate send suppression.
 const apothecaryElectionController = new ApothecaryElectionController();
@@ -3129,14 +2983,8 @@ let apoChoiceRaw: Record<string, unknown> | null = null;
 // earlier frame than the `apothecaryChoice` dialog, and the re-roll (`apothecaryRoll` report) in the same/earlier
 // frame. Both hold casualtyRoll[0] (raw D16), used to label OLD/NEW when the coarse PlayerState base can't split the
 // finer BB2025 tiers (game 793: both bases RIP=8). Cleared on fresh-game/reconnect.
-const apoOldCasualtyD16 = new Map<string, number>();
-const apoNewCasualtyD16 = new Map<string, number>();
-type ApothecaryOriginalOutcome = {
-  injury: string;
-  roll: number | null;
-  square: [number, number] | null;
-};
-const apoOriginalCasualtyOutcome = new Map<string, ApothecaryOriginalOutcome>();
+let visibleCasualtyRollProjection = createCasualtyRollProjection();
+let visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
 const apothecaryAutoReturnSeen = new Set<string>();
 let apothecaryAutoReturnSeq = 0;
 let apothecaryResultTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3200,8 +3048,8 @@ function surfaceAutoAcceptedApothecaryReturn(
   // Catch-up/seek applies the same authoritative model but suppresses transient presentation.
   if (playback.catchingUp) return;
 
-  const old = apoOriginalCasualtyOutcome.get(playerId);
-  const oldRoll = liveChoice?.oldRoll ?? pending?.oldRoll ?? old?.roll ?? apoOldCasualtyD16.get(playerId) ?? null;
+  const old = injuryOutcomeFor(visibleInjuryOutcomeProjection, playerId);
+  const oldRoll = liveChoice?.oldRoll ?? pending?.oldRoll ?? old?.roll ?? casualtyRollFor(visibleCasualtyRollProjection, playerId)?.oldRoll ?? null;
   const newRoll = liveChoice?.newRoll ?? pending?.newRoll ?? reportedNewRoll;
   const oldInjury = liveChoice?.oldInjury ?? pending?.oldInjury
     ?? old?.injury ?? (oldRoll != null ? casualtyRollLabel(oldRoll) : 'Original injury');
@@ -3249,7 +3097,20 @@ function surfaceAutoAcceptedApothecaryReturn(
 }
 
 /** shallowRef + manual trigger: the game object is mutated in place by the applier. */
-const game = shallowRef<GameJson | null>(null);
+const legacyGame = shallowRef<GameJson | null>(null);
+const game = customRef<GameJson | null>((track, trigger) => ({
+  get() { track(); return spectatorPublication.position.value?.checkpoint.model ?? legacyGame.value; },
+  set(value) {
+    if (spectatorPublication.position.value) throw new Error('Cannot mutate the published spectator position');
+    legacyGame.value = value; trigger();
+  },
+}));
+Object.defineProperty(game, '__v_isShallow', { value: true });
+/** Internal seam for verifying production readers before enabling review ingress gating. */
+export function installSpectatorPublicationTestHarness() {
+  return { publish: (checkpoint: SpectatorCheckpoint) => spectatorPublication.publish(checkpoint, true),
+    dispose: () => spectatorPublication.clear() };
+}
 let joinRerollReplayGeneration = 0;
 
 // Upstream 54cb42563 grantors: Count Luthor's StarOfTheShow, Skrorg's
@@ -3279,18 +3140,126 @@ export function joinReplayRerollReconstructionWorthwhile(joinedGame: GameJson): 
 
 /** Repair only TurnData fields omitted by the upstream snapshot. A live incremental setter
  *  that lands while the replay download is in flight creates the property first and wins. */
+/** One replay download per join snapshot, shared by the pre-join backfill and the standing re-roll repair. Keyed by
+ *  history generation + game so a reconnect or another match fetches afresh; a failed fetch is not cached. */
+let sharedJoinReplay: { key: string; promise: Promise<ReplayBundle> } | null = null;
+function joinReplayBundle(request: { url: string; coach: string; compression?: boolean }, gameId: number, key: string): Promise<ReplayBundle> {
+  if (sharedJoinReplay?.key === key) return sharedJoinReplay.promise;
+  const promise = downloadReplay({ ...request, gameId });
+  sharedJoinReplay = { key, promise };
+  promise.catch(() => { if (sharedJoinReplay?.promise === promise) sharedJoinReplay = null; });
+  return promise;
+}
+/** Owner 09-14: a spectator who joins mid-match gets the turns BEFORE the join too. The server streams the in-progress
+ *  game's replay (commands 1..joinCommandNr); reduced from the replay seed they become a sealed "Before you joined"
+ *  segment ahead of the live one. Read-only, best effort: any failure leaves the live history untouched. */
+async function backfillSpectatorHistoryFromReplay(
+  request: { url: string; coach: string; compression?: boolean },
+  history: LiveSpectateHistory, joinedHead: SpectatorCheckpoint,
+): Promise<void> {
+  if (state.demoMode) return;
+  const generation = history.generation;
+  const gameId = Number(joinedHead.model.gameId);
+  if (!Number.isInteger(gameId) || gameId <= 0) return;
+  // Eligibility BEFORE any download (a same-match reconnect or an evicted backfill never re-fetches), and the attempt
+  // is bound to the live segment identity it was triggered for: a replacement snapshot or a reconnect gets its own attempt
+  // and this one refuses at prepare/commit.
+  const liveIdentity = history.canBackfill();
+  if (!liveIdentity) return;
+  const inFlightKey = `${liveIdentity.sessionId}:${liveIdentity.connectionGeneration}:${liveIdentity.segmentId}`;
+  // Astra 09-14 round 5: the per-segment books only matter for the CURRENT connection — earlier connections' keys
+  // are dropped here so the maps never grow for the app's lifetime.
+  // Only the CURRENT live segment can still be backfilled (canBackfill names it), so every other key is dead weight.
+  for (const book of [backfillOutcomes, backfillAttempts]) for (const key of book.keys()) if (key !== inFlightKey && !backfillInFlight.has(key)) book.delete(key);
+  // Attempts are counted per live segment, never by live event count (Astra 09-14: a join burst past the retry
+  // multiples while the first download was pending left the backfill un-retried for good). A trigger that lands while
+  // an attempt is in flight is remembered and honoured when that attempt ends unverified.
+  if (backfillInFlight.has(inFlightKey)) { backfillRetryRequested.add(inFlightKey); return; }
+  const last = backfillOutcomes.get(inFlightKey);
+  if (last && last !== 'boundary-unverified' && last !== 'needle-short') return; // final for this segment
+  const attempt = (backfillAttempts.get(inFlightKey) ?? 0) + 1;
+  if (attempt > BACKFILL_MAX_ATTEMPTS) return;
+  backfillAttempts.set(inFlightKey, attempt);
+  backfillRetryRequested.delete(inFlightKey);
+  backfillInFlight.add(inFlightKey);
+  try { await backfillSpectatorHistoryFromReplayOnce(request, history, joinedHead, generation, gameId, liveIdentity, inFlightKey, attempt); }
+  finally { backfillInFlight.delete(inFlightKey); }
+  // Live events that arrived mid-flight already extended the needle/tail: when this attempt could not place the join,
+  // the next fresh download is scheduled NOW rather than waiting for a live event that may never come.
+  // Astra 09-14 round 5: a stale attempt (the connection or snapshot moved on underneath it) never re-enters —
+  // that would spend the REPLACEMENT segment's first attempt on a one-event needle. Only the same live segment retries.
+  const outcome = backfillOutcomes.get(inFlightKey);
+  const stillLive = history.generation === generation && history.canBackfill()?.segmentId === liveIdentity.segmentId;
+  if (backfillRetryRequested.delete(inFlightKey) && stillLive && (outcome === 'boundary-unverified' || outcome === 'needle-short')) {
+    void backfillSpectatorHistoryFromReplay(request, history, joinedHead);
+  }
+}
+const backfillInFlight = new Set<string>();
+const backfillOutcomes = new Map<string, string>();
+const backfillAttempts = new Map<string, number>();
+const backfillRetryRequested = new Set<string>();
+/** Bounded fresh-download retries when the downloaded stream predates the live needle (Astra 09-14 MAJOR 1). */
+const BACKFILL_MAX_ATTEMPTS = 3;
+async function backfillSpectatorHistoryFromReplayOnce(
+  request: { url: string; coach: string; compression?: boolean },
+  history: LiveSpectateHistory, joinedHead: SpectatorCheckpoint, generation: number, gameId: number,
+  liveIdentity: SpectatorIdentity, inFlightKey: string, attempt: number,
+): Promise<void> {
+  let bundle: ReplayBundle;
+  // Attempt 1 shares the join download with the re-roll repair; a retry must see the live tail, so it fetches afresh.
+  try { bundle = await joinReplayBundle(request, gameId, `${history.sessionId}:${generation}:${gameId}${attempt > 1 ? `:retry${attempt}` : ''}`); }
+  catch (error) { backfillOutcomes.set(inFlightKey, 'download-failed'); log('system', `earlier history unavailable: ${String(error)}`); return; }
+  if (history.generation !== generation || history.head?.model.gameId !== joinedHead.model.gameId) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
+  let seed: GameJson;
+  try { seed = createReplaySeed(bundle.finalState); } catch (error) { backfillOutcomes.set(inFlightKey, 'seed-failed'); log('system', `earlier history unavailable: ${String(error)}`); return; }
+  const prepared = await history.prepareBackfill(seed, bundle.commands, liveIdentity);
+  if (history.generation !== generation) { backfillOutcomes.set(inFlightKey, 'superseded'); return; }
+  const outcome = prepared.kind === 'ok' ? history.commitBackfill(prepared.prepared) : prepared;
+  backfillOutcomes.set(inFlightKey, outcome.kind);
+  switch (outcome.kind) {
+    case 'ok': log('system', `earlier history loaded: ${outcome.events} commands before you joined`); break;
+    case 'nothing-before-join': break; // joined at the very start: nothing to add
+    case 'superseded': break; // a newer snapshot/connection owns the next attempt
+    case 'over-budget': log('system', 'earlier history not loaded: over the history budget'); break;
+    case 'boundary-unverified': log('system', `earlier history not loaded: could not place the join inside the ${outcome.replayCommands}-command replay${attempt < BACKFILL_MAX_ATTEMPTS ? ' — will retry' : ''}`); break;
+    case 'needle-short': break; // retried once the full needle exists
+    case 'reducer-failed': log('system', `earlier history not loaded: replay command ${outcome.commandNr ?? outcome.at} could not be followed (${outcome.reason.slice(0, 120)})`); break;
+  }
+  spectatorReviewRevision.value++;
+}
 export async function reconstructJoinRerollsFromReplay(
   request: { url: string; coach: string; compression?: boolean },
   joinedGame: GameJson,
+  repairTarget?: { history: LiveSpectateHistory; checkpoint: SpectatorCheckpoint; snapshotCommandNr: number | null },
 ): Promise<void> {
   if (!joinReplayRerollReconstructionWorthwhile(joinedGame)) return;
+  if (repairTarget && (repairTarget.snapshotCommandNr === null || !Number.isSafeInteger(repairTarget.snapshotCommandNr))) return;
   const generation = ++joinRerollReplayGeneration;
   const gameId = Number(joinedGame.gameId);
   if (!Number.isInteger(gameId) || gameId <= 0) return;
   try {
-    const bundle = await downloadReplay({ ...request, gameId });
-    if (generation !== joinRerollReplayGeneration || game.value !== joinedGame) return;
-    const replayed = inferStandingRerollsFromReplay(bundle.commands);
+    const bundle = repairTarget
+      ? await joinReplayBundle(request, gameId, `${repairTarget.history.sessionId}:${repairTarget.history.generation}:${gameId}`)
+      : await downloadReplay({ ...request, gameId });
+    if (generation !== joinRerollReplayGeneration || (!repairTarget && game.value !== joinedGame)) return;
+    const repairCommands = repairTarget ? bundle.commands.filter((command) =>
+      typeof command.commandNr === 'number' && command.commandNr <= repairTarget.snapshotCommandNr!) : bundle.commands;
+    const replayed = inferStandingRerollsFromReplay(repairCommands);
+    if (repairTarget) {
+      const repaired = repairTarget.history.repairStandingRerolls(repairTarget.checkpoint, replayed);
+      if (repaired) {
+        // Repair the trusted head independently of the historical reader. A paused
+        // checkpoint stays pinned until the user chooses another position or live.
+        if (spectatorPublication.position.value) {
+          if (spectatorTransport?.review.source === 'live') spectatorTransport.received();
+        } else if (legacyGame.value === joinedGame) {
+          game.value = structuredClone(repaired.model);
+          if (spectatorDisplayedCheckpoint === repairTarget.checkpoint) spectatorDisplayedCheckpoint = repaired;
+        }
+        spectatorReviewRevision.value++;
+      }
+      return;
+    }
     let repaired = 0;
     for (const side of ['home', 'away'] as const) {
       const turnData = (side === 'home' ? joinedGame.turnDataHome : joinedGame.turnDataAway) as Record<string, unknown>;
@@ -3314,11 +3283,648 @@ export async function reconstructJoinRerollsFromReplay(
     }
     if (repaired > 0) triggerRef(game);
   } catch (error) {
-    if (generation === joinRerollReplayGeneration && game.value === joinedGame) {
+    if (generation === joinRerollReplayGeneration && (repairTarget ? repairTarget.history.head === repairTarget.checkpoint : game.value === joinedGame)) {
       console.warn(`[rerolls] replay reconstruction unavailable for game ${gameId}:`, error);
     }
   }
 }
+let spectatorIngress: SpectatorIngress | null = null;
+// One independently owned displayed graph; queued frames retain only receipt/cursor metadata.
+let spectatorDisplayedCheckpoint: SpectatorCheckpoint | null = null;
+let spectatorTransport: LiveSpectateTransport | null = null;
+let pendingSpectatorGoLive: { transport: LiveSpectateTransport; promise: Promise<boolean>; resolve: (value: boolean) => void } | null = null;
+const spectatorReviewRevision = shallowRef(0);
+const spectatorLiveChatOpen = shallowRef(false);
+const spectatorChatUnread = shallowRef(0);
+function resetSpectatorChatUnread(): void { spectatorChatUnread.value = 0; }
+function noteHiddenSpectatorReviewChat(reviewActive = spectatorTransport?.review.source === 'live-review'): void {
+  if (!reviewActive || spectatorLiveChatOpen.value || settings.chatDisabled) return;
+  spectatorChatUnread.value = Math.min(100, spectatorChatUnread.value + 1);
+}
+const spectatorReviewState = computed(() => {
+  void spectatorReviewRevision.value;
+  const review = spectatorTransport?.review;
+  const cursor = spectatorPublication.position.value?.checkpoint.cursor ?? spectatorDisplayedCheckpoint?.cursor;
+  const controls = review?.source === 'live-review' ? spectatorTransport!.controls() : undefined;
+  if (controls && lastConnect?.mode === 'spectator'
+      && ((state.connectionClosed?.mode === 'spectator' && !state.connectionClosed.reconnecting)
+        || (!!spectatorTransport?.history.staleReason && !pendingSpectatorGoLive
+          && !state.connectionClosed?.reconnecting))) controls.canGoLive = true;
+  return {
+    annotationSessionKey: cursor ? `spectate:${cursor.sessionId}:${cursor.connectionGeneration}:${cursor.segmentId}` : 'spectate:disconnected',
+    active: review?.source === 'live-review', phase: review?.phase ?? 'live',
+    chatUnread: spectatorChatUnread.value,
+    canPause: !!spectatorIngress && !!spectatorDisplayedCheckpoint && spectatorIngress.history.recording && !spectatorIngress.history.staleReason && !play.active && !replay.active,
+    // 09-14: shown before any pause too, so a disabled PAUSE names the real reason instead of "Waiting for match data".
+    feedStale: pendingSpectatorGoLive || state.connectionClosed?.reconnecting || (!spectatorDisplayedCheckpoint && !spectatorIngress?.history.head) ? null
+      : spectatorTransport?.history.staleReason ?? spectatorIngress?.history.staleReason ?? null,
+    controls,
+  };
+});
+watch(() => { void spectatorReviewRevision.value; return spectatorTransport?.review.source === 'live-review'; },
+  () => { spectatorLiveChatOpen.value = false; resetSpectatorChatUnread(); }, { flush: 'sync' });
+export function installSpectatorReviewChatUnreadTestHarness() {
+  const prior = { unread: spectatorChatUnread.value, open: spectatorLiveChatOpen.value, disabled: settings.chatDisabled };
+  spectatorLiveChatOpen.value = false;
+  resetSpectatorChatUnread();
+  return {
+    receive: () => noteHiddenSpectatorReviewChat(true),
+    beginReview: () => { spectatorLiveChatOpen.value = false; resetSpectatorChatUnread(); },
+    setDisabled: (disabled: boolean) => { settings.chatDisabled = disabled; },
+    dispose: () => {
+      spectatorChatUnread.value = prior.unread;
+      spectatorLiveChatOpen.value = prior.open;
+      settings.chatDisabled = prior.disabled;
+    },
+  };
+}
+/** Astra P2 (09-13): a history that goes stale while the reader is LIVE used to freeze the pitch silently — the reader skips
+ *  every received() and the "Live feed unavailable" label lives on controls the view only mounts in review. Move into review at
+ *  the visible position so the label and GO TO LIVE (which reconnects when stale) are on screen. */
+function spectatorFeedWentStale(transport: LiveSpectateTransport, reason: string): void {
+  if (transport.review.source !== 'live' || transport.review.phase !== 'live') return;
+  log('system', `live feed unavailable — ${reason}. GO TO LIVE reconnects.`);
+  // Forced: a budget-disabled history (recording=false) must still land the reader in review at the displayed position.
+  void transport.pauseLive(true);
+}
+async function pauseSpectatorView(): Promise<void> {
+  if (spectatorTransport) { await spectatorTransport.pauseLive(); return; }
+  const checkpoint = spectatorDisplayedCheckpoint;
+  const history = spectatorIngress?.history;
+  if (!checkpoint || !history?.recording || play.active || replay.active) return;
+  let transitionPendingPushes: ReadonlyMap<string, PendingPush> = new Map();
+  let transitionCoordinates: ReadonlyMap<string, readonly number[] | null> = new Map();
+  let transitionKickoffWeather: KickoffWeatherContext = createKickoffWeatherContext(checkpoint.model);
+  let transitionTurnPresentation: TurnPresentationContext = createTurnPresentationContext();
+  let transitionBallProjectile: BallProjectileContext = createBallProjectileContext();
+  let transitionTurnBefore: TurnPresentationBefore = captureTurnPresentationBefore(checkpoint.model);
+  let transitionKickoffBefore: Pick<GameJson, 'turnMode' | 'homePlaying'> = {
+    turnMode: checkpoint.model.turnMode, homePlaying: checkpoint.model.homePlaying,
+  };
+  let transitionBlockCard = checkpoint.durableProjection.blockCard
+    ? structuredClone(checkpoint.durableProjection.blockCard) : null;
+  // Owner 09-14: the choice reveal after GO TO LIVE must sit on the block's defender square; the live model has
+  // already cleared defenderId by the time the choice frame publishes, so the square rides from the prior context.
+  let transitionBlockDefenderSquare: [number, number] | null = checkpoint.durableProjection.block.defenderSquare
+    ? [...checkpoint.durableProjection.block.defenderSquare] as [number, number] : null;
+  let transitionApothecaryResult = checkpoint.durableProjection.apothecaryResult
+    ? structuredClone(checkpoint.durableProjection.apothecaryResult) : null;
+  let transitionInjuryOutcomes = structuredClone(checkpoint.durableProjection.injuryOutcomes);
+  const transport = new LiveSpectateTransport(history, {
+    publish: (position, snap) => {
+      const previous = spectatorPublication.position.value?.checkpoint ?? spectatorDisplayedCheckpoint;
+      const coordinates = new Map<string, readonly number[] | null>(!snap && previous
+        ? previous.model.fieldModel.playerDataArray.map((player) => [player.playerId,
+          player.playerCoordinate ? [player.playerCoordinate[0], player.playerCoordinate[1]] : null]) : []);
+      transitionKickoffWeather = structuredClone(previous?.durableProjection.kickoffWeather
+        ?? createKickoffWeatherContext(position.model));
+      transitionTurnPresentation = { ...(previous?.durableProjection.turnPresentation ?? createTurnPresentationContext()) };
+      transitionBallProjectile = structuredClone(previous?.durableProjection.ballProjectile ?? createBallProjectileContext());
+      transitionTurnBefore = captureTurnPresentationBefore(previous?.model ?? position.model);
+      transitionKickoffBefore = {
+        turnMode: (previous?.model ?? position.model).turnMode,
+        homePlaying: (previous?.model ?? position.model).homePlaying,
+      };
+      transitionBlockCard = previous?.durableProjection.blockCard
+        ? structuredClone(previous.durableProjection.blockCard) : null;
+      transitionBlockDefenderSquare = previous?.durableProjection.block.defenderSquare
+        ? [...previous.durableProjection.block.defenderSquare] as [number, number] : null;
+      transitionApothecaryResult = previous?.durableProjection.apothecaryResult
+        ? structuredClone(previous.durableProjection.apothecaryResult) : null;
+      transitionInjuryOutcomes = structuredClone(previous?.durableProjection.injuryOutcomes
+        ?? position.durableProjection.injuryOutcomes);
+      spectatorPublication.publish(position, snap);
+      // The publication now owns the visible model. Release the retired legacy
+      // graph rather than retaining a fourth full match copy throughout review.
+      legacyGame.value = null;
+      // Install the movement hold in this synchronous publication boundary, before
+      // Vue flushes the model watcher. Clock refreshes must not repeat an outcome.
+      const follow = position.durableProjection.followup.outcome;
+      if (!snap && follow?.followed && previous?.cursor.sequence !== position.cursor.sequence) {
+        state.deferMove = { playerId: follow.attackerId, action: 'defer', seq: (state.deferMove?.seq ?? 0) + 1 };
+      }
+      transitionCoordinates = coordinates;
+      transitionPendingPushes = new Map(!snap && previous ? previous.durableProjection.pendingPushes.map((pending) =>
+        [pending.playerId, { from: [...pending.from] as [number, number], age: pending.age }]) : []);
+      spectatorDisplayedCheckpoint = position;
+    },
+    present: async (event, signal) => {
+      if (signal.aborted) return;
+      const position = spectatorPublication.position.value?.checkpoint;
+      if (!position) return;
+      const priorCoordinates = transitionCoordinates;
+      const follow = position.durableProjection.followup.outcome;
+      const reports = (event.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
+      const eventCommandId = String(event.command.netCommandId ?? '');
+      if (eventCommandId === NetCommandId.SERVER_ZAP_PLAYER) {
+        const coordinate = priorCoordinates.get(String(event.command.playerId ?? ''));
+        if (coordinate?.length === 2 && Number.isFinite(coordinate[0]) && Number.isFinite(coordinate[1])) {
+          state.zapAnim = { square: [coordinate[0]!, coordinate[1]!], seq: (state.zapAnim?.seq ?? 0) + 1 };
+        }
+      } else if (eventCommandId === NetCommandId.SERVER_ADD_PLAYER) {
+        const side = String(event.command.teamId ?? '') === String(position.model.teamHome.teamId) ? 'home'
+          : String(event.command.teamId ?? '') === String(position.model.teamAway.teamId) ? 'away' : null;
+        if (side) state.addPlayerPuff = {
+          square: side === 'home' ? [2, -2] : [23, 15], seq: (state.addPlayerPuff?.seq ?? 0) + 1,
+        };
+      }
+      const kickoffWeather = kickoffWeatherPresentation(
+        transitionKickoffWeather, reports, position.model, transitionKickoffBefore,
+      );
+      const turnCue = turnPresentation(
+        transitionTurnPresentation, transitionTurnBefore, position.model, reports,
+      );
+      const commandNr = Number.isFinite(Number(event.command.commandNr)) ? Number(event.command.commandNr) : null;
+      const apothecaryOutcome = apothecaryOutcomePresentation(
+        reports, position.model, commandNr, transitionApothecaryResult, transitionInjuryOutcomes,
+      );
+      const sendOffOutcome = sendOffOutcomePresentation(reports, position.model);
+      let projectile: ReturnType<typeof ballProjectilePresentation> | null = null;
+      try {
+        projectile = ballProjectilePresentation(event.command as Record<string, unknown>, reports, position.model, {
+          playback: 'pacedReplay', previous: transitionBallProjectile, priorCoordinates,
+          fallbackThrownPlayerId: (position.model as { defenderId?: string }).defenderId,
+        });
+      } catch (error) {
+        console.warn(`ffb: invalid review projectile presentation: ${String(error)}`);
+      }
+      const holdSurface = async (holdMs: number, show: () => void, clear: () => void, gap = 0): Promise<boolean> => {
+        if (signal.aborted) return false;
+        show();
+        return presentStages([
+          { delayBefore: presentationMs(holdMs), present: clear },
+          ...(gap > 0 ? [{ delayBefore: presentationMs(gap), present: () => {} }] : []),
+        ], signal);
+      };
+      const blockOutcome = blockOutcomePresentation(reports, position.model, {
+        ...position.durableProjection.block, previousDice: transitionBlockCard?.dice,
+      });
+      if (blockOutcome.stamp !== undefined) state.blockResultStamp = blockOutcome.stamp
+        ? { ...blockOutcome.stamp, seq: (state.blockResultStamp?.seq ?? 0) + 1 } : null;
+      if (blockOutcome.dauntlessBeat
+          && !await presentStages([{ delayBefore: presentationMs(DAUNTLESS_BEAT_MS), present: () => {} }], signal)) return;
+      if (blockOutcome.choiceIndex != null && transitionBlockCard) {
+        state.blockPartial = {
+          ...transitionBlockCard,
+          defenderSquare: transitionBlockDefenderSquare ?? position.durableProjection.block.defenderSquare ?? undefined,
+          tumbleKey: `review:${position.cursor.sequence}`,
+          mine: false,
+          choiceIndex: blockOutcome.choiceIndex,
+          seq: (state.blockPartial?.seq ?? 0) + 1,
+        };
+        if (!await presentStages([{ delayBefore: opponentBlockChoiceRevealMs(), present: () => {
+          delete spectatorTransientState.blockPartial;
+        } }], signal)) return;
+      } else if (blockOutcome.dice.length && position.durableProjection.blockCard
+          && !await presentStages([{ delayBefore: presentationMs(SPECTATOR_BLOCK_READ_MS), present: () => {} }], signal)) return;
+
+      if (projectile?.passBallHold !== undefined) state.passBallHold = projectile.passBallHold
+        ? { square: projectile.passBallHold, seq: (state.passBallHold?.seq ?? 0) + 1 } : null;
+      const scatterPreview = projectile?.kickScatterPreview === undefined
+        ? kickoffWeather.scatterPreview : projectile.kickScatterPreview;
+      if (scatterPreview) {
+        state.kickScatterPreview = {
+          commandNr: Number(event.command.commandNr ?? position.cursor.sequence),
+          seq: (state.kickScatterPreview?.seq ?? 0) + 1,
+          direction: scatterPreview.direction,
+          directionRoll: scatterPreview.directionRoll,
+          distanceRoll: scatterPreview.distanceRoll,
+          unreducedEndpoint: scatterPreview.unreducedEndpoint,
+          candidates: null,
+        };
+      } else if (projectile?.kickScatterPreview === null) {
+        state.kickScatterPreview = null;
+      }
+      const pregameByKind = (kind: PregamePresentationCue['kind']) => kickoffWeather.pregame.filter((cue) => cue.kind === kind);
+      for (const cue of pregameByKind('fanFactor')) {
+        const fan = cue as Extract<PregamePresentationCue, { kind: 'fanFactor' }>;
+        const diff = Math.abs(fan.home.total - fan.away.total);
+        const leader = fan.home.total === fan.away.total ? 'tie' : fan.home.total > fan.away.total ? 'home' : 'away';
+        if (!await holdSurface(FAN_CINE_MS, () => { state.fanFactorCine = {
+          home: fan.home, away: fan.away,
+          homeCoach: position.model.teamHome.coach ?? 'Home', awayCoach: position.model.teamAway.coach ?? 'Away',
+          diff, leader,
+        }; }, () => { state.fanFactorCine = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const weather of kickoffWeather.weather.filter((cue) => cue.source === 'weather')) {
+        if (!await holdSurface(WEATHER_CINE_MS,
+          () => { state.weatherCine = { roll: weather.roll, weather: weather.weather }; },
+          () => { state.weatherCine = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const cue of pregameByKind('coin')) {
+        const coin = cue as Extract<PregamePresentationCue, { kind: 'coin' }>;
+        if (!await holdSurface(COIN_CINE_MS,
+          () => { state.coinToss = { result: coin.result, coach: coin.coach, won: coin.won, called: coin.called }; },
+          () => { state.coinToss = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      if (kickoffWeather.kickoff) {
+        const kickoff = kickoffWeather.kickoff;
+        state.kickoffArcNeedsDecisionDwell = kickoff.decisionDwell;
+        if (!await holdSurface(KICKOFF_CINE_MS,
+          () => { state.kickoffCine = { result: kickoff.result, roll: kickoff.roll,
+            img: kickoffSplashUrl(kickoff.result, kickoff.palette) }; },
+          () => { state.kickoffCine = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      if (kickoffWeather.weatherMageUse) {
+        const mage = kickoffWeather.weatherMageUse;
+        if (!await holdSurface(REROLL_SPLASH_HOLD_MS, () => { state.rerollSplash = {
+          side: mage.side, coach: mage.coach, logo: mage.logo, source: 'Weather Mage', isTeam: false,
+          text: `${mage.coach} used their Weather Mage!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+        }; }, () => { state.rerollSplash = null; })) return;
+      }
+      for (const weather of kickoffWeather.weather.filter((cue) => cue.source === 'weatherMage')) {
+        if (!await holdSurface(WEATHER_CINE_MS,
+          () => { state.weatherCine = { roll: weather.roll, weather: weather.weather }; },
+          () => { state.weatherCine = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const cue of pregameByKind('masterChef')) {
+        const chef = cue as Extract<PregamePresentationCue, { kind: 'masterChef' }>;
+        if (!await holdSurface(RIOTOUS_CINE_MS,
+          () => { state.masterChefSplash = { team: chef.team, stolen: chef.stolen, rolls: chef.rolls,
+            seq: (state.masterChefSplash?.seq ?? 0) + 1 }; },
+          () => { state.masterChefSplash = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const cue of pregameByKind('prayer')) {
+        const prayer = cue as Extract<PregamePresentationCue, { kind: 'prayer' }>;
+        if (!await holdSurface(PRAYER_CINE_MS,
+          () => { state.prayerAnnounce = { team: prayer.team, prayer: prayer.name, icon: prayer.icon,
+            text: prayer.text, lines: prayer.lines, ...(prayer.playerId ? { playerId: prayer.playerId } : {}),
+            seq: (state.prayerAnnounce?.seq ?? 0) + 1 }; },
+          () => { state.prayerAnnounce = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const cue of pregameByKind('rockMiss')) {
+        const rock = cue as Extract<PregamePresentationCue, { kind: 'rockMiss' }>;
+        if (!await holdSurface(rockThrowBackstopMs(),
+          () => { state.rockThrow = { square: rock.square, miss: true, seq: (state.rockThrow?.seq ?? 0) + 1 }; },
+          () => { state.rockThrow = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      for (const cue of pregameByKind('riotousRookies')) {
+        const rookies = cue as Extract<PregamePresentationCue, { kind: 'riotousRookies' }>;
+        if (!await holdSurface(RIOTOUS_CINE_MS,
+          () => { state.riotousRookiesSplash = { coach: rookies.coach, amount: rookies.amount, rolls: rookies.rolls,
+            seq: (state.riotousRookiesSplash?.seq ?? 0) + 1 }; },
+          () => { state.riotousRookiesSplash = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      if (kickoffWeather.dodgySnack) {
+        const snack = kickoffWeather.dodgySnack;
+        if (!await presentStages([{ delayBefore: presentationMs(400), present: () => {} }], signal)) return;
+        if (!await holdSurface(DODGY_SNACK_CINE_MS,
+          () => { state.dodgySnackCine = { rollHome: snack.rollHome, rollAway: snack.rollAway,
+            seq: (state.dodgySnackCine?.seq ?? 0) + 1 }; }, () => { state.dodgySnackCine = null; })) return;
+        if (!await holdSurface(DODGY_SNACK_ANNOUNCEMENT_MS,
+          () => { state.dodgySnackAnnouncement = { players: snack.players,
+            seq: (state.dodgySnackAnnouncement?.seq ?? 0) + 1 }; }, () => { state.dodgySnackAnnouncement = null; })) return;
+        for (const player of snack.sentOff) {
+          if (!await holdSurface(DODGY_SNACK_SPLASH_MS,
+            () => { state.dodgySnackSplash = { player, seq: (state.dodgySnackSplash?.seq ?? 0) + 1 }; },
+            () => { state.dodgySnackSplash = null; })) return;
+        }
+      }
+      const pushes = pushPresentation(transitionPendingPushes, reports, position.model, priorCoordinates);
+      state.pushArrows = pushes.arrows.length ? pushes.arrows : null;
+      for (const playerId of pushes.grabbers) state.grabUse = { playerId, seq: (state.grabUse?.seq ?? 0) + 1 };
+      const firstRolls: ActionRollCue[] = [];
+      const rerolledRolls: ActionRollCue[] = [];
+      const rerollCue = rerollPresentation(reports);
+      const reroll = rerollCue?.isBlockReroll ? null : rerollCue;
+      if (rerollCue?.skill) {
+        const coordinate = position.model.fieldModel.playerDataArray.find((player) => player.playerId === rerollCue.pid)?.playerCoordinate;
+        const cue = skillUsePresentation({ reportId: 'skillUse', playerId: rerollCue.pid, skill: rerollCue.skill }, coordinate,
+          position.durableProjection.block, playerName(position.model, rerollCue.pid));
+        if (cue) state.skillUsed = { ...cue,
+          toast: rerollCue.proSucceeded ? playerName(position.model, rerollCue.pid) + ' uses Pro to reroll!' : cue.toast,
+          seq: (state.skillUsed?.seq ?? 0) + 1 };
+      }
+      for (const report of reports) {
+        const pid = String(report.playerId ?? '');
+        const coordinate = position.model.fieldModel.playerDataArray.find((player) => player.playerId === pid)?.playerCoordinate;
+        const cue = skillUsePresentation(report, coordinate, position.durableProjection.block, playerName(position.model, pid));
+        if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
+        const rollCoordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? coordinate;
+        const roll = actionRollPresentation(report, reports, position.model, rollCoordinate, true, reroll);
+        if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
+      }
+      const showRolls = (rolls: ActionRollCue[]) => {
+        const dice = rolls.flatMap((roll) => roll.die ? [roll.die] : []);
+        for (const roll of rolls) {
+          if (roll.trait) state.negatraitCue = { ...roll.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
+          if (roll.modal) state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
+        }
+        if (dice.length) state.actionDice = { rolls: dice, seq: (state.actionDice?.seq ?? 0) + 1 };
+      };
+      const hasFail = firstRolls.some((roll) => roll.die?.failed || roll.modal?.ok === false || roll.trait?.successful === false);
+      const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
+      const resultBeat = reroll ? presentationMs(reroll.proFailed || reroll.lonerFailed ? REROLL_SPLASH_HOLD_MS : rerollSplashWanted(reroll.isTeam, reroll.raw) ? REROLL_BEAT_MS : 300) : 0;
+      if (reports.some((report) => report.reportId === 'steadyFootingRoll' && report.successful === true)) playSound('angel');
+      const wireSound = event.command.sound as string | null | undefined;
+      const projectileOwnsWireSound = !!projectile && (
+        (projectile.suppressedBallScatter && wireSound === 'bounce')
+        ||
+        (!!projectile.ballScatter?.sound && wireSound === projectile.ballScatter.sound)
+        || (!!projectile.authoritativeKick && wireSound === 'kick')
+        || (!!projectile.throw && wireSound === projectile.throw.sound)
+        || (!!projectile.bomb && wireSound === projectile.bomb.sound)
+        || (!!projectile.fireball && wireSound === projectile.fireball.sound)
+      );
+      if (!projectileOwnsWireSound) playSound(wireSound);
+      const staged = await presentStages([
+        { delayBefore: 0, present: () => showRolls(firstRolls) },
+        { delayBefore: failBeat, present: () => {
+          if (rerollCue?.proFailed) showProFailedSplash(rerollCue.pid);
+          else if (reroll && rerollSplashWanted(reroll.isTeam, reroll.raw)) showRerollSplash(reroll.pid, reroll.source, reroll.isTeam, reroll.raw);
+        } },
+        { delayBefore: resultBeat, present: () => {
+          if (reroll?.lonerFailed) showLonerFailedSplash(reroll.pid);
+          showRolls(rerolledRolls);
+        } },
+        ...(reroll?.lonerFailed ? [{ delayBefore: presentationMs(REROLL_SPLASH_HOLD_MS), present: () => {} }] : []),
+      ], signal);
+      if (!staged) return;
+      if (projectile) {
+        if (projectile.unknownAnimationType && !warnedAnimationTypes.has(projectile.unknownAnimationType)) {
+          warnedAnimationTypes.add(projectile.unknownAnimationType);
+          console.warn(`ffb: unrecognised wire animationType "${projectile.unknownAnimationType}"`);
+        }
+        for (const sound of projectile.sounds.filter((cue) => cue.when === 'immediate')) playSound(sound.id);
+        if (projectile.catchPlayerId) state.ballCatch = {
+          playerId: projectile.catchPlayerId, seq: (state.ballCatch?.seq ?? 0) + 1,
+        };
+        if (projectile.direction) state.ballDirection = {
+          ...projectile.direction, seq: (state.ballDirection?.seq ?? 0) + 1,
+        };
+        if (projectile.authoritativeKick) {
+          const { startCoordinate, endCoordinate } = projectile.authoritativeKick.animation;
+          state.kickAim = { square: [endCoordinate[0], endCoordinate[1]], seq: (state.kickAim?.seq ?? 0) + 1 };
+          playSound('kick');
+          state.kickDescend = {
+            origin: [startCoordinate[0], startCoordinate[1]], landing: [endCoordinate[0], endCoordinate[1]],
+            seq: (state.kickDescend?.seq ?? 0) + 1,
+          };
+        }
+        if (projectile.bomb) state.bombBlast = {
+          square: projectile.bomb.square, sound: projectile.bomb.sound, seq: (state.bombBlast?.seq ?? 0) + 1,
+        };
+        if (projectile.fireball) state.fireballAnim = {
+          square: projectile.fireball.square, sound: projectile.fireball.sound, seq: (state.fireballAnim?.seq ?? 0) + 1,
+        };
+        if (projectile.throw) state.throwAnim = {
+          ...projectile.throw, seq: (state.throwAnim?.seq ?? 0) + 1,
+        };
+        if (projectile.trickster) state.trickster = {
+          ...projectile.trickster, seq: (state.trickster?.seq ?? 0) + 1,
+        };
+        if (projectile.leap?.kind === 'crossing') state.leap = {
+          playerId: projectile.leap.playerId, sound: projectile.leap.sound, seq: (state.leap?.seq ?? 0) + 1,
+        };
+        else if (projectile.leap?.kind === 'inPlace') {
+          playSound(projectile.leap.sound);
+          state.leapFail = { playerId: projectile.leap.playerId, seq: (state.leapFail?.seq ?? 0) + 1 };
+        }
+        if (projectile.ballAndChainScatter) state.bncScatter = {
+          roll: projectile.ballAndChainScatter.roll,
+          from: projectile.ballAndChainScatter.from,
+          dest: projectile.ballAndChainScatter.dest,
+          seq: (state.bncScatter?.seq ?? 0) + 1,
+        };
+        if (projectile.playerScatter) state.scatterAnim = {
+          playerId: projectile.playerScatter.playerId, path: projectile.playerScatter.path,
+          seq: (state.scatterAnim?.seq ?? 0) + 1,
+        };
+        if (projectile.ballScatter) state.scatterAnim = {
+          playerId: '__ball__', path: projectile.ballScatter.path,
+          seq: (state.scatterAnim?.seq ?? 0) + 1,
+        };
+        if (projectile.trickster && projectile.sounds.some((cue) => cue.when === 'tricksterArrival')) {
+          if (!await presentStages([{ delayBefore: presentationMs(600), present: () => { playSound('blunder'); } }], signal)) return;
+        }
+        const hasAnimatedProjectile = !!(projectile.authoritativeKick || projectile.bomb || projectile.fireball
+          || projectile.throw || projectile.trickster || projectile.leap || projectile.playerScatter || projectile.ballScatter);
+        if (hasAnimatedProjectile) {
+          await nextTick();
+          await waitUntilReplayPresentationIdle({
+            flushView: async () => { await nextTick(); }, isCurrent: () => !signal.aborted,
+            isIdle: () => replayPresentationIdleProbe?.() ?? true,
+            now: () => Date.now(), waitFrame: () => new Promise<void>((resolve) => setTimeout(resolve, 16)),
+            timeoutMs: 30000, onTimeout: () => {},
+          });
+          if (signal.aborted) return;
+          state.throwAnim = null;
+          state.scatterAnim = null;
+          state.ballCatch = null;
+          state.bombBlast = null;
+          state.fireballAnim = null;
+          state.trickster = null;
+          state.leap = null;
+          state.leapFail = null;
+          if (projectile.authoritativeKick) {
+            state.kickAim = null; state.kickDescend = null; state.kickClearSeq++;
+          }
+        }
+      }
+      if (kickoffWeather.victims && !await holdSurface(RIOTOUS_CINE_MS,
+        () => { state.kickoffVictimSplash = { ...kickoffWeather.victims!,
+          seq: (state.kickoffVictimSplash?.seq ?? 0) + 1 }; },
+        () => { state.kickoffVictimSplash = null; })) return;
+      if (follow) {
+        const releaseDelay = follow.followed ? presentationMs(FOLLOWUP_MOVE_RELEASE_MS) : 0;
+        const followed = await presentStages([
+          { delayBefore: PIPELINE_TIMINGS.followStay.afterPushMs, present: () => {
+            state.followupIndicator = { playerName: playerName(position.model, follow.attackerId), square: follow.square,
+              followed: follow.followed, seq: (state.followupIndicator?.seq ?? 0) + 1 };
+          } },
+          { delayBefore: releaseDelay, present: () => {
+            if (follow.followed) state.deferMove = { playerId: follow.attackerId, action: 'release', seq: (state.deferMove?.seq ?? 0) + 1 };
+          } },
+          { delayBefore: Math.max(0, PIPELINE_TIMINGS.followStay.holdMs - releaseDelay), present: () => { state.followupIndicator = null; } },
+        ], signal);
+        if (!followed) return;
+      }
+      const fallCoordinates = new Map<string, [number, number] | null>([...priorCoordinates].map(([id, coordinate]) =>
+        [id, coordinate ? [coordinate[0]!, coordinate[1]!] : null]));
+      const movement = position.durableProjection.movementOccurrence;
+      const failedDestination = movement ? observedFailedMovementDestination(movement, movement.playerId) : null;
+      if (movement && failedDestination) fallCoordinates.set(movement.playerId, failedDestination);
+      const fall = buildFallOverCue(reports, fallCoordinates, state.fallOver?.seq ?? 0);
+      if (fall) state.fallOver = fall;
+      // Owner 09-14: the Stab toast reads its beat before the target's armour roll on the review path too.
+      const stabCue = stabPresentation(reports, position.model);
+      if (stabCue) {
+        state.skillUsed = { playerId: stabCue.playerId, skill: 'Stab', square: stabCue.square, name: stabCue.name, toast: `${stabCue.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+        if (!await presentStages([{ delayBefore: presentationMs(STAB_CUE_MS), present: () => {} }], signal)) return;
+      }
+      const armourSeen = new Set<string>();
+      const armour = reports.flatMap((report) => {
+        const key = injuryReportDedupeKey(report);
+        if (!key || armourSeen.has(key)) return [];
+        armourSeen.add(key);
+        const pid = String(report.defenderId ?? report.playerId ?? '');
+        const coordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? priorCoordinates.get(pid);
+        const cue = armourPresentation(report, coordinate);
+        return cue ? [cue] : [];
+      });
+      if (armour.length) {
+        state.armorDice = { rolls: armour, seq: (state.armorDice?.seq ?? 0) + 1 };
+        if (armour.some((roll) => roll.broken) && !await presentStages([{ delayBefore: armourReadMs(), present: () => {} }], signal)) return;
+      }
+      const injured = new Set<string>();
+      for (const report of reports) {
+        const pid = String(report.defenderId ?? report.playerId ?? '');
+        const coordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? priorCoordinates.get(pid)
+          ?? position.model.fieldModel.playerDataArray.find((p) => p.playerId === pid)?.playerCoordinate;
+        const injury = injuryPresentation(report, position.model, coordinate, reports.some((r) => r.reportId === 'foul'));
+        if (!injury || injured.has(pid)) continue;
+        injured.add(pid);
+        if (injury.isCasualty) casualtyPresentationsOutstanding++;
+        injuryQueue.push(injury);
+      }
+      pumpInjuries();
+      // Publication drives model-diff rendering; report cues above write transient channels only.
+      await nextTick();
+      await waitUntilReplayPresentationIdle({
+        flushView: async () => { await nextTick(); },
+        isCurrent: () => !signal.aborted,
+        isIdle: () => !injuryPlaying && injuryQueue.length === 0 && (replayPresentationIdleProbe?.() ?? true),
+        now: () => Date.now(), waitFrame: () => new Promise<void>((resolve) => setTimeout(resolve, 16)),
+        timeoutMs: 30000, onTimeout: () => {},
+      });
+      if (signal.aborted) return;
+      if (apothecaryOutcome) {
+        state.apothecaryAnim = {
+          playerId: apothecaryOutcome.playerId, square: apothecaryOutcome.square,
+          outcome: apothecaryOutcome.autoReturn ? 'reserves' : 'building',
+          side: apothecaryOutcome.side, medic: true, seq: (state.apothecaryAnim?.seq ?? 0) + 1,
+        };
+        if (!await holdSurface(3000, () => { state.apothecaryAutoReturn = {
+          ...apothecaryOutcome, mine: false, audience: 'spectator',
+          seq: (state.apothecaryAutoReturn?.seq ?? 0) + 1,
+        }; }, () => { state.apothecaryAutoReturn = null; })) return;
+      }
+      if (sendOffOutcome === null) {
+        state.sendOffResult = null;
+      } else if (sendOffOutcome) {
+        if (!await holdSurface(SEND_OFF_WAITING_RESULT_HOLD_MS,
+          () => { state.sendOffResult = { ...sendOffOutcome, seq: (state.sendOffResult?.seq ?? 0) + 1 }; },
+          () => { state.sendOffResult = null; })) return;
+      }
+      if (turnCue.clearMoveTrail) state.moveTrailClearSeq++;
+      if (turnCue.splash?.kind === 'turnover') {
+        const turnEnd = reports.find((report) => String(report.reportId) === 'turnEnd') ?? null;
+        const fireAllowed = turnoverSplashFireAllowed({
+          turnEnd,
+          turnMode: position.model.turnMode,
+          actingPlayerId: position.model.actingPlayer?.playerId,
+          ballCarrierInEndzone: ballCarrierInScoringEndzone(position.model),
+        });
+        if (fireAllowed) {
+          if (!await presentStages([{
+            delayBefore: presentationMs(turnoverSplashMinimumDelayMs(turnCue.splash.afterInjury)), present: () => {},
+          }], signal)) return;
+          const splash = turnCue.splash;
+          state.turnover = { side: splash.side, coach: splash.coach, teamName: splash.teamName,
+            logo: splash.logo, seq: (state.turnover?.seq ?? 0) + 1 };
+          if (turnCue.toast) showTurnToast(turnCue.toast.turn, turnCue.toast.side, turnCue.toast.context);
+          playSound('sad_trombone');
+          if (!await presentStages([{
+            delayBefore: presentationMs(TURNOVER_HOLD_MS), present: () => { state.turnover = null; },
+          }], signal)) return;
+        }
+      } else if (turnCue.splash?.kind === 'turnStart') {
+        if (!await presentStages([{ delayBefore: presentationMs(TURN_START_DELAY_MS), present: () => {
+          const splash = turnCue.splash!;
+          state.turnStart = { side: splash.side, coach: splash.coach, teamName: splash.teamName,
+            logo: splash.logo, seq: (state.turnStart?.seq ?? 0) + 1 };
+          if (turnCue.toast) showTurnToast(turnCue.toast.turn, turnCue.toast.side, turnCue.toast.context);
+        } }, { delayBefore: presentationMs(TURN_START_HOLD_MS), present: () => { state.turnStart = null; } }], signal)) return;
+      } else if (turnCue.toast) {
+        showTurnToast(turnCue.toast.turn, turnCue.toast.side, turnCue.toast.context);
+      }
+    },
+    presentCollapsed: (event) => {
+      // Match standalone replay: 2x/4x retain command audio; 8x+ is silent.
+      if ((spectatorTransport?.playback.speed ?? REAL_TIME_REPLAY_SPEED) >= 4) return;
+      playSound(event.command.sound as string | null | undefined);
+    },
+    cancelTransients: cancelSpectatorPresentation,
+    onChange: () => { spectatorReviewRevision.value++; },
+  });
+  if (!transport.review.adoptDisplayed(checkpoint)) { transport.dispose(); return; }
+  // Install the gate before cancellation or publication can trigger reactive callbacks.
+  spectatorTransport = transport;
+  await transport.pauseLive();
+}
+function settlePendingSpectatorGoLive(value: boolean): void {
+  const pending = pendingSpectatorGoLive;
+  pendingSpectatorGoLive = null;
+  pending?.resolve(value);
+}
+function rejectPendingSpectatorGoLive(transport: LiveSpectateTransport | null): void {
+  if (pendingSpectatorGoLive?.transport === transport) settlePendingSpectatorGoLive(false);
+  reconnecting = false;
+  if (state.connectionClosed?.mode === 'spectator') {
+    state.connectionClosed = { ...state.connectionClosed, reconnecting: false };
+  }
+}
+async function completePendingSpectatorGoLive(): Promise<void> {
+  const pending = pendingSpectatorGoLive;
+  if (!pending || pending.transport !== spectatorTransport) return;
+  pendingSpectatorGoLive = null;
+  pending.resolve(await pending.transport.goToLive());
+}
+function goToLiveSpectatorView(): Promise<boolean> {
+  const transport = spectatorTransport;
+  if (!transport) return Promise.resolve(false);
+  if (pendingSpectatorGoLive) return pendingSpectatorGoLive.promise;
+  if (transport.controls().canGoLive) return transport.goToLive();
+  const disconnected = state.connectionClosed?.mode === 'spectator';
+  if ((!disconnected && !transport.history.staleReason) || lastConnect?.mode !== 'spectator') return Promise.resolve(false);
+  let resolvePending!: (value: boolean) => void;
+  const promise = new Promise<boolean>((resolve) => { resolvePending = resolve; });
+  pendingSpectatorGoLive = { transport, promise, resolve: resolvePending };
+  gameStore.reconnect();
+  return promise;
+}
+/** @internal Read-only visibility for ordered-ingress integration tests. */
+export function spectatorDisplayedCheckpointForTest(): SpectatorCheckpoint | null { return spectatorDisplayedCheckpoint; }
+/** @internal Read-only reader/head visibility for the GO TO LIVE follow test (replayer resume, 09-12). */
+export function spectatorReaderDiagnosticsForTest(): { hasTransport: boolean; phase: string | null; visibleSeq: number | null; headSeq: number | null; staleReason: string | null; readerActive: boolean; failure: string | null } {
+  const review = spectatorTransport?.review as unknown as { active?: unknown } | undefined;
+  return {
+    hasTransport: !!spectatorTransport, phase: spectatorTransport?.review.phase ?? null,
+    visibleSeq: spectatorTransport?.review.visible?.cursor.sequence ?? null, headSeq: spectatorTransport?.history.head?.cursor.sequence ?? null,
+    staleReason: spectatorTransport?.history.staleReason ?? null, readerActive: !!review?.active, failure: spectatorTransport?.review.failure ?? null,
+  };
+}
+/** The position the legacy live path is showing, kept in step with the history so PAUSE can adopt it.
+ *  Owner 09-14 ("live replay feature simply isn't visible" / pause stuck on "Waiting for match data"): every routed frame
+ *  reached here, and a frame WITHOUT a history cursor — a chat/sound/sketch push, a duplicate, an ignored packet — nulled
+ *  the displayed position for the rest of the connection. Now a cursor-less frame leaves it unchanged, and a committed
+ *  frame reuses the history's already-reduced checkpoint instead of reducing the model a second time per packet. */
+function commitSpectatorDisplayedFrame(frame: QueuedFrame): void {
+  const cursor = frame.receipt?.cursor;
+  if (!cursor) return;
+  const history = spectatorIngress?.history;
+  if (!history || !history.recording) { spectatorDisplayedCheckpoint = null; spectatorReviewRevision.value++; return; }
+  const previous = spectatorDisplayedCheckpoint;
+  const head = history.head;
+  let next: SpectatorCheckpoint | null = null;
+  if (head && sameSpectatorIdentity(head.cursor, cursor) && head.cursor.sequence === cursor.sequence) {
+    next = head; // caught up: the admitted checkpoint IS this frame's position
+  } else if (previous && sameSpectatorIdentity(previous.cursor, cursor)
+    && (cursor.sequence === previous.cursor.sequence + 1
+      || (cursor.sequence === previous.cursor.sequence && frame.cmd.netCommandId === NetCommandId.SERVER_GAME_TIME))) {
+    // Exactly one step behind the head (or a clock sample on the displayed step): one cheap reduce from the previous position.
+    try {
+      next = reduceSpectatorCheckpoint(previous, { cursor, command: frame.cmd as never,
+        ingressOrder: frame.receipt!.order, receivedWallAt: frame.receipt!.receivedWallAt,
+        receivedMonotonicAt: frame.receipt!.receivedMonotonicAt });
+    } catch { next = null; }
+  } else if (history.contains(cursor)) {
+    next = history.checkpointAt(cursor);
+  }
+  spectatorDisplayedCheckpoint = next;
+  spectatorReviewRevision.value++;
+}
+let spectatorSessionSerial = 0;
 let session: GameSession | null = null;
 const replay = reactive({
   active: false,
@@ -3385,11 +3991,14 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[]) {
+function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : 'connection') {
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
-  state.log.push({ time: logTimestamp(), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags });
-  if (state.log.length > 400) state.log.splice(0, state.log.length - 400);
+  const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
+  appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
   if (settings.devMode) devLog('log', `[${kind}] ${text}`); // mirror client log fires into the Developer panel
+}
+function logMatch(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[]): void {
+  log(kind, text, side, d6, blockDice, names, tags, 'match');
 }
 const railDiagnostic: RailDiagnosticSink = (diagnostic) => {
   log('system', `⚠ rail: ${diagnostic.message}`);
@@ -3428,7 +4037,7 @@ function devSummarize(dir: 'in' | 'out', cmd: Record<string, unknown>): { label:
 
 /** Which authoritative team a chat coach belongs to; a coach on neither complete team is a spectator. */
 function talkSide(coach: string | undefined): LogEntry['side'] {
-  const g = game.value;
+  const g = spectatorIngress ? spectatorIngress.history.head?.model : game.value;
   return chatAuthorSide(
     (g?.teamHome as { coach?: unknown } | undefined)?.coach,
     (g?.teamAway as { coach?: unknown } | undefined)?.coach,
@@ -3444,7 +4053,7 @@ let spectatorBaselineSeen = false;
 function handleServerJoin(cmd: { spectators?: number; spectatorNames?: unknown; coach?: unknown; clientMode?: unknown }) {
   // Owner 09-07: the join broadcast is the log's join line ("<Coach> joined as Home" / "<Coach> is now spectating
   // the game.") — the socket's own "connection: joined" state line is no longer logged.
-  const line = joinLogLine(cmd, game.value);
+  const line = joinLogLine(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
   if (line) log('system', line);
   if (Array.isArray(cmd.spectatorNames)) state.spectatorNames = cmd.spectatorNames.map(String);
   if (typeof cmd.spectators !== 'number') return;
@@ -3490,8 +4099,10 @@ export function playbackGapMs(deltaMs: number, queueLength: number, floorMs: num
 const DEMO_BLOCK_REPLAY_GAP_MS = 900;
 
 interface QueuedFrame {
+  serverPush?: boolean;
   cmd: Record<string, unknown>;
   receivedAt: number;
+  receipt?: SpectatorReceipt;
   replayEndOfInput?: boolean;
   onTheBallPhaseIdentity?: number;
   onTheBallModelRevision?: number;
@@ -4373,26 +4984,7 @@ function movementDraining(playerId?: string): boolean {
 // ── Authoritative pass destination ───────────────────────────────────────────────────────────────────
 // This is intentionally action/dialog agnostic. Upstream publishes passCoordinate for ordinary passes, bombs,
 // Throw Team-Mate reroll decisions, and the later Swoop election. The client only validates and displays it.
-export function passDestinationFromGame(
-  g: GameJson | null,
-): { square: [number, number]; kind: 'ball' | 'bomb' | 'stunty' } | null {
-  if (!g) return null;
-  const square = g.passCoordinate;
-  if (!Array.isArray(square) || square.length < 2) return null;
-  const x = square[0];
-  const y = square[1];
-  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= 26 || y < 0 || y >= 15) return null;
-  const actions = [
-    String((g as { throwerAction?: unknown }).throwerAction ?? ''),
-    String((g.actingPlayer as { playerAction?: unknown } | undefined)?.playerAction ?? ''),
-  ].map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
-  const kind = actions.some((action) => action.includes('bomb'))
-    ? 'bomb'
-    : actions.some((action) => action === 'swoop' || action.includes('throwteammate') || action.includes('kickteammate'))
-      ? 'stunty'
-      : 'ball';
-  return { square: [x, y], kind };
-}
+
 
 function syncPassDestination(g: GameJson): void {
   const marker = passDestinationFromGame(g);
@@ -4782,26 +5374,7 @@ function resetEndGameSettle(): void {
 
 let penaltyShootoutPresentationState = { ...EMPTY_PENALTY_SHOOTOUT_PRESENTATION };
 
-function penaltyShootoutPresentation(g: GameJson, payload: Readonly<Record<string, unknown>>) {
-  const nums = (value: unknown) => Array.isArray(value) ? value.map(Number) : [];
-  const homeRolls = nums(payload.rollsHome);
-  const awayRolls = nums(payload.rollsAway);
-  const wins = Array.isArray(payload.penaltyWins) ? payload.penaltyWins.map(Boolean) : [];
-  const labels = Array.isArray(payload.descriptions) ? payload.descriptions.map(String) : [];
-  return {
-    rounds: homeRolls.map((home, index) => ({
-      home,
-      away: awayRolls[index] ?? 0,
-      homeWon: !!wins[index],
-      label: labels[index] ?? String(index + 1),
-    })),
-    scoreHome: Number(payload.penaltyScoreHome ?? 0),
-    scoreAway: Number(payload.penaltyScoreAway ?? 0),
-    homeWins: !!payload.homeTeam,
-    homeName: g.teamHome?.teamName ?? 'Home',
-    awayName: g.teamAway?.teamName ?? 'Away',
-  };
-}
+
 
 function syncEndGame(g: GameJson, command?: Pick<ServerCommand, 'commandNr'> & {
   reportList?: { reports?: readonly Record<string, unknown>[] };
@@ -4845,14 +5418,11 @@ function reportSig(r: Record<string, unknown>): string {
 let lastReportSig: string | null = null;
 let lastReportCommandNr: number | null = null;
 /** Owner 07-04: has the server ever set the ACTIVE bit this game? Once true it's trusted exclusively; false = demo. */
-let sawActiveBit = false;
-let lastTurnKey = '';
-/** Latch behind `state.playingIsHome` — null until the first frame settles it. See the state field's note. */
-let settledPlayingIsHome: boolean | null = null;
+let visibleBoardProjection = createBoardProjection();
 // Owner 2026-07-14 (#10 part 2): receive-time "recovering" latch — ids that hit the STUNNED→PRONE(+!active) transition and remain in the missed-turn state. Maintained in applyFrame; feeds state.recoveringPlayers.
-const recoveringIds = new Set<string>();
 // Owner 07-06: SPECTATOR drive-north flip — the driving team, set ONCE per drive at kickoff and held (no mid-drive spin); best-effort init on mid-game join; null = unknown.
-let driveOffenseIsHome: boolean | null = null;
+let visibleDriveProjection: DriveProjection | null = null;
+let visibleReportLogContext = createReportLogContext();
 
 /** B9-1: does the report carry a dice roll? Non-debug log shows only these (owner rule). */
 function isDiceRoll(r: Record<string, unknown>): boolean {
@@ -5265,6 +5835,19 @@ function syncKickSkillDialog(g: GameJson): void {
 }
 
 function applyFrame(frame: QueuedFrame) {
+  return withLogReceipt(frame.receipt, () => {
+    if (frame.serverPush) {
+      handleServerPush(frame.cmd);
+      playback.lastReceivedAt = frame.receivedAt;
+      commitSpectatorDisplayedFrame(frame);
+      return;
+    }
+    applyFrameContents(frame);
+    commitSpectatorDisplayedFrame(frame);
+  });
+}
+
+function applyFrameContents(frame: QueuedFrame) {
   if (!game.value) return;
   const cmd = frame.cmd;
   // Settlement later in this frame may run after the planner has already published the following square's
@@ -5358,9 +5941,7 @@ function applyFrame(frame: QueuedFrame) {
     }
   }
   // #10 pt-2: who was STUNNED BEFORE this apply — the STUNNED→PRONE transition identifies recovery (a snapshot can't: a wrestled player is also PRONE+!active, but never from STUNNED).
-  const preStunned = new Set<string>(
-    game.value.fieldModel.playerDataArray.filter((d) => ((d.playerState ?? 0) & 0xff) === 0x04).map((d) => d.playerId),
-  );
+  const preStunned = stunnedPlayerIds(game.value);
   if (cmd.modelChangeList) {
     const result = applyModelChangeList(game.value, cmd.modelChangeList as unknown as ModelChangeListJson);
     if (setupPlaceThisFrame) playSound('setupPlace');
@@ -5385,7 +5966,7 @@ function applyFrame(frame: QueuedFrame) {
       if (last) state.setupPlacementPulse = { playerId: last, seq: (state.setupPlacementPulse?.seq ?? 0) + 1 };
     }
     setSoundWeather(game.value.fieldModel.weather);
-    for (const unknownId of result.unknown) log('system', `unknown model change: ${unknownId}`);
+    for (const unknownId of result.unknown) logMatch('system', `unknown model change: ${unknownId}`);
     if (!playback.catchingUp) sppGainsThisFrame = collectSppGainParts(preSppTotals, game.value);
     // retire-gap hook 1: read the acting marker off the APPLIED model (this frame's truth) — before the per-square
     // walk detection below, so a frame that both ends one activation and opens another retires the old snapshot
@@ -5404,7 +5985,7 @@ function applyFrame(frame: QueuedFrame) {
     );
     if (supersede === 'defer' && !pendingKickDescendSupersede) {
       pendingKickDescendSupersede = true;
-      log('system', `#174/W5 deferred ball-coordinate supersede until kickArc seq ${state.kickDescend?.seq ?? 'unknown'} retires`);
+      logMatch('system', `#174/W5 deferred ball-coordinate supersede until kickArc seq ${state.kickDescend?.seq ?? 'unknown'} retires`);
     } else if (supersede === 'clear') clearAuthoritativeKickPresentation(false);
     // Bind the resulting MoveSquare set to the acting player's now-authoritative coordinate. This must run
     // after the complete model-change list applies, because upstream can send the coordinate and replacement
@@ -5416,28 +5997,11 @@ function applyFrame(frame: QueuedFrame) {
   if (endTurnInFlight && endTurnInFlightTurnKey !== currentTurnKey(game.value)) {
     endTurnInFlight = false; endTurnInFlightTurnKey = null; // #14b TB-5: the applied server model advanced the turn — END_TURN ack landed
   }
-  // While PICKED_UP, mirror the thrown player at the thrower's square for presentation.
+  // Durable pickup identity is shared with detached history; renderer sequence stays local.
   {
-    const PICKED_UP_BASE = 0x10; // PlayerState.java:25
-    const thrownId = String(game.value.defenderId ?? '');
-    const thrownData = game.value.fieldModel.playerDataArray.find((d) => d.playerId === thrownId);
-    const held = !!thrownId && ((thrownData?.playerState ?? 0) & 0xff) === PICKED_UP_BASE;
-    if (held && state.ttmHeld?.thrownId !== thrownId) {
-      const throwerId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-      const current = thrownData?.playerCoordinate;
-      // A transition frame retains the mate's pre-pickup square in preCoords; a snapshot/join may not, so use
-      // the mate's current model coordinate (or, as a final model-derived fallback, the thrower's square).
-      const throwerCurrent = game.value.fieldModel.playerDataArray.find((d) => d.playerId === throwerId)?.playerCoordinate;
-      const from = preCoords.get(thrownId) ?? current ?? throwerCurrent ?? [0, 0];
-      state.ttmHeld = {
-        thrownId,
-        throwerId,
-        fromSquare: [from[0], from[1]],
-        seq: (state.ttmHeld?.seq ?? 0) + 1,
-      };
-    } else if (!held && state.ttmHeld && !state.demoMode) {
-      state.ttmHeld = null; // upstream removeThrownPlayer() mirror; demo owns its timed release independently
-    }
+    const held = reduceHeldTeamMate(state.ttmHeld, preCoords, game.value);
+    if (held && held !== state.ttmHeld) state.ttmHeld = { ...held, seq: (state.ttmHeld?.seq ?? 0) + 1 };
+    else if (!held && !state.demoMode) state.ttmHeld = null;
   }
   // Project server destination truth before any same-frame dialog is rendered.
   syncPassDestination(game.value);
@@ -5457,17 +6021,7 @@ function applyFrame(frame: QueuedFrame) {
     }
   }
   // #10 pt-2: latch "recovering" on STUNNED→PRONE(+!active), hold while PRONE+!active, clear on leaving — the stun X persists through the missed turn without false-marking a wrestled player.
-  {
-    let changed = false;
-    for (const d of game.value.fieldModel.playerDataArray) {
-      const id = d.playerId; if (typeof id !== 'string') continue;
-      const st = (d.playerState ?? 0) as number;
-      const proneInactive = (st & 0xff) === 0x03 && (st & 0x100) === 0;
-      if (preStunned.has(id) && proneInactive) { if (!recoveringIds.has(id)) { recoveringIds.add(id); changed = true; } }
-      else if (!proneInactive && recoveringIds.delete(id)) changed = true;
-    }
-    if (changed || state.recoveringPlayers.length !== recoveringIds.size) state.recoveringPlayers = [...recoveringIds];
-  }
+  state.recoveringPlayers = reduceRecoveringPlayers(state.recoveringPlayers, preStunned, game.value);
   // Per-square walk detection (adjacent on-pitch→on-pitch only): Order 66 live play and full-presentation
   // replay route the ACTING player's steps through the #67 PRESENTATION DRAIN (DD-1 snapshot, per-tile gated;
   // scoped to acting so a same-frame pushback isn't mis-read). Other live paths keep the C3 holdPlayback stagger.
@@ -5529,6 +6083,7 @@ function applyFrame(frame: QueuedFrame) {
   const rawReports = (cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
   // B9-1: dedup echoed reports, then log dice rolls only (all reports in debug).
   const reports = dedupeReports(rawReports, (cmd as { commandNr?: number }).commandNr);
+  if (game.value) skillDecisionCardData(game.value, String(game.value.dialogParameter?.playerId ?? ''), String(game.value.dialogParameter?.skill ?? ''), reports);
   // Passive block-choice reveal (live non-choosing seat + spectator): apply the server-reported choice to
   // the already-visible dice, hold for the live viewer's 450 ms reveal (spectator x1.1), then permit teardown/next state.
   // This never delays the outbound choice or model application and never runs for the choosing coach.
@@ -5536,32 +6091,22 @@ function applyFrame(frame: QueuedFrame) {
   // Owner 09-05: stamp the applied result on the affected token(s) — for EVERY seat (chooser, non-chooser,
   // spectator) the blockChoice report is the server's word that the result applies.
   if (!playback.catchingUp && opponentBlockChoice) {
-    const res = String(opponentBlockChoice.blockResult ?? '').toUpperCase();
-    const symbol = res.includes('SKULL') ? 'attacker-down'
-      : res.includes('BOTH') ? 'both-down'
-      : res.includes('POW') && res.includes('PUSH') ? 'defender-stumbles'
-      : res.includes('POW') ? 'pow'
-      : res.includes('PUSH') ? 'push' : null;
-    const defenderId = String(opponentBlockChoice.defenderId ?? '');
-    const attackerId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (symbol) {
-      // Owner 09-06: a player with BLOCK stays up on Both Down — no 'both down' stamp on them (a stamp on a player the
-      // result does not touch reads wrong). Both with Block -> nobody stamped.
-      const hasBlock = (id: string) => { const p = playerById(game.value, id); return !!p && playerHasSkill(p, 'Block'); }; // base + temporary skills
-      const playerIds = symbol === 'attacker-down' ? [attackerId]
-        : symbol === 'both-down' ? [attackerId, defenderId].filter((id) => !hasBlock(id))
-        : [defenderId];
-      const ids = playerIds.filter((id) => id.length > 0);
-      if (ids.length) state.blockResultStamp = { symbol, playerIds: ids, seq: (state.blockResultStamp?.seq ?? 0) + 1 };
-      else state.blockResultStamp = null; // nobody stamped (both carry Block) — a new result supersedes the last stamp
-    }
+    const outcome = blockOutcomePresentation(reports, game.value, {
+      attackerId: String(game.value.actingPlayer?.playerId ?? ''),
+      defenderId: String(opponentBlockChoice.defenderId ?? ''), defenderSquare: null,
+    });
+    if (outcome.stamp !== undefined) state.blockResultStamp = outcome.stamp
+      ? { ...outcome.stamp, seq: (state.blockResultStamp?.seq ?? 0) + 1 } : null;
   }
   const opponentChoiceIndex = Number(opponentBlockChoice?.diceIndex ?? -1);
   if (!playback.catchingUp && blockPartialAtFrameStart && !blockPartialAtFrameStart.mine
       && Number.isInteger(opponentChoiceIndex)
       && opponentChoiceIndex >= 0 && opponentChoiceIndex < blockPartialAtFrameStart.dice.length) {
     if (opponentBlockChoiceRevealTimer) cancelGameTimeout(opponentBlockChoiceRevealTimer);
-    state.blockPartial = { ...blockPartialAtFrameStart, choiceIndex: opponentChoiceIndex };
+    state.blockPartial = { ...blockPartialAtFrameStart, choiceIndex: opponentChoiceIndex,
+      // The reveal keeps the card where the dice landed; a card surfaced before the defender was known takes the
+      // report's defender at this frame (still the block square — the push lands after).
+      defenderSquare: blockPartialAtFrameStart.defenderSquare ?? liveDefenderSquare(String(opponentBlockChoice?.defenderId ?? '')) };
     const revealSeq = blockPartialAtFrameStart.seq;
     const revealMs = opponentBlockChoiceRevealMs();
     opponentBlockChoiceRevealUntil = Date.now() + revealMs;
@@ -5640,18 +6185,8 @@ function applyFrame(frame: QueuedFrame) {
   // standing player keeps the ball, also reports used=false (`StepResetFumblerooskie.java:89-117`). Either the model
   // false edge or activation end clears this identity, so it cannot contradict the model or survive an activation.
   {
-    const election = [...reports].reverse().find((r) => String(r.reportId) === 'fumblerooskie');
-    if (election) {
-      const playerId = String(election.playerId ?? '');
-      if (election.used === true && playerId && game.value.fieldModel.ballMoving) {
-        state.fumblerooskie = { playerId, seq: (state.fumblerooskie?.seq ?? 0) + 1 };
-      } else if (election.used === false) {
-        state.fumblerooskie = null;
-      }
-    }
-    const live = state.fumblerooskie;
-    const actingId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (live && (!game.value.fieldModel.ballMoving || actingId !== live.playerId)) state.fumblerooskie = null;
+    const marker = reduceFumblerooskie(state.fumblerooskie, reports, game.value);
+    if (marker !== state.fumblerooskie) state.fumblerooskie = marker ? { ...marker, seq: (state.fumblerooskie?.seq ?? 0) + 1 } : null;
   }
   // #78 (owner 08-05): pace pickup, catch resolution, and EVERY ball-scatter hop in o66 play; spectate keeps holdPlayback. The frame's sound rides its beat (#92 Group-A cue); beats ride the #67 FIFO so they land AFTER move steps and degrade to instant on flush/catch-up.
   if (settings.order66 && !playback.catchingUp) {
@@ -5771,7 +6306,7 @@ function applyFrame(frame: QueuedFrame) {
       const id = String(r.reportId);
       return (id === 'block' || id === 'blockChoice' || id === 'blockRoll') && typeof (r as { defenderId?: unknown }).defenderId === 'string';
     });
-    if (hint) setBlockDefenderHint(String((hint as { defenderId?: unknown }).defenderId));
+    if (hint) setBlockDefenderHint(String((hint as { defenderId?: unknown }).defenderId), visibleReportLogContext);
   }
   for (const [reportIndex, report] of reports.entries()) {
     if (String(report.reportId) === 'dwarfenWisdomRoll') {
@@ -5813,11 +6348,8 @@ function applyFrame(frame: QueuedFrame) {
           ?? (game.value.fieldModel.playerDataArray.find((d) => d.playerId === def)?.playerCoordinate as [number, number] | undefined)
           ?? null;
         if (raw && onPitchSq(raw)) {
-          armorRolls.push({
-            square: [raw[0], raw[1]],
-            rolls: [Number(armorRoll[0]), Number(armorRoll[1])],
-            broken: !!(report as { armorBroken?: unknown }).armorBroken,
-          });
+          const cue = armourPresentation(report, raw);
+          if (cue) armorRolls.push(cue);
         }
       }
     }
@@ -5830,9 +6362,9 @@ function applyFrame(frame: QueuedFrame) {
           && report.successful === false && foulAppearanceFrameContext
         ? { ...report, defenderId: foulAppearanceFrameContext.defenderId }
         : report;
-      const lines = formatReportLines(reportForDisplay, game.value);
+      const lines = formatReportLines(reportForDisplay, game.value, visibleReportLogContext);
       const surfaceLog = () => {
-        for (const formatted of lines) log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags);
+        for (const formatted of lines) logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags);
       };
       const fireballReport = (String(report.reportId) === 'spellEffectRoll' && String(report.specialEffect) === 'fireball')
         || (String(report.reportId) === 'injury' && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
@@ -5845,12 +6377,18 @@ function applyFrame(frame: QueuedFrame) {
   }
   // (foulInFrame lifted above the armour render so a foul can surface its 🥾 target cue first.)
   const foulInFrame = reports.some((other) => String(other.reportId) === 'foul');
+  // Owner 09-14: STAB — "<Player> uses Stab!" over the stabber first; the target's armour roll follows a beat later.
+  const stab = playback.catchingUp ? null : stabPresentation(reports, game.value);
+  if (stab) state.skillUsed = { playerId: stab.playerId, skill: 'Stab', square: stab.square, name: stab.name, toast: `${stab.name} uses Stab!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
   if (armorRolls.length > 0 && !playback.catchingUp) {
     const broken = armorRolls.some((a) => a.broken);
     // Phase 3a HARD GATE (event-priority D5b): a BROKEN armour roll opens the armour read
     // window — the injury result (pumpInjuries) may not begin until it elapses, so the 2d6
     // armour dice read + settle in their own beat first (no overlap).
-    const showArmour = () => { state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; };
+    // Astra 09-14: a DELAYED reveal (stab / foul beat) must not publish against a REPLACED model — a reconnect snapshot
+    // inside the beat swaps game.value; the old roll/square then belongs to nothing on screen.
+    const modelAtSchedule = game.value;
+    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; };
     const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
       && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
     if (fireballInjury && pendingFireballBeats > 0) {
@@ -5871,6 +6409,10 @@ function applyFrame(frame: QueuedFrame) {
       if (broken) armourGateUntil = Date.now() + estimate + armourReadMs();
       holdPlayback(estimate + (broken ? armourReadMs() : 0));
       scheduleGameTimeout(() => releaseArmourAfterFollow(0), presentationMs(FOLLOWUP_ARMOUR_BACKSTOP_MS));
+    } else if (stab) {
+      holdPlayback(presentationMs(STAB_CUE_MS) + (broken ? armourReadMs() : 0));
+      if (broken) armourGateUntil = Date.now() + presentationMs(STAB_CUE_MS) + armourReadMs();
+      scheduleGameTimeout(showArmour, presentationMs(STAB_CUE_MS));
     } else if (foulInFrame) {
       // Owner 2026-07-09: a FOUL surfaces the 🥾 boot over the fouled player FIRST — it reads a
       // beat, THEN the armour roll renders (the foul analogue of the blitz target crosshair:
@@ -5887,13 +6429,7 @@ function applyFrame(frame: QueuedFrame) {
   // B4-1/B6-1/2: one injury event per report, sequenced back-to-back. B8-1/B9-7: centered block-dice cine off blockRoll and/or blockChoice (choice carries dice+index+result; roll carries choosingTeamId — uphill = defender's team chooses).
   {
     const blockReport = reports.find((r) => String(r.reportId) === 'block');
-    if (blockReport) {
-      lastBlockAttackerId =
-        String(blockReport.playerId ?? blockReport.attackerId ?? game.value.actingPlayer?.playerId ?? '') ||
-        lastBlockAttackerId;
-      // Owner 07-04: the `block` report carries the DEFENDER id (blockRoll sends null) — capture it or the uphill test + square lookup fall back to the STALE previous defender.
-      lastBlockDefenderId = String(blockReport.defenderId ?? '') || lastBlockDefenderId;
-    }
+    visibleBlockContext = reduceBlockContext(visibleBlockContext, game.value, reports, preCoords);
     const rollReport = reports.find((r) => String(r.reportId) === 'blockRoll');
     const choiceReport = reports.find((r) => String(r.reportId) === 'blockChoice');
     const source = rollReport ?? choiceReport;
@@ -5920,10 +6456,8 @@ function applyFrame(frame: QueuedFrame) {
     if (isBlockReroll) blockChoiceEpoch++;
     if (source) {
       const rolls = Array.isArray(source.blockRoll) ? (source.blockRoll as number[]) : [];
-      const defenderId = String(rollReport?.defenderId ?? choiceReport?.defenderId ?? lastBlockDefenderId ?? '');
-      lastBlockDefenderId = defenderId || lastBlockDefenderId;
+      const defenderId = String(rollReport?.defenderId ?? choiceReport?.defenderId ?? visibleBlockContext.defenderId ?? '');
       const sq = preCoords.get(defenderId) ?? null;
-      if (sq && sq[0] >= 0 && sq[0] < 26 && sq[1] >= 0 && sq[1] < 15) lastBlockDefenderSquare = [sq[0], sq[1]]; // #1/#5 anchor
       if (sq && sq[0] >= 0 && sq[0] < 26 && sq[1] >= 0 && sq[1] < 15 && rolls.length > 0) {
         // Shipped Order-66 modes present block dice through blockPartial (legacy block cine ripped 09-06).
         // Preserve the existing Dauntless hold on subsequent playback frames; this does not defer same-frame
@@ -5935,92 +6469,23 @@ function applyFrame(frame: QueuedFrame) {
   }
   // #94: derive PERSISTENT blitz tokens from the observed model (spectate-parity, D10 flag gate); runs AFTER the block section so the frame's attacker/defender ids are current. Negatrait-failed blitz keeps the marker with no target (spent-token property).
   {
-    const curKey = currentTurnKey(game.value);
-    if (blitzActor && blitzActor.turnKey !== curKey) { blitzActor = null; blitzActorTarget = ''; } // new turn → reset
-    const ap = game.value.actingPlayer as { playerId?: string; playerAction?: string } | undefined;
-    const apId = String(ap?.playerId ?? '');
-    if (apId && /blitz/i.test(String(ap?.playerAction ?? ''))) {
-      const sideHome = game.value.teamHome.playerArray.some((p) => p.playerId === apId);
-      blitzActor = { id: apId, side: sideHome, turnKey: curKey };
-    }
-    // #109 (TK g737): the DECLARE-time target lives in targetSelectionState, never game.defenderId ('' until the block) — selectedBlitzTargetId reads the applied model. STICKY: assign only from a valid source; the turn-key reset is the only clear.
-    const nominatedTarget = selectedBlitzTargetId(game.value);
-    if (blitzActor && blitzActor.turnKey === curKey) {
-      // BT-1 (Meero): rebind from the nominated source ONLY while the blitzActor is acting — an unscoped read would rebind to a LATER player's selection (blitzActor is sticky past its activation).
-      if (apId === blitzActor.id && nominatedTarget) blitzActorTarget = nominatedTarget;
-      else if (lastBlockAttackerId === blitzActor.id && lastBlockDefenderId) blitzActorTarget = lastBlockDefenderId;
-    }
-    const blitzUsedSide = blitzActor
-      ? !!(blitzActor.side ? game.value.turnDataHome?.blitzUsed : game.value.turnDataAway?.blitzUsed)
-      : false;
-    // #109: SHOW at DECLARE (blitzUsed lags the nomination); blitzUsedSide keeps the marker through the turn; self-clears on abort (both conditions go false). Spectate-parity — both sides derive identically.
-    const declaringBlitzTarget = !!blitzActor && blitzActor.turnKey === curKey && apId === blitzActor.id
-      && /blitz/i.test(String(ap?.playerAction ?? '')) && !!nominatedTarget;
-    const show = !!blitzActor && blitzActor.turnKey === curKey && (blitzUsedSide || declaringBlitzTarget);
+    visibleBlitzProjection = reduceBlitzProjection(visibleBlitzProjection, game.value, { attackerId: visibleBlockContext.attackerId, defenderId: visibleBlockContext.defenderId });
+    const marker = visibleBlitzProjection;
     const cur = state.blitzTokens;
-    if (show) {
-      if (!cur || cur.blitzerId !== blitzActor!.id || cur.targetId !== blitzActorTarget) {
-        state.blitzTokens = { blitzerId: blitzActor!.id, targetId: blitzActorTarget, side: blitzActor!.side, seq: (cur?.seq ?? 0) + 1 };
+    if (marker?.visible) {
+      if (!cur || cur.blitzerId !== marker.id || cur.targetId !== marker.targetId) {
+        state.blitzTokens = { blitzerId: marker.id, targetId: marker.targetId, side: marker.side, seq: (cur?.seq ?? 0) + 1 };
       }
-    } else if (cur) {
-      state.blitzTokens = null;
-    }
+    } else if (cur) state.blitzTokens = null;
   }
   // B9-14/G4: push arrows — signalled by `pushback` OR a PUSH blockChoice; the MOVE may land later, so register pre-push square and fire on the actual move.
   {
-    const onPitch = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
-    // 1. register pushes signalled this frame (dedup by player)
-    for (const report of reports) {
-      const id = String(report.reportId);
-      let pid = '';
-      if (id === 'pushback') {
-        pid = String(report.defenderId ?? report.playerId ?? '');
-        // #79: GRAB push = mode 'grab', NO skillUse report — grabber = the acting blocker (PushbackMessage.java:25-28).
-        if (String(report.pushbackMode) === 'grab') {
-          const grabber = String((game.value.actingPlayer as { playerId?: string } | undefined)?.playerId ?? '');
-          if (grabber) state.grabUse = { playerId: grabber, seq: (state.grabUse?.seq ?? 0) + 1 };
-        }
-      } else if (id === 'blockChoice') {
-        const res = String(report.blockResult ?? '').toUpperCase();
-        if (res.includes('PUSH')) pid = String(report.defenderId ?? '');
-      }
-      if (!pid) continue;
-      const from = preCoords.get(pid) ?? null;
-      if (from && onPitch(from)) pendingPushes.set(pid, { from, age: 0 });
-    }
-    // 2. fire arrows for pending pushes whose player has now moved; age out/clear
-    const arrows: { from: [number, number]; to: [number, number] }[] = [];
-    const arrowedThisFrame = new Set<string>();
-    for (const [pid, entry] of [...pendingPushes]) {
-      const data = game.value.fieldModel.playerDataArray.find((d) => d.playerId === pid);
-      const to = data?.playerCoordinate ? ([data.playerCoordinate[0], data.playerCoordinate[1]] as [number, number]) : null;
-      if (to && onPitch(to) && (to[0] !== entry.from[0] || to[1] !== entry.from[1])) {
-        arrows.push({ from: entry.from, to });
-        arrowedThisFrame.add(pid);
-        lastPushFrom.set(pid, entry.from); // the vacated square, for followupChoice
-        pendingPushes.delete(pid);
-      } else if (!to || !onPitch(to) || ++entry.age > PENDING_PUSH_MAX_AGE) {
-        pendingPushes.delete(pid); // pushed off pitch / removed, or aged out
-      }
-    }
-    // 2b. CHAIN pushes (07-08): BB2025 emits NO report for the chain victim — detect by RULE (whoever stood on a pushed player's destination is chain-pushed); the growing loop resolves multi-link chains.
-    for (let i = 0; i < arrows.length; i++) {
-      const dest = arrows[i]!.to;
-      for (const d of game.value.fieldModel.playerDataArray) {
-        const cpid = d.playerId;
-        if (arrowedThisFrame.has(cpid) || pendingPushes.has(cpid)) continue;
-        const cfrom = preCoords.get(cpid);
-        if (!cfrom || !onPitch(cfrom) || cfrom[0] !== dest[0] || cfrom[1] !== dest[1]) continue;
-        const cto = d.playerCoordinate ? ([d.playerCoordinate[0], d.playerCoordinate[1]] as [number, number]) : null;
-        if (cto && onPitch(cto) && (cto[0] !== cfrom[0] || cto[1] !== cfrom[1])) {
-          arrows.push({ from: cfrom, to: cto }); // already vacated → arrow now (loop chains off it)
-          arrowedThisFrame.add(cpid);
-          lastPushFrom.set(cpid, cfrom);
-        } else {
-          pendingPushes.set(cpid, { from: cfrom, age: 0 }); // not moved yet → fire on its move frame
-        }
-      }
-    }
+    const projectedPushes = pushPresentation(pendingPushes, reports, game.value, preCoords, PENDING_PUSH_MAX_AGE);
+    pendingPushes.clear();
+    for (const [pid, pending] of projectedPushes.pending) pendingPushes.set(pid, pending);
+    for (const [pid, from] of projectedPushes.lastFrom) lastPushFrom.set(pid, from);
+    for (const playerId of projectedPushes.grabbers) state.grabUse = { playerId, seq: (state.grabUse?.seq ?? 0) + 1 };
+    const arrows = projectedPushes.arrows;
     // Owner 07-03: hold arrows behind the block dice (spectator pacing, via the driver's resolve anchor); null clears immediately.
     const arrowsToShow = arrows.length > 0 ? arrows : null;
     // #122 (Yularen RE-ENABLE 07-22): o66 arrows are ⚖ PHANTOM-SAFE BY CONSTRUCTION vs W1 ([[server-wedge-catalog]]): (a) every arrow derives from a square ACTUALLY VACATED this frame (Stand-Firm/declined = no transition = no arrow); (b) set SYNCHRONOUSLY, not via the scheduleResolved timer (the W1 mechanism); (c) recomputed per frame + nulls when nothing moved. The timer path STAYS on the flag-OFF/spectate branch, byte-untouched.
@@ -6035,97 +6500,24 @@ function applyFrame(frame: QueuedFrame) {
   if (failedMoverId && failedMoverDestination) fallOverCoords.set(failedMoverId, failedMoverDestination);
   const fallOverCue = buildFallOverCue(reports, fallOverCoords, state.fallOver?.seq ?? 0);
   if (fallOverCue) state.fallOver = fallOverCue;
+  const injuryOutcomeCoordinates = new Map(preCoords);
+  for (const player of game.value.fieldModel.playerDataArray) {
+    const failedSquare = failedMovementDestination(player.playerId);
+    if (failedSquare) injuryOutcomeCoordinates.set(player.playerId, failedSquare);
+  }
+  visibleInjuryOutcomeProjection = reduceInjuryOutcomes(visibleInjuryOutcomeProjection, visibleCasualtyRollProjection, reports, game.value, injuryOutcomeCoordinates);
   const injuredThisFrame = new Set<string>();
   for (const report of reports) {
-    // #243: capture the apothecary re-roll's D16 (NEW) BEFORE the injury filter continues. `apothecaryRoll` carries
-    // casualtyRoll:[d16,d6] keyed by playerId (reportFormatter apothecaryRoll handler; call-catalog apothecaryRoll).
-    // Persisted so the apothecaryD16 modal built later can label the finer tier. Guarded on a real number → no stale.
-    if (String(report.reportId) === 'apothecaryRoll') {
-      const cr = (report as { casualtyRoll?: unknown }).casualtyRoll;
-      const apid = String((report as { playerId?: unknown }).playerId ?? '');
-      if (apid && Array.isArray(cr) && typeof cr[0] === 'number') apoNewCasualtyD16.set(apid, cr[0]);
-    }
+    visibleCasualtyRollProjection = reduceCasualtyRollProjection(visibleCasualtyRollProjection, [report], game.value);
     if (String(report.reportId) !== 'injury') continue;
-    // Owner 07-05: splash ONLY when the armour BROKE (held armour = a knockdown, not an injury).
-    // Crowd pushes and bites bypass armour. Rocks do roll armour; a held stalling-rock result stays in
-    // this queue only to finish the impact cinematic and uses an explicit impact-only toast below.
-    const armorBroke = (report as { armorBroken?: unknown }).armorBroken === true;
-    const injType = injuryTypeName(report.injuryType).toLowerCase();
-    if (!armorBroke && !injType.includes('crowd') && !injType.includes('rock') && !injType.includes('bitten')) continue;
-    const playerId = (report.defenderId ?? report.playerId) as string | undefined;
-    if (!playerId) continue;
-    // #243: capture the ORIGINAL casualty's D16 (OLD). The injury report carries casualtyRoll:[d16,d6], null on a
-    // non-casualty roll — so the guard only stores real casualties (a later KO can't overwrite it). ⚠ raw roll[0].
-    {
-      const cr = (report as { casualtyRoll?: unknown }).casualtyRoll;
-      if (Array.isArray(cr) && typeof cr[0] === 'number') apoOldCasualtyD16.set(playerId, cr[0]);
-    }
-    if (injuredThisFrame.has(playerId)) continue; // B9-1: one injury cinematic per player per frame
+    const playerId = String(report.defenderId ?? report.playerId ?? '');
+    const event = injuryPresentation(report, game.value, failedMovementDestination(playerId) ?? preCoords.get(playerId), foulInFrame);
+    if (!event || injuredThisFrame.has(playerId)) continue;
     injuredThisFrame.add(playerId);
-    const homeIds = new Set(game.value.teamHome.playerArray.map((p) => p.playerId));
-    const side: 'home' | 'away' = homeIds.has(playerId) ? 'home' : 'away';
-    const team = side === 'home' ? game.value.teamHome : game.value.teamAway;
-    const player = team.playerArray.find((p) => p.playerId === playerId);
-    const data = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
-    // g351: ⚖ render the SERVER'S injury result — the report's `injury` field (4-8) is authoritative; the model-state read mislabeled a KO. Fall back to model state only when absent.
-    const reportInjury = Number((report as { injury?: unknown }).injury ?? 0);
-    const base = reportInjury >= 0x04 && reportInjury <= 0x08 ? reportInjury : ((data?.playerState ?? 0) & 0xff);
-    const square = failedMovementDestination(playerId) ?? preCoords.get(playerId);
-    const logoUrl = (team.roster as { logoUrl?: string })?.logoUrl ?? null;
-    // Owner 07-03: crowd push (injuryType crowdpush/crowdpushForSpp/ktmCrowd) → fans-rush cine BEFORE the injury anim.
-    const onPitchSq = !!square && square[0] >= 0 && square[0] < 26 && square[1] >= 0 && square[1] < 15;
-    const crowdSurf = injType.includes('crowd') && onPitchSq;
-    // Owner 2026-07-04: THROW A ROCK (kickoff event / Throw-a-Rock prayer) — the FFB injuryType is 'throwARock'. Plays the rock-throw cinematic before the injury.
-    const rockThrow = injType.includes('rock') && onPitchSq;
-    // Owner 07-08: VAMPIRE FEED (injuryType "bitten", wire-confirmed g1920239) → 🧛 marker BEFORE the injury roll.
-    const bitten = injType.includes('bitten') && onPitchSq;
-    // Owner 07-08 + C7 fix: the server-resolved casualty string rides PlayerResult — but it's STICKY server-side (upstream never clears it), so an unconditional read leaked an OLD label onto a fresh Badly Hurt. Mirror upstream's isSeriousInjury() gate: read only at base ≥ 0x07 (RIP included).
-    const results = side === 'home'
-      ? game.value.gameResult.teamResultHome.playerResults
-      : game.value.gameResult.teamResultAway.playerResults;
-    // Owner 09-06: the INJURY REPORT itself carries the casualty string on the wire (game 944: "Dislocated Hip
-    // (-AG)") — read it first; PlayerResult.seriousInjury is set by a LATER model change, so the report-frame toast
-    // fell through to "Badly Hurt" on a smashed knee.
-    const reportSerious = (report as { seriousInjury?: string | null }).seriousInjury;
-    const seriousInjury = typeof reportSerious === 'string' && reportSerious.trim()
-      ? reportSerious
-      : base >= 0x07
-        ? (results.find((r) => r.playerId === playerId) as { seriousInjury?: string | null } | undefined)?.seriousInjury ?? null
-        : null;
-    if (base >= 0x06) {
-      const tier = casualtyTierLabel(seriousInjury, base);
-      apoOriginalCasualtyOutcome.set(playerId, {
-        injury: tier?.label ?? (INJURY_LABELS[base] ?? 'Injury'),
-        roll: apoOldCasualtyD16.get(playerId) ?? null,
-        square: square && onPitchSq ? [square[0], square[1]] : null,
-      });
-    }
-    // Fast-forward (join/switch catch-up): skip the injury splash queue — the player's resulting state (dugout/KO'd) already rides the model changes, so the board is current.
     if (!playback.catchingUp) {
-      if (base >= 0x06) casualtyPresentationsOutstanding += 1;
-      injuryQueue.push({
-      type: INJURY_LABELS[base] ?? 'INJURED',
-      // #64: the split taxonomy — injury-roll 3-step + (for a casualty) the 5-step D16 severity from seriousInjury.
-      injuryRoll: injuryRollLabel(base),
-      casualty: casualtyTierLabel(seriousInjury, base),
-      player: player?.playerName ?? '',
-      playerId,
-      side,
-      logoUrl,
-      teamName: team.teamName ?? '',
-      square:
-        square && square[0] >= 0 && square[0] < 26 && square[1] >= 0 && square[1] < 15 ? square : null,
-      foul: foulInFrame,
-      isCasualty: base >= 0x06, // BADLY_HURT and worse
-      injuryBase: base,
-      seriousInjury,
-      crowdSurf,
-      rockThrow,
-      rockImpactOnly: rockThrow && !armorBroke,
-      bitten,
-      });
+      if (event.isCasualty) casualtyPresentationsOutstanding++;
+      injuryQueue.push(event);
     }
-    // Owner 2026-07-03 r6f: the apothecary offer is now driven by the FFB `useApothecary` dialog (detected below), not this injury heuristic — so a real apothecary type + serious-injury payload rides the wire.
   }
   surfaceAutoAcceptedApothecaryReturn(
     reports,
@@ -6179,60 +6571,26 @@ function applyFrame(frame: QueuedFrame) {
       sendOffAnsweredKey = null; // instance over — a later, distinct send-off for the same player may argue again
     }
   }
-  // Owner 07-04: the ACTIVE bit (0x100) is FUMBBL's activation signal — prefer it, then actingPlayer; report notation is demo-only last resort.
-  const PLAYER_ACTIVE_FLAG = 0x100;
-  const MOVING_BASE = 0x02; // PlayerState.MOVING
-  // Owner 07-05: MOVING base = FUMBBL's "last clicked" pose (PlayerIconFactory frame 1/3 iff getBase()==MOVING) — unambiguous (one MOVING at a time), unlike the 0x100 bit which sits on several players. Re-evaluated per frame.
-  const arr = game.value.fieldModel.playerDataArray;
-  const stateOf = (d: { playerState?: unknown }) => ((d.playerState as number) ?? 0);
-  const playingIsHome = !!game.value.homePlaying;
-  // Owner 08-18: settle the playing side across the server's turn-flip transit — adopt the raw flag on every
-  // frame EXCEPT `betweenTurns`, hold the previous answer there. On the g870 wire (HS nr61-65) the raw flag
-  // reads true,true,true,FALSE,TRUE,false; held, it reads true,true,true,true,true,FALSE — one boundary, so the
-  // fades and the panel transition animate ONCE instead of rocking. Non-transit modes (setup/kickoff/endGame…)
-  // stay live, so nothing outside the flip changes.
-  if (settledPlayingIsHome === null || String(game.value.turnMode ?? '') !== 'betweenTurns') {
-    settledPlayingIsHome = playingIsHome;
-  }
-  state.playingIsHome = settledPlayingIsHome;
-  const homeIdSet = new Set(game.value.teamHome.playerArray.map((p) => p.playerId));
-  const movingId = arr.find((d) => (stateOf(d) & 0xff) === MOVING_BASE)?.playerId ?? null;
-  // SELECTED-BUT-STANDING fallback: the ACTIVE-bit player, PLAYING-team-scoped ONLY (o66ag #7: a stale cross-team bit surfaced a phantom gold marker at turn start).
-  const activeBitId =
-    arr.find((d) => (stateOf(d) & PLAYER_ACTIVE_FLAG) !== 0 && homeIdSet.has(d.playerId) === playingIsHome)?.playerId
-    ?? null;
-  const acting = (game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? null;
-  // o66ap #7 ROOT FIX: active player = RECEIVE-TIME `srvActingId` (unpaced wire mirror) — game.actingPlayer is PACED (null-at-end queued behind the block cine = "never clears") and movingId can be STALE (the Bloater jump). srvActingId nulls at wire speed; movingId stays as the demo-only fallback. The "state IS the ack" law applied to the marker.
-  const activeByState = srvActingId ?? movingId;
-  if (activeBitId || activeByState) sawActiveBit = true;
-  const firstNotation =
-    (reports.map((r) => r.actingPlayerId ?? r.playerId ?? r.defenderId).find((v) => typeof v === 'string') as
-      | string
-      | undefined) ?? null;
   // B9-12 G9: game over ⇒ no active player (clear the stale highlight). A CONCEDE ends the game via model change — surface the modal AND force the end-game surface (finished/endGame can trail the flag by a frame).
   {
-    const gr = game.value.gameResult as { teamResultHome?: { conceded?: boolean }; teamResultAway?: { conceded?: boolean } } | undefined;
-    const side: 'home' | 'away' | null = gr?.teamResultHome?.conceded ? 'home' : gr?.teamResultAway?.conceded ? 'away' : null;
-    if (side && concedeShownFor !== side) {
-      concedeShownFor = side;
-      const team = side === 'home' ? game.value.teamHome : game.value.teamAway;
-      state.concedeNotice = {
-        teamName: team.teamName ?? '',
-        coach: (team.coach as string | null) ?? '',
-        side,
-      };
+    const notice = concedeNoticeFromGame(game.value);
+    if (notice && concedeShownFor !== notice.side) {
+      concedeShownFor = notice.side;
+      state.concedeNotice = notice;
     }
   }
   const conceded = !!concedeShownFor;
   const over = String(game.value.turnMode ?? '') === 'endGame' || !!(game.value as { finished?: unknown }).finished || conceded;
-  // Owner 07-04: once the server has used the ACTIVE bit, trust it EXCLUSIVELY (clear when none active); the demo sets no bit so it keeps the fallbacks.
-  const activeId = over ? null : sawActiveBit ? activeByState : (activeByState ?? acting ?? firstNotation);
-  // Owner 07-08 (Phase-4): during a LIVE follow/stay, HOLD the gold marker on the attacker if only
-  // the player-state bit clears. The acting-player id is the activation lifetime: once the applied model
-  // clears it, pendingFollowup may remain solely to pace the follow/stay presentation and must not keep
-  // the attacker visually active (game_818).
-  const followupStillActing = pendingFollowup?.attackerId === acting;
-  state.activePlayerId = followupStillActing && !over ? acting : activeId;
+  const priorBoardTurnKey = visibleBoardProjection.turnKey;
+  visibleBoardProjection = reduceBoardProjection(visibleBoardProjection, game.value, {
+    recoveringPlayers: state.recoveringPlayers,
+    reports,
+    acknowledgedActingId: play.active ? srvActingId : game.value.actingPlayer?.playerId ?? null,
+    followupAttackerId: pendingFollowup?.attackerId ?? null,
+  });
+  state.playingIsHome = visibleBoardProjection.playingIsHome ?? !!game.value.homePlaying;
+  state.activePlayerId = visibleBoardProjection.activePlayerId;
+  state.actedPlayers = visibleBoardProjection.actedPlayers;
   // Owner 07-04: per-TURN "has acted" set → pitch rings (white = to act, grey = done); cleared on turnKey change.
   {
     const g = game.value as { turnMode?: unknown; homePlaying?: unknown; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } };
@@ -6244,8 +6602,7 @@ function applyFrame(frame: QueuedFrame) {
       turnToastKey = `normal:${home}:${curTurn}`;
     }
     // Owner 07-13 (#4 superseded): ✓ acted-markers derive statelessly per frame (no team-turn clear needed); the activation-state clears below stay on turnKey (frozen block rail).
-    if (turnKey !== lastTurnKey) {
-      lastTurnKey = turnKey;
+    if (turnKey !== priorBoardTurnKey) {
       // o66r #9 (activation-state root): NULL srvActingId + activePlayerId at each team-turn boundary — a stale carry-over caused phantom declares, #4/#6/#10/#13. Nulled here to WIN over the recompute above.
       srvActingId = null;
       state.activePlayerId = null;
@@ -6255,30 +6612,6 @@ function applyFrame(frame: QueuedFrame) {
       pendingFollowup = null;
       if (state.followupChoice) state.followupChoice = null;
       if (state.pushArrows) state.pushArrows = null;
-    }
-    // Owner 07-13 (supersedes the 07-06 hasMoved tracking): "acted" derives from the SERVER's ACTIVE bit — PLAYING-team + on-pitch + STANDING + bit-clear = acted ✓. Own-team gated (the bit sets for both teams at a flip); STANDING-only excludes the #10 recovering player + the transient MOVING frame; the currently-active player is excluded. Stateless per-frame.
-    if (over) {
-      state.actedPlayers = [];
-    } else {
-      const STANDING_BASE = 0x01; const PRONE_BASE = 0x03; const ACTIVE_BIT = 0x100;
-      const homeIds = new Set(((game.value.teamHome as { playerArray?: { playerId?: string }[] }).playerArray ?? []).map((p) => p.playerId));
-      const playing = state.playingIsHome; // settled across the betweenTurns transit (no per-frame rocking)
-      const acted: string[] = [];
-      for (const d of (game.value.fieldModel?.playerDataArray ?? [])) {
-        const id = d.playerId;
-        if (typeof id !== 'string' || id === state.activePlayerId) continue;
-        const st = (d.playerState ?? 0) as number;
-        if ((st & ACTIVE_BIT) !== 0) continue; // must be done (inactive)
-        // #17: a WRESTLE user acts then falls PRONE (no turnover) — acted = STANDING OR (PRONE and not #10-recovering); MOVING/stunned/KO fall through.
-        const base = st & 0xff;
-        const actedShape = base === STANDING_BASE || (base === PRONE_BASE && !state.recoveringPlayers.includes(id));
-        if (!actedShape) continue;
-        if (homeIds.has(id) !== playing) continue; // only the team currently playing
-        const c = d.playerCoordinate as [number, number] | undefined;
-        if (!c || c[0] < 0 || c[0] > 25 || c[1] < 0 || c[1] > 14) continue; // on-pitch only
-        acted.push(id);
-      }
-      state.actedPlayers = acted;
     }
     // Owner 07-06: BLITZ DECLARATION crosshair — fires at DECLARE (before the walk), once per (attacker:target), holds a beat.
     {
@@ -6604,24 +6937,13 @@ function applyFrame(frame: QueuedFrame) {
   // Owner 2026-07-06 / 2026-07-08: a RE-ROLL was spent — surface it for ANY source (Team Re-Roll / Pro / Brawler / Leader / skill rerolls…), not just TRR. A blockReRoll splashes immediately (the block cine paces that family); a plain reRoll is handed to the action-dice pass below, which STAGES it behind the failed die so the fail → reroll → new result sequence is readable.
   let pendingActionReroll: { pid: string; source: string; isTeam: boolean; raw: string; lonerFailed: boolean } | null = null;
   {
-    const isTeamRR = (v: unknown) => /teamreroll/.test(String(v ?? '').toLowerCase().replace(/[^a-z]/g, ''));
     const rr = reports.find(
       (r) => (String(r.reportId) === 'reRoll' || String(r.reportId) === 'blockReRoll') && (r as { reRollSource?: unknown }).reRollSource != null,
     );
     const rrPid = rr && String((rr as { playerId?: unknown }).playerId ?? '');
     if (rr && rrPid) {
-      const rawSource = String((rr as { reRollSource?: unknown }).reRollSource ?? '');
-      const isTeam = isTeamRR(rawSource);
-      const isPro = /^Pro\b/i.test(prettySkillName(rawSource));
-      // #214 (owner-fg 07-29, #208 class): the non-team branch leaked the RAW `com.fumbbl…` identifier into the reroll toast ("uses com.fumbbl.dauntless"). Prettify the DISPLAY source only; `raw: rawSource` below stays untouched (the option-match at :2650 keys on it, and reRollSource on the wire is raw).
-      const source = isTeam ? 'a team reroll' : prettySkillName(rawSource); // owner 09-06: "uses a team reroll!"
-      // Akhorne's Blind Rage auto-consumes its Dauntless reroll without a skillUse
-      // dialog/report. Mirror the normal report-driven skill toast from ReportReRoll;
-      // this is presentation-only and does not alter the reroll or action model.
-      const automaticSkill = reportedAutomaticRerollSkill(rr);
-      const proSucceeded = isPro && (rr as { successful?: unknown }).successful === true;
-      const proFailed = isPro && (rr as { successful?: unknown }).successful === false;
-      const rerollSkill = proSucceeded ? 'Pro' : isPro ? null : automaticSkill;
+      const rerollCue = rerollPresentation(reports)!;
+      const { raw: rawSource, isTeam, source, proSucceeded, proFailed, skill: rerollSkill } = rerollCue;
       if (rerollSkill) {
         const coordinate = game.value.fieldModel.playerDataArray.find((data) => data.playerId === rrPid)?.playerCoordinate
           ?? preCoords.get(rrPid) ?? null;
@@ -6636,21 +6958,14 @@ function applyFrame(frame: QueuedFrame) {
       }
       if (proFailed) showProFailedSplash(rrPid);
       // A BLOCK reroll = `blockReRoll`, OR (team reroll of a block) a generic `reRoll` that co-occurs with a `blockRoll` this frame (wire-confirmed g1920221 cmd 2456). An action reroll (dodge/GFI) is a `reRoll` with NO blockRoll → the action-dice path stages it.
-      const isBlockReroll = String(rr.reportId) === 'blockReRoll'
-        || reports.some((r) => String(r.reportId) === 'blockRoll');
-      // Owner 08-19: FAILED LONER gate — server-stated only: ReportReRoll's gating roll (roll>0,
-      // Loner/Pro grant rolls; plain rerolls carry roll 0) came up short (successful=false) on a
-      // team re-roll → the re-roll is LOST. The loner pill queues AFTER the reroll splash.
-      const lonerRoll = Number((rr as { roll?: unknown }).roll);
-      const lonerFailed = isTeam && (rr as { successful?: unknown }).successful === false
-        && Number.isInteger(lonerRoll) && lonerRoll > 0;
+      const { isBlockReroll, lonerFailed } = rerollCue;
       if (isBlockReroll) {
         // Owner 2026-07-08: a BLOCK reroll has NO dialog surface for a spectator (unlike an action reroll, which shows the reroll menu + gold glow), so it read as a silent re-roll. Always surface the reroll toast for block rerolls and hold a beat so it reads BEFORE the re-rolled block dice tumble in. (holdPlayback no-ops in play mode.)
         // Failed Pro is a gate result: the server did not grant a reroll. Its dedicated
         // coach-facing failure card must not be replaced by the generic "uses Pro" card.
         if (proFailed) holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS));
         else {
-          showRerollSplash(rrPid, source, isTeam);
+          showRerollSplash(rrPid, source, isTeam, rawSource);
           holdPlayback(presentationMs(REROLL_BEAT_MS));
         }
         if (lonerFailed) {
@@ -6674,19 +6989,7 @@ function applyFrame(frame: QueuedFrame) {
     for (const report of reports) {
       const pid = report.playerId;
       const reportId = String(report.reportId);
-      // U9d: Punt's NoDiceReport shapes bypass the generic action-roll reader: distance has `roll` but no playerId;
-      // direction has playerId but names the die `directionRoll`. Capture the current neutral roll for the prompt
-      // and explicitly retire any prior action threshold for that player. No accuracy/pass-fail result is invented.
-      if (reportId === 'puntDistanceRoll' || reportId === 'puntDirectionRoll') {
-        const puntPlayerId = typeof pid === 'string'
-          ? pid
-          : String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-        const puntRoll = Number(reportId === 'puntDirectionRoll' ? report.directionRoll : report.roll);
-        if (puntPlayerId && Number.isInteger(puntRoll) && puntRoll >= 1 && puntRoll <= 6) {
-          lastActionRoll.set(puntPlayerId, puntRoll);
-          lastActionNeeded.delete(puntPlayerId);
-        }
-      }
+      visibleActionRollProjection = reduceActionRollProjection(visibleActionRollProjection, [report], game.value);
       // R-A1/R-A5: the server reported a skillUse answer consumed (yes OR no) — mark the instance answered so the still-live dialog's card stops re-arming. Unconditional on reportId (a declined non-standFirm skill would fail the isSkillUse/isSkillDecline gate below and `continue` past it, so record BEFORE that).
       if (String(report.reportId) === 'skillUse' && skillDialogMatches(dialogAtFrameStart, pid, report.skill)) {
         answeredSkillDialog = dialogAtFrameStart;
@@ -6703,128 +7006,14 @@ function applyFrame(frame: QueuedFrame) {
       const raw = (data?.playerCoordinate as [number, number] | undefined)
         ?? (typeof pid === 'string' ? preCoords.get(pid) : null) ?? undefined;
       if (isActionRoll) {
-        const p = pid as string;
-        lastActionRoll.set(p, roll as number); // for the reroll cinematic's on-pitch die
-        const rpt = report as { reportId?: unknown; reRolled?: unknown; successful?: unknown; minimumRoll?: unknown; modifier?: unknown; rollModifiers?: unknown };
-        if (reportId === 'passRoll' || reportId === 'throwTeamMateRoll') {
-          const passTruth = serverPassRollTruth(report);
-          if (passTruth) {
-            lastServerPassRoll.set(p, passTruth);
-            const dialog = game.value.dialogParameter as Record<string, unknown> | null | undefined;
-            if (reportId === 'passRoll' && dialog?.dialogId === 'skillUse'
-                && String(dialog.playerId ?? '') === p && normSkill(dialog.skill) === 'pass') {
-              try {
-                const instanceKey = dialogInstanceKey(game.value);
-                passSkillUseTruth = instanceKey ? { instanceKey, playerId: p, truth: passTruth } : null;
-              } catch {
-                passSkillUseTruth = null;
-              }
-            }
-          }
-        } else {
-          lastServerPassRoll.delete(p);
-        }
-        // A re-rolled result wins over the base action for the on-die cause tag.
-        const reRolled = rpt.reRolled === true;
-        const modifierCause = reportId === 'dodgeRoll'
-          ? dieCauseFromRollModifiers(rpt.rollModifiers)
-          : reportId === 'standUpRoll' && typeof rpt.modifier === 'number' && rpt.modifier > 0
-            ? 'timmber'
-            : undefined;
-        // Owner 09-09: a confusion roll's die tag wears ITS negatrait's icon (`trait:<skill>` — Really Stupid, Bone
-        // Head, Animal Savagery, Wild Animal, Take Root, Unchannelled Fury) instead of one shared icon.
-        const confusionSkill = reportId === 'confusionRoll' ? String((report as { confusionSkill?: unknown }).confusionSkill ?? '').trim() : '';
-        const cause = reRolled ? 'reroll' : modifierCause ?? (confusionSkill ? `trait:${confusionSkill}` : DIE_CAUSE_BY_REPORT[reportId]);
-        // Owner 2026-07-08 (rev 3): the FAILED stencil now shows in PLAY MODE too — the acting coach sees their own fail stamped before the reroll menu opens (was spectator/opponent-only, case 282).
-        const failed = rpt.successful === false;
-        // Owner 2026-07-08: the roll NEEDED rides into the stencil — "FAILED (3+)".
-        const neededRaw = Number(rpt.minimumRoll);
-        const needed = Number.isFinite(neededRaw) && neededRaw >= 2 && neededRaw <= 6 ? neededRaw : undefined;
-        if (needed) lastActionNeeded.set(p, needed);
-        else if (!reRolled) lastActionNeeded.delete(p); // stale target from a previous action
-        // Owner o66 #7: PASS / CATCH rolls surface as an over-head MODAL (below), not the generic feet-die — so the coach reads "this player's pass/catch" at a glance. lastActionRoll/lastActionNeeded are already captured above, so the reroll cinematic + turnover arming are unaffected by skipping the feet-die push.
-        if (reportId === 'confusionRoll') {
-          // Add a named negatrait outcome cue from the received confusionRoll report.
-          const trait = String((report as { confusionSkill?: unknown }).confusionSkill ?? '');
-          // Owner 08-17 / Animal Savagery: on a FAIL, the server may resolve the lash-out target in the
-          // SAME message (0 or 1 adjacent target) via a sibling `animalSavagery` report carrying
-          // {attackerId, defenderId?}. A 2+-target choice interrupts with a dialog, so that report lands
-          // in a LATER message with no confusionRoll alongside it — hasTarget stays undefined there
-          // (never guessed from adjacency client-side).
-          let hasTarget: boolean | undefined;
-          if (failed && trait === 'Animal Savagery') {
-            const sibling = reports.find((r) => String(r.reportId) === 'animalSavagery'
-              && String((r as { attackerId?: unknown }).attackerId ?? '') === p);
-            if (sibling) hasTarget = typeof (sibling as { defenderId?: unknown }).defenderId === 'string';
-          }
-          state.negatraitCue = { playerId: p, trait, successful: !failed, roll: roll as number, needed, hasTarget, seq: (state.negatraitCue?.seq ?? 0) + 1 };
-        }
-        // Owner 08-17 (Blood Lust follow-up): the pill fires off the report application itself — a
-        // FAILED ReportBloodLustRoll — not off any bloodlust-card stage or reroll-availability check,
-        // so a coach with no reroll on offer (and the opponent/spectator seats, which never see the
-        // card at all) still gets it. This sits alongside the existing unified bloodlust card
-        // (state.bloodlust, reroll/decision/bite stages below) without touching those stages.
-        if (reportId === 'bloodLustRoll' && failed) {
-          state.negatraitCue = { playerId: p, trait: 'Blood Lust', successful: false, roll: roll as number, needed, seq: (state.negatraitCue?.seq ?? 0) + 1 };
-        }
-        if (reportId === 'passRoll' || reportId === 'catchRoll') {
-          if (raw && onPitch(raw)) {
-            state.rollModal = {
-              playerId: p, square: [raw[0], raw[1]], kind: reportId === 'passRoll' ? 'pass' : 'catch',
-              roll: roll as number, needed, ok: !failed, reRolled, seq: (state.rollModal?.seq ?? 0) + 1,
-            };
-          }
-          continue;
-        }
-        if (raw && onPitch(raw)) {
-          // Owner 2026-07-08: EVERY reroll captions the re-rolled die. A SKILL reroll (Dodge, Sure Hands, Pro, Brawler…) → "<skill icon/glyph> reroll" in soft gold; a TEAM reroll → "<TRR icon> used!". The renderer picks the icon/word from rerollTeam.
-          const rerollSkill = reRolled && pendingActionReroll ? pendingActionReroll.raw : undefined;
-          const rerollTeam = reRolled && pendingActionReroll ? pendingActionReroll.isTeam : undefined;
-          const liveDialog = game.value.dialogParameter as Record<string, unknown> | null | undefined;
-          const liveDialogId = normalizedWireName(liveDialog?.dialogId);
-          const passiveViewer = !play.active || !myPlayIds(game.value).has(p);
-          // The server-owned reroll dialog is the sole authority for this passive cue. Do not infer
-          // availability from local team resources: the label appears only while the opponent's exact
-          // failed-roll offer is live and contains at least one server-offered response.
-          const opponentRerollPending = failed && passiveViewer
-            && liveDialogId.includes('reroll') && String(liveDialog?.playerId ?? '') === p
-            && offeredReRollOptions(liveDialog ?? {}, playerById(game.value, p)?.skillDisplayValuesMap).length > 0;
-          const presentedRoll: (typeof firstRolls)[number] = {
-            square: [raw[0], raw[1]], value: roll as number, cause, failed, needed, rerollSkill, rerollTeam,
-          };
-          if (opponentRerollPending) presentedRoll.opponentRerollPending = true;
-          (reRolled ? reRolledRolls : firstRolls).push(presentedRoll);
-        }
+        const cue = actionRollPresentation(report, reports, game.value, raw, !play.active || !myPlayIds(game.value).has(String(pid)), pendingActionReroll);
+        if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
+        if (cue?.modal) state.rollModal = { ...cue.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
+        if (cue?.die) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
       }
-      if (isSkillUse) {
-        const skill = (report as { skill?: unknown }).skill;
-        if (typeof pid === 'string' && typeof skill === 'string' && raw && onPitch(raw)) {
-          // Owner 2026-07-06 (#1/#5): if the skill user is the CURRENT block's DEFENDER, pin the icon+toast to the BLOCK square (a Sidestep / Stand Firm / Fend / Grab reaction otherwise chases the live token, which has been pushed / side-stepped "off to the side"). Fall back to the live square for everything else.
-          const isBlockDefender = pid === lastBlockDefenderId && !!lastBlockDefenderSquare;
-          const square: [number, number] = isBlockDefender ? [lastBlockDefenderSquare![0], lastBlockDefenderSquare![1]] : [raw[0], raw[1]];
-          // Owner 09-05: a CANCELLING use (upstream SkillUse.CANCEL_* — Juggernaut cancelling Wrestle / Fend /
-          // Stand Firm, Tackle cancelling Dodge…) is automatic, not the 'Yes' the coach gave a reactive card, so it
-          // reads "<skill> cancels <cancelled skill>!" instead of "<name> used <skill>". The chosen use (e.g.
-          // SkillUse.PUSH_BACK_OPPONENT after the Juggernaut card) keeps the default wording.
-          const skillUse = String((report as { skillUse?: unknown }).skillUse ?? '');
-          const cancelled = /^cancel([A-Z].*)$/.exec(skillUse)?.[1];
-          const toast = cancelled ? `${skill} cancels ${cancelled.replace(/([a-z])([A-Z])/g, '$1 $2')}!` : undefined;
-          state.skillUsed = {
-            playerId: pid, skill, square, anchored: isBlockDefender, toast,
-            name: playerName(game.value, pid), seq: (state.skillUsed?.seq ?? 0) + 1,
-          };
-        }
-      }
-      if (isSkillDecline) {
-        const skill = (report as { skill?: unknown }).skill;
-        if (typeof pid === 'string' && typeof skill === 'string' && raw && onPitch(raw)) {
-          const isBlockDefender = pid === lastBlockDefenderId && !!lastBlockDefenderSquare;
-          const square: [number, number] = isBlockDefender ? [lastBlockDefenderSquare![0], lastBlockDefenderSquare![1]] : [raw[0], raw[1]];
-          state.skillUsed = {
-            playerId: pid, skill, square, anchored: isBlockDefender, declined: true,
-            name: playerName(game.value, pid), seq: (state.skillUsed?.seq ?? 0) + 1,
-          };
-        }
+      if (isSkillUse || isSkillDecline) {
+        const cue = skillUsePresentation(report, raw, visibleBlockContext, playerName(game.value, String(pid)));
+        if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
       }
     }
     const fireballSpellEffect = reports.some((report) => String(report.reportId) === 'spellEffectRoll'
@@ -6843,24 +7032,24 @@ function applyFrame(frame: QueuedFrame) {
       const rr = pendingActionReroll;
       const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
       // TRR use splashes (owner 08-19); skill rerolls ride the glow with a short breath, not a splash beat.
-      const resultBeat = presentationMs(rerollSplashWanted(rr.isTeam) ? REROLL_BEAT_MS : 300);
+      const resultBeat = presentationMs(rerollSplashWanted(rr.isTeam, rr.raw) ? REROLL_BEAT_MS : 300);
       holdPlayback(failBeat + resultBeat);
-      if (rerollSplashWanted(rr.isTeam)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam), failBeat));
+      if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw), failBeat));
       rerollStageTimers.push(scheduleGameTimeout(() => pushDice(reRolledRolls), failBeat + resultBeat));
       // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
       // reroll splash clears (splash deprecated → after the fail beat + breath) and holds its own read beat.
       if (rr.lonerFailed) {
-        const lonerAt = failBeat + (rerollSplashWanted(rr.isTeam) ? presentationMs(REROLL_SPLASH_HOLD_MS) : resultBeat);
+        const lonerAt = failBeat + (rerollSplashWanted(rr.isTeam, rr.raw) ? presentationMs(REROLL_SPLASH_HOLD_MS) : resultBeat);
         rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rr.pid), lonerAt));
         holdPlayback(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS));
       }
     } else {
-      if (pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam)) showRerollSplash(pendingActionReroll.pid, pendingActionReroll.source, pendingActionReroll.isTeam);
+      if (pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw)) showRerollSplash(pendingActionReroll.pid, pendingActionReroll.source, pendingActionReroll.isTeam, pendingActionReroll.raw);
       // Owner 08-19: FAILED LONER with no same-frame dice (the fail landed in an earlier frame):
       // splash shown → pill after the splash clears; no splash → pill immediately.
       if (pendingActionReroll?.lonerFailed) {
         const lonerPid = pendingActionReroll.pid;
-        const splashed = rerollSplashWanted(pendingActionReroll.isTeam);
+        const splashed = rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw);
         if (splashed) rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid), presentationMs(REROLL_SPLASH_HOLD_MS)));
         else showLonerFailedSplash(lonerPid);
         holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS) * (splashed ? 2 : 1));
@@ -6922,10 +7111,10 @@ function applyFrame(frame: QueuedFrame) {
     } catch (error) {
       state.kickScatterPreview = null;
       kickoffPresentationOccurrence = null;
-      log('system', `invalid kickoffScatter preview: ${String(error)}`);
+      logMatch('system', `invalid kickoffScatter preview: ${String(error)}`);
     }
     // Owner 2026-07-06: a kickoff starts a new DRIVE — the RECEIVING (offensive) team is the one whose half the ball lands in (home half = x 0..12). Fixes the spectator drive-north orientation for the whole drive until the next kickoff.
-    driveOffenseIsHome = endpoint[0] <= 12;
+    visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, reports, game.value);
   }
   // Preliminary scatter never arms a gate; result cues keep their received position ahead of final KICK.
   flushPendingKickoffSplash();
@@ -6979,12 +7168,7 @@ function applyFrame(frame: QueuedFrame) {
             minimumRoll,
             mine: false,
             seq: (state.skillChoice?.seq ?? 0) + 1,
-            ...passSkillUseCardData(skillUseGame, suPid, rawSkill),
-            ...hmpScatterSkillUseCardData(skillUseGame, suPid, rawSkill, reports),
-            injuryResult: normSkill(rawSkill) === 'savagemauling'
-              ? savageMaulingInjuryResult(reports, suPid)
-              : undefined,
-            armorDice: oldProArmorDice(reports, suPid, rawSkill),
+            ...skillDecisionCardData(skillUseGame, suPid, rawSkill, reports),
           };
         };
         // The authoritative passCoordinate marker was synchronized before this block. The renderer watcher
@@ -6992,7 +7176,6 @@ function applyFrame(frame: QueuedFrame) {
         armCard();
       }
     } else if (!isSu) {
-      passSkillUseTruth = null;
       autoFiredSkillDialog = null; // dialog gone → re-arm the auto-fire latch for the next prompt
       answeredSkillDialog = null;
       if (state.skillChoice && !state.skillChoice.mine) state.skillChoice = null; // spectator drop
@@ -7210,27 +7393,16 @@ function applyFrame(frame: QueuedFrame) {
       const pid = String(dp.playerId);
       const instanceKey = dialogInstanceKey(game.value);
       if (answeredApothecaryChoiceKey !== instanceKey && state.apothecaryD16?.playerId !== pid) {
-        const oldBase = playerStateBase(dp.playerStateOld) ?? 0;
-        const newBase = playerStateBase(dp.playerStateNew) ?? 0;
-        // #243 SR-218 MK-1: prefer the finer D16 tier from the captured casualtyRoll[0] — but ONLY when the roll's IMPLIED base equals the wire base. Casualty modifiers can make raw roll[0] land a different tier than the server applied; on disagreement the server's applied base WINS (fall back to INJURY_LABELS). Within base 0x07 the finer label is still used (mapSIRoll is NOT modelled; only the base-level guard is in scope).
-        const oldRollVal = apoOldCasualtyD16.get(pid) ?? null;
-        const newRollVal = apoNewCasualtyD16.get(pid) ?? null;
-        const oldOk = oldRollVal != null && casualtyRollBase(oldRollVal) === oldBase;
-        const newOk = newRollVal != null && casualtyRollBase(newRollVal) === newBase;
-        const oldInjury = oldOk ? casualtyRollLabel(oldRollVal) : (INJURY_LABELS[oldBase] ?? 'INJURY');
-        const newInjury = newOk ? casualtyRollLabel(newRollVal) : (INJURY_LABELS[newBase] ?? 'INJURY');
+        const resultCard = buildApothecaryResult(game.value, dp, visibleCasualtyRollProjection);
         state.apothecaryD16 = {
-          playerId: pid, player: playerName(game.value, pid), side: teamSide(pid), square: squareOf(pid),
-          oldInjury, newInjury,
-          // #243 ③ / MK-1b: raw D16 for the modal numbers, NULLed on base-mismatch fallback so a base-derived label is never rendered beside a disagreeing raw roll (label + number = one render unit).
-          oldRoll: oldOk ? oldRollVal : null, newRoll: newOk ? newRollVal : null,
+          ...resultCard,
           mine: play.active && myPlayIds(game.value).has(pid),
           seq: (state.apothecaryD16?.seq ?? 0) + 1,
         };
         // #243 item ②: the casualty on its own line (OLD = pre-apothecary), then the apothecary-treatment line — separate log lines per the owner's format.
         const nm = playerName(game.value, pid);
-        log('system', `${nm} suffers a casualty! (${oldInjury})`);
-        log('system', `${nm} is treated with an Apothecary`);
+        logMatch('system', `${nm} suffers a casualty! (${resultCard.oldInjury})`);
+        logMatch('system', `${nm} is treated with an Apothecary`);
       }
     } else if (dlg !== 'apothecaryChoice') {
       answeredApothecaryChoiceKey = null;
@@ -7279,7 +7451,7 @@ function applyFrame(frame: QueuedFrame) {
         const attacker = String((report as { attackerId?: unknown }).attackerId ?? '');
         const sameTeamBlock = !!attacker && playingRoster.some((p) => p.playerId === attacker);
         if (fallen && !nonKnockdown && !sameTeamBlock && playingRoster.some((p) => p.playerId === fallen)) {
-          if (!turnoverArmed) log('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, fallen)})`); // #11 diag
+          if (!turnoverArmed) logMatch('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, fallen)})`); // #11 diag
           turnoverArmed = true;
           turnoverArmedAfterInjury = true;
         }
@@ -7743,10 +7915,10 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // Outside Order 66, pace regular play frames but keep pregame/setup lockstep and queue continuity.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil) {
-    applyFrame({ cmd, receivedAt: Date.now(), replayEndOfInput, ...onTheBall });
+    applyFrame({ cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall });
     return;
   }
-  playback.queue.push({ cmd, receivedAt: Date.now(), replayEndOfInput, ...onTheBall });
+  playback.queue.push({ cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall });
   pumpPlayback();
 }
 
@@ -7757,7 +7929,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
 function forceSnapshotTick() {
   const g = game.value as (GameJson & { turnMode?: unknown; homePlaying?: unknown; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } }) | null;
   if (!g) return;
-  lastTurnKey = `${g.turnMode}:${g.homePlaying}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`;
+  visibleBoardProjection.turnKey = boardTurnKey(g);
   const cmd: Record<string, unknown> = {
     netCommandId: 'serverModelSync', commandNr: Number((g as { commandNr?: unknown }).commandNr ?? 0),
     modelChangeList: { modelChangeArray: [] }, reportList: { reports: [] }, animation: null, sound: null,
@@ -7792,15 +7964,19 @@ function resetPlayback() {
   apothecaryElectionController.clear(); answeredApothecaryChoiceKey = null;
   clearAnsweredDialogInstance();
   primalSavageryIntent = null;
-  passSkillUseTruth = null;
+  visibleSkillDecisionProjection = createSkillDecisionProjection();
+  visibleSkillDialog = null;
   selectWeatherHandledInstanceKey = null; // fresh game — identical Weather Mage payloads are new dialog instances
   selectSkillHandledInstanceKey = null; state.selectSkill = null; // fresh game — no stale Intensive Training latch/card
   weatherMageRoll = null;
   pregameHandled.clear(); // g330: fresh game (incl. a REMATCH on the same connection) — else stale pchoice keys (pickMeUp) auto-decline all game
-  lastTurnKey = ''; sawActiveBit = false; settledPlayingIsHome = null; state.actedPlayers = []; // fresh game (acted set is now bit-derived per-frame)
-  recoveringIds.clear(); state.recoveringPlayers = []; // fresh game — drop any #10 recovering latch
-  driveOffenseIsHome = null; state.fieldFlip = { flip: false, seq: state.fieldFlip.seq + 1 }; // owner 2026-07-06: re-derive drive-north on a new game
+  visibleBoardProjection = createBoardProjection(); state.actedPlayers = []; // fresh game (acted set is now bit-derived per-frame)
+  state.recoveringPlayers = []; // fresh game — drop any #10 recovering latch
+  visibleReportLogContext = createReportLogContext();
+  visibleActionRollProjection = createActionRollProjection();
+  visibleDriveProjection = null; state.fieldFlip = { flip: false, seq: state.fieldFlip.seq + 1 }; // owner 2026-07-06: re-derive drive-north on a new game
   turnToastKey = ''; state.turnToast = null; if (turnToastTimer) { cancelGameTimeout(turnToastTimer); turnToastTimer = null; } // owner 2026-07-06: fresh game — reset turn toast
+  state.opponentLeft = null; // Connection notice resets only at a fresh game or explicit disconnect.
   defenderNoticeKey = ''; state.defenderNotice = null; // owner 2026-07-07: fresh game — reset the defender-action notice
   state.infoNotice = null; // owner 2026-07-08: fresh game — reset the informationOkay notice
   state.bloodlust = null; // owner 2026-07-08: fresh game — clear the vampire bloodlust card
@@ -7847,7 +8023,7 @@ function resetPlayback() {
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
   prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
-  apoOldCasualtyD16.clear(); apoNewCasualtyD16.clear(); apoOriginalCasualtyOutcome.clear();
+  visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
   resetEndGameSettle(); // owner 2026-07-08 (queue 1): fresh game — endGame pacing re-arms
@@ -7903,9 +8079,8 @@ function clearCinematics(hardGameBoundary = false) {
   state.defectors = null; // #140: flush the defector list on a game change
   state.endGameStats = null; // #169: flush the end-of-match results on a game change
   state.ballDirection = null; // #141: flush the punt/swoop direction on a game change
-  state.opponentLeft = null; // #136: flush the opponent-left notice on a game change
 
-  gazeVictimIds.clear(); state.gazeVictims = []; // owner 2026-07-08: fresh game — clear gaze-victim markers
+  state.gazeVictims = []; // owner 2026-07-08: fresh game — clear gaze-victim markers
   state.fanFactorCine = null; state.inducementReveal = null; state.apothecaryChoice = null;
   pendingApothecaryResult = null;
   clearApothecaryResult();
@@ -7914,7 +8089,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.injurySplash = null; state.injuryPuff = null;
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
-  state.blitzTokens = null; blitzActor = null; blitzActorTarget = ''; // #94: fresh game — drop blitz-token capture
+  state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
   state.turnStart = null; clearRerollSplash();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
@@ -7933,7 +8108,7 @@ function clearCinematics(hardGameBoundary = false) {
   demoCineTimers = [];
   clearAutoBeats(); // #166: drop any pending opt-in auto-answer beats on a game change
   turnoverArmed = false; turnoverArmedAfterInjury = false; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; // Phase 3a: drop stale turnover/block/armour gates
-  lastBlockDefenderSquare = null; lastBlitzDeclKey = ''; // #1/#5 + blitz-decl
+  visibleBlockContext.defenderSquare = null; lastBlitzDeclKey = ''; // #1/#5 + blitz-decl
   injuryQueue.length = 0;
   injuryPlaying = false;
   blockPipeline.reset(); // Phase 1: drop any in-flight run so it can't gate the next game
@@ -7942,24 +8117,22 @@ function clearCinematics(hardGameBoundary = false) {
 }
 
 /** Retire every presentation producer after a collapsed replay frame without erasing durable report/model state. */
-function clearCollapsedReplayPresentation(): void {
+function clearCollapsedReplayPresentation(preserveConnection = false): void {
   const durable = {
     dodgySnackPlayers: state.dodgySnackPlayers,
     defectors: state.defectors,
     endGameStats: state.endGameStats,
     gazeVictims: state.gazeVictims,
-    gazeVictimIds: [...gazeVictimIds],
     ttmHeld: state.ttmHeld,
     fumblerooskie: state.fumblerooskie,
     // Persistent per-turn occurrence, not a transient cinematic. Replay collapse/seek must retain the
     // authoritative declarer/target latch so catch-up projects the same marker as uninterrupted playback.
     blitzTokens: state.blitzTokens ? { ...state.blitzTokens } : null,
-    blitzActor: blitzActor ? { ...blitzActor } : null,
-    blitzActorTarget,
+    visibleBlitzProjection: visibleBlitzProjection ? { ...visibleBlitzProjection } : null,
   };
 
   // Some presentation callbacks intentionally keep no individual handle. Cancel the session registry first.
-  clearAllGameTimeouts();
+  clearAllGameTimeouts(preserveConnection);
   playback.timer = null;
   playback.holdUntil = 0;
   turnStartTimer = null;
@@ -7985,14 +8158,37 @@ function clearCollapsedReplayPresentation(): void {
   state.defectors = durable.defectors;
   state.endGameStats = durable.endGameStats;
   state.gazeVictims = durable.gazeVictims;
-  gazeVictimIds.clear();
-  for (const playerId of durable.gazeVictimIds) gazeVictimIds.add(playerId);
   state.ttmHeld = durable.ttmHeld;
   state.fumblerooskie = durable.fumblerooskie;
   state.blitzTokens = durable.blitzTokens;
-  blitzActor = durable.blitzActor;
-  blitzActorTarget = durable.blitzActorTarget;
+  visibleBlitzProjection = durable.visibleBlitzProjection;
   if (state.endGame.finalPresentationReady) state.endGameSettled = true;
+}
+
+/** Cancels only presentation ownership; socket state and connection timers survive. */
+let spectatorRendererCancellation: { cancel: () => void } | null = null;
+function registerSpectatorRendererCancellation(cancel: () => void): () => void {
+  const owner = { cancel };
+  spectatorRendererCancellation = owner;
+  return () => { if (spectatorRendererCancellation === owner) spectatorRendererCancellation = null; };
+}
+function cancelSpectatorPresentation(): void {
+  if (play.active) throw new Error('Spectator presentation cancellation requires a spectator connection');
+  playback.queue.length = 0;
+  resetPresentation();
+  clearCollapsedReplayPresentation(true);
+  stopPresentationSounds();
+  spectatorRendererCancellation?.cancel();
+  clearSpectatorTransientState();
+}
+/** Internal seam for verifying timer ownership before Pause activation. */
+export function installSpectatorCancellationTestHarness() {
+  return {
+    schedulePresentation: (callback: () => void, delay: number) => scheduleGameTimeout(callback, delay),
+    scheduleConnection: (callback: () => void, delay: number) => scheduleConnectionTimeout(callback, delay),
+    cancel: () => cancelSpectatorPresentation(),
+    dispose: () => clearAllGameTimeouts(),
+  };
 }
 
 /**
@@ -8021,8 +8217,7 @@ function clearLeaveGameResidualState(): void {
 
   clearPendingRailCommands();
   autoFiredSkillDialog = null;
-  lastBlockAttackerId = null;
-  lastBlockDefenderId = null;
+  visibleBlockContext = createBlockContext();
   apothecaryElectionController.clear();
   apoChoiceRaw = null;
   lastAppliedCommandNr = 0;
@@ -8033,7 +8228,7 @@ function clearLeaveGameResidualState(): void {
   state.demoMode = false;
   state.joinError = null;
   state.wireLogFile = '';
-  state.log.splice(0);
+  state.log = [];
   state.injurySplash = null;
   state.actionDice = null;
   state.rollModal = null;
@@ -8887,12 +9082,12 @@ function plannerStart(input: {
     // walk-to-contact→block re-entry (SpectateView re-arms this plan after a flush) — one tick reads a
     // non-blitz action ⇒ the live test falsely reds a legal declared-blitz execution ("blitz already used",
     // none used; wire verified g835: server actingPlayer stayed {blitzer,blitzMove} throughout). Anchor the
-    // exemption ALSO on the STICKY per-turn blitz declarer (#94 blitzActor): captured from the observed blitz
+    // exemption ALSO on the STICKY per-turn blitz declarer (#94 visibleBlitzProjection): captured from the observed blitz
     // action, sticky through the turn, immune to the volatile live read. Still refuses a genuine second blitz —
-    // a DIFFERENT player isn't the recorded declarer (blitzActor.id !== playerId), the turn-key guard prevents
+    // a DIFFERENT player isn't the recorded declarer (visibleBlitzProjection.id !== playerId), the turn-key guard prevents
     // any leak into a later turn, and the server stays the ultimate authority.
     const liveOwnBlitz = plannerActingId() === playerId && /blitz/i.test(plannerActingAction());
-    const stickyOwnBlitz = !!blitzActor && blitzActor.turnKey === currentTurnKey(game.value) && blitzActor.id === playerId;
+    const stickyOwnBlitz = !!visibleBlitzProjection && visibleBlitzProjection.turnKey === currentTurnKey(game.value) && visibleBlitzProjection.id === playerId;
     const declaredOwnBlitz = liveOwnBlitz || stickyOwnBlitz;
     if (turnData?.blitzUsed && !declaredOwnBlitz) {
       log('system', '⚠ Blitz cancelled — this team has already used its Blitz this turn.');
@@ -9645,9 +9840,8 @@ export function installApothecaryTestHarness(
   const priorAutoReturn = state.apothecaryAutoReturn;
   const priorSurfaces = [...apothecaryElectionSurfaces];
   const priorHandled = [...followupHandled];
-  const priorOldCasualtyD16 = [...apoOldCasualtyD16];
-  const priorNewCasualtyD16 = [...apoNewCasualtyD16];
-  const priorOriginalOutcomes = [...apoOriginalCasualtyOutcome];
+  const priorCasualtyRollProjection = visibleCasualtyRollProjection;
+  const priorOriginalOutcomes = visibleInjuryOutcomeProjection;
   const priorAutoReturnSeen = [...apothecaryAutoReturnSeen];
   const priorAutoReturnSeq = apothecaryAutoReturnSeq;
   const priorPendingResult = pendingApothecaryResult;
@@ -9660,9 +9854,8 @@ export function installApothecaryTestHarness(
   state.apothecaryChoice = null;
   clearApothecaryResult();
   pendingApothecaryResult = null;
-  apoOldCasualtyD16.clear();
-  apoNewCasualtyD16.clear();
-  apoOriginalCasualtyOutcome.clear();
+  visibleCasualtyRollProjection = createCasualtyRollProjection();
+  visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear();
   playback.catchingUp = false;
   game.value = fixture;
@@ -9743,12 +9936,8 @@ export function installApothecaryTestHarness(
       settings.uiMode = priorUiMode;
       state.apothecaryChoice = priorChoice;
       state.apothecaryAutoReturn = priorAutoReturn;
-      apoOldCasualtyD16.clear();
-      for (const [key, value] of priorOldCasualtyD16) apoOldCasualtyD16.set(key, value);
-      apoNewCasualtyD16.clear();
-      for (const [key, value] of priorNewCasualtyD16) apoNewCasualtyD16.set(key, value);
-      apoOriginalCasualtyOutcome.clear();
-      for (const [key, value] of priorOriginalOutcomes) apoOriginalCasualtyOutcome.set(key, value);
+      visibleCasualtyRollProjection = priorCasualtyRollProjection;
+      visibleInjuryOutcomeProjection = priorOriginalOutcomes;
       apothecaryAutoReturnSeen.clear();
       for (const key of priorAutoReturnSeen) apothecaryAutoReturnSeen.add(key);
       apothecaryAutoReturnSeq = priorAutoReturnSeq;
@@ -10019,6 +10208,8 @@ export function installSkillUseClearTestHarness(
   card(): typeof state.skillChoice;
   /** Owner 08-19: the used/declined skill TOAST arm (a declined Stand Firm must ride this, never a card). */
   skillUsed(): typeof state.skillUsed;
+  /** Owner 09-14: the armour dice arm (the Stab beat delays it behind the toast). */
+  armorDice(): typeof state.armorDice;
   opponentPending(): typeof state.opponentChoicePending;
   opponentPendingPlayerId(): typeof state.opponentChoicePendingPlayerId;
   passTarget(square: [number, number]): boolean;
@@ -10040,8 +10231,10 @@ export function installSkillUseClearTestHarness(
   const priorAnswered = answeredSkillDialog;
   const priorAutoFired = autoFiredSkillDialog;
   const priorInteractive = interactiveReRolls;
-  const priorPassSkillUseTruth = passSkillUseTruth;
-  const priorHmpScatterSkillUseTruth = hmpScatterSkillUseTruth;
+  const priorSkillDecisionProjection = visibleSkillDecisionProjection;
+  const priorSkillDialog = visibleSkillDialog;
+  const priorSkillOccurrence = visibleSkillOccurrence;
+
   const priorPendingRailCommands = new Map(pendingRailCommands);
 
   answeredSkillDialog = null;
@@ -10049,7 +10242,8 @@ export function installSkillUseClearTestHarness(
   autoFiredSkillDialog = null;
   state.skillChoice = null;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null;
-  hmpScatterSkillUseTruth = null;
+  visibleSkillDecisionProjection = createSkillDecisionProjection();
+  visibleSkillDialog = null;
   game.value = fixture;
   game.value.turnMode = 'regular';
   play.active = true;
@@ -10078,6 +10272,7 @@ export function installSkillUseClearTestHarness(
     },
     card: () => state.skillChoice,
     skillUsed: () => state.skillUsed,
+    armorDice: () => state.armorDice,
     opponentPending: () => state.opponentChoicePending,
     opponentPendingPlayerId: () => state.opponentChoicePendingPlayerId,
     passTarget: (square) => gameStore.sendPassTarget(square),
@@ -10099,8 +10294,10 @@ export function installSkillUseClearTestHarness(
       answeredSkillDialog = priorAnswered;
       autoFiredSkillDialog = priorAutoFired;
       interactiveReRolls = priorInteractive;
-      passSkillUseTruth = priorPassSkillUseTruth;
-      hmpScatterSkillUseTruth = priorHmpScatterSkillUseTruth;
+      visibleSkillDecisionProjection = priorSkillDecisionProjection;
+      visibleSkillDialog = priorSkillDialog;
+      visibleSkillOccurrence = priorSkillOccurrence;
+
       clearPendingRailCommands();
       for (const [rail, pending] of priorPendingRailCommands) pendingRailCommands.set(rail, pending);
     },
@@ -10188,8 +10385,7 @@ export function installBlitzTokenReplayTestHarness(fixture: GameJson): {
 } {
   const priorGame = game.value;
   const priorTokens = state.blitzTokens;
-  const priorActor = blitzActor;
-  const priorTarget = blitzActorTarget;
+  const priorActor = visibleBlitzProjection;
   const priorReplayActive = replay.active;
   const priorCatchingUp = playback.catchingUp;
   const priorCommandNr = lastAppliedCommandNr;
@@ -10221,8 +10417,7 @@ export function installBlitzTokenReplayTestHarness(fixture: GameJson): {
       clearCinematics(true);
       game.value = priorGame;
       state.blitzTokens = priorTokens;
-      blitzActor = priorActor;
-      blitzActorTarget = priorTarget;
+      visibleBlitzProjection = priorActor;
       replay.active = priorReplayActive;
       playback.catchingUp = priorCatchingUp;
       lastAppliedCommandNr = priorCommandNr;
@@ -11665,6 +11860,7 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
     changes: ModelChangeListJson['modelChangeArray'],
     reports?: Record<string, unknown>[],
     commandNr?: number,
+    receipt?: SpectatorReceipt,
   ): void;
   turnStart(): typeof state.turnStart;
   turnToast(): typeof state.turnToast;
@@ -11674,6 +11870,12 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
   /** Owner 08-18 rocking-boundary probe: the SETTLED playing side + the acted set it scopes. */
   playingIsHome(): boolean;
   actedPlayers(): string[];
+  boardProjection(): ReturnType<typeof createBoardProjection>;
+  actionRollProjection(): ReturnType<typeof createActionRollProjection>;
+  endGameHudProjection(): ReturnType<typeof reduceEndGameHud>;
+  blitzProjection(): BlitzProjection | null;
+  driveProjection(): DriveProjection | null;
+  persistentMarkers(): { heldTeamMate: ReturnType<typeof reduceHeldTeamMate>; fumblerooskie: ReturnType<typeof reduceFumblerooskie>; dodgySnackPlayers: string[] };
   gazeVictims(): string[];
   resetGame(): void;
   dispose(): void;
@@ -11696,17 +11898,25 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
   turnToastKey = '';
   turnoverArmed = false;
   turnoverArmedAfterInjury = false;
-  const priorSettled = settledPlayingIsHome;
+  const priorActionRolls = visibleActionRollProjection;
+  const priorEndStats = state.endGameStats;
+  const priorDefectors = state.defectors;
+  const priorDrive = visibleDriveProjection;
+  const priorBlitz = visibleBlitzProjection;
+  const priorHeld = state.ttmHeld;
+  const priorFumble = state.fumblerooskie;
+  const priorSnack = state.dodgySnackPlayers;
+  const priorBoardProjection = structuredClone(visibleBoardProjection);
   const priorActed = state.actedPlayers;
   const priorGazeVictims = state.gazeVictims;
-  const priorGazeVictimIds = [...gazeVictimIds];
-  settledPlayingIsHome = null; // the fixture's own first frame settles it
+  visibleBoardProjection = createBoardProjection(); // the fixture's own first frame settles it
   let nr = 0;
   return {
-    applyModelChanges(changes, reports = [], commandNr) {
+    applyModelChanges(changes, reports = [], commandNr, receipt) {
       nr = commandNr ?? nr + 1;
       applyFrame({
-        receivedAt: Date.now(),
+        receivedAt: receipt?.receivedWallAt ?? Date.now(),
+        receipt,
         cmd: {
           netCommandId: NetCommandId.SERVER_MODEL_SYNC,
           commandNr: nr,
@@ -11722,6 +11932,19 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
     setLivePlayer(active, catchingUp = false) { play.active = active; playback.catchingUp = catchingUp; },
     playingIsHome: () => state.playingIsHome,
     actedPlayers: () => [...state.actedPlayers],
+    boardProjection: () => structuredClone(visibleBoardProjection),
+    actionRollProjection: () => structuredClone(visibleActionRollProjection),
+    endGameHudProjection: () => ({
+      stats: state.endGameStats ? { winningsHome: state.endGameStats.winningsHome, winningsAway: state.endGameStats.winningsAway, dedFans: state.endGameStats.dedFans ? { ...state.endGameStats.dedFans } : null } : null,
+      defectorNames: state.defectors ? [...state.defectors.names] : null,
+    }),
+    blitzProjection: () => visibleBlitzProjection ? { ...visibleBlitzProjection } : null,
+    driveProjection: () => visibleDriveProjection ? { ...visibleDriveProjection } : null,
+    persistentMarkers: () => ({
+      heldTeamMate: state.ttmHeld ? { thrownId: state.ttmHeld.thrownId, throwerId: state.ttmHeld.throwerId, fromSquare: [...state.ttmHeld.fromSquare] } : null,
+      fumblerooskie: state.fumblerooskie ? { playerId: state.fumblerooskie.playerId } : null,
+      dodgySnackPlayers: [...state.dodgySnackPlayers],
+    }),
     gazeVictims: () => [...state.gazeVictims],
     resetGame() { resetPlayback(); },
     dispose() {
@@ -11733,11 +11956,17 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
       play.active = priorPlayActive;
       playback.catchingUp = priorCatchingUp;
       turnToastKey = priorTurnToastKey;
-      settledPlayingIsHome = priorSettled;
+      visibleActionRollProjection = priorActionRolls;
+      state.endGameStats = priorEndStats;
+      state.defectors = priorDefectors;
+      visibleDriveProjection = priorDrive;
+      visibleBlitzProjection = priorBlitz;
+      state.ttmHeld = priorHeld;
+      state.fumblerooskie = priorFumble;
+      state.dodgySnackPlayers = priorSnack;
+      visibleBoardProjection = priorBoardProjection;
       state.actedPlayers = priorActed;
       state.gazeVictims = priorGazeVictims;
-      gazeVictimIds.clear();
-      for (const playerId of priorGazeVictimIds) gazeVictimIds.add(playerId);
       turnoverArmed = priorTurnoverArmed;
       turnoverArmedAfterInjury = priorTurnoverArmedAfterInjury;
     },
@@ -11934,7 +12163,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
       pendingFireballBeats = 0;
       warnedAnimationTypes.clear();
       for (const type of priorWarned) warnedAnimationTypes.add(type);
-      state.log.splice(priorLogLength);
+      state.log = state.log.slice(0, priorLogLength);
       state.fireballAnim = priorCue;
       state.injurySplash = priorInjury;
       state.armorDice = priorArmour;
@@ -12510,7 +12739,8 @@ export function installSendOffTestHarness(
       playback.catchingUp = value;
       syncOpponentSendOffWaiting(game.value!);
     },
-    disconnect() { play.active = false; clearSendOffWaiting(); },
+    disconnect() {
+      play.active = false; clearSendOffWaiting(); },
     dispose() {
       clearSendOffWaiting();
       session = priorSession;
@@ -12836,7 +13066,7 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
 const STALE_SETUP_NOTICE_LIVE_MODES = new Set(['setup', 'solidDefence', 'perfectDefence', 'swarming']);
 
 function sendCommand(cmd: Record<string, unknown>): boolean {
-  if (!replayAllowsGameCommand(replay.active)) {
+  if (!play.active || spectatorTransport?.review.source === 'live-review' || !replayAllowsGameCommand(replay.active)) {
     observeOutgoingShadow(cmd, 'dropped');
     console.warn('[replay] dropped outbound command:', cmd.netCommandId);
     return false;
@@ -12904,24 +13134,10 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
 }
 
 // Owner 2026-07-06: SPECTATOR drive-north flip helpers. Best-effort read of which team is on offense when JOIN mid-game (no kickoff observed): ball carrier's team if held, else first-offense/half rule (home receives first drive of first half iff homeFirstOffense; swaps at second half); half rule is first guess, self-corrects at next kickoff.
-function deriveOffenseIsHome(g: GameJson): boolean {
-  const fm = g.fieldModel;
-  const ball = fm.ballCoordinate;
-  if (fm.ballInPlay && !fm.ballMoving && Array.isArray(ball)) {
-    const carrier = fm.playerDataArray.find(
-      (d) => Array.isArray(d.playerCoordinate) && d.playerCoordinate[0] === ball[0] && d.playerCoordinate[1] === ball[1],
-    );
-    if (carrier) return g.teamHome.playerArray.some((p) => p.playerId === carrier.playerId);
-  }
-  const homeFirst = !!(g as { homeFirstOffense?: unknown }).homeFirstOffense;
-  const secondHalf = Number(g.half ?? 1) === 2;
-  return secondHalf ? !homeFirst : homeFirst;
-}
-
 /** Recompute state.fieldFlip from current drive offense + play mode. Flip is SPECTATOR-ONLY (play mode keeps active/home at bottom), true only when driving team is AWAY (attacks near/south natively, mirror to send drive north). seq bumps only on real change. */
 function updateFieldFlip(g: GameJson): void {
-  if (driveOffenseIsHome === null) driveOffenseIsHome = deriveOffenseIsHome(g);
-  const flip = !play.active && driveOffenseIsHome === false;
+  visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, [], g);
+  const flip = !play.active && !visibleDriveProjection.offenseIsHome;
   if (flip !== state.fieldFlip.flip) {
     state.fieldFlip = { flip, seq: state.fieldFlip.seq + 1 };
   }
@@ -13028,81 +13244,27 @@ let selectWeatherHandledInstanceKey: string | null = null;
  *  interactive commit and on headless one-shot send so a repeat/duplicate frame can't re-answer or re-send. */
 let selectSkillHandledInstanceKey: string | null = null;
 /** Owner 2026-07-08: players confused by successful Hypnotic Gaze (→ 👁 marker); module-scoped persists across frames; pruned to still-confused each frame+cleared on new game. */
-const gazeVictimIds = new Set<string>();
 // Owner 2026-07-03: last single-die roll seen per player (from action-die report stream) so reroll cinematic can re-show FAILED d6 at square.
-const lastActionRoll = new Map<string, number>();
+let visibleActionRollProjection = createActionRollProjection();
 /** Owner 2026-07-08: roll player NEEDED on their last action (report minimumRoll)—folded into FAILED stencil ("FAILED (3+)") when reroll prompt re-shows failed die. */
-const lastActionNeeded = new Map<string, number>();
-const lastServerPassRoll = new Map<string, ServerPassRollTruth>();
-let passSkillUseTruth: { instanceKey: string; playerId: string; truth: ServerPassRollTruth } | null = null;
-type HmpScatterContext = { ordinal: number; direction: string; showNeverUse: boolean };
-let hmpScatterSkillUseTruth: {
-  gameId: string;
-  playerId: string;
-  dialog: object;
-  context: HmpScatterContext;
-} | null = null;
-
-function passSkillUseCardData(g: GameJson, playerId: string, rawSkill: string): {
-  roll?: number; result?: PassReRollResult; needed?: number;
-} {
-  if (normSkill(rawSkill) !== 'pass' || !passSkillUseTruth || passSkillUseTruth.playerId !== playerId) return {};
-  let instanceKey: string | null = null;
-  try { instanceKey = dialogInstanceKey(g); } catch { return {}; }
-  if (!instanceKey || passSkillUseTruth.instanceKey !== instanceKey) return {};
-  const truth = passSkillUseTruth.truth;
-  return { roll: truth.roll, result: truth.result, needed: truth.minimumRoll };
-}
-
-/** Project Blast It!'s current HMP scatter prompt from one authoritative frame.
- * The upstream dialog instance is the occurrence boundary; showNeverUse=true is
- * the explicit first-scatter/reset signal for a new HMP pass. */
-function hmpScatterSkillUseCardData(
-  g: GameJson,
-  playerId: string,
-  rawSkill: string,
-  reports: readonly Record<string, unknown>[],
-): { hmpScatter?: HmpScatterContext } {
-  const dialog = g.dialogParameter as Record<string, unknown> | null;
-  const action = String((g.actingPlayer as { playerAction?: unknown } | null)?.playerAction
-    ?? (g as { throwerAction?: unknown }).throwerAction ?? '');
-  const hmp = action.toLowerCase().replace(/[^a-z]/g, '') === 'hailmarypass';
-  if (normSkill(rawSkill) !== 'blastit' || !hmp || dialog?.dialogId !== 'skillUse'
-      || String(dialog.playerId ?? '') !== playerId || typeof dialog.showNeverUse !== 'boolean') return {};
-  const dialogObject = dialog as object;
-  if (hmpScatterSkillUseTruth?.dialog === dialogObject) {
-    return { hmpScatter: hmpScatterSkillUseTruth.context };
-  }
-  const gameId = String(g.gameId ?? '');
-  const first = dialog.showNeverUse === true
-    || hmpScatterSkillUseTruth?.gameId !== gameId
-    || hmpScatterSkillUseTruth?.playerId !== playerId;
-  const ordinal = first ? 1 : Math.min(3, (hmpScatterSkillUseTruth?.context.ordinal ?? 0) + 1);
-  const scatter = [...reports].reverse().find((report) => report.reportId === 'scatterBall');
-  const directions = Array.isArray(scatter?.directionArray) ? scatter.directionArray : [];
-  const direction = String(directions.at(-1) ?? '').trim();
-  if (!direction) return {};
-  const context = { ordinal, direction, showNeverUse: dialog.showNeverUse };
-  hmpScatterSkillUseTruth = { gameId, playerId, dialog: dialogObject, context };
-  return { hmpScatter: context };
+let visibleSkillDecisionProjection = createSkillDecisionProjection();
+let visibleSkillDialog: object | null = null;
+let visibleSkillOccurrence = 0;
+function skillDecisionCardData(g: GameJson, playerId: string, rawSkill: string, reports: readonly Record<string, unknown>[]): SkillDecisionDetails {
+  const dialog = g.dialogParameter ?? null;
+  if (dialog !== visibleSkillDialog) { visibleSkillDialog = dialog; visibleSkillOccurrence++; }
+  visibleSkillDecisionProjection = reduceSkillDecisionProjection(visibleSkillDecisionProjection, g, reports, String(visibleSkillOccurrence));
+  const current = visibleSkillDecisionProjection.current;
+  return current?.playerId === playerId && current.skill === rawSkill ? current.details : {};
 }
 /** Owner 08-17 (row2): waiting-for-opponent's-interceptor-choice toast predicate. SERVER-DERIVED — mirrors the
  *  :7352 chooser's own gate (dialogId 'interception' + I hold no candidate interceptor) so it fires exactly for
  *  the passer/spectator side, never the reacting coach (who gets the picker instead). passRoll rides whatever
  *  the server has already sent for the thrower (interception is only offered post-accuracy-roll, so it's normally set). */
 const interceptWait = computed(() => {
-  const g = game.value;
-  const idp = g?.dialogParameter as Record<string, unknown> | undefined;
-  if (!g || idp?.dialogId !== 'interception') return null;
-  const throwerId = (idp?.throwerId ?? (g as { throwerId?: string | null }).throwerId ?? '') as string;
-  const target = g.passCoordinate as [number, number] | null | undefined;
-  const from = g.fieldModel.playerDataArray.find((d) => d.playerId === throwerId)?.playerCoordinate as
-    | [number, number]
-    | null
-    | undefined;
-  if (!throwerId || !from || !target) return null;
-  if (interceptors(g, throwerId, from, target).some((c) => myPlayIds(g).has(c.playerId))) return null; // I'm asked — picker handles it
-  return { throwerId, target, passRoll: lastServerPassRoll.get(throwerId) ?? null };
+  const position = spectatorPublication.position.value;
+  if (position) return position.passive.interceptWait;
+  return game.value ? interceptionWaitFromGame(game.value, visibleActionRollProjection, myPlayIds(game.value)) : null;
 });
 // Owner 2026-07-03 r4: live UI turns this ON so reroll prompts on OUR player answered by coach; headless drivers/probes leave OFF (auto-decline) so M4.2 probe flow unchanged. ⚠ NEEDS A LIVE PLAY-MODE VERIFICATION PASS (demo never sends reRoll dialogs); reRollSource wire shape may need tweak against fork server.
 let interactiveReRolls = false;
@@ -13143,43 +13305,8 @@ function armApothecaryPrompt(g: GameJson, dialog: Record<string, unknown>): void
   }
   if (state.apothecaryChoice?.key === prompt.key && state.apothecaryChoice.mine === prompt.mine) return;
 
-  const firstInjuredId = prompt.injuries[0]?.playerId;
-  const decidingTeam = prompt.teamId != null
-    ? (prompt.teamId === g.teamAway.teamId ? g.teamAway : g.teamHome)
-    : (g.teamAway.playerArray.some((player) => player.playerId === firstInjuredId) ? g.teamAway : g.teamHome);
-  const injuries = prompt.injuries.map((offer, index) => {
-    const data = g.fieldModel.playerDataArray.find((player) => player.playerId === offer.playerId);
-    const side: 'home' | 'away' = g.teamHome.playerArray.some((player) => player.playerId === offer.playerId)
-      ? 'home' : 'away';
-    return {
-      index,
-      playerId: offer.playerId,
-      player: playerName(g, offer.playerId),
-      side,
-      square: data?.playerCoordinate && data.playerCoordinate[0] >= 0
-        ? [data.playerCoordinate[0], data.playerCoordinate[1]] as [number, number]
-        : null,
-      base: offer.base,
-      outcome: offer.outcome,
-      injury: offer.injury,
-      offeredTypes: [...offer.offeredTypes],
-      options: [...apothecaryTypeOptions(offer.offeredTypes, prompt.kind === 'single')],
-    };
-  });
-  const primary = injuries[0]!;
-  state.apothecaryChoice = {
-    key: prompt.key,
-    kind: prompt.kind,
-    // Owner 09-06 (game 943): the single useApothecary dialog carries NO teamId (playerId only) — the deciding team is
-    // the INJURED PLAYER's team, else the card named the home coach and sat under the wrong panel.
-    teamId: prompt.teamId ?? decidingTeam.teamId,
-    ...primary,
-    noneLabel: apothecaryNoneLabel(prompt),
-    coach: String(decidingTeam.coach ?? ''),
-    injuries,
-    mine: prompt.mine,
-    seq: (state.apothecaryChoice?.seq ?? 0) + 1,
-  };
+  state.apothecaryChoice = { ...buildApothecaryDecision(g, prompt), key: prompt.key, mine: prompt.mine, seq: (state.apothecaryChoice?.seq ?? 0) + 1 };
+
 }
 /** Owner 2026-07-10 (g350 #1, Foul Appearance): wire sometimes carries skill as FULLY-QUALIFIED Java class (e.g. com.fumbbl.ffb.skill.bb2025.FoulAppearance) which leaked RAW into reroll/skill modal; strip class path to leaf+space CamelCase→human label. #214 prettySkillName extracted to ./logic/prettySkillName.ts (Echo item-①ruling 08-03—pure display-label seam, imported above so ffb-protocol rig can pin no-com.fumbbl/Title-Case invariant without store reach). */
 /** Owner 2026-07-14: map RAW skillUse skill (leaf class name or plain name—e.g. com.fumbbl.ffb.skill.bb2025.StandFirm, SideStep, Fend) to AUTOMATIC SKILL USAGE toggle key; returns null for any skill without auto-use toggle (those always surface interactively). */
@@ -13246,47 +13373,13 @@ function clearAutoBeats(): void {
   for (const t of autoBeatTimers) cancelGameTimeout(t);
   autoBeatTimers.clear(); autoBeatPending.clear();
 }
-function reRollSourceName(v: unknown): string | null {
-  if (!v) return null;
-  // ⚠ RAW — this value is also sent back as the wire `reRollSource`; prettify only at DISPLAY sites.
-  if (typeof v === 'string') return v;
-  if (typeof v === 'object' && v !== null && 'name' in v) return String((v as { name: unknown }).name);
-  return null;
-}
 
-function playerById(g: GameJson | null | undefined, playerId: string) {
-  return g ? [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((player) => player.playerId === playerId) : undefined;
-}
 
-function explicitLashOutCapability(
-  dp: Record<string, unknown>,
-  player: ReturnType<typeof playerById>,
-  actingPlayer?: Record<string, unknown> | null,
-): boolean | null {
-  const records = [dp, dp.actingPlayer, actingPlayer, player].filter(
-    (value): value is Record<string, unknown> => typeof value === 'object' && value !== null,
-  );
-  for (const record of records) {
-    for (const key of ['canLashOutAtEnemyPlayers', 'canLashOut', 'lashOut']) {
-      if (typeof record[key] === 'boolean') return record[key];
-    }
-  }
-  return null;
-}
 
-export function primalSavageryAvailable(
-  dp: Record<string, unknown>,
-  player: ReturnType<typeof playerById>,
-  actingPlayer?: Record<string, unknown> | null,
-): boolean {
-  // Live fork wire (game 889 command 381) uses the FQ class id
-  // `com.fumbbl.ffb.skill.mixed.AnimalSavagery`; older fixtures/forks use the
-  // friendly `Animal Savagery`. Share the display canonicalizer so both exact
-  // server-authored forms identify the same prompt without suffix guessing.
-  if (normSkill(reRollActionName(dp.reRolledAction)) !== 'animalsavagery') return false;
-  const explicit = explicitLashOutCapability(dp, player, actingPlayer);
-  return explicit ?? playerHasSkill(player, PRIMAL_SAVAGERY_SKILL);
-}
+
+
+
+
 
 function primalSavageryDialogMatches(
   dp: Record<string, unknown> | null | undefined,
@@ -13308,124 +13401,24 @@ function reconcilePrimalSavageryIntent(): void {
 }
 
 /** Apply only the acting player's server-sent display value to a display label. */
-function valuedSkillLabel(rawSkill: string, displayValues: Record<string, unknown> | undefined): string {
-  const skillName = rawSkill.includes(' ') ? rawSkill : prettySkillName(rawSkill);
-  const rawValue = displayValues?.[skillName] ?? displayValues?.[rawSkill];
-  const displayValue = rawValue == null ? undefined : String(rawValue);
-  return skillNameWithValue(displayValue, skillName);
-}
+
 
 /** Loner copy prefers its display value; legacy numeric skill value remains server-model fallback. */
-function lonerValueForPlayer(g: GameJson | null | undefined, playerId: string): string | undefined {
-  const player = playerById(g, playerId);
-  const rawValue = player?.skillDisplayValuesMap?.Loner ?? player?.skillValuesMap?.Loner;
-  if (rawValue == null) return undefined;
-  const value = String(rawValue).trim();
-  if (!value) return undefined;
-  return /^\d+$/.test(value) ? `${value}+` : value;
-}
+
 
 // Upstream ffb-common DialogReRollParameter.java:113-127 / IJsonOption.java:444,507 uses
 // `reRollSourceSingleUse` and `skill`; the old aliases remain only for legacy fixtures.
-function singleUseReRollName(dp: Record<string, unknown>): string | null {
-  return reRollSourceName(dp.reRollSourceSingleUse ?? dp.singleUseReRollSource);
-}
 
-function reRollSkillName(dp: Record<string, unknown>): string | null {
-  return reRollSourceName(dp.skill ?? dp.reRollSkill);
-}
 
-export interface ReRollPromptPresentation {
-  title: string;
-  question: string;
-  result?: PassReRollResult;
-  messages: string[];
-  fumble: boolean;
-  loner: boolean;
-  roll?: number;
-  needed?: number;
-  thresholdless: boolean;
-}
 
-function reRollActionName(value: unknown): string {
-  // #214 class: `reRolledAction` sometimes carries a raw FQ skill id (e.g. the bomb/Pass fumble
-  // wire `com.fumbbl.ffb.skill.common.Pass`) instead of the usual already-friendly label
-  // ("Really Stupid", "Throw Team-Mate"); route through prettySkillName to strip it before display.
-  return prettySkillName(String(value ?? 'roll'))
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
-function ttmSuperbTarget(messages: string[]): number | undefined {
-  for (const message of messages) {
-    const explicit = message.match(/Re-roll needed:\s*(\d)\+/i) ?? message.match(/\((\d)\+/);
-    if (explicit) return Number(explicit[1]);
-    if (/Re-roll needed:\s*a natural 6/i.test(message)) return 6;
-  }
-  return undefined;
-}
 
-export function reRollPromptPresentation(
-  dp: Record<string, unknown>,
-  passRoll?: ServerPassRollTruth,
-): ReRollPromptPresentation {
-  const action = reRollActionName(dp.reRolledAction);
-  const passTruth = passRoll?.reportId === 'throwTeamMateRoll'
-    ? (/throw team.?mate|kick team.?mate/i.test(action) ? passRoll : undefined)
-    : passRoll?.reportId === 'passRoll'
-      ? (/pass|bomb/i.test(action) ? passRoll : undefined)
-      : undefined;
-  const title = passTruth?.bomb ? 'Bomb' : /^right stuff$/i.test(action) ? 'Landing' : action;
-  const minimumRollRaw = Number(dp.minimumRoll);
-  const hasExplicitMinimum = dp.minimumRoll != null && Number.isFinite(minimumRollRaw);
-  const thresholdless = hasExplicitMinimum && minimumRollRaw <= 0;
-  const dialogNeeded = hasExplicitMinimum && minimumRollRaw >= 2 && minimumRollRaw <= 6
-    ? minimumRollRaw
-    : undefined;
-  const rawMessages = Array.isArray(dp.messageArray)
-    ? (dp.messageArray as unknown[]).filter((message): message is string => typeof message === 'string')
-    : [];
-  // Owner 08-18 (Breathe Fire screenshot): drop the server's threshold explainer — the "You need a:"
-  // header and its "• N+ to <outcome>" bullets. Consequence lines ("You would be knocked down…") and
-  // the rolled value stay. Derivations (ttmSuperbTarget) read the RAW list, display reads this one.
-  const messages = rawMessages.filter(
-    (message) => !/^\s*you need a:?\s*$/i.test(message)
-      && !/^\s*[•·\-*]?\s*\d\+?\s+to\s+/i.test(message)
-      // The TTM result and Superb threshold are already rendered above the offer. This crossed-out server
-      // explainer sat between Needed and the Loner warning and duplicated that result without adding a choice.
-      && !(passTruth?.reportId === 'throwTeamMateRoll' && /has no effect on a superb result/i.test(message))
-      // The result/Needed rows and the question already convey this entire sentence. Keep it in rawMessages for
-      // ttmSuperbTarget above, but do not repeat it in the dialog body.
-      && !(passTruth?.reportId === 'throwTeamMateRoll' && /^\s*this is an?\s+(?:subpar|superb)\s+result\b/i.test(message)),
-  );
-  const modifier = reRollSourceName(dp.modifyingSkill);
-  const failed = hasExplicitMinimum && minimumRollRaw > 0;
-  // Owner 08-18 (B&C screenshot): the Ball & Chain DIRECTION re-roll offer (ReRolledActions.DIRECTION,
-  // StepMoveBallAndChain) is the one prompt that MUST stay small — it sits on the acting square with the
-  // scatter destination and the direction arrow right underneath it. The generic sentence ("Do you want to
-  // re-roll the Direction?") only restates the title line above it, so collapse it to one compact line.
-  // Exact-match the raw wire action so `Punt Direction` (a different, unaffected offer) is not caught.
-  const isBncDirection = String(dp.reRolledAction ?? '').trim() === 'Direction';
-  const question = isBncDirection
-    ? 'Reroll direction?'
-    : `Do you want to re-roll the ${failed ? 'failed ' : ''}${action}`
-      + `${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
-  let needed = thresholdless ? undefined : dialogNeeded;
-  if (passTruth?.reportId === 'passRoll') needed = passTruth.minimumRoll;
-  if (passTruth?.reportId === 'throwTeamMateRoll') needed = ttmSuperbTarget(rawMessages);
-  return {
-    title,
-    question,
-    result: passTruth?.result,
-    messages,
-    fumble: dp.fumble === true,
-    loner: Array.isArray(dp.reRollProperties) && (dp.reRollProperties as unknown[]).map(String).includes('LONER'),
-    roll: passTruth?.roll,
-    needed,
-    thresholdless,
-  };
-}
+
+
+
+
+
+
 /** Owner 2026-07-04: surface REFEREE SEND-OFF prompt from bribes/argueTheCall dialog; playerIds[0] is spotted player; bribes dialog with maxNrOfBribes>0 means bribe available; idempotent per player. */
 let sendOffKey = '';
 /** Row19 (owner sighting 08-17, game 866): once OUR seat sends CLIENT_ARGUE_THE_CALL for a spotted player, latch it here so the Argue option never resurfaces/re-sends for that same send-off instance — StepBribes.java (upstream) has no once-only guard on CLIENT_ARGUE_THE_CALL and will re-roll on every repeat, and the argueTheCall→bribes dialog flip re-armed state.sendOff each round, letting a human's frantic re-click (or any stray repeat) fire another argue. Keyed on playerId (the send-off instance's stable identity across the dialogId flip); cleared when the instance actually resolves (argueTheCall/bribesRoll report below, and on game reset). Precedent: kickSkillAnsweredKey. */
@@ -13691,47 +13684,7 @@ function bribesOfferFromDialog(g: GameJson, dp: Record<string, unknown> | undefi
   };
 }
 /** Owner 2026-07-08: is playerId currently in tackle zone of STANDING opponent with Tackle? Checked at player's CURRENT square—on failed dodge model still holds ORIGIN while reroll dialog up, reads "dodging away from Tackle"; state bits mirror ffb-pitch playerState hasTackleZones: base STANDING(0x01)/MOVING(0x02)/BLOCKED(0x0c) exert tackle zone unless CONFUSED(0x200) or HYPNOTIZED(0x800). */
-export function offeredReRollOptions(
-  dp: Record<string, unknown>,
-  skillDisplayValues?: Record<string, unknown>,
-): ReRollPromptOption[] {
-  const options: ReRollPromptOption[] = [];
-  const singleUse = singleUseReRollName(dp);
-  const skillName = reRollSkillName(dp);
-  const modifyingSkill = reRollSourceName(dp.modifyingSkill);
-  const rrProps = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
-  const hasPro = rrProps.includes('PRO') || !!dp.proReRollOption;
-  const hasMascot = rrProps.includes('MASCOT');
-  const specialTeamLabel = rrProps.includes('BRILLIANT_COACHING') ? 'Brilliant Coaching'
-    : rrProps.includes('PUMP_UP_THE_CROWD') ? 'Pump up the Crowd'
-      : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
-        : null;
-  const specialTeamSource = rrProps.includes('BRILLIANT_COACHING') ? 'Brilliant Coaching ReRoll'
-    : rrProps.includes('PUMP_UP_THE_CROWD') ? 'Pump up the Crowd'
-      : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
-        : null;
-  const hasTeam = rrProps.some((property) =>
-    ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property))
-    || !!dp.teamReRollOption;
-  if (singleUse) options.push({ label: valuedSkillLabel(singleUse, skillDisplayValues), source: singleUse, response: 'reroll', role: 'source' });
-  if (skillName) options.push({ label: valuedSkillLabel(skillName, skillDisplayValues), source: skillName, response: 'skill', role: 'reroll-skill' });
-  if (modifyingSkill && modifyingSkill !== skillName) {
-    options.push({ label: valuedSkillLabel(modifyingSkill, skillDisplayValues), source: modifyingSkill, response: 'skill', role: 'modifier' });
-  }
-  if (hasPro) options.push({ label: 'Pro', source: 'Pro', response: 'reroll', role: 'source' });
-  for (const composite of proCompositeReRollOptions(rrProps)) {
-    options.push({ ...composite, response: 'reroll', role: 'source' });
-  }
-  if (specialTeamLabel && specialTeamSource) {
-    options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
-  } else if (hasMascot) {
-    options.push({ label: 'Team Mascot (no re-roll if it fails)', source: 'Team Mascot', response: 'reroll', role: 'source' });
-    if (hasTeam) options.push({ label: 'Team Mascot, then Team Re-roll', source: 'Mascot TRR', response: 'reroll', role: 'source' });
-  } else if (hasTeam) {
-    options.push({ label: 'Team Re-roll', source: 'Team ReRoll', response: 'reroll', role: 'source' });
-  }
-  return options;
-}
+
 
 const KNOWN_RE_ROLL_PROPERTIES = new Set([
   'TRR', 'BRILLIANT_COACHING', 'MASCOT', 'PRO', 'LONER', 'PUMP_UP_THE_CROWD', 'SHOW_STAR',
@@ -13892,45 +13845,13 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
     });
     return;
   }
-  // Owner 2026-07-13: server sends reRolledAction as FRIENDLY NAME ("Animal Savagery", "Bone Head", "Really Stupid"); old .replace(([A-Z])/g,' $1').toLowerCase() treated as camelCase id→double-spaced+lowercased proper names ("Animal Savagery"→"animal  savagery")→reported mis-naming in read-only spectator reroll prompt; keep server's name: split camelCase id if arrives but preserve case+collapse whitespace so friendly name passes through intact.
-  const passTruth = lastServerPassRoll.get(playerId);
-  const presentation = reRollPromptPresentation(dp, passTruth);
-  const action = reRollActionName(dp.reRolledAction);
-  // Owner o66af: FOUL APPEARANCE reads better as full sentence than generic "Re-roll foul appearance?"; acting coach sees failed-roll prompt ("…failed their Foul Appearance roll. Use a re-roll?"); opposition/spectator sees read-only "…is deciding whether to re-roll…" (can't act); reroll ICON buttons (TRR/skill) render below label either way; non-foul rerolls keep generic label.
-  const isFoulAppearance = /foul ?appearance/i.test(String(dp.reRolledAction ?? ''));
-  const nm = playerName(game.value, playerId);
-  const modifierSuffix = modifyingSkill ? ` or use ${prettySkillName(modifyingSkill)}` : '';
-  const label = isFoulAppearance
-    ? (mine ? `${nm} failed their Foul Appearance roll. Use a re-roll?` : `${nm} is deciding whether to re-roll…`)
-    : `Re-roll ${action}${modifierSuffix}?`;
-  // U9d root fix: the dialog is authoritative for this decision. An explicit minimumRoll<=0 means the current
-  // roll is threshold-less, so a cached target from the player's previous action must never leak into this card.
-  // D6 intake: the dialog value + rules version only gate the CACHED fallback below; the
-  // presentation (W46 pass/TTM truth) stays authoritative for the displayed roll/target.
-  const minimumRollRaw = dp.minimumRoll;
-  const rulesVersion = game.value?.gameOptions.gameOptionArray
-    .find((option) => option.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  const card = buildReRollDecision(game.value!, dp, visibleActionRollProjection, mine, options);
+  if (!card) return;
   // Defer a failed-walk reroll prompt behind its presentation and capture the dialog key before deferral.
   const reRollArmedKey = dialogInstanceKey(game.value);
   const armReRollPrompt = () => {
     state.reRollPrompt = {
-      playerId,
-      reRolledAction: String(dp.reRolledAction ?? ''),
-      title: presentation.title,
-      label,
-      question: presentation.question,
-      result: presentation.result,
-      messages: presentation.messages,
-      fumble: presentation.fumble,
-      loner: presentation.loner,
-      lonerValue: lonerValueForPlayer(game.value, playerId),
-      options,
-      roll: presentation.roll ?? d6RerollRoll(lastActionRoll.get(playerId), rulesVersion, dp.reRolledAction),
-      needed: passTruth
-        ? presentation.needed
-        : presentation.needed
-          ?? d6RerollNeeded(minimumRollRaw, lastActionNeeded.get(playerId), rulesVersion, dp.reRolledAction, presentation.thresholdless),
-      thresholdless: presentation.thresholdless,
+      ...card,
       mine,
       chosen: null,
       seq: (state.reRollPrompt?.seq ?? 0) + 1,
@@ -13947,30 +13868,26 @@ let blockChoiceEpoch = 0;
 let lastBlockThudKey = '';
 /** @returns true when this call actually armed a NEW offer; false when the de-dup key swallowed it (the
  *  dialog is simply still up). Callers that pace the surface must only hold the drain on a true. */
+/** The on-pitch square of a player in the CURRENT model (null when unknown / off pitch). */
+function liveDefenderSquare(playerId: string): [number, number] | undefined {
+  if (!playerId || !game.value) return undefined;
+  const data = (game.value.fieldModel?.playerDataArray as { playerId: string; playerCoordinate?: unknown }[] | undefined)
+    ?.find((d) => d.playerId === playerId);
+  const c = data?.playerCoordinate;
+  return Array.isArray(c) && c.length === 2 && Number.isInteger(c[0]) && Number.isInteger(c[1])
+    && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15
+    ? [Number(c[0]), Number(c[1])] : undefined;
+}
 function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boolean } = {}): boolean {
   // Non-choosers get inert block-dice display with no reroll sources or sends.
   const readOnly = !!opts.readOnly;
   const key = `blockPartial:${blockChoiceEpoch}:${JSON.stringify(dp.blockRoll)}${readOnly ? ':view' : ''}`;
   if (followupHandled.has(key)) return false;
   followupHandled.add(key);
-  const rr = readOnly ? [] : (Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : []);
-  // Uphill phase one offers attacker rerolls; enable die commit only for the current chooser or when rerolls are exhausted.
-  const nrOfDice = Number(dp.nrOfDice ?? 0);
-  // Derive Pro/Brawler/Consummate from reRollActionToSourceMap; legacy booleans are fallback only.
-  const a2s = (dp.reRollActionToSourceMap && typeof dp.reRollActionToSourceMap === 'object')
-    ? (dp.reRollActionToSourceMap as Record<string, unknown>) : {};
-  const srcTeam = rr.includes('TRR') || rr.includes('MASCOT') || !!dp.teamReRollOption;
-  const srcPro = rr.includes('PRO') || !!a2s['Single Die Per Activation'] || !!dp.proReRollOption;
-  const srcBrawler = !!a2s['Single BothDown'] || !!dp.brawlerOption;
-  const srcConsummate = !!a2s['Single Die'] || !!dp.consummateOption;
-  const consummateSrc = typeof a2s['Single Die'] === 'string' ? String(a2s['Single Die']) : (dp.consummateOption ? 'Consummate Professional' : null);
-  const singleBlockDieSrc = typeof a2s['Single Block Die'] === 'string' ? String(a2s['Single Block Die']) : null;
-  const multiBlockDiceSrc = typeof a2s['Multi Block Dice'] === 'string' ? String(a2s['Multi Block Dice']) : null;
-  // Hatred: reRollActionToSourceMap['Single Skull']='Hatred' (upstream Hatred.java; g483 captured frame).
-  const singleSkullSrc = typeof a2s['Single Skull'] === 'string' ? String(a2s['Single Skull']) : null;
-  const actingId = String(dp.playerId ?? (game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  const actingSkillValues = playerById(game.value, actingId)?.skillDisplayValuesMap;
-  const hasAnyReroll = srcTeam || srcPro || srcBrawler || srcConsummate || !!singleBlockDieSrc || !!multiBlockDiceSrc || !!singleSkullSrc;
+  const card = buildBlockDecision(game.value, dp, readOnly);
+  // Owner 09-14 UAT / Astra: the anchor square is read NOW (the block's own frame), never when a drain-deferred prompt
+  // finally arms (the push / follow-up may have applied by then) and never inherited from an earlier card.
+  const defenderSquare = liveDefenderSquare(String(game.value?.defenderId ?? ''));
   // #67 phase-1 (Tarkin): blockPartial is RESULT prompt (pick block die); Meero SR-17: SELF-contextualising—carries own dice (dice/nrOfDice)+shows WITH pick so only missing context in o66 play is BLITZ WALK that preceded it; if walk still draining hold die-pick behind it (FIFO context-gate) so dice don't pop over bursting blitz move; plain block (no walk) or idle drain⇒arms next tick=today's behaviour; dedup (epoch/followupHandled) already ran above at CALL time so re-send won't double-enqueue.
   const armBlockPartial = () => {
   // Owner 09-05: the block THUD. In Order-66 play the legacy dice cine (which played 'block' on die selection)
@@ -13978,35 +13895,14 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
   // but no o66 beat ever played it — blocks were silent. Fire it once when the dice land in the o66 surface.
   if (!playback.catchingUp && lastBlockThudKey !== key) { lastBlockThudKey = key; playSound('block'); }
   state.blockPartial = {
-    dice: Array.isArray(dp.blockRoll) ? (dp.blockRoll as unknown[]).map(Number) : [],
+    ...card,
     tumbleKey: `${blockChoiceEpoch}:${JSON.stringify(dp.blockRoll)}`,
-    nrOfDice,
-    // readOnly (non-chooser #5): FORCE pickable off — the `nrOfDice>0` shortcut would otherwise make a downhill watcher pickable. The chooser path is unchanged.
-    pickable: readOnly ? false : (nrOfDice > 0 || !hasAnyReroll),
-    // #38: phase-1 of the uphill two-phase — I'm the defender-VIEW (readOnly), it's uphill (nrOfDice<0), and the
-    // attacker still has a re-roll to decide (hasAnyReroll). Flips false at the phase-2 flip / downhill / no re-roll.
-    opponentRerollPending: readOnly && nrOfDice < 0 && hasAnyReroll,
-    chooserTeamRerollAvailable: readOnly && srcTeam, // owner 09-07: watcher-side cue only (never a button)
-    // TRR / MASCOT both re-roll the whole block via CLIENT_USE_RE_ROLL (proven live);
-    // LONER just gates TRR with a roll the server applies, so it still shows the button.
-    // readOnly: suppress EVERY reroll source (they belong to the chooser — the `dp.*Option` flags read below
-    // are the chooser's; showing them to the non-chooser would let the wrong coach spend a re-roll).
-    teamRR: !readOnly && srcTeam,
-    // Keep Mascot distinct from TRR and suppress plain TRR when Mascot is available.
-    mascot: !readOnly && rr.includes('MASCOT'),
-    mascotTrr: !readOnly && rr.includes('MASCOT') && rr.includes('TRR'),
-    pro: !readOnly && srcPro,
-    brawler: !readOnly && srcBrawler,
-    consummate: !readOnly && srcConsummate,
-    consummateLabel: readOnly ? null : (consummateSrc ? valuedSkillLabel(consummateSrc, actingSkillValues) : null),
-    singleBlockDie: readOnly ? null : singleBlockDieSrc,
-    singleBlockDieLabel: readOnly ? null : (singleBlockDieSrc ? valuedSkillLabel(singleBlockDieSrc, actingSkillValues) : null),
-    multiBlockDice: readOnly ? null : multiBlockDiceSrc,
-    multiBlockDiceLabel: readOnly ? null : (multiBlockDiceSrc ? valuedSkillLabel(multiBlockDiceSrc, actingSkillValues) : null),
-    singleSkull: readOnly ? null : singleSkullSrc,
-    singleSkullLabel: readOnly ? null : (singleSkullSrc ? valuedSkillLabel(singleSkullSrc, actingSkillValues) : null),
     mine: !readOnly,
     seq: (state.blockPartial?.seq ?? 0) + 1,
+    // Owner 09-14 UAT: the dice card is anchored ONCE, where the defender stood when the dice landed — the live
+    // model's defenderId / coordinates move on with the push, follow-up and blitz, and a card re-anchored per
+    // frame re-appeared over the blitzer's square during the 450 ms reveal. Unknown → the view follows the model.
+    defenderSquare,
   };
   };
   if (settings.order66 && play.active && movementDraining()) enqueuePromptBehind('blockPartial', armBlockPartial);
@@ -14505,19 +14401,7 @@ function maybeSurfaceDefenderAction(g: GameJson) {
 }
 
 // Exact composite sources offered by one server reRollProperties dialog.
-function proCompositeReRollOptions(rrProps: string[]): { label: string; source: string }[] {
-  if (!rrProps.includes('PRO')) return [];
-  const hasMascot = rrProps.includes('MASCOT');
-  const hasTeam = rrProps.some((property) =>
-    ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property));
-  const options: { label: string; source: string }[] = [];
-  if (hasTeam) options.push({ label: 'Pro, then Team Re-roll', source: 'Pro TRR' });
-  if (hasMascot) options.push({ label: 'Pro, then Team Mascot', source: 'Pro Mascot' });
-  if (hasMascot && hasTeam) {
-    options.push({ label: 'Pro, then Team Mascot, then Team Re-roll', source: 'Pro Mascot TRR' });
-  }
-  return options;
-}
+
 
 // Reused by the unified bloodlust card; source is the exact CLIENT_USE_RE_ROLL wire value.
 export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill' }[] {
@@ -15131,7 +15015,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         }
       } else {
         state.bloodlust = { stage: 'reroll', playerId: dpPlayer, vampire: playerName(g, dpPlayer) || 'The vampire',
-          reRolledAction: String(dp?.reRolledAction ?? ''), rerollOptions: opts, roll: lastActionRoll.get(dpPlayer),
+          reRolledAction: String(dp?.reRolledAction ?? ''), rerollOptions: opts, roll: (actionRollFor(visibleActionRollProjection, dpPlayer)?.roll ?? undefined),
           seq: bloodlustSeq(), instanceKey: dialogInstanceKey(g) };
       }
     }
@@ -15213,12 +15097,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
               minimumRoll, mine: true,
               seq: (state.skillChoice?.seq ?? 0) + 1,
               instanceKey,
-              ...passSkillUseCardData(g, dpPlayer, rawSkill),
-              ...hmpScatterSkillUseCardData(g, dpPlayer, rawSkill, reports),
-              injuryResult: normSkill(rawSkill) === 'savagemauling'
-                ? savageMaulingInjuryResult(reports, dpPlayer)
-                : undefined,
-              armorDice: oldProArmorDice(reports, dpPlayer, rawSkill),
+              ...skillDecisionCardData(g, dpPlayer, rawSkill, reports),
             };
           };
           // No animation dependency: upstream cannot publish the initial Swoop animation until this answer.
@@ -17289,6 +17168,10 @@ function handleGameShutdown(code: number) {
 function handleServerPush(cmd: Record<string, unknown>) {
   const id = String(cmd.netCommandId ?? '');
   const g = game.value;
+  if (id === NetCommandId.SERVER_SOUND) {
+    playSound(cmd.sound as string | null | undefined);
+    return;
+  }
   if (id === NetCommandId.SERVER_TEAM_SETUP_LIST) {
     // ServerCommandTeamSetupList.isReplayable() = false: generic live push only, never replay/golden ingestion.
     if (state.setupPhase && g && setupSurfaceIsServerArmed(g)
@@ -17706,13 +17589,33 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // restored by clearCollapsedReplayPresentation carry a later Blitz into an earlier prefix;
       // the prefix handlers below rebuild all three fields when the declaration is actually present.
       state.blitzTokens = null;
-      blitzActor = null;
-      blitzActorTarget = '';
+      visibleBlitzProjection = null;
       // Gaze identity is report-derived, not model-derived. A backward seek must not carry a
       // later successful occurrence into a prefix where the same player happens to remain
       // CONFUSED for another reason; prefix reports below rebuild the set when appropriate.
-      gazeVictimIds.clear();
       state.gazeVictims = [];
+      visibleReportLogContext = createReportLogContext();
+      visibleActionRollProjection = createActionRollProjection();
+      visibleSkillDecisionProjection = createSkillDecisionProjection();
+      visibleSkillDialog = null;
+      visibleCasualtyRollProjection = createCasualtyRollProjection();
+      visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
+      visibleBlockContext = createBlockContext();
+      state.endGameStats = null;
+      state.defectors = null;
+      visibleDriveProjection = reduceDriveProjection(null, [], seed);
+      state.recoveringPlayers = [];
+      state.dodgySnackPlayers = [];
+      state.fumblerooskie = null;
+      const heldSeed = reduceHeldTeamMate(null, new Map(), seed);
+      state.ttmHeld = heldSeed ? { ...heldSeed, seq: (state.ttmHeld?.seq ?? 0) + 1 } : null;
+      visibleBoardProjection = reduceBoardProjection({ ...createBoardProjection(), turnKey: boardTurnKey(seed) }, seed, {
+        reports: [], recoveringPlayers: [], acknowledgedActingId: seed.actingPlayer?.playerId ?? null, followupAttackerId: null,
+      });
+      state.playingIsHome = visibleBoardProjection.playingIsHome ?? !!seed.homePlaying;
+      state.activePlayerId = visibleBoardProjection.activePlayerId;
+      state.actedPlayers = visibleBoardProjection.actedPlayers;
+      updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
       if (!wasCatchingUp) setSoundsSuppressed(true);
@@ -17779,6 +17682,27 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
 }
 
 export const gameStore = {
+  spectatorPublishedPosition: spectatorPublication.position,
+  spectatorReview: spectatorReviewState,
+  /** Read-only retained-history accounting for mounted leak/limit diagnostics. */
+  spectatorHistoryAccounting() {
+    const history = spectatorIngress?.history;
+    return history ? { accounting: history.accounting(), limits: history.limits } : null;
+  },
+  spectatorLiveChatOpen,
+  openSpectatorLiveChat() {
+    if (settings.chatDisabled) return;
+    spectatorLiveChatOpen.value = true;
+    resetSpectatorChatUnread();
+  },
+  incrementSpectatorChatUnread() {
+    if (!settings.chatDisabled) spectatorChatUnread.value = Math.min(100, spectatorChatUnread.value + 1);
+  },
+  resetSpectatorChatUnread,
+  pauseSpectatorView,
+  goToLiveSpectatorView,
+  registerSpectatorRendererCancellation,
+  appendSystemNotice(text: string): void { log('system', text); },
   state,
   game,
   reportMovementPresentationRecoveryDiagnostic(message: string, error: unknown): void {
@@ -18927,6 +18851,7 @@ export const gameStore = {
    *  `/help` lists them. Play-mode only for the actions; the server no-ops an end-turn from
    *  a non-acting coach, so it's harmless. Feedback goes to the game log (kind 'system'). */
   devCommand(raw: string) {
+    if (spectatorTransport?.review.source === 'live-review') return;
     const cmd = raw.trim().toLowerCase().replace(/^\/+/, '').split(/\s+/)[0] ?? '';
     const say = (t: string) => log('system', `⚙ ${t}`);
     switch (cmd) {
@@ -18990,24 +18915,33 @@ export const gameStore = {
     log('system', `play: block partial re-roll — ${kind}`);
   },
 
-  async connect(params: { url: string; coach: string; password: string; gameId: number; compression?: boolean }) {
-    this.disconnect();
+  async connect(params: { url: string; coach: string; password: string; gameId: number; compression?: boolean }, preserveReview = false) {
+    const retainedHistory = preserveReview
+      ? spectatorIngress?.history ?? (spectatorTransport?.review.source === 'live-review' ? spectatorTransport.history : null)
+      : null;
+    if (retainedHistory) {
+      const oldSession = session;
+      session = null;
+      spectatorIngress?.dispose();
+      spectatorIngress = null;
+      oldSession?.close();
+      if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
+    } else this.disconnect();
     lastConnect = { mode: 'spectator', params }; // remember for a Reconnect after a drop
     state.demoMode = false;
     // B9-12 G6: fresh game — clear the previous game's log so lines don't pile up.
-    state.log.splice(0);
+    if (!retainedHistory) state.log = [];
     // B9-12 G13: don't keep the PREVIOUS game rendered while the new one joins.
     state.joinError = null;
     state.spectateConnectError = null; // owner 08-18: fresh attempt — drop any prior connect-error modal
-    game.value = null;
-    triggerRef(game);
+    if (!retainedHistory) { game.value = null; triggerRef(game); }
     expectingGame = true;
     session = new GameSession({ url: params.url, compression: params.compression ?? true });
     // Ignore late events from a prior session that this connect just replaced (a stale async close was otherwise setting a bogus joinError over the new game — seen on rapid reconnects).
     const thisSession = session;
     let spectatorStatusTerminal = false;
     session.on('status', (cmd) => {
-      if (thisSession !== session || game.value) return;
+      if (thisSession !== session || !expectingGame) return;
       spectatorStatusTerminal = true;
       expectingGame = false;
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
@@ -19019,6 +18953,7 @@ export const gameStore = {
         message: projected.message,
         detail: projected.detail,
       };
+      rejectPendingSpectatorGoLive(spectatorTransport);
       log('system', projected.detail);
       thisSession.close();
     });
@@ -19027,39 +18962,115 @@ export const gameStore = {
       state.sessionState = s;
       if (s !== 'joined') log('system', `connection: ${s}`); // owner 09-07: the serverJoin broadcast logs the join
     });
-    session.on('gameState', (cmd) => {
-      if (thisSession !== session) return;
-      expectingGame = false;
-      state.waitingForMatch = null; // the match started — drop the waiting modal
-      if (joinTimer) {
-        cancelGameTimeout(joinTimer);
-        joinTimer = null;
-      }
-      resetPlayback(); // fresh game: no stale queued frames
-      clearPendingRailCommands();
-      game.value = structuredClone(cmd.game) as GameJson;
-      normalizeZappedPlayerSnapshots(game.value);
-      seedMoveOfferSnapshot();
-      onTheBallReceiveTurnMode = String(game.value.turnMode ?? '');
-      syncEndGame(game.value, cmd);
-      seedActingPlayer(game.value); // review batch: seed the ack-gate mirror from the snapshot (no first-action penalty)
-      forceSnapshotTick(); // owner 09-06: derive the per-frame presentation from the snapshot now
-      syncKickSkillDialog(game.value); // a spectator may join while the kicking coach is already deciding
-      state.connectionClosed = null; reconnectAttempts = 0; reconnecting = false; // a game arrived — any drop is resolved
-      log('system', `game state received (game ${game.value.gameId})`);
-      void reconstructJoinRerollsFromReplay({
-        url: params.url, coach: params.coach, compression: params.compression,
-      }, game.value);
+    const history = retainedHistory ?? new LiveSpectateHistory('spectator-' + (++spectatorSessionSerial));
+    const connectionGeneration = history.generation + 1;
+    history.beginConnection(connectionGeneration);
+    spectatorReviewRevision.value++;
+    spectatorIngress = new SpectatorIngress(thisSession, history, connectionGeneration, {
+      current: () => thisSession === session,
+      receipt: () => ({ order: ++nextVisibleLogOrder, receivedWallAt: Date.now(), receivedMonotonicAt: performance.now() }),
+      route: (cmd, receipt, result) => withLogReceipt(receipt, () => {
+        spectatorReviewRevision.value++;
+        // Astra 09-13 P2-1: EVERY packet class can mark the history stale (an unsupported netCommandId does), so the
+        // stale hand-off sits above the class dispatch rather than inside the snapshot/match/clock branch.
+        if (spectatorTransport && result.kind === 'stale') spectatorFeedWentStale(spectatorTransport, result.reason);
+        // Owner 09-14: once a full content needle of live commands exists after a join snapshot (first join or reconnect),
+        // the replay backfill runs; the join boundary is located by CONTENT inside the replay stream (the two commandNr
+        // spaces differ). A stream that predates the needle is retried on a fresh download at each later multiple.
+        if (result.kind === 'committed' && result.event && history.liveSegmentEvents >= BACKFILL_NEEDLE_LENGTH) {
+          void backfillSpectatorHistoryFromReplay({ url: params.url, coach: params.coach, compression: params.compression },
+            history, result.checkpoint);
+        }
+        if (spectatorTransport) {
+          const packetClass = classifySpectatorPacket(cmd as Record<string, unknown>);
+          if (packetClass === 'snapshot' || packetClass === 'match' || packetClass === 'clock') {
+            if (packetClass === 'snapshot') {
+              expectingGame = false; state.waitingForMatch = null;
+              if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
+              state.connectionClosed = null; reconnectAttempts = 0; reconnecting = false;
+            }
+            spectatorTransport.received();
+            if (packetClass === 'snapshot') {
+              const repairHead = history.head;
+              if (repairHead) void reconstructJoinRerollsFromReplay({
+                url: params.url, coach: params.coach, compression: params.compression,
+              }, repairHead.model, { history, checkpoint: repairHead,
+                snapshotCommandNr: typeof cmd.commandNr === 'number' ? cmd.commandNr : null });
+              void completePendingSpectatorGoLive();
+            }
+            return;
+          }
+          if (packetClass === 'annotation') {
+            // This non-replayable sound belongs only to the current live source.
+            // A paused, seeking, or returning historical reader remains silent.
+            if (cmd.netCommandId === NetCommandId.SERVER_SOUND
+              && spectatorTransport.review.source === 'live'
+              && spectatorTransport.review.phase === 'live') handleServerPush(cmd as Record<string, unknown>);
+            return;
+          }
+        }
+        switch (cmd.netCommandId) {
+          case NetCommandId.SERVER_GAME_STATE: {
+
+            if (thisSession !== session) return;
+            expectingGame = false;
+            state.waitingForMatch = null; // the match started — drop the waiting modal
+            if (joinTimer) {
+              cancelGameTimeout(joinTimer);
+              joinTimer = null;
+            }
+            spectatorDisplayedCheckpoint = result.kind === 'committed'
+              && estimatedSpectatorBytes(result.checkpoint) <= history.limits.activeGraphBytes ? result.checkpoint : null;
+            spectatorReviewRevision.value++;
+            resetPlayback(); // fresh game: no stale queued frames
+            clearPendingRailCommands();
+            game.value = structuredClone(cmd.game) as GameJson;
+            normalizeZappedPlayerSnapshots(game.value);
+            seedMoveOfferSnapshot();
+            onTheBallReceiveTurnMode = String(game.value.turnMode ?? '');
+            syncEndGame(game.value, cmd);
+            seedActingPlayer(game.value); // review batch: seed the ack-gate mirror from the snapshot (no first-action penalty)
+            forceSnapshotTick(); // owner 09-06: derive the per-frame presentation from the snapshot now
+            syncKickSkillDialog(game.value); // a spectator may join while the kicking coach is already deciding
+            state.connectionClosed = null; reconnectAttempts = 0; reconnecting = false; // a game arrived — any drop is resolved
+            log('system', `game state received (game ${game.value.gameId})`);
+            if (history.head) void reconstructJoinRerollsFromReplay({
+              url: params.url, coach: params.coach, compression: params.compression,
+            }, game.value, { history, checkpoint: history.head, snapshotCommandNr: typeof cmd.commandNr === 'number' ? cmd.commandNr : null });
+
+            break;
+          }
+          case NetCommandId.SERVER_MODEL_SYNC: enqueueSync(cmd as Record<string, unknown>); break;
+          case NetCommandId.SERVER_TALK: {
+            const talk = cmd as { coach?: string; talks?: string[] };
+            log('talk', `${talk.coach ?? '?'}: ${(talk.talks ?? []).join(' ')}`, talkSide(talk.coach));
+            noteHiddenSpectatorReviewChat();
+            break;
+          }
+          case NetCommandId.SERVER_JOIN: joinAckedThisConnect = true; handleServerJoin(cmd as { spectators?: number }); break;
+          default: {
+            const packetClass = classifySpectatorPacket(cmd as Record<string, unknown>);
+            if (packetClass === 'match' || packetClass === 'clock') {
+              // Non-sync mutations and clock samples share the displayed receive order.
+              // Connection notices remain immediate; clock samples create no history step.
+              playback.queue.push({ cmd: cmd as Record<string, unknown>, serverPush: true,
+                receivedAt: receipt.receivedWallAt, receipt });
+              pumpPlayback();
+            } else handleServerPush(cmd as Record<string, unknown>);
+            break;
+          }
+        }
+      }),
     });
-    session.on('modelSync', (cmd) => { if (thisSession === session) enqueueSync(cmd as Record<string, unknown>); });
-    session.on('talk', (cmd) => { if (thisSession === session) log('talk', `${cmd.coach ?? '?'}: ${(cmd.talks ?? []).join(' ')}`, talkSide(cmd.coach)); });
-    session.on('join', (cmd) => { if (thisSession !== session) return; joinAckedThisConnect = true; handleServerJoin(cmd as { spectators?: number }); });
-    session.on('command', (cmd) => { if (thisSession === session) handleServerPush(cmd as Record<string, unknown>); });
-    session.on('error', (error) =>
-      log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`),
-    );
+    session.on('error', (error) => {
+      if (thisSession !== session) return;
+      log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`);
+    });
     session.on('close', (code, reason) => {
       if (thisSession !== session) return;
+      history.disconnect(connectionGeneration);
+      spectatorReviewRevision.value++;
+      if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
       state.onTheBallWaiting = null;
@@ -19074,7 +19085,7 @@ export const gameStore = {
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
         return;
       }
-      if (game.value && !shouldShowConnectionClosedDialog(true, state.endGame.finalPresentationReady)) {
+      if (game.value && !shouldShowConnectionClosedDialog(true, history.head?.durableProjection.endGame.finalPresentationReady ?? state.endGame.finalPresentationReady)) {
         // Owner ruling 08-17: game already finished (endGame.finalPresentationReady) —
         // the server closing the socket post-game is expected, not a drop. Leave the
         // endgame screen as-is instead of arming the reconnect prompt over it.
@@ -19103,8 +19114,8 @@ export const gameStore = {
     });
     // B9-12 G12: a join that never receives a game state must time out with a surfaced error rather than hang forever on "joining".
     if (joinTimer) cancelGameTimeout(joinTimer);
-    joinTimer = scheduleGameTimeout(() => {
-      if (expectingGame && !game.value) {
+    joinTimer = scheduleConnectionTimeout(() => {
+      if (expectingGame && (!game.value || retainedHistory)) {
         state.joinError = `No response joining game ${params.gameId} — it may be finished or unavailable.`;
         state.spectateConnectError = {
           gameId: params.gameId, url: params.url,
@@ -19112,7 +19123,9 @@ export const gameStore = {
           detail: `No response within ${JOIN_TIMEOUT_MS / 1000}s`,
         };
         log('system', 'join timed out — game finished or unavailable');
-        this.disconnect();
+        rejectPendingSpectatorGoLive(spectatorTransport);
+        if (retainedHistory) thisSession.close();
+        else this.disconnect();
       }
     }, JOIN_TIMEOUT_MS);
     try {
@@ -19127,6 +19140,10 @@ export const gameStore = {
       const message = friendlySpectateError(detail);
       state.joinError = `Couldn't connect to game ${params.gameId}: ${message}`;
       state.spectateConnectError = { gameId: params.gameId, url: params.url, message, detail };
+      if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
+      if (state.connectionClosed?.mode === 'spectator') {
+        state.connectionClosed = { ...state.connectionClosed, reconnecting: false };
+      }
       expectingGame = false;
       if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
     }
@@ -19134,7 +19151,7 @@ export const gameStore = {
 
   async connectReplay(params: { url: string; coach: string; gameId: number; compression?: boolean; auth?: string }) {
     this.disconnect();
-    state.log.splice(0);
+    state.log = [];
     game.value = null;
     triggerRef(game);
     replay.loading = true;
@@ -19165,7 +19182,7 @@ export const gameStore = {
     const bundle = parseReplayFile(text, byteLength);
     const preflighted = preflightReplayBundle(bundle);
     this.disconnect();
-    state.log.splice(0);
+    state.log = [];
     try { installReplayBundle(bundle, preflighted); }
     catch (error) {
       replay.error = error instanceof Error ? error.message : String(error);
@@ -19246,7 +19263,7 @@ export const gameStore = {
     // load a newly issued JNLP after any socket loss.
     lastConnect = officialFumbbl ? null : { mode: 'player', params };
     state.demoMode = false;
-    state.log.splice(0);
+    state.log = [];
     state.joinError = null;
     game.value = null;
     triggerRef(game);
@@ -19411,7 +19428,7 @@ export const gameStore = {
     // FUMBBL joins wait in matchmaking for the game to start (long window); other joins expect a prompt gameState and use the short "server unreachable" guard.
     const joinTimeoutMs = officialFumbbl ? FUMBBL_MATCH_WAIT_MS : JOIN_TIMEOUT_MS;
     if (joinTimer) cancelGameTimeout(joinTimer);
-    joinTimer = scheduleGameTimeout(() => {
+    joinTimer = scheduleConnectionTimeout(() => {
       if (expectingGame && !game.value) {
         // Rejoin-by-id / opponent-not-yet-here resting state: on the fork path, if the server ALREADY
         // acked our join (serverJoin ⇒ joinAckedThisConnect), the socket is alive and the server simply
@@ -19463,6 +19480,7 @@ export const gameStore = {
   },
 
   sendTalk(text: string) {
+    if (settings.chatDisabled || (spectatorTransport?.review.source === 'live-review' && !spectatorLiveChatOpen.value)) return;
     session?.sendTalk(text);
   },
 
@@ -19586,7 +19604,9 @@ export const gameStore = {
   /** Developer replay: feed a captured block through the real spectator ingest pipeline. */
   async demoReplayBlock() {
     this.disconnect();
+    const generation = ++demoLoadGeneration;
     const asset = await import('../assets/demo-block.json');
+    if (generation !== demoLoadGeneration || spectatorPublication.position.value) return;
     const data = asset.default as unknown as { game: unknown; frames: Record<string, unknown>[] };
     play.active = false;
     game.value = structuredClone(data.game) as GameJson;
@@ -21438,10 +21458,25 @@ export const gameStore = {
     // connectionClosed + `reconnecting`), so raise BOTH AFTER kicking it off. A successful
     // join clears them (gameState); a failed one keeps retrying/prompting via the close
     // handler (which treats `reconnecting` as a drop even though game.value is null).
-    if (lc.mode === 'spectator') void this.connect(lc.params);
+    if (lc.mode === 'spectator') void this.connect(lc.params, true);
     else void this.connectAsPlayer(lc.params);
     reconnecting = true;
     state.connectionClosed = { mode: lc.mode, label, code: 0, reconnecting: true };
+  },
+  cancelReconnect() {
+    if (spectatorTransport?.review.source !== 'live-review') { this.disconnect(); return; }
+    settlePendingSpectatorGoLive(false);
+    if (reconnectTimer) { cancelGameTimeout(reconnectTimer); reconnectTimer = null; }
+    reconnecting = false;
+    expectingGame = false;
+    if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
+    const cancelledSession = session;
+    session = null;
+    spectatorIngress?.dispose();
+    spectatorIngress = null;
+    cancelledSession?.close();
+    state.sessionState = 'idle';
+    if (state.connectionClosed) state.connectionClosed = { ...state.connectionClosed, reconnecting: false };
   },
   /** Play-mode: schedule the next auto-reconnect attempt (capped, backing off). */
   scheduleAutoReconnect() {
@@ -21457,7 +21492,7 @@ export const gameStore = {
     // be rejoinable until the opponent also comes back, so back off instead of hammering — capped so we still
     // retry promptly once it's serveable. Each success lands in the joined-and-waiting hold and stops the loop.
     const delay = Math.min(RECONNECT_DELAY_MS * 2 ** (reconnectAttempts - 1), RECONNECT_MAX_DELAY_MS);
-    reconnectTimer = scheduleGameTimeout(() => {
+    reconnectTimer = scheduleConnectionTimeout(() => {
       reconnectTimer = null;
       // still disconnected (a successful join would have cleared connectionClosed)?
       if (state.connectionClosed?.mode === 'player') this.reconnect();
@@ -21485,6 +21520,17 @@ export const gameStore = {
   },
 
   disconnect() {
+    demoLoadGeneration++;
+    settlePendingSpectatorGoLive(false);
+    state.opponentLeft = null;
+    spectatorTransport?.dispose();
+    spectatorTransport = null;
+    spectatorReviewRevision.value++;
+    spectatorPublication.clear();
+    clearSpectatorTransientState();
+    spectatorIngress?.dispose();
+    spectatorIngress = null;
+    spectatorDisplayedCheckpoint = null;
     // Owner 2026-07-07: an explicit Disconnect is the user's choice — cancel any pending auto-reconnect and drop the "Connection closed" prompt.
     if (reconnectTimer) { cancelGameTimeout(reconnectTimer); reconnectTimer = null; }
     // NB: don't reset reconnectAttempts here — connect() calls disconnect(), so resetting would defeat the retry cap mid-loop. It's reset on a successful gameState instead.
@@ -21526,7 +21572,9 @@ export const gameStore = {
    */
   async loadDemo() {
     this.disconnect();
+    const generation = ++demoLoadGeneration;
     const demo = await import('../assets/demo-game.json');
+    if (generation !== demoLoadGeneration || spectatorPublication.position.value) return;
     const g = structuredClone(demo.default) as unknown as GameJson;
 
     const STANDING_ACTIVE = 0x101;
@@ -21656,7 +21704,7 @@ export const gameStore = {
     ];
     for (const report of sampleReports) {
       if (settings.debugLog || isDiceRoll(report) || isAlwaysVisibleEffectReport(report)) {
-        for (const formatted of formatReportLines(report, g)) {
+        for (const formatted of formatReportLines(report, g, visibleReportLogContext)) {
           log('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags);
         }
       }
@@ -21726,6 +21774,7 @@ if (import.meta.env.DEV) {
   // a real block resolves end-to-end through the live pipeline.
   (globalThis as unknown as { __replayFrames?: (cmds: Record<string, unknown>[], gapMs?: number) => unknown }).__replayFrames =
     (cmds, gapMs = 1100) => {
+      if (spectatorPublication.position.value) return { gameSet: false, syncFrames: 0 };
       play.active = false; // spectator pacing (the pipeline)
       const gs = cmds.find((c) => String(c.netCommandId) === 'serverGameState');
       if (gs && gs.game) { game.value = structuredClone(gs.game) as GameJson; triggerRef(game); }
@@ -21736,6 +21785,7 @@ if (import.meta.env.DEV) {
   // __replayFramesPlay drives captured frames through the real play-mode pipeline; spectator replay cannot reproduce play-only races.
   (globalThis as unknown as { __replayFramesPlay?: (cmds: Record<string, unknown>[], gapMs?: number) => unknown }).__replayFramesPlay =
     (cmds, gapMs = 120) => {
+      if (spectatorPublication.position.value) return { mode: 'play', gameSet: false, syncFrames: 0 };
       play.active = true; // route through the PLAY-MODE pipeline (immediate-apply for non-regular turns)
       const gs = cmds.find((c) => String(c.netCommandId) === 'serverGameState');
       if (gs && gs.game) {

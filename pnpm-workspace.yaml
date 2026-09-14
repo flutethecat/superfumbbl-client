@@ -1,3 +1,5 @@
 packages:
   - apps/*
   - packages/*
+patchedDependencies:
+  pixi.js@8.20.1: patches/pixi.js@8.20.1.patch

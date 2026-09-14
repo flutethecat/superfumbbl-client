@@ -189,6 +189,12 @@ let fieldFlip = false;
 export function setFieldFlip(f: boolean): void {
   fieldFlip = f;
 }
+/** P3 (perf 09-14): every module-level input of extPoint/depthScale in one comparable string — the stadium memo key
+ *  in renderer.ts carries it so a projection change (orientation, flat, uniform figures, field flip) always redraws. */
+export function geometryStateKey(): string {
+  return `${orientation}|${flat ? 1 : 0}|${uniformFigures ? 1 : 0}|${fieldFlip ? 1 : 0}`;
+}
+
 export function isFieldFlip(): boolean {
   return fieldFlip;
 }

@@ -37,6 +37,8 @@ const props = defineProps<{
   toolbarRight?: number;
   /** Host-relative LEFT edge of the quick bar; when set the launcher docks to its left (owner 09-06). */
   toolbarLeft?: number | null;
+  /** Rendered height of the quick bar; the COLLAPSED launcher takes exactly this height (owner 09-14: top and bottom edges align). */
+  toolbarHeight?: number | null;
   toolbarPosition?: EdgePanelPosition | null;
 }>();
 const emit = defineEmits<{
@@ -131,15 +133,20 @@ function toggleExpanded(): void {
   refresh();
 }
 
+/** Owner 09-14: the collapsed, undocked launcher takes the quick bar's rendered height (top/bottom edges align). A
+ *  dragged launcher keeps its intrinsic 29 px trigger (Astra: `height: 100%` of an auto parent shrank it after a move). */
+const matchedHeight = computed(() => !state.value.expanded && !props.toolbarPosition && props.toolbarLeft != null && !!props.toolbarHeight); // the left-docked default only (Astra: the right-docked fallback never spreads the height)
 const toolbarStyle = computed<Record<string, string>>(() => {
   viewportRevision.value;
   if (!props.toolbarPosition) {
     // Default dock = immediately LEFT of the quick bar on the same bottom row. The expanded row still
     // rises above the launcher (translateY) so it clears the bar as it grows rightward.
+    const matched: Record<string, string> = matchedHeight.value ? { height: `${props.toolbarHeight}px` } : {};
     if (props.toolbarLeft != null) return {
       bottom: `${props.toolbarBottom ?? 8}px`,
       left: `${Math.max(8, props.toolbarLeft - launcherSize.value.width - 4)}px`,
       right: 'auto',
+      ...matched,
     };
     return {
       bottom: `${props.toolbarBottom ?? 8}px`,
@@ -408,7 +415,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="enabled" ref="shell" class="telestrator-shell">
-      <div ref="toolbar" class="telestrator-tools" role="toolbar" aria-label="Telestrator"
+      <div ref="toolbar" class="telestrator-tools" role="toolbar" aria-label="Telestrator" :data-matched="matchedHeight"
         :data-expanded="state.expanded"
         :data-dragging="toolbarDragging"
         :style="toolbarStyle">
@@ -567,6 +574,8 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--ui-focus-halo);
 }
+.telestrator-tools { box-sizing: border-box; } /* owner 09-14: an explicit height (quick-bar match) includes border + padding */
+.telestrator-tools[data-matched='true'] .telestrator-collapsed-trigger { height: 100%; min-height: 0; } /* fills the matched box only */
 .telestrator-tools .telestrator-collapsed-trigger { box-sizing: border-box; flex: 0 0 auto; width: auto; min-width: max-content; padding: 0 9px; white-space: nowrap; touch-action: none; cursor: grab; }
 .telestrator-tools[data-dragging='true'] .telestrator-collapsed-trigger {
   cursor: grabbing;

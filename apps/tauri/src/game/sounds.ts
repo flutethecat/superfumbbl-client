@@ -293,6 +293,15 @@ export function waitForSoundUrlsRetirement(urls: ReadonlySet<string>): Promise<v
 let suppressed = false;
 export function setSoundsSuppressed(v: boolean): void { suppressed = v; }
 
+/** Stop already-started cues when presentation ownership changes. */
+export function stopPresentationSounds(): void {
+  for (const audio of [...playingAudio]) {
+    audio.pause();
+    playingAudio.delete(audio);
+  }
+  notifyAudioSettlement();
+}
+
 export function playSound(soundId: string | null | undefined): void {
   if (!soundId || suppressed) return;
   // Owner 08-17: replay's fast collapse path (2x/4x) now calls this from a plain model-fold — an

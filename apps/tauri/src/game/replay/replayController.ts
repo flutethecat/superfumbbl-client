@@ -310,6 +310,9 @@ export interface ReplayTurnMarker extends ReplayTurnPosition {
   cursor: number;
   boundary: 'start' | 'finish';
   label: string;
+  /** Live review only (owner 09-14): the history segment the cursor belongs to — the TURNS list spans every
+   *  segment ("Before you joined" first), so a marker must name its own. Absent for file replays. */
+  segmentId?: number;
 }
 
 type UnlabelledReplayTurnMarker = Omit<ReplayTurnMarker, 'label'>;

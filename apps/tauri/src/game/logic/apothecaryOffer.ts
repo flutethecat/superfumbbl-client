@@ -5,7 +5,10 @@ import {
 
 export const APOTHECARY_TYPES = ['TEAM', 'WANDERING', 'PLAGUE'] as const;
 export type ApothecaryType = typeof APOTHECARY_TYPES[number];
-export type ApothecaryOutcome = 'stay' | 'reserves' | 'building';
+export const APOTHECARY_OUTCOMES = ['stay', 'reserves', 'building'] as const;
+export type ApothecaryOutcome = (typeof APOTHECARY_OUTCOMES)[number];
+export const APOTHECARY_OFFER_KINDS = ['single', 'multiple'] as const;
+export const APOTHECARY_NONE_LABELS = ['Decline', 'None'] as const;
 export type ApothecaryAudience = 'player' | 'spectator' | 'replay';
 
 export const APOTHECARY_TYPE_LABELS: Readonly<Record<ApothecaryType, string>> = Object.freeze({
@@ -25,7 +28,7 @@ export interface ApothecaryInjuryOffer {
 }
 
 export interface ApothecaryOffer {
-  kind: 'single' | 'multiple';
+  kind: (typeof APOTHECARY_OFFER_KINDS)[number];
   dialogId: 'useApothecary' | 'useApothecaries';
   teamId: string | null;
   injuries: readonly ApothecaryInjuryOffer[];
@@ -98,7 +101,7 @@ export function apothecaryTypeOptions(types: readonly ApothecaryType[], legacyUn
   return types.map((type) => Object.freeze({ type, label: apothecaryTypeLabel(type) }));
 }
 
-export function apothecaryNoneLabel(offer: Pick<ApothecaryOffer, 'kind' | 'injuries'>): 'Decline' | 'None' {
+export function apothecaryNoneLabel(offer: Pick<ApothecaryOffer, 'kind' | 'injuries'>): (typeof APOTHECARY_NONE_LABELS)[number] {
   return offer.kind === 'single' && (offer.injuries[0]?.offeredTypes.length ?? 0) <= 1 ? 'Decline' : 'None';
 }
 

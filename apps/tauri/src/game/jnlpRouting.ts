@@ -188,7 +188,7 @@ export function stageFumbblPlayerLobby(lobby: FumbblLobby, auth: string): void {
 }
 
 function logJnlp(text: string): void {
-  gameStore.state.log.push({ time: new Date().toLocaleTimeString(), kind: 'system', text });
+  gameStore.appendSystemNotice(text);
 }
 
 type FumbblJoinTarget = {

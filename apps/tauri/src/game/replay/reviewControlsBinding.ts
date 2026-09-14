@@ -22,6 +22,10 @@ export interface ReviewControlsBinding {
   stepBackward(): Promise<unknown>;
   turn(direction: -1 | 1): Promise<unknown>;
   seek(sequence: number): Promise<unknown>;
+  /** Owner 09-14: a TURNS pick may live in another history segment (the pre-join backfill); seeks across it. */
+  seekTurn?(marker: ReplayTurnMarker): Promise<unknown>;
+  /** Owner 09-14: Previous/Next turn stay enabled at a segment edge when a neighbouring segment can be crossed into. */
+  canTurn?(direction: -1 | 1): boolean;
   setSpeed(speed: ReplaySpeed): void;
   beginScrub(): unknown;
   endScrub(): void;

@@ -17,21 +17,17 @@ export interface HmpScatterSkillUseCardInput {
 /** The Savage Mauling election is delivered in the same sync as the injury
  * report. Project the server's final PlayerState result; never recompute it
  * from the dice or from a later field-model update. */
+/** Injury result names by casualty base 4..8; the spectator checkpoint validator reads this list. */
+export const INJURY_RESULT_NAMES = ['Stun', 'KO', 'Badly Hurt', 'Serious Injury', 'Death'] as const;
+export type InjuryResultName = (typeof INJURY_RESULT_NAMES)[number];
 export function savageMaulingInjuryResult(
   reports: readonly Record<string, unknown>[],
   playerId: string,
-): string | undefined {
+): InjuryResultName | undefined {
   const report = reports.find((candidate) => candidate.reportId === 'injury'
     && String(candidate.attackerId ?? '') === playerId);
   const injury = typeof report?.injury === 'number' ? report.injury & 0xff : -1;
-  switch (injury) {
-    case 4: return 'Stun';
-    case 5: return 'KO';
-    case 6: return 'Badly Hurt';
-    case 7: return 'Serious Injury';
-    case 8: return 'Death';
-    default: return undefined;
-  }
+  return injury >= 4 && injury <= 8 ? INJURY_RESULT_NAMES[injury - 4] : undefined;
 }
 
 /** Old Pro's skill-use prompt shares a frame with the chainsaw injury report.

@@ -65,7 +65,7 @@ const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> =
           <p class="fm-lede">Everything rides the pitch — one camera, one board, every panel floats over it. Drag them where you like.</p>
           <ul class="fm-list">
             <li><b>Quick bar</b> (bottom corner): settings ⚙, tackle zones, sprite style, skill display, 🏟️ stadium visibility, 🎬 Auto Director, and the 🐞 bug report. Display and camera only — no game actions live there.</li>
-            <li><b>Auto Director</b> tracks the ball and the acting player. Toggle it off for a calm camera: pan with <kbd>WASD</kbd> or drag, scroll to zoom.</li>
+            <li><b>Auto Director</b> tracks the ball and the acting player. Toggle it off for a calm camera: pan with <kbd>WASD</kbd> or the arrow keys, or drag; scroll to zoom.</li>
             <li><b>Log window</b> (bottom right): the play-by-play with the real dice. Tabs flip to Chat and both Rosters.</li>
             <li><b>Click any player</b> — yours or theirs — for their card: stats, skills, SPP.</li>
             <li><b>Follow the action:</b> the gold halo marks the player being activated; the ring under each player is white until they act, then grey. Skill icons ride over heads (or as text markers at the feet) — tune them in Settings → Display → Skill display config.</li>

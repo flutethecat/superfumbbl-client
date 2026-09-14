@@ -17,12 +17,20 @@ const minimum = computed(() => props.review?.minimum ?? 0);
 const speed = computed(() => props.review?.speed ?? gameStore.replay.speed);
 const playing = computed(() => props.review?.playing ?? gameStore.replay.playing);
 const canPlay = computed(() => ready.value && status.value.cursor < status.value.total);
+// Owner 09-14: a turn step may cross into the neighbouring history segment (the live review says when).
+const canTurnBack = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(-1) : status.value.cursor > minimum.value));
+const canTurnForward = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(1) : status.value.cursor < status.value.total));
 const turnMarkers = computed(() => props.review?.turnMarkers ?? gameStore.replay.status.turnMarkers);
 function turnMarkerKey(marker: (typeof turnMarkers.value)[number]): string {
-  return `${marker.cursor}:${marker.boundary}:${marker.side}:${marker.turn}:${marker.half}`;
+  return `${marker.segmentId ?? ''}:${marker.cursor}:${marker.boundary}:${marker.side}:${marker.turn}:${marker.half}`;
 }
-const selectedTurnMarker = computed(() => turnMarkers.value
-  .filter((marker) => marker.cursor <= status.value.cursor).at(-1) ?? null);
+// Owner 09-14: the list spans every history segment; the highlighted turn is the last one at or before the cursor
+// INSIDE the visible segment (an earlier segment's turns all precede it).
+const selectedTurnMarker = computed(() => {
+  const visibleSegment = props.review?.selectedSegment ?? null;
+  const inVisible = turnMarkers.value.filter((marker) => marker.segmentId === undefined || marker.segmentId === visibleSegment);
+  return inVisible.filter((marker) => marker.cursor <= status.value.cursor).at(-1) ?? null;
+});
 const panelEl = ref<HTMLElement | null>(null);
 const defaultPosition = ref<{ x: number; y: number } | null>(null);
 const panelStyle = computed(() => ({
@@ -40,7 +48,8 @@ function onTransportKeydown(event: KeyboardEvent): void {
     if (playing.value || canPlay.value) { event.preventDefault(); togglePlayback(); }
   } else if (ready.value && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
     const direction = event.key === 'ArrowLeft' ? -1 : 1;
-    if (direction < 0 ? status.value.cursor <= minimum.value : status.value.cursor >= status.value.total) return;
+    if (event.shiftKey ? !(direction < 0 ? canTurnBack.value : canTurnForward.value)
+      : (direction < 0 ? status.value.cursor <= minimum.value : status.value.cursor >= status.value.total)) return;
     event.preventDefault();
     if (event.shiftKey) {
       if (props.review) void props.review.turn(direction);
@@ -212,7 +221,8 @@ function seek(sequence: number): void {
 function selectTurn(event: Event): void {
   const key = (event.target as HTMLSelectElement).value;
   const marker = turnMarkers.value.find((candidate) => turnMarkerKey(candidate) === key);
-  if (marker) seek(marker.cursor);
+  if (!marker) return;
+  if (props.review?.seekTurn) void props.review.seekTurn(marker); else seek(marker.cursor);
 }
 function openRecentHistory(): void {
   const segment = props.review?.segments.at(-1);
@@ -224,7 +234,7 @@ function openRecentHistory(): void {
   <div ref="panelEl" class="replay-controls" :style="panelStyle" :data-playing="playing" :data-state="status.phase" role="toolbar" tabindex="0" aria-label="Replayer controls" aria-keyshortcuts="Space ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight" @keydown.stop="onTransportKeydown" @pointerdown.stop @contextmenu.stop.prevent>
     <button type="button" class="replay-grip" title="Drag replay controls" aria-label="Drag replay controls" @pointerdown="startDrag">⠿</button>
     <div class="replay-control-group transport-controls">
-      <button class="transport-icon" :disabled="!ready || status.cursor <= minimum" title="Previous turn" aria-label="Previous turn" @click="props.review ? props.review.turn(-1) : gameStore.replayTurnBackward()">
+      <button class="transport-icon" :disabled="!canTurnBack" title="Previous turn" aria-label="Previous turn" @click="props.review ? props.review.turn(-1) : gameStore.replayTurnBackward()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-7 7 7 7m9-14-7 7 7 7" /></svg>
       </button>
       <button class="transport-icon" :disabled="!ready || status.cursor <= minimum" title="Previous step" aria-label="Previous step" @click="props.review ? props.review.stepBackward() : gameStore.replayCommandBackward()">
@@ -237,7 +247,7 @@ function openRecentHistory(): void {
       <button class="transport-icon" :disabled="!ready || status.cursor >= status.total" title="Next step" aria-label="Next step" @click="stepForward">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!ready || status.cursor >= status.total" title="Next turn" aria-label="Next turn" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
+      <button class="transport-icon" :disabled="!canTurnForward" title="Next turn" aria-label="Next turn" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 7 7-7 7m9-14 7 7-7 7" /></svg>
       </button>
     </div>

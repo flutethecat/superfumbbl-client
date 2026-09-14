@@ -59,4 +59,5 @@ export { renderStadiumPack, validateStadiumPack, modelToSquare, stadiumFootprint
 export { bundledStadiumPacks, type BundledStadiumPack } from './bundledStadium';
 /** Keep the 3D dice controller and Three.js in lazy chunks. */
 export const loadBlockDice3d = () => import('./blockDice3d');
+export { ACTION_DIE_TUMBLE_MS } from './actionDice3d';
 export type { BlockDiceRow } from './blockDice3d';

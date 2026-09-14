@@ -5,10 +5,9 @@
  */
 
 export type EndGameAudience = 'player' | 'spectator' | 'replay';
-export type EndGamePhase =
-  | 'idle' | 'initializing' | 'assignTouchdowns' | 'penaltyShootout'
-  | 'mvp' | 'winnings' | 'dedicatedFans' | 'playerLoss'
-  | 'statistics' | 'complete';
+export const END_GAME_PHASES = ['idle', 'initializing', 'assignTouchdowns', 'penaltyShootout',
+  'mvp', 'winnings', 'dedicatedFans', 'playerLoss', 'statistics', 'complete'] as const;
+export type EndGamePhase = (typeof END_GAME_PHASES)[number];
 
 export interface EndGameDialog {
   id: string;
@@ -173,7 +172,9 @@ export function reduceEndGame(previous: EndGameState, frame: EndGameFrame): EndG
   for (const report of frame.reports) {
     phase = later(phase, reportPhase(report));
     switch (report.kind) {
-      case 'playerEvent': touchdownAwards = [...touchdownAwards, report]; break;
+      // Only the declared shape is stored: the frame report carries its `kind` discriminator, which the spectator
+      // checkpoint validator (exact keys) rejected at the first touchdown award of every real match (09-14).
+      case 'playerEvent': touchdownAwards = [...touchdownAwards, { playerId: report.playerId, text: report.text }]; break;
       case 'penaltyShootout': shootoutReports = [...shootoutReports, report.payload]; break;
       case 'mostValuablePlayers': mvpHomeIds = report.homeIds; mvpAwayIds = report.awayIds; break;
       case 'winnings': winnings = { home: report.home, away: report.away }; break;

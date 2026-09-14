@@ -372,23 +372,22 @@ function boughtLine(r: Report, game: GameJson | null): string {
   return `${teamName(game, r.teamId)} buys ${parts.length ? parts.join(', ') : 'nothing'}${goldPart}`;
 }
 
-/** Defender of the most recent block report (EC-8: live blockRoll omits it). */
-let lastBlockDefenderId: string | undefined;
-
-/** ATTACKER of the most recent block report (owner 08-18). ReportBlockRoll carries
- *  only the defender, so the opening `block` report latches the attacker for the
- *  offered-dice line that follows it in the same frame. */
-let lastBlockAttackerId: string | undefined;
-
-/** ReportBlockRoll names the choosing team; the following ReportBlockChoice
- * omits it. Retain that authoritative team for the resolved-choice log line. */
-let lastBlockChoosingTeamId: string | undefined;
+/** Cursor-owned context. Explicit contexts never read the legacy presentation lane. */
+export interface ReportLogContext {
+  lastBlockDefenderId: string | null;
+  lastBlockAttackerId: string | null;
+  lastBlockChoosingTeamId: string | null;
+}
+export function createReportLogContext(): ReportLogContext {
+  return { lastBlockDefenderId: null, lastBlockAttackerId: null, lastBlockChoosingTeamId: null };
+}
+const legacyReportLogContext = createReportLogContext();
 
 /** Owner 2026-07-06 (finding B): prime the block defender from a report that DOES
  *  carry it (block / blockChoice) BEFORE the frame's log loop, so the LIVE blockRoll
  *  line — which omits defenderId — resolves the name instead of rendering "vs ?". */
-export function setBlockDefenderHint(defenderId: string | undefined): void {
-  if (defenderId) lastBlockDefenderId = defenderId;
+export function setBlockDefenderHint(defenderId: string | undefined, context = legacyReportLogContext): void {
+  if (defenderId) context.lastBlockDefenderId = defenderId;
 }
 
 /** Owner 08-18: the attacker for a block dice/result line. Report keys first, then the game model's
@@ -396,8 +395,8 @@ export function setBlockDefenderHint(defenderId: string | undefined): void {
  *  id latched from this sequence's `block` report -- model-current beats a latch that a debug-log
  *  toggle could leave a sequence behind. Returns undefined when none resolve; the caller then keeps
  *  the old defender-only wording rather than guessing. */
-function blockAttacker(r: Report, g: GameJson | null): string | undefined {
-  for (const candidate of [r.attackerId, r.playerId, g?.actingPlayer?.playerId, lastBlockAttackerId]) {
+function blockAttacker(r: Report, g: GameJson | null, context: ReportLogContext): string | undefined {
+  for (const candidate of [r.attackerId, r.playerId, g?.actingPlayer?.playerId, context.lastBlockAttackerId]) {
     if (typeof candidate === 'string' && candidate) return candidate;
   }
   return undefined;
@@ -473,7 +472,7 @@ function turnEndLines(r: Report, g: GameJson | null): string[] {
   return lines;
 }
 
-const formatters: Record<string, (report: Report, game: GameJson | null) => string> = {
+const formatters: Record<string, (report: Report, game: GameJson | null, context: ReportLogContext) => string> = {
   dodgeRoll: skillRoll('dodges'),
   goForItRoll: skillRoll('goes for it'),
   catchRoll: skillRoll('catches'),
@@ -560,11 +559,11 @@ const formatters: Record<string, (report: Report, game: GameJson | null) => stri
   // the block report carries ONLY defenderId — the attacker is implicit (the
   // acting player); and the LIVE server's blockRoll omits defenderId (our
   // mirror is ahead of production), so the last block's defender is carried.
-  block: (r, g) => {
-    lastBlockDefenderId = typeof r.defenderId === 'string' ? r.defenderId : lastBlockDefenderId;
+  block: (r, g, context) => {
+    context.lastBlockDefenderId = typeof r.defenderId === 'string' ? r.defenderId : context.lastBlockDefenderId;
     const attacker = r.attackerId ?? r.playerId ?? g?.actingPlayer?.playerId;
-    if (typeof attacker === 'string' && attacker) lastBlockAttackerId = attacker;
-    lastBlockChoosingTeamId = undefined;
+    if (typeof attacker === 'string' && attacker) context.lastBlockAttackerId = attacker;
+    context.lastBlockChoosingTeamId = null;
     return `${pn(g, attacker)} blocks ${pn(g, r.defenderId)}`;
   },
   // Owner 08-18: the offered block-dice line named only the DEFENDER ("block dice vs X"), so the log
@@ -575,12 +574,12 @@ const formatters: Record<string, (report: Report, game: GameJson | null) => stri
   // the `block` report that opens the sequence, else game.actingPlayer (upstream's own client
   // does exactly this for the attacker-less block texts -- same precedent as the `referee` line).
   // With no attacker resolvable AT ALL the OLD wording is kept for that shape (never guess).
-  blockRoll: (r, g) => {
+  blockRoll: (r, g, context) => {
     // ffb-common/src/main/java/com/fumbbl/ffb/report/ReportBlockRoll.java:16-18,57-71 carries these wire values.
     const dice = Array.isArray(r.blockRoll) ? blockDieList(r.blockRoll) : '?';
-    if (typeof r.choosingTeamId === 'string' && r.choosingTeamId) lastBlockChoosingTeamId = r.choosingTeamId;
-    const defender = r.defenderId ?? lastBlockDefenderId;
-    const attacker = blockAttacker(r, g);
+    if (typeof r.choosingTeamId === 'string' && r.choosingTeamId) context.lastBlockChoosingTeamId = r.choosingTeamId;
+    const defender = r.defenderId ?? context.lastBlockDefenderId;
+    const attacker = blockAttacker(r, g, context);
     // Owner 08-18: attacker left / defender right (already the shape); when the DEFENDER's coach
     // picks the die (choosingTeamId ≠ attacker's team = the block is uphill), title it "Uphill Block"
     // — the title then carries the chooser, so the "(… chooses)" tail drops on uphill lines.
@@ -594,7 +593,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null) => stri
       ? `${titleTag(uphill ? 'Uphill Block' : 'Block')} ${pn(g, attacker)} vs ${pn(g, defender)}: ${dice}${chooses}`
       : `block dice vs ${pn(g, defender)}: ${dice}${chooses}`;
   },
-  blockChoice: (r, g) => {
+  blockChoice: (r, g, context) => {
     // ffb-common/src/main/java/com/fumbbl/ffb/report/ReportBlockChoice.java:16-19,85-105 carries roll + selection.
     const roll = Array.isArray(r.blockRoll) && typeof r.diceIndex === 'number'
       ? r.blockRoll[r.diceIndex]
@@ -604,7 +603,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null) => stri
       : blockResultFaceName(r.blockResult);
     const choosingTeamId = typeof r.choosingTeamId === 'string' && r.choosingTeamId
       ? r.choosingTeamId
-      : lastBlockChoosingTeamId;
+      : context.lastBlockChoosingTeamId;
     return `${coachName(g, choosingTeamId)} chooses ${result}`;
   },
   blockReRoll: (r, g) => {
@@ -1190,12 +1189,12 @@ function seriousInjuryLabel(value: unknown): string {
   return `${label} (${niStatDownTag('NI')})`;
 }
 
-export function formatReportDisplay(report: Report, game: GameJson | null): ReportDisplay {
+export function formatReportDisplay(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay {
   const id = String(report.reportId ?? 'unknown');
   const formatter = formatters[id];
   if (formatter) {
     try {
-      return decodeDisplay(formatter(report, game));
+      return decodeDisplay(formatter(report, game, context));
     } catch {
       // fall through to the generic line
     }
@@ -1221,15 +1220,15 @@ export function formatReportDisplay(report: Report, game: GameJson | null): Repo
   return decodeDisplay(extras ? `${humanize(id)} | ${extras}` : humanize(id));
 }
 
-export function formatReport(report: Report, game: GameJson | null): string {
-  return formatReportDisplay(report, game).text;
+export function formatReport(report: Report, game: GameJson | null, context = legacyReportLogContext): string {
+  return formatReportDisplay(report, game, context).text;
 }
 
 /** #10x (owner 08-17): multi-LINE entry point — most reportIds still render as exactly one
  *  line (delegates to formatReportDisplay), but turnEnd splits into several (TD line, grouped
  *  KO-recovery lines, heat-exhaustion line) instead of one '; '-joined wall of text. Callers
  *  should log() each returned entry as its own line, in order. */
-export function formatReportLines(report: Report, game: GameJson | null): ReportDisplay[] {
+export function formatReportLines(report: Report, game: GameJson | null, context = legacyReportLogContext): ReportDisplay[] {
   if (String(report.reportId ?? '') === 'turnEnd') {
     try {
       return turnEndLines(report, game).map(decodeDisplay);
@@ -1242,11 +1241,11 @@ export function formatReportLines(report: Report, game: GameJson | null): Report
   const formatter = formatters[String(report.reportId ?? 'unknown')];
   if (formatter) {
     try {
-      const raw = formatter(report, game);
+      const raw = formatter(report, game, context);
       if (raw.includes('\n')) return raw.split('\n').filter((line) => line.length > 0).map(decodeDisplay);
     } catch {
       // fall through to the single-line generic path
     }
   }
-  return [formatReportDisplay(report, game)];
+  return [formatReportDisplay(report, game, context)];
 }

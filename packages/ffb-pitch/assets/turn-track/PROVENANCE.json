@@ -1,0 +1,20 @@
+{
+  "folder": "turn-track",
+  "purpose": "Header icons of the on-pitch turn/score track: clock = Turn column, spiked football = Score column (owner 09-14).",
+  "license": "Super FUMBBL Media License (original art)",
+  "assets": [
+    {
+      "file": "clock.png",
+      "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/turn-tracker/clock-v2.png",
+      "tool": "owner-run built-in image_gen (prompt + cleanup prompt in the source folder's prompts-and-manifest.json)",
+      "processing": "alpha-trimmed and Lanczos-downscaled to 256 px max edge (a mipmapped GPU texture then serves the ~24 px fit-zoom header and the ~110 px zoomed-in header without decimation)"
+    },
+    {
+      "file": "spiked-football.png",
+      "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/turn-tracker/spiked-football-v1.png",
+      "tool": "owner-run built-in image_gen (prompt in the source folder's prompts-and-manifest.json)",
+      "processing": "alpha-trimmed and Lanczos-downscaled to 256 px max edge (a mipmapped GPU texture then serves the ~24 px fit-zoom header and the ~110 px zoomed-in header without decimation)"
+    }
+  ],
+  "note": "No FUMBBL or Games Workshop material; not routed through any FUMBBL CDN."
+}

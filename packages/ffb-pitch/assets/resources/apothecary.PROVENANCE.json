@@ -1,0 +1,9 @@
+{
+  "file": "apothecary.png",
+  "purpose": "On-pitch apothecary token (bench indicator) and the treatment cinematic character; drawn nearest-sampled like the walk sprites.",
+  "license": "Super FUMBBL Media License (original art)",
+  "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/production-128/misc/apothecary/front-selected.png",
+  "tool": "sprite lane (PixelLab generation, owner-selected candidate); prompt: prompts/misc/apothecary-front-v2.txt in the same folder tree",
+  "replaced": "928x1373 owner Gemini illustration (07-03 r6f) \u2014 128 px pixel sprite matches the walk-sheet tier (owner 09-14)",
+  "note": "No FUMBBL or Games Workshop material."
+}

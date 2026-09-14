@@ -1,9 +1,10 @@
 import { isD6FaceValue, type D6FaceValue } from '@fumbbl40k/ffb-pitch';
 
+export const D6_LOG_TOKEN_KINDS = ['roll', 'target'] as const;
 export interface D6LogToken {
   index: number;
   value: D6FaceValue;
-  kind: 'roll' | 'target';
+  kind: (typeof D6_LOG_TOKEN_KINDS)[number];
 }
 
 export type D6LogPart =

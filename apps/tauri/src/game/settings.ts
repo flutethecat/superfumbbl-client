@@ -332,7 +332,6 @@ export interface AppSettings {
    *  'banner' (default, the full injury banner like every other result) or 'tag' (a
    *  lightweight token-anchored tag like the KO toast, so a stun no longer interrupts
    *  hard). Injury-pacing-review §4-1. Stun only; KO/casualty are unaffected. */
-  stunDisplay: 'banner' | 'tag';
   /** Owner 2026-07-08: show the full-width CASUALTY SPLASH banner on a casualty.
    *  Default OFF — the token-anchored casualty toast (red) carries it; the splash is
    *  opt-in. The toast is unaffected by this. */
@@ -556,7 +555,6 @@ const DEFAULTS: AppSettings = {
   d6FaceVariant: 'brushed-metal',
   auraDisturbingPresence: 'selected',
   auraPickMeUp: 'selected',
-  stunDisplay: 'banner',
   casualtySplash: false, // owner 2026-07-08: casualty splash defaults OFF (the red toast remains)
   flatRender: false,
   turnTrack: true, // owner 2026-07-07: on-pitch turn/score/re-roll tracks shown by default

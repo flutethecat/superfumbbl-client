@@ -1984,7 +1984,7 @@ function captureKey(event: KeyboardEvent) {
             <legend>Dice</legend>
             <label class="row">
               <input v-model="settings.blockDice3d" type="checkbox" />
-              <span>3D block dice</span>
+              <span>3D dice (block dice + on-pitch action dice)</span>
             </label>
             <label class="row">
               <span>D6 style</span>
@@ -2207,19 +2207,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
           </fieldset>
 
-          <fieldset class="settings-group">
-            <legend>Injury results</legend>
-            <label class="row">
-              <span>Stun display</span>
-              <select v-model="settings.stunDisplay">
-                <option value="banner">Banner (full)</option>
-                <option value="tag">Token tag (light)</option>
-              </select>
-            </label>
-            <p class="hint">A STUN either interrupts with the full injury banner, or shows a light
-              tag over the stunned player's token. KO &amp; casualties use the token-anchored toast.</p>
-            <!-- Owner 09-10: the casualty splash toggle is cut — the red casualty toast over the square carries it (settings.casualtySplash stays off). -->
-          </fieldset>
+          <!-- Owner 09-14: the Injury results group (Stun display banner/tag) is cut — the stun reads as the token toast like a KO; the 'tag' variant only swapped toast styles. -->
         </section>
 
         <!-- ============================ MODS ============================ -->

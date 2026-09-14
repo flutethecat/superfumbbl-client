@@ -28,6 +28,7 @@ import {
   depthZKey,
   extPoint,
   getOrientation,
+  geometryStateKey,
   isFieldFlip,
   isFlat,
   isOnPitch,
@@ -95,11 +96,12 @@ import {
   isD6FaceValue,
   type D6FaceVariant,
 } from './d6';
+import { ACTION_DIE_TUMBLE_MS, nextTumbleFace, type ActionDiceLayer, type ActionDieFaceSource, type ActionDieSlot } from './actionDice3d';
 import { presentationMs, setPresentationMode as configurePresentationMode, type PresentationMode } from './presentationTiming';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { rushTargetForPlayer } from './rushTarget';
-import { stadiumStandTileColumn, stadiumStandTileTransform, type StadiumStandSide } from './stadiumTiles';
+import { stadiumRiserEdge, stadiumStandTileColumn, stadiumStandTileTransform, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
 
 
@@ -118,6 +120,16 @@ function isMovingPlayerAction(action: string | null | undefined): boolean {
  * This predicate is intentionally conservative: it permits a projection-only redraw only while the same moving
  * actor and every physical pitch primitive are unchanged. Any uncertain board mutation falls back to refresh().
  */
+/** P0 (09-14): set equality for the pick-setter guards; null ≡ empty. */
+export function sameIdSet(a: ReadonlySet<string> | null, b: ReadonlySet<string> | null): boolean {
+  const sa = a && a.size > 0 ? a : null;
+  const sb = b && b.size > 0 ? b : null;
+  if (sa === sb) return true;
+  if (!sa || !sb || sa.size !== sb.size) return false;
+  for (const id of sa) if (!sb.has(id)) return false;
+  return true;
+}
+
 export function movementTokenGenerationSignature(game: GameJson | null): string | null {
   if (!game) return null;
   const acting = game.actingPlayer as { playerId?: unknown; playerAction?: unknown } | null | undefined;
@@ -446,6 +458,13 @@ export const AD_FOLLOW_DEAD_SQ = 1;
 export const AD_NUDGE_START_SQ = 2;
 export const AD_TRACK_START_SQ = 3;
 export const AD_FOLLOW_TAU_MS = 180; // exp time-constant
+/** Owner 09-14: the KICK-OFF camera — a slow pan that keeps the kicked ball in view (no zoom change), then an eased
+ *  return to the camera the viewer had. Independent of the auto director (it plays with the director OFF too); the
+ *  director yields while it runs. */
+export const KICK_FOLLOW_TAU_MS = 650;
+export const KICK_FOLLOW_RETURN_MS = 900;
+/** Extra dwell on the landing square before the return starts. */
+export const KICK_FOLLOW_LANDING_DWELL_MS = 350;
 export const AD_NUDGE_MS = 420;
 export const AD_MANUAL_HOLD_MS = 1500;
 export const AD_IDLE_DELAY_MS = 10_000;
@@ -799,6 +818,29 @@ const STEP_BEAT_MS = 150;
 const ACTION_DIE_IN_MS = 180;
 const ACTION_DIE_HOLD_MS = 1150;
 const ACTION_DIE_OUT_MS = 300;
+/** The on-pitch action d6 edge in world px (buildD6's S); the 3D cube parks at this size times the node's world scale. */
+const ACTION_DIE_SIZE = 28;
+interface ActionDieRecord {
+  node: Container;
+  baseScale: number;
+  start: number;
+  holdForOpponentReroll?: boolean;
+  holdUntilTurnover?: boolean;
+  square?: [number, number];
+  /** Action dice only (skill-use / armour pops share the lifecycle but have no die): the 3D layer key. */
+  id?: number;
+  value?: number;
+  cause?: string;
+  failed?: boolean;
+  face?: Sprite | null;
+  causeTag?: Container | null;
+  /** The cause badge's own (2D) offset; nudged outward while the cube draws over the Pixi canvas. */
+  causeTagHome?: { x: number; y: number };
+  tumbleStartAt?: number;
+  tumbleUntil?: number;
+  nextFaceAt?: number;
+  lastTumbleFace?: number;
+}
 /** Accepted local movement gets a visible first stride promptly while its authoritative echo is in flight.
  * It may approach, but never complete, the destination square before confirmation. */
 // A successful first stride starts from the token's exact live pixels on the next task. The ticker supplies the
@@ -1321,6 +1363,50 @@ type BlockFace = 'skull' | 'bothdown' | 'push' | 'powpush' | 'pow';
  * token container API is shaped so texture sprites can replace the Graphics
  * without touching the scene logic.
  */
+export interface SpectatorPitchState {
+  activePlayerId: string | null;
+  actedPlayers: readonly string[];
+  recoveringPlayers: readonly string[];
+  gazeVictims: readonly string[];
+  dodgySnackPlayers: readonly string[];
+  fieldFlip: boolean;
+  blitzTokens: { blitzerId: string; targetId: string } | null;
+  heldTeamMate: { thrownId: string; throwerId: string } | null;
+  passDestination: { square: Square; kind: PassDestinationKind } | null;
+}
+
+/** One in-flight move tween: the token, its waypoint path, style, clock and optional flight decorations. */
+export interface MoveTweenRecord {
+  token: Container;
+  waypoints: { x: number; y: number }[];
+  style: 'slide' | 'walk' | 'hop' | 'trail' | 'hoptrail';
+  start: number;
+  segmentMs: number;
+  /** False at a confirmed buffered seam, keeping constant velocity into the next tile. */
+  easeOut?: boolean;
+  /** Peak lift (px) of a single arc across the whole tween — the kick flight. */
+  arc?: number;
+  /** Owner 2026-07-07: kick-ball SCALE effect — the ball grows toward its apex then
+   *  shrinks back. `baseScale` = the token's resting scale; the live scale is
+   *  `baseScale * (1 + (growTo−1) * h)` where h∈[0,1] follows `growMode`: 'up' (0→1,
+   *  the fly-in rising to the apex), 'down' (1→0, the descent), 'arc' (sin peak at mid,
+   *  a single edge→aim flight). Absent ⇒ no scale animation. */
+  baseScale?: number;
+  growTo?: number;
+  growMode?: 'up' | 'down' | 'arc';
+  /** step-stutter: the presentation step this tile tween presents (armPresentationStepTween only). Tagged so
+   *  the ticker can mark exactly THAT step consumed at its visual end — never a neighbouring tween for the
+   *  same player (a leap arc, a coalesced-jump path) that happens to finish first. */
+  psStep?: PresentationStep;
+  /** A bounded local first-stride anticipation. It never signals onAnimDone; only an authoritative failed
+   * Dodge/Rush report may let the visual token reach the attempted square while its reroll is offered. */
+  movementIntent?: MovementIntent;
+  /** Short server-coordinate correction across an authoritative reconciliation boundary. It never releases a walk gate. */
+  reconcileKey?: string;
+  /** Post-step rendered-anchor repair. It is not a presentation step and never emits onAnimDone/trail/sound. */
+  postStepCorrectionKey?: string;
+}
+
 export class PitchRenderer {
   /** ms per block-die face — UI-7 study Option A (700ms, recommended);
    *  Option B = 1000ms. See docs/dice-timing-study.md. */
@@ -1430,6 +1516,7 @@ export class PitchRenderer {
     if (!texture) return;
     this.generatedCrowdTexture = null;
     this.crowdTextures = this.crowdTextures.filter((candidate) => candidate !== texture);
+    this.stadiumAssetRevision++;
     texture.destroy(true);
   }
 
@@ -1578,6 +1665,37 @@ export class PitchRenderer {
    *  in place of the procedural stands while present. */
   private stadiumModel: RenderedStadium | null = null;
   private stadiumModelGeneration = 0;
+  /** P3 (perf 09-14): the input key of the last SUCCESSFUL drawStadium(), or null when the stadium must be redrawn.
+   *  Only setGame consults it (drawStadiumIfChanged) — every explicit drawStadium() caller redraws unconditionally
+   *  and refreshes the key. Cleared by clearEffects (the pregame sign text lives in effectsLayer, so an unchanged key
+   *  would otherwise leave the placards blank after a same-game cancel/restore). The stadium was ~9 ms of every
+   *  ~11.5 ms model sync while its inputs change only via setters, a game change or asset arrival. */
+  private stadiumDrawKey: string | null = null;
+  /** Bumped at every stadium asset mutation (async texture arrival, generated crowd add/remove, camera/light incl.
+   *  their null-on-failure) — collection identity never changes on `.set/.push`, so the key carries this instead. */
+  private stadiumAssetRevision = 0;
+  private stadiumInputKey(): string {
+    const g = this.game;
+    const fans = (team?: { dedicatedFans?: unknown }) => Number(team?.dedicatedFans);
+    const m = this.stadiumModel;
+    return JSON.stringify([
+      !!g, String((g as { gameId?: unknown } | null)?.gameId ?? ''),
+      fans(g?.teamHome as { dedicatedFans?: unknown } | undefined), fans(g?.teamAway as { dedicatedFans?: unknown } | undefined),
+      this.stadiumEnabled, this.decorEnabled,
+      m ? [this.stadiumModelGeneration, m.texture.uid, m.dugoutsProvided, m.footprint.x0, m.footprint.x1, m.footprint.y0, m.footprint.y1,
+        m.corners.tl.u, m.corners.tl.v, m.corners.tr.u, m.corners.tr.v, m.corners.bl.u, m.corners.bl.v] : null,
+      geometryStateKey(),
+      this.stadiumAssetRevision, this.standTextures.size, this.crowdTextures.length, this.signFanTextures.length,
+      this.dressingTextures.size, !!this.stoneTexture, !!this.cameraTexture, !!this.lightTexture,
+      this.turfTheme, this.pitchTextures.size, pitchWeatherKey(g?.fieldModel.weather), // drawStadiumProps' pitch underlay
+      this.pregameSignNames,
+    ]);
+  }
+  /** The setGame path: redraw only when an input changed since the last successful draw. */
+  private drawStadiumIfChanged(): void {
+    if (this.stadiumDrawKey !== null && this.stadiumDrawKey === this.stadiumInputKey()) return;
+    this.drawStadium();
+  }
   private pitchLayer = new Container();
   /** B7-5: faded team logos at the sweet spots, under players. */
   private sweetSpotLayer = new Container();
@@ -1678,6 +1796,10 @@ export class PitchRenderer {
   private tokenScore: Texture | null = null; // owner 2026-07-13: SCORE token — chess ROOK (replaced the skull pawn)
   /** Owner 2026-07-07: the TRR (team re-roll) inducement icon for the re-roll column header. */
   private tokenRerollIcon: Texture | null = null;
+  /** Owner 09-14: turn-track HEADER icons — clock = Turn column, spiked football = Score column (owner ImageGen art,
+   *  assets/turn-track, 256 px masters served through mipmaps so the ~24 px header is never decimated). */
+  private turnTrackClockIcon: Texture | null = null;
+  private turnTrackScoreIcon: Texture | null = null;
   /** Turf themes (owner-curated): per-square textures, alternated per row. */
   private turfThemes = new Map<string, Texture[]>();
   /** FUMBBL preloaded pitch images (owner 2026-07-03 r2): full top-down field
@@ -2062,39 +2184,7 @@ export class PitchRenderer {
    *  through the same door. Identity-keyed (never seq: the store restarts seq at 1 each run). */
   private presentationStepConsumed: PresentationStep | null = null;
   /** Active move tweens, keyed by playerId. */
-  private moveTweens = new Map<
-    string,
-    {
-      token: Container;
-      waypoints: { x: number; y: number }[];
-      style: 'slide' | 'walk' | 'hop' | 'trail' | 'hoptrail';
-      start: number;
-      segmentMs: number;
-      /** False at a confirmed buffered seam, keeping constant velocity into the next tile. */
-      easeOut?: boolean;
-      /** Peak lift (px) of a single arc across the whole tween — the kick flight. */
-      arc?: number;
-      /** Owner 2026-07-07: kick-ball SCALE effect — the ball grows toward its apex then
-       *  shrinks back. `baseScale` = the token's resting scale; the live scale is
-       *  `baseScale * (1 + (growTo−1) * h)` where h∈[0,1] follows `growMode`: 'up' (0→1,
-       *  the fly-in rising to the apex), 'down' (1→0, the descent), 'arc' (sin peak at mid,
-       *  a single edge→aim flight). Absent ⇒ no scale animation. */
-      baseScale?: number;
-      growTo?: number;
-      growMode?: 'up' | 'down' | 'arc';
-      /** step-stutter: the presentation step this tile tween presents (armPresentationStepTween only). Tagged so
-       *  the ticker can mark exactly THAT step consumed at its visual end — never a neighbouring tween for the
-       *  same player (a leap arc, a coalesced-jump path) that happens to finish first. */
-      psStep?: PresentationStep;
-      /** A bounded local first-stride anticipation. It never signals onAnimDone; only an authoritative failed
-       * Dodge/Rush report may let the visual token reach the attempted square while its reroll is offered. */
-      movementIntent?: MovementIntent;
-      /** Short server-coordinate correction across an authoritative reconciliation boundary. It never releases a walk gate. */
-      reconcileKey?: string;
-      /** Post-step rendered-anchor repair. It is not a presentation step and never emits onAnimDone/trail/sound. */
-      postStepCorrectionKey?: string;
-    }
-  >();
+  private moveTweens = new Map<string, MoveTweenRecord>();
   private movementReconcileFence: MovementPresentationFence | null = null;
   private movementPresentationRecoverySeqSeen = -1;
   private reconciliationTimers = new Map<string, { key: string; timer: ReturnType<typeof setTimeout> }>();
@@ -2207,6 +2297,48 @@ export class PitchRenderer {
     this.adManualUntil = now + AD_MANUAL_HOLD_MS;
     this.resetAutoDirectorCamera(true);
     this.adIdleSince = now;
+    this.kickFollow = null; // a coach who grabs the camera mid-kick keeps it
+  }
+
+  /** Owner 09-14: kick-off camera — see KICK_FOLLOW_TAU_MS. `until` = the flight/bounce is over (wall clock). */
+  private kickFollow: {
+    track: () => { x: number; y: number };
+    until: number;
+    savedX: number; savedY: number;
+    returnStart: number | null; fromX: number; fromY: number;
+  } | null = null;
+  private startKickFollow(ball: Container, flightMs: number): void {
+    if (!this.app) return;
+    const now = performance.now();
+    const until = now + flightMs + presentationMs(KICK_FOLLOW_LANDING_DWELL_MS);
+    const track = () => ({ x: ball.position.x, y: ball.position.y });
+    if (this.kickFollow) { // a descent chained onto a fly-in: keep the ORIGINAL saved camera, extend the follow
+      this.kickFollow.track = track;
+      this.kickFollow.until = Math.max(this.kickFollow.until, until);
+      this.kickFollow.returnStart = null;
+      return;
+    }
+    this.kickFollow = { track, until, savedX: this.world.position.x, savedY: this.world.position.y, returnStart: null, fromX: 0, fromY: 0 };
+  }
+  private tickKickFollow(dtMs: number, now: number): void {
+    const kf = this.kickFollow;
+    if (!kf || !this.app || this.cinematic) return;
+    if (kf.returnStart === null) {
+      if (now >= kf.until) { kf.returnStart = now; kf.fromX = this.world.position.x; kf.fromY = this.world.position.y; return; }
+      const p = kf.track();
+      const scale = this.world.scale.x;
+      const cx = this.app.screen.width / 2 - p.x * scale;
+      const cy = this.app.screen.height / 2 - p.y * scale;
+      const alpha = 1 - Math.exp(-Math.min(50, Math.max(0, dtMs)) / KICK_FOLLOW_TAU_MS); // slow glide, zoom untouched
+      this.world.position.x += (cx - this.world.position.x) * alpha;
+      this.world.position.y += (cy - this.world.position.y) * alpha;
+      this.clampCamera();
+      return;
+    }
+    const t = Math.min(1, (now - kf.returnStart) / presentationMs(KICK_FOLLOW_RETURN_MS));
+    const e = 1 - (1 - t) * (1 - t);
+    this.world.position.set(kf.fromX + (kf.savedX - kf.fromX) * e, kf.fromY + (kf.savedY - kf.fromY) * e);
+    if (t >= 1) this.kickFollow = null;
   }
 
   private autoDirectorPresentationBusy(): boolean {
@@ -2312,6 +2444,12 @@ export class PitchRenderer {
     // Cinematics retain their established priority and saved-camera return. The
     // idle clock is re-anchored for their entire visible lifetime.
     if (this.cinematic) {
+      this.resetAutoDirectorCamera(true);
+      this.adIdleSince = now;
+      return;
+    }
+    // Owner 09-14: the kick-off camera owns the pan while the ball is in the air / bouncing / returning.
+    if (this.kickFollow) {
       this.resetAutoDirectorCamera(true);
       this.adIdleSince = now;
       return;
@@ -2437,7 +2575,16 @@ export class PitchRenderer {
   private rollModals: { node: Container; start: number; baseY: number }[] = [];
   /** On-pitch action d6 (owner 2026-07-03 r3): a rolled die pops next to the
    *  action square, holds, then fades. Self-removing via the ticker. */
-  private actionDice: { node: Container; baseScale: number; start: number; holdForOpponentReroll?: boolean; holdUntilTurnover?: boolean; square?: [number, number] }[] = [];
+  private actionDice: ActionDieRecord[] = [];
+  // Owner 09-14: 3D action dice — the block-die cube with d6 faces on an overlay over the pitch (actionDice3d.ts).
+  private hostEl: HTMLElement | null = null;
+  private actionDice3d: ActionDiceLayer | null = null;
+  private actionDice3dWanted = false;
+  private actionDice3dGeneration = 0;
+  private actionDieSeq = 0;
+  private lastActionDiceTick = 0;
+  /** Owner 09-14 / Astra: reduced motion skips the tumble (2D face cycle and 3D clip alike) — the result shows at once. */
+  private reducedMotion = false;
   /** Live skill surfaces that must change representation when a mod pack adds/removes a target. */
   private liveSkillAssets = new Map<Container, () => void>();
   /** Native asset URLs held by mounted custom-player tokens. Most tokens release
@@ -2813,6 +2960,9 @@ export class PitchRenderer {
   /** The user's CURRENT selection for a shaded pick — a persistent over-head arrow (reuses buildPickArrow)
    *  that stays set while selected, independent of the per-refresh bobbing arrows the crosshair mode uses. */
   private pickSelectedId: string | null = null;
+  /** Perf counters (09-14, P6): `refreshes` per `setGames` is the number that exposed the 4-rebuilds-per-sync
+   *  bug; read via `window.__renderer.perf` in DEV or the headless rig (docs/proposals/renderer-perf-bench). */
+  readonly perf = { refreshes: 0, setGames: 0 };
 
   /** Arm (ids) or clear (null/empty) the player-pick affordances. Unclassified ids use crosshair-only fallback. */
   setPlayerPick(eligibleIds: (string[] & Partial<{ friendlyIds: readonly string[]; oppositionIds: readonly string[] }>) | null): void {
@@ -2847,6 +2997,10 @@ export class PitchRenderer {
    *  player-pick. Turning it off also drops the ineligible-dim set and the persistent selection arrow so a
    *  stale override can't survive into the next (crosshair-mode) pick. */
   setPlayerPickShaded(shaded: boolean): void {
+    // Perf 09-14 (P0): the view re-syncs this trio on EVERY model sync, so an unchanged value must not rebuild the
+    // token generation (it was 4 refreshes per sync). The !shaded branch also clears the other two fields, so the
+    // early return is only safe when those are already clear (Zap re-arms pickSelectedId while shaded stays false).
+    if (shaded === this.pickShaded && (shaded || (this.pickIneligibleIds === null && this.pickSelectedId === null))) return;
     this.pickShaded = shaded;
     if (!shaded) { this.pickIneligibleIds = null; this.pickSelectedId = null; }
     this.refresh();
@@ -2856,7 +3010,9 @@ export class PitchRenderer {
    *  shaded pick is armed — the server's eligible set stays whatever setPlayerPick carries; this is purely
    *  the complement for presentation. Pass null/empty to clear. */
   setPlayerPickIneligible(ids: string[] | null): void {
-    this.pickIneligibleIds = ids && ids.length > 0 ? new Set(ids) : null;
+    const next = ids && ids.length > 0 ? new Set(ids) : null;
+    if (sameIdSet(next, this.pickIneligibleIds)) return; // P0: unchanged set → no rebuild
+    this.pickIneligibleIds = next;
     this.refresh();
   }
 
@@ -2864,6 +3020,7 @@ export class PitchRenderer {
    *  selection for a shaded pick. Independent of setPlayerPickArrows (the touchback nominee-narrowing path,
    *  which still drives the crosshair-mode bobbing arrows for every other player-pick consumer). */
   setPlayerPickSelected(id: string | null): void {
+    if (id === this.pickSelectedId) return; // P0: unchanged selection → no rebuild
     this.pickSelectedId = id;
     this.refresh();
   }
@@ -3292,6 +3449,8 @@ export class PitchRenderer {
     this.app = app;
     this.initializingApp = null;
     host.appendChild(app.canvas);
+    this.hostEl = host;
+    if (this.actionDice3dWanted) void this.ensureActionDice3d();
 
     // Owner 2026-07-08: on any host/viewport resize, re-centre the camera on the
     // pitch. Pixi's resizeTo resizes the canvas and emits 'resize' once app.screen
@@ -3303,19 +3462,11 @@ export class PitchRenderer {
     // rescale overlays. Explicit refits (first layout, new game, orientation/flat/flip toggles) still reset.
     this.onRendererResize = () => {
       if (!this.app) return;
-      this.resetAutoDirectorCamera(true);
-      const fit = this.cameraFitScale || this.world.scale.x;
-      const atFit = Math.abs(this.world.scale.x - fit) <= fit * 0.02;
-      if (atFit) this.resetCamera();
-      else {
-        this.drawBackdrop();
-        this.updateOverlayScales();
-        // owner 08-27 (1080p-maximize bug): a diverged camera keeps its zoom/pan on resize, but the
-        // held POSITION was legal for the OLD screen — on a grown window it left the southern content
-        // cropped until an orientation swap forced a refit. Re-legalize against the new bounds: a
-        // fit-sized axis recentres, a zoomed-in pan is pulled inside the new legal range.
-        this.clampCamera();
-      }
+      // owner 08-27 (1080p-maximize bug): a diverged camera keeps its zoom/pan on resize, but the held POSITION
+      // was legal for the OLD screen — keepOrRefitCamera re-legalises it against the new bounds (and refreshes
+      // the fit reference so the wheel can still zoom out to the new fit).
+      this.drawBackdrop();
+      this.keepOrRefitCamera();
     };
     app.renderer.on('resize', this.onRendererResize);
 
@@ -3493,6 +3644,19 @@ export class PitchRenderer {
     } catch (error) {
       console.warn('ffb-pitch: turn-track tokens failed to load', error);
     }
+    try {
+      // Owner 09-14: header icons — linear sampling + mipmaps (256 px master drawn ~24 px at the fit zoom).
+      const head = async (name: string) => {
+        const texture = await Assets.load<Texture>(new URL(`../assets/turn-track/${name}.png`, import.meta.url).href);
+        texture.source.scaleMode = 'linear';
+        texture.source.autoGenerateMipmaps = true;
+        return texture;
+      };
+      [this.turnTrackClockIcon, this.turnTrackScoreIcon] = await Promise.all([head('clock'), head('spiked-football')]);
+      if (!this.initActive(generation, app)) return;
+    } catch (error) {
+      console.warn('ffb-pitch: turn-track header icons failed to load, using the emoji labels', error);
+    }
 
     if (!this.initActive(generation, app)) return;
 
@@ -3623,6 +3787,7 @@ export class PitchRenderer {
     // presented token/ball rather than an immediate-apply model endpoint.
     app.ticker.add(() => {
       this.tickAutoDirector(this.app?.ticker.deltaMS ?? 0, performance.now());
+      this.tickKickFollow(this.app?.ticker.deltaMS ?? 0, performance.now());
       this.adCompletedMotionTargets.clear();
     });
     // knockdown/injury flash rings (F-5): expand + fade over 600ms.
@@ -3665,8 +3830,8 @@ export class PitchRenderer {
     const DIE_HOLD = presentationMs(ACTION_DIE_HOLD_MS);
     const DIE_OUT = presentationMs(ACTION_DIE_OUT_MS);
     app.ticker.add(() => {
-      if (this.actionDice.length === 0) return;
       const now = performance.now();
+      if (this.actionDice.length === 0) { this.lastActionDiceTick = 0; this.actionDice3d?.sync([], 0, now); return; }
       this.actionDice = this.actionDice.filter((die) => {
         const rawElapsed = now - die.start;
         // Owner 09-06: a FAILED re-rolled die is held until the turnover tears it down (backstop 6 s so it can
@@ -3693,8 +3858,38 @@ export class PitchRenderer {
           die.node.alpha = 1 - t;
           die.node.scale.set(die.baseScale * (1 + t * 0.15));
         }
+        // Owner 09-14: the PNG face tumbles through random faces before the result surfaces (the 3D cube does the
+        // same through its clip; its PNG face stays hidden underneath).
+        if (die.tumbleUntil !== undefined && die.face && now >= (die.tumbleStartAt ?? 0)) {
+          if (now < die.tumbleUntil) {
+            if (now >= (die.nextFaceAt ?? 0)) {
+              const face = nextTumbleFace(die.lastTumbleFace ?? die.value ?? 1);
+              die.lastTumbleFace = face;
+              const texture = this.d6FaceTextures[face - 1];
+              if (texture) die.face.texture = texture;
+              die.nextFaceAt = now + 40;
+            }
+          } else {
+            const texture = this.d6FaceTextures[(die.value ?? 1) - 1];
+            if (texture) die.face.texture = texture;
+            die.tumbleUntil = undefined;
+          }
+        }
         return true;
       });
+      if (this.actionDice3d) {
+        const dt = this.lastActionDiceTick ? (now - this.lastActionDiceTick) / 1000 : 0;
+        this.lastActionDiceTick = now;
+        const slots: ActionDieSlot[] = [];
+        for (const die of this.actionDice) {
+          if (die.id === undefined) continue;
+          const g = die.node.getGlobalPosition();
+          const s = Math.abs(die.node.worldTransform.a);
+          slots.push({ id: die.id, cx: g.x, cy: g.y, size: ACTION_DIE_SIZE * s, alpha: die.node.alpha, value: die.value ?? 1 });
+        }
+        const drawn = this.actionDice3d.sync(slots, dt, now);
+        for (const die of this.actionDice) if (die.id !== undefined) this.applyActionDieFaceMode(die, drawn.has(die.id));
+      }
     });
 
     // Owner 09-08: log double-click camera focus — an eased pan (+ zoom-in from the whole-pitch fit) onto one
@@ -3857,6 +4052,7 @@ export class PitchRenderer {
       if (!this.initActive(generation, app)) return;
       this.stoneTexture.source.scaleMode = 'nearest';
       this.stoneTexture.source.addressMode = 'repeat';
+      this.stadiumAssetRevision++;
       if (!this.stoneTexture || !this.initActive(generation, app)) return;
       // FUMBBL's own prone/stunned notation (slash / X overlays) + the
       // treacherous-trapdoor field icon (B7-6; TrapDoor decorations)
@@ -3927,6 +4123,7 @@ export class PitchRenderer {
         texture.source.scaleMode = 'nearest';
         texture.source.addressMode = 'repeat';
         this.standTextures.set(name, texture);
+        this.stadiumAssetRevision++;
       }
       // Owner 2026-07-04: a broadcast CAMERA + a stadium LIGHT tower. Owner 09-10: the two cells are now their own
       // files (camera.png 196x197, light_tower.png 153x361) — the full SakPix pack sheets no longer ship.
@@ -3935,14 +4132,16 @@ export class PitchRenderer {
         if (!this.initActive(generation, app)) return;
         bc.source.scaleMode = 'nearest';
         this.cameraTexture = bc;
-      } catch { this.cameraTexture = null; }
+        this.stadiumAssetRevision++;
+      } catch { this.cameraTexture = null; this.stadiumAssetRevision++; }
       if (!this.initActive(generation, app)) return;
       try {
         const lt = await Assets.load<Texture>(new URL(`../assets/stadium/light_tower.png`, import.meta.url).href);
         if (!this.initActive(generation, app)) return;
         lt.source.scaleMode = 'nearest';
         this.lightTexture = lt;
-      } catch { this.lightTexture = null; }
+        this.stadiumAssetRevision++;
+      } catch { this.lightTexture = null; this.stadiumAssetRevision++; }
       if (!this.initActive(generation, app)) return;
       // fan pool: humans + fantasy creatures (owner 2026-07-02) — all
       // height-normalized at render time so every fan reads the same size.
@@ -3957,6 +4156,7 @@ export class PitchRenderer {
         if (!this.initActive(generation, app)) return;
         texture.source.scaleMode = 'nearest';
         this.crowdTextures.push(texture);
+        this.stadiumAssetRevision++;
       }
       // B9-16 (owner): swap the unnatural zombie for a STANDING risen corpse — a
       // sickly-green tint of a standing human crowd sprite, baked to a texture so
@@ -3968,6 +4168,7 @@ export class PitchRenderer {
         zombieTex.source.scaleMode = 'nearest';
         this.generatedCrowdTexture = zombieTex;
         this.crowdTextures.push(zombieTex);
+        this.stadiumAssetRevision++;
         tinted.destroy();
       }
       // arena dressing: corner pennants + bunting strips
@@ -3976,6 +4177,7 @@ export class PitchRenderer {
         if (!this.initActive(generation, app)) return;
         texture.source.scaleMode = 'nearest';
         this.dressingTextures.set(name, texture);
+        this.stadiumAssetRevision++;
       }
       // Owner 2026-07-06: sign-holding spectators (extracted from the sprite sheet)
       // — seeded into the front stands, their blank placards get an "I ♥ name"
@@ -3986,6 +4188,7 @@ export class PitchRenderer {
           if (!this.initActive(generation, app)) return;
           t.source.scaleMode = 'nearest';
           this.signFanTextures.push(t);
+          this.stadiumAssetRevision++;
         } catch { /* a missing sign-fan just shrinks the pool */ }
         if (!this.initActive(generation, app)) return;
       }
@@ -4063,6 +4266,8 @@ export class PitchRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     PitchRenderer.instances.delete(this);
+    this.disposeActionDice3d();
+    this.hostEl = null;
     this.blockFaceLoadGeneration++;
     this.blockFaceStaticSprites.clear();
     this.pitchDrawRequestGeneration++;
@@ -4129,10 +4334,11 @@ export class PitchRenderer {
     this.activeEdgeMarker = null;
   }
 
-  setGame(game: GameJson | null): void {
+  setGame(game: GameJson | null, spectatorState?: SpectatorPitchState): void {
     // Authoritative model paint always wins the current turn. Any display-only
     // refresh queued before it is already represented by the synchronous state
     // below and must not rebuild the just-painted token generation afterward.
+    this.perf.setGames++;
     this.absorbQueuedProjectionRefresh();
     this.absorbQueuedOverlayRedraw();
     const dialogId = String((game?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '')
@@ -4200,6 +4406,20 @@ export class PitchRenderer {
       }
     }
     this.game = game;
+    if (spectatorState) {
+      this.activePlayerId = spectatorState.activePlayerId;
+      setActiveWalkerPlayer(this.walkerOwnerId, spectatorState.activePlayerId);
+      settleWalkersIdle(this.walkerOwnerId, this.moveTweens);
+      this.actedPlayers = new Set(spectatorState.actedPlayers);
+      this.recoveringPlayers = new Set(spectatorState.recoveringPlayers);
+      this.gazeVictims = new Set(spectatorState.gazeVictims);
+      this.dodgySnackPlayers = new Set(spectatorState.dodgySnackPlayers);
+      this.blitzTokens = spectatorState.blitzTokens && { ...spectatorState.blitzTokens };
+      this.ttmHeld = spectatorState.heldTeamMate ? { ...spectatorState.heldTeamMate, start: 0, fromSquare: null } : null;
+      this.passDestinationMarker = spectatorState.passDestination ? [...spectatorState.passDestination.square] : null;
+      this.passDestinationKind = spectatorState.passDestination?.kind ?? 'ball';
+      this.setFieldFlipMode(spectatorState.fieldFlip);
+    }
     const modelBall = game?.fieldModel.ballCoordinate as [number, number] | null | undefined;
     this.suppressGenericBallInThisRefresh = isServerKickoffScatterTransition(this.pendingServerKickoffScatter, modelBall);
     if (this.suppressGenericBallInThisRefresh) this.pendingServerKickoffScatter = null;
@@ -4222,7 +4442,7 @@ export class PitchRenderer {
       void this.ensureAndDrawPitch();
     }
     setWalkCastWeather(pitchWeatherKey(game?.fieldModel.weather)); // owner 09-06: weather scales the walker casts
-    if (reuseMovementTokens) {
+    if (reuseMovementTokens && !spectatorState) {
       // The authoritative object still replaces this.game before reaching here. Only reach/cost/path surfaces
       // changed, so repaint those against the latest model and leave every token/tween/container untouched.
       this.redrawOverlays();
@@ -4230,7 +4450,7 @@ export class PitchRenderer {
       priorClassicLeaseToRelease?.release();
       return;
     }
-    this.drawStadium(); // fan attendance (dedicatedFans) shapes the crowd
+    this.drawStadiumIfChanged(); // fan attendance (dedicatedFans) shapes the crowd; otherwise the stands stay put (P3)
     try { this.refresh(); }
     finally {
       this.suppressGenericBallInThisRefresh = false;
@@ -4296,6 +4516,7 @@ export class PitchRenderer {
 
   clearEffects(): void {
     this.resetAutoDirectorCamera(true);
+    this.kickFollow = null;
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
     this.movementIntentTimer = null;
@@ -4323,6 +4544,7 @@ export class PitchRenderer {
     this.liveSkillAssets.clear();
     for (const c of this.effectsLayer.removeChildren()) c.destroy({ children: true });
     this.signTextNodes = []; // the persistent pre-game sign texts live in effectsLayer
+    this.stadiumDrawKey = null; // P3: the memoised stadium output is now incomplete (signs gone) → next setGame redraws
     this.trailNumberNodes = []; // persistent trail numbers live in effectsLayer too
     this.moveTweens.clear();
     this.activationFades.clear(); this.activationFadePaint.clear(); // item3
@@ -4363,6 +4585,24 @@ export class PitchRenderer {
     this.activePlayerId = null;
     if (this.ballEdgeMarker) this.ballEdgeMarker.node.visible = false;
     if (this.activeEdgeMarker) this.activeEdgeMarker.node.visible = false;
+  }
+
+  /** Retire the old visible presentation before a spectator checkpoint is installed.
+   * The caller must subsequently reapply the checkpoint's persistent projections. */
+  cancelSpectatorPresentation(): void {
+    if (this.destroyed) return;
+    this.absorbQueuedProjectionRefresh();
+    this.absorbQueuedOverlayRedraw();
+    this.clearCanvasInteractionState(this.app?.canvas ?? null);
+    this.cancelAllTimers();
+    this.clearEffects();
+    this.snapReplayFrame();
+  }
+
+  restoreSpectatorPosition(game: GameJson, state: SpectatorPitchState): void {
+    if (this.destroyed) return;
+    this.snapReplayFrame();
+    this.setGame(game, state);
   }
 
   /** Snap one non-presented replay render without erasing persistent same-game projections. */
@@ -4477,6 +4717,7 @@ export class PitchRenderer {
   /** Re-renders tokens from the current game state (call after model sync). */
   refresh(): void {
     if (!this.app || this.destroyed) return;
+    this.perf.refreshes++;
     this.absorbQueuedOverlayRedraw();
     const suspendedPostStep = this.suspendPostStepConvergenceForRefresh();
     let refreshCompleted = false;
@@ -4519,14 +4760,17 @@ export class PitchRenderer {
     // are destroyed) so the rebuilt token can EASE from there to the latest model square instead of snapping.
     // Skip the ball + any special animation (arc'd leaps/throws, hop scatters) — those re-arm from their own
     // pending* maps and must not be flattened into a plain ease.
-    const carriedTweenPos = new Map<string, { x: number; y: number }>();
+    // 09-14 (Astra P2 on the replayer): EVERY plain-move style is carried, not only walk/slide — hop/trail/hoptrail
+    // tweens were dropped by any rebuild, so a refresh mid-walk snapped those tokens. The whole in-flight tween
+    // record (style, clock, path) travels with the pixel position; the rebuild re-attaches it to the new token
+    // when the model square is still the tween's destination, and only eases from the pixel when the square moved.
+    const carriedTweenPos = new Map<string, { x: number; y: number; tween: MoveTweenRecord }>();
     const carryNow = performance.now();
     for (const [id, tw] of this.moveTweens) {
       if (tw === preservedPresentationTween) continue;
       if (id === '__ball__' || tw.token.destroyed || tw.arc) continue;
-      if (tw.style !== 'walk' && tw.style !== 'slide') continue;
       const total = Math.max(1, (tw.waypoints.length - 1) * tw.segmentMs);
-      if (carryNow - tw.start < total) carriedTweenPos.set(id, { x: tw.token.position.x, y: tw.token.position.y });
+      if (carryNow - tw.start < total) carriedTweenPos.set(id, { x: tw.token.position.x, y: tw.token.position.y, tween: tw });
     }
     // destroy (not just detach) the old generation — Text canvases and
     // Graphics buffers otherwise accumulate ~MBs per live model sync
@@ -4761,10 +5005,18 @@ export class PitchRenderer {
       // recovery clock and can freeze the actor indefinitely. The generic authoritative interpolation below is
       // the fail-open path until an exact step snapshot arrives.
       if (carried && !deferred) {
-        // Owner 2026-07-13: CONTINUE an in-flight walk across the token rebuild — ease from the token's
-        // current visual position to the CURRENT model square (a follow-up sync with the same coord, OR a
-        // coord that advanced this sync). This is what lets the walk actually animate under frequent syncs.
-        this.continueMoveTween(data.playerId, token, carried, [nx, ny]);
+        // Owner 2026-07-13: CONTINUE an in-flight walk across the token rebuild. Same destination: re-attach the
+        // tween unchanged (style, clock, remaining path) so the walk neither restarts nor changes character.
+        // Destination moved this sync: ease from the token's current visual position to the new model square.
+        const dest = this.tokenPos(nx, ny);
+        const end = carried.tween.waypoints[carried.tween.waypoints.length - 1];
+        // Only a PLAIN tween re-attaches: a presentation-step, movement-intent or reconciliation tween is owned by its
+        // rail (rollback/consume look it up by tag) and keeps the prior ease-from-pixel behaviour across a rebuild.
+        const plain = !carried.tween.psStep && !carried.tween.movementIntent && !carried.tween.reconcileKey && !carried.tween.postStepCorrectionKey;
+        if (plain && end && Math.abs(end.x - dest.x) < 0.5 && Math.abs(end.y - dest.y) < 0.5) {
+          this.moveTweens.set(data.playerId, { ...carried.tween, token });
+          token.position.set(carried.x, carried.y);
+        } else this.continueMoveTween(data.playerId, token, carried, [nx, ny]);
       } else if (!ttmFlightActive && previous && (previous[0] !== nx || previous[1] !== ny)) {
         this.startMoveTween(data.playerId, token, previous, [nx, ny]);
       }
@@ -8337,7 +8589,8 @@ export class PitchRenderer {
         band.zIndex = -0.5;
         this.dugoutLayer.addChild(band);
 
-        const label = new Text({ text: section.label, style: DUGOUT_LABEL_STYLE });
+        // Owner 09-14: 4x raster + linear filtering — the band text read low-res under the camera zoom (marking-text rule).
+        const label = new Text({ text: section.label, style: DUGOUT_LABEL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         label.anchor.set(0.5, 0.5);
         label.scale.set(depthScale(labelRow, columns[1]!));
         label.rotation = pitchTextRotation(labelRow, columns[1]!); // owner 09-10: E-W turns the band text with the pitch
@@ -8659,7 +8912,8 @@ export class PitchRenderer {
     this.turnTrackLayer.addChild(ground);
 
     // --- header row + numbered cells ---
-    const headers = ['RR', '🕐', '🏈']; // left=re-rolls (icon), centre=turn timer (clock), right=score (owner emoji)
+    const headers = ['RR', '🕐', '🏈']; // left=re-rolls (icon), centre=turn (clock icon), right=score (spiked football icon); emoji = fallback
+    const headerIcons: (Texture | null)[] = [this.tokenRerollIcon, this.turnTrackClockIcon, this.turnTrackScoreIcon];
     columns.forEach((y, ci) => {
       const hquad = squareQuad(headerX, y);
       const hband = new Graphics();
@@ -8670,11 +8924,13 @@ export class PitchRenderer {
       this.turnTrackLayer.addChild(hband);
       const hMid = squareAnchor(headerX, y);
       const hsc = depthScale(headerX, y);
-      // owner 2026-07-07: the re-roll column (ci 0) carries the TRR inducement icon (else text).
-      if (ci === 0 && this.tokenRerollIcon) {
-        const icon = new Sprite(this.tokenRerollIcon);
+      // owner 2026-07-07: the re-roll column (ci 0) carries the TRR inducement icon; owner 09-14: the turn and score
+      // columns carry the clock / spiked-football icons (each falls back to its text/emoji label when unloaded).
+      const headerIcon = headerIcons[ci] ?? null;
+      if (headerIcon) {
+        const icon = new Sprite(headerIcon);
         icon.anchor.set(0.5);
-        icon.scale.set((TILE_W * 0.62 * hsc) / this.tokenRerollIcon.width);
+        icon.scale.set((TILE_W * 0.62 * hsc) / Math.max(headerIcon.width, headerIcon.height));
         icon.position.set(hMid.x, hMid.y);
         icon.zIndex = this.depthZ(headerX, y) + 0.5;
         this.turnTrackLayer.addChild(icon);
@@ -9054,6 +9310,7 @@ export class PitchRenderer {
     }));
     if (generation !== this.d6FaceLoadGeneration || variant !== this.d6FaceVariant) return;
     this.d6FaceTextures = textures;
+    this.applyActionDiceFaces(); // the cube follows the PNG set (variant change or first load)
   }
 
   /** Owner 2026-07-04: enter/leave interactive setup. When active, taps route to
@@ -10523,6 +10780,7 @@ export class PitchRenderer {
     // B0: the persistent target crosshair clears once the ball has LANDED
     const flyClearMs = presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS) + bounceMs + presentationMs(KICK_CLEAR_TAIL_MS);
     this.kickInVisualUntil = performance.now() + flyClearMs; // #59a: suppress the carrier-clear until this landing
+    this.startKickFollow(g, flyClearMs + Math.max(0, this.kickInHoldUntil - performance.now())); // owner 09-14: slow pan with the ball, then return
     this.scheduleTimer(() => {
       this.clearKickTarget();
       // Owner 09-10 (game 947): the store's kickArc barrier waits for a kickDescend landing signal; when the
@@ -10564,6 +10822,7 @@ export class PitchRenderer {
     // B0: the persistent target crosshair clears once the ball has LANDED
     const descClearMs = presentationMs(KICK_DESCENT_MS) + presentationMs(KICK_BOUNCE_DELAY_MS) + bounceMs + presentationMs(KICK_CLEAR_TAIL_MS);
     this.kickInVisualUntil = performance.now() + descClearMs; // #59a: suppress the carrier-clear until this landing
+    this.startKickFollow(g, descClearMs); // owner 09-14: the descent + bounce keep the ball in view, then the camera returns
     // #124 KD-3 (Meero SR-48): scope the cleanup to THIS descend's snapshot. A touchback/re-kick mid-descend
     // arms a NEW snapshot (seq++, its own animateKickDescent + timer); if THIS (earlier) timer fired an
     // unconditional `if (this.kickDescendSnapshot)` it would null the NEWER snapshot and cut its descend short.
@@ -11510,38 +11769,161 @@ export class PitchRenderer {
     const [x, y] = square;
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
-    // Owner 09-06: a RE-ROLLED die replaces the held original ('REROLLING?') at the same square at once — the two
-    // dice stacked ('USED!' over 'REROLLING?') on the opponent's view.
-    if (rerollSkill) {
-      this.actionDice = this.actionDice.filter((d) => {
-        const same = d.holdForOpponentReroll && d.square && d.square[0] === x && d.square[1] === y;
-        if (same) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
-        return !same;
-      });
+    const now = performance.now();
+    const tumbleMs = presentationMs(ACTION_DIE_TUMBLE_MS);
+    // Owner 09-14: a RE-ROLL tumbles the PERSISTED die in place (the failed original held for the decision, or one
+    // still on screen at the square) and surfaces the new result under a fresh caption — FAILED again below it if
+    // the re-roll also fails. No teardown, no second pop-in. (Owner 09-06 had it replaced at the same square.)
+    // Astra 09-14: only a FAILED die is ever re-rolled, and the newest one at the square is the one the re-roll
+    // answers — a successful Rush die sharing the square is never hijacked.
+    const persisted = rerollSkill
+      ? [...this.actionDice].reverse().find((d) => d.id !== undefined && d.failed && d.square && d.square[0] === x && d.square[1] === y)
+      : undefined;
+    if (persisted) {
+      // Rebuild the die body for the new value (textured face OR the vector fallback body) and re-caption it.
+      for (const child of persisted.node.removeChildren()) child.destroy({ children: true });
+      const rebuilt = this.buildActionDieFace(value, persisted.cause);
+      for (const child of [...rebuilt.node.children]) persisted.node.addChild(child);
+      rebuilt.node.destroy();
+      persisted.face = rebuilt.face;
+      persisted.causeTag = rebuilt.causeTag;
+      persisted.causeTagHome = rebuilt.causeTag ? { x: rebuilt.causeTag.position.x, y: rebuilt.causeTag.position.y } : undefined;
+      persisted.start = now - presentationMs(ACTION_DIE_IN_MS); // already popped in: hold restarts, no re-pop
+      persisted.value = value;
+      persisted.failed = !!failed;
+      persisted.holdForOpponentReroll = opponentRerollPending;
+      persisted.holdUntilTurnover = !!failed;
+      persisted.node.alpha = 1;
+      persisted.node.scale.set(persisted.baseScale);
+      this.decorateActionDie(persisted.node, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
+      this.applyActionDieFaceMode(persisted);
+      this.startActionDieTumble(persisted, now, tumbleMs);
+      return;
     }
-    const die = this.buildD6(value, cause);
-    // Owner 2026-07-05 / 2026-07-08: a FAILED roll gets a stenciled tag beside the
-    // die (play mode included, rev 3); the roll NEEDED is folded in: "FAILED (3+)".
-    if (failed) die.addChild(this.buildFailedStencil(needed, opponentRerollPending));
-    // Owner 2026-07-08: EVERY reroll captions the re-rolled die in soft gold — a SKILL reroll
-    // (Dodge, Sure Hands, Pro…) reads "<skill icon/glyph> reroll"; a TEAM reroll reads
-    // "<TRR inducement icon> used!".
-    if (rerollSkill) die.addChild(this.buildRerollLabel(rerollSkill, rerollTeam));
+    const built = this.buildActionDieFace(value, cause);
+    const die = built.node;
+    this.decorateActionDie(die, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
     // sit at the square's upper-right so it reads "next to" the action, not on it
     die.position.set(anchor.x + TILE_W * 0.5 * scale, anchor.y - TILE_H * 0.7 * scale);
     die.scale.set(0.05);
     die.alpha = 0;
     die.zIndex = this.depthZ(x, y) + 60; // above tokens + markers
     this.effectsLayer.addChild(die);
-    this.actionDice.push({
+    const record: ActionDieRecord = {
       node: die,
       baseScale: scale,
-      start: performance.now(),
+      start: now,
       holdForOpponentReroll: opponentRerollPending,
       // owner 09-06: a failed RE-ROLL stays up until the turnover splash (releaseDiceAtTurnover), not one tick
       holdUntilTurnover: !!(rerollSkill && failed),
       square: [x, y],
-    });
+      id: ++this.actionDieSeq,
+      value,
+      cause,
+      failed: !!failed,
+      face: built.face,
+      causeTag: built.causeTag,
+      causeTagHome: built.causeTag ? { x: built.causeTag.position.x, y: built.causeTag.position.y } : undefined,
+    };
+    this.actionDice.push(record);
+    this.applyActionDieFaceMode(record);
+    this.startActionDieTumble(record, now, tumbleMs, presentationMs(ACTION_DIE_IN_MS));
+  }
+
+  /** The d6 container plus handles to its face sprite (tumbled / hidden under the cube) and its cause badge. */
+  private buildActionDieFace(value: number, cause?: string): { node: Container; face: Sprite | null; causeTag: Container | null } {
+    const node = this.buildD6(value, cause);
+    const first = node.children[0];
+    const face = first instanceof Sprite ? first : null;
+    const causeTag = cause && this.dieTagPosition !== 'off' && node.children.length > 1 ? (node.children[node.children.length - 1] as Container) : null;
+    return { node, face, causeTag };
+  }
+
+  /** Owner 2026-07-05 / 07-08 / 09-14: FAILED (+ the roll needed) under the die; a re-roll caption below that. */
+  private decorateActionDie(node: Container, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean): void {
+    if (failed) node.addChild(this.buildFailedStencil(needed, opponentRerollPending));
+    // Owner 2026-07-08: EVERY reroll captions the re-rolled die in soft gold — a SKILL reroll
+    // (Dodge, Sure Hands, Pro…) reads "<skill icon/glyph> reroll"; a TEAM reroll reads
+    // "<TRR inducement icon> used!". Owner 09-14: it sits BELOW the FAILED tag, never on it.
+    // Owner 09-14: a TEAM re-roll no longer captions the die ("<TRR> used!") — the "<Coach> uses a team reroll!" splash
+    // carries it; a SKILL re-roll keeps its "<icon> reroll" caption.
+    if (rerollSkill && !rerollTeam) node.addChild(this.buildRerollLabel(rerollSkill, rerollTeam, !!failed));
+  }
+
+  /** Owner 09-14: a short tumble, then the result — the 3D cube through its clip, the PNG face through random faces. */
+  /** `delayMs` — a fresh die tumbles AFTER its pop-in (owner UAT 09-14: a tumble during the 180 ms scale-up is invisible);
+   *  a re-roll in place (already popped in) tumbles at once. */
+  private startActionDieTumble(die: ActionDieRecord, now: number, tumbleMs: number, delayMs = 0): void {
+    const ms = this.reducedMotion ? 0 : tumbleMs;
+    const startAt = now + (this.reducedMotion ? 0 : delayMs);
+    die.tumbleStartAt = startAt;
+    die.tumbleUntil = startAt + ms;
+    die.nextFaceAt = startAt;
+    die.lastTumbleFace = die.value;
+    if (this.actionDice3d && die.id !== undefined && die.value !== undefined) this.actionDice3d.tumble(die.id, die.value, Math.max(1, ms), now, startAt - now);
+  }
+
+  /** Owner 09-14: the view's reduced-motion preference — no dice tumble, results surface immediately. */
+  setReducedMotion(on: boolean): void {
+    this.reducedMotion = on;
+  }
+
+  /** Owner 09-14: 3D action dice (the block-die cube with d6 faces) over the pitch; PNG faces when off/unavailable. */
+  setActionDice3d(enabled: boolean): void {
+    this.actionDice3dWanted = enabled;
+    if (!enabled) { this.disposeActionDice3d(); return; }
+    if (this.app && this.hostEl) void this.ensureActionDice3d();
+  }
+
+  private async ensureActionDice3d(): Promise<void> {
+    if (this.actionDice3d || !this.hostEl) return;
+    const generation = ++this.actionDice3dGeneration;
+    const host = this.hostEl;
+    try {
+      const module = await import('./actionDice3d');
+      if (generation !== this.actionDice3dGeneration || !this.actionDice3dWanted || this.hostEl !== host) return;
+      const layer = await module.createActionDiceLayer(host, { onFailure: (error) => this.failActionDice3d(error), anchor: this.app?.canvas });
+      if (generation !== this.actionDice3dGeneration || !this.actionDice3dWanted || this.hostEl !== host) { layer.dispose(); return; }
+      this.actionDice3d = layer;
+      this.applyActionDiceFaces(); // may be deferred until loadD6FaceTextures lands (see below)
+    } catch (error) {
+      if (generation === this.actionDice3dGeneration) this.failActionDice3d(error);
+    }
+  }
+
+  private failActionDice3d(error: unknown): void {
+    console.warn('ffb-pitch: 3D action dice unavailable, using the PNG faces', error);
+    this.actionDice3dWanted = false;
+    this.disposeActionDice3d();
+  }
+
+  private disposeActionDice3d(): void {
+    this.actionDice3dGeneration++;
+    this.actionDice3d?.dispose();
+    this.actionDice3d = null;
+    this.lastActionDiceTick = 0;
+    for (const die of this.actionDice) this.applyActionDieFaceMode(die);
+  }
+
+  /** The decoded d6 face bitmaps Pixi holds for the PNG die (null until loaded) — the cube wraps these directly. */
+  private d6FaceSources(): (ActionDieFaceSource | null)[] {
+    return D6_FACE_VALUES.map((value) => (this.d6FaceTextures[value - 1]?.source?.resource as ActionDieFaceSource | undefined) ?? null);
+  }
+  /** Push the current d6 faces to the cube layer once they exist; until then the layer draws nothing (PNG dice show). */
+  private applyActionDiceFaces(): void {
+    const layer = this.actionDice3d;
+    if (!layer || this.d6FaceSources().some((source) => !source)) return;
+    void layer.updateFaceTextures(this.d6FaceSources());
+  }
+
+  /** The PNG face hides under the cube while the 3D layer draws this die (Astra: a die past the pool cap keeps
+   *  its face); it shows again the moment the layer is gone. */
+  private applyActionDieFaceMode(die: ActionDieRecord, drawnIn3d = !!this.actionDice3d): void {
+    const cube = !!this.actionDice3d && drawnIn3d;
+    if (die.face) die.face.visible = !cube;
+    // Owner 09-14 UAT: the badge stays ON the die (its normal corner/top/side/bottom offset) — an outward push read as
+    // detached; the cube overlaps it only during the 125 ms tumble.
+    if (die.causeTag && die.causeTagHome) die.causeTag.position.set(die.causeTagHome.x, die.causeTagHome.y);
   }
 
   /** Owner 09-06: the turnover tears down the dice held for it (a failed re-roll's result). */
@@ -11644,22 +12026,7 @@ export class PitchRenderer {
       plus.position.set(failed.width / 2 + 17, 0);
       c.addChild(face, plus);
     }
-    if (opponentRerollPending) {
-      const pending = new Text({
-        text: 'Rerolling?',
-        style: {
-          fontFamily: 'Nuffle, system-ui, sans-serif', fontSize: 9, fontWeight: 'bold',
-          fill: 0xe9dcc0, stroke: { color: 0x14161a, width: 3 },
-        },
-      });
-      pending.anchor.set(0.5, 0);
-      pending.position.set(0, 14);
-      // Owner 09-06: the question only appears after ~2 s of waiting on the opponent — a prompt reroll replaces
-      // the held die first and the text never shows (the timer finds it destroyed).
-      pending.visible = false;
-      this.scheduleTimer(() => { if (!pending.destroyed && !c.destroyed) pending.visible = true; }, presentationMs(2000));
-      c.addChild(pending);
-    }
+    // Owner 09-14: no 'Rerolling?' caption — the held die + FAILED already say it; the answer arrives as the re-roll.
     c.position.set(0, 26); // below the 28px die
     return c;
   }
@@ -11667,7 +12034,7 @@ export class PitchRenderer {
   /** Owner 2026-07-08: a soft-gold caption under a re-rolled action die. A SKILL reroll reads
    *  "<skill icon/glyph> reroll" (Dodge, Sure Hands, Pro…); a TEAM reroll reads "<TRR icon>
    *  used!". Uses the icon art when available, else a gold glyph plate of the initials. */
-  private buildRerollLabel(skillName: string, isTeam?: boolean): Container {
+  private buildRerollLabel(skillName: string, isTeam?: boolean, belowFailed = false): Container {
     const c = new Container();
     return this.trackLiveSkillAsset(c, () => {
       for (const child of c.removeChildren()) child.destroy({ children: true });
@@ -11694,12 +12061,17 @@ export class PitchRenderer {
       const word = new Text({
         text: isTeam ? 'used!' : 'reroll',
         style: { fontFamily: 'Nuffle, system-ui, sans-serif', fontSize: 11, fontWeight: 'bold', fill: gold, stroke: { color: 0x14161a, width: 3 } },
+        // Owner 09-14: the caption rasters at 4x like the stencil tags — it read low-res under the camera zoom.
+        resolution: 4,
+        textureStyle: { scaleMode: 'linear' },
+        autoGenerateMipmaps: true,
       });
       word.anchor.set(0, 0.5);
       iconNode.position.set(0, 0);
       word.position.set(iconW + gap, 0);
       c.addChild(iconNode, word);
-      c.position.set(-(iconW + gap + word.width) / 2, 28);
+      // Owner 09-14: under the FAILED tag (plate 17..35) when both show, so 'USED!' and 'FAILED' never overlap.
+      c.position.set(-(iconW + gap + word.width) / 2, belowFailed ? 48 : 28);
     });
   }
 
@@ -12628,11 +13000,13 @@ export class PitchRenderer {
     if (await setBundledSkillBadgeFamily(family)) this.refresh();
   }
 
-  /** Re-measures the host (layout changes don't fire window resize) and refits. */
+  /** Re-measures the host (layout changes don't fire window resize) and refits — Owner 09-14 ("the auto director
+   *  consumes zoom steps"): ONLY while the camera is still at the fit. A coach's wheel zoom survives a HUD panel
+   *  or dialog toggling; the pan is re-legalised against the new bounds instead (same rule as onRendererResize). */
   resize(): void {
     this.app?.resize();
     this.drawBackdrop(); // B2-11: screen-space, re-fit to the new viewport
-    this.resetCamera();
+    this.keepOrRefitCamera();
   }
 
   /** B8-8/B9-V3: zIndex depth key — the square's near-depth boundary screen Y
@@ -12765,6 +13139,36 @@ export class PitchRenderer {
     return { homeForward, awayForward: { dx: -homeForward.dx, dy: -homeForward.dy } };
   }
 
+  private fitScaleFor(worldW: number, worldH: number, margin: number): number {
+    if (!this.app) return this.cameraFitScale;
+    return this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (this.app.screen.height - margin) / worldH), 'floor');
+  }
+
+  /** The fit scale for the CURRENT viewport (resetCamera's maths without moving the camera) — Astra 09-14: a kept
+   *  zoom on a resized host must compare against, and be able to wheel out to, the NEW fit. */
+  private currentFitScale(): number {
+    const ew = getOrientation() === 'ew';
+    const edge = this.clampToPitchEdge;
+    const padW = edge ? 0 : ew ? 0 : 2 * 4 * TILE_W;
+    const padH = edge ? 0 : ew ? 2 * 4 * TILE_H : 0;
+    return this.fitScaleFor(worldWidth() + padW, worldHeight() + padH, 24);
+  }
+
+  /** A kept (diverged) camera after the host changed size: refresh the fit reference, refit if the view now sits at or
+   *  below the new fit, else keep the coach's zoom and re-legalise the pan. */
+  private keepOrRefitCamera(): void {
+    if (!this.app) return;
+    const fit = this.currentFitScale();
+    const previousFit = this.cameraFitScale || this.world.scale.x;
+    // Untouched = still at the OLD fit (a shrinking window leaves it above the new one) or at/below the NEW fit.
+    const untouched = Math.abs(this.world.scale.x - previousFit) <= previousFit * 0.02 || this.world.scale.x <= fit * 1.02;
+    if (untouched) { this.resetCamera(); return; }
+    this.cameraFitScale = fit;
+    this.resetAutoDirectorCamera(true);
+    this.updateOverlayScales();
+    this.clampCamera();
+  }
+
   resetCamera(): void {
     if (!this.app) return;
     this.resetAutoDirectorCamera(true);
@@ -12786,7 +13190,7 @@ export class PitchRenderer {
     const offY = edge ? 0 : ew ? dugoutH : 0;
     const worldW = worldWidth() + padW;
     const worldH = worldHeight() + padH;
-    const scale = this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (this.app.screen.height - margin) / worldH), 'floor');
+    const scale = this.fitScaleFor(worldW, worldH, margin);
     this.world.scale.set(scale);
     this.cameraFitScale = scale; // 100% reference for badge zoom scaling
     this.updateOverlayScales();
@@ -13014,10 +13418,19 @@ export class PitchRenderer {
   }
 
   private drawStadium(): void {
+    this.stadiumDrawKey = null; // committed only after a complete draw (a throw leaves the stadium marked dirty)
+    this.drawStadiumBody();
+    this.stadiumDrawKey = this.stadiumInputKey();
+  }
+
+  private drawStadiumBody(): void {
     for (const child of this.stadiumLayer.removeChildren()) child.destroy({ children: true });
     for (const child of this.dressingLayer.removeChildren()) child.destroy({ children: true });
     this.crowdMembers = [];
     this.signFanSlots = [];
+    // The slots are gone, so the placard text must go too — the early-return branches below (stadium off, model
+    // pack, stands not loaded) never reached renderPregameSigns and left orphan "I ♥ name" text in effectsLayer.
+    this.renderPregameSigns();
 
     // B9-V3: the arena is built in the ACTIVE orientation's native frame via
     // per-corner projection (extPoint), so the stadium follows the pitch whether
@@ -13125,19 +13538,23 @@ export class PitchRenderer {
           { x: number; y: number },
         ];
         const points = raisedCorners.flatMap((p) => [p.x, p.y]);
-        // riser face: the vertical drop under this cell's FRONT edge (the two
-        // corners nearest the camera = largest screen Y). Skipped on ring 0.
+        // riser face: the drop under this cell's PITCH-FACING edge (owner 09-14: was "largest screen Y", which put a
+        // black bar under every seat cell whenever a band steps across the screen). Only drawn where a step face can
+        // actually be seen (edge runs across the screen); skipped on ring 0. Faced with the concourse stone, shaded,
+        // so the tiers read as stepped masonry instead of black slots.
         if (ring > 0) {
-          const front = [...corners].sort((a, b) => b.y - a.y).slice(0, 2);
-          const drop = height * RING_RISE;
-          graphics
-            .poly([
-              front[0]!.x, front[0]!.y - lift + drop,
-              front[1]!.x, front[1]!.y - lift + drop,
-              front[1]!.x, front[1]!.y - lift,
-              front[0]!.x, front[0]!.y - lift,
-            ])
-            .fill({ color: 0x14161c });
+          const { edge, visible } = stadiumRiserEdge(stand, raisedCorners);
+          if (visible) {
+            const drop = height * RING_RISE;
+            const riser = [edge[0].x, edge[0].y + drop, edge[1].x, edge[1].y + drop, edge[1].x, edge[1].y, edge[0].x, edge[0].y];
+            if (this.stoneTexture) {
+              const fit = drop / this.stoneTexture.height * 2; // two stone courses per step
+              graphics.poly(riser).fill({ texture: this.stoneTexture, matrix: new Matrix(fit, 0, 0, fit, Math.min(edge[0].x, edge[1].x), Math.min(edge[0].y, edge[1].y)) });
+              graphics.poly(riser).fill({ color: 0x0a0c10, alpha: 0.45 });
+            } else {
+              graphics.poly(riser).fill({ color: 0x2a2d36 });
+            }
+          }
         }
         // The stand PNG is a four-cell atlas (three seat modules plus an aisle),
         // not one icon to restart from pixel zero in every square. Select one
@@ -16091,6 +16508,10 @@ export class PitchRenderer {
           fill: 0xf2c245,
           stroke: { color: 0x14161a, width: 2 },
         },
+        // Owner 09-14: 4x raster + linear filtering like the other pitch labels — the 8 px raster read low-res under zoom.
+        resolution: 4,
+        textureStyle: { scaleMode: 'linear' },
+        autoGenerateMipmaps: true,
       });
       label.anchor.set(0.5, 0.5);
       // #90 (owner): the caption must fit INSIDE one tile. Per the owner's "drop letter-spacing

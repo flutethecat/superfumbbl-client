@@ -22,6 +22,7 @@ import {
   setupTemplatesForSide,
   squareLabel,
   TILE_H,
+  TILE_W,
   type ActionMode,
   type ClassicIconTextureSource,
   type ContextTarget,
@@ -88,7 +89,6 @@ import { chatToastRole, type ChatAuthorSide } from '../game/chatAuthor';
 import { useChatToastQuietClear } from '../game/chatToastQuietClear';
 import { newlyAppendedChatOccurrences, scheduleAuthoredChatToastExpiry } from '../game/chatToastLifetime';
 import { logTagParts, type LogTagKind, type LogTagToken } from '../game/logTags';
-import { logTimestamp } from '../game/logTime';
 // Owner 08-18: the armour log lines render the same breastplate icon art the on-pitch armour
 // die toast uses (renderer.ts showArmorRoll), inline at text size, over the 🛡 text node.
 import breastplateIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/breastplate.png';
@@ -102,6 +102,7 @@ import { hmpScatterSkillUseCardCopy, passSkillUseCardCopy } from '../game/skillU
 import { swoopChoiceCopy } from '../game/logic/swoopPresentation';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
+import { snapshotTickNeedsRebuild } from '../game/spectatorSnapshotTick';
 import { watchBoardPresentationReconciliation, watchMovementPresentationReconciliation, watchMovementPresentationRecovery } from '../game/movementPresentationReconciliation';
 import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../game/furyOfTheBloodGod';
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
@@ -122,8 +123,10 @@ import { gazeTargetClick, isGazeMovementState } from '../game/logic/gazeMovement
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
+import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from '../game/postGameAdvancement';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
 import { spectatorExitActionsVisible, spectatorMvpPending, type EndGameExit } from '../game/spectatorEndGame';
+import { spectatorConcedeOccurrenceKey, spectatorPenaltyShootoutOccurrenceKey } from '../game/spectatorLocalDismissal';
 import { shouldShowRejoinBrowser } from '../game/rejoinFlow';
 // Fives lane 08-19: project only the fresh auto-Move shell back through the menu's server-derived offer set.
 function quickClickBlitzAction(game: GameJson, ctx: ClientStateContext, actingId: string, targetId: string): CoachAction | null {
@@ -282,6 +285,7 @@ import {
 } from '../game/jnlpRouting';
 import { generateAllMarkings, type AutoMarkingConfig } from '../game/markings';
 import { computeIconSkills, computeConfigMarkings, anyMarkerConfigured, markerGlyph, jumpUpMenuPresentation, playerDetailSkills } from '../game/skillDisplay';
+import type { PlayerDetailSkill } from '../game/skillDisplay';
 import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
@@ -392,6 +396,9 @@ const panelTab = ref<'log' | 'chat' | 'roster'>('log');
 const rosterSide = ref<'home' | 'away'>('home');
 const panelCollapsed = ref(false);
 let renderer: PitchRenderer | null = null;
+/** Bumped once the pitch renderer has mounted and loaded its assets — computeds that read `renderer` (a plain module
+ *  variable) re-run through it instead of caching a pre-mount null (Astra 09-14). */
+const rendererReady = ref(0);
 const FULLSCREEN_SOUTH_PAN_MIN = 120;
 const FULLSCREEN_SOUTH_PAN_MAX = 220;
 function syncFullscreenSouthPanRange() {
@@ -458,7 +465,10 @@ function chooseKickElection(target: (typeof kickElectionTargets.value)[number]):
   gameStore.resolveKickElection(target.key, target.choice, 'modern');
 }
 
-const chatEntries = computed(() => gameStore.state.log.filter((e) => e.kind === 'talk'));
+const liveChatEntries = computed(() => gameStore.state.log.filter((e) => e.kind === 'talk'));
+const reviewChatHidden = computed(() => gameStore.spectatorReview.value.active && !gameStore.spectatorLiveChatOpen.value);
+const replayerOpen = computed(() => props.mode === 'replay' || gameStore.spectatorReview.value.active);
+const chatEntries = computed(() => reviewChatHidden.value ? [] : liveChatEntries.value);
 // Owner 08-19: coach-name/message split for the chat pane — pure helper in game/chatLine.ts.
 function chatParts(entry: { text: string }): { name: string; rest: string } {
   return chatLineParts(entry.text);
@@ -574,11 +584,11 @@ const logNewEvents = ref(false);
 const chatNewEvents = ref(false);
 // Owner 2026-07-08: unread chat count → a badge on the CHAT tab (shown when toasts
 // are disabled, so a missed line is still surfaced). Reset when the tab is opened.
-const chatUnread = ref(0);
+const chatUnread = computed(() => gameStore.spectatorReview.value.chatUnread);
 
 /** On replay load, keep the default Log clear of the transport. A coach's persisted Log position wins. */
 function dodgeDefaultLogFromReplayControls(): void {
-  if (props.mode !== 'replay' || settings.logPos || panelCollapsed.value) return;
+  if ((props.mode !== 'replay' && !gameStore.spectatorReview.value.active) || settings.logPos || panelCollapsed.value) return;
   const panel = panelEl.value;
   const host = pitchHost.value;
   const controls = host?.querySelector('.replay-controls') as HTMLElement | null;
@@ -599,6 +609,16 @@ function dodgeDefaultLogFromReplayControls(): void {
     10,
   );
 }
+const spectatorDirectorSuspended = computed(() => {
+  const review = gameStore.spectatorReview.value;
+  return review.active && (review.phase === 'pausing' || review.phase === 'seeking' || !review.controls?.playing);
+});
+const spectatorPauseButton = ref<HTMLButtonElement | null>(null);
+watch(() => gameStore.spectatorReview.value.active, async (active, wasActive) => {
+  await nextTick();
+  if (active) dodgeDefaultLogFromReplayControls();
+  else if (wasActive) spectatorPauseButton.value?.focus();
+});
 function logNameStyle(team: LogNameTeam): Record<string, string> | undefined {
   const color = logNameColor(team);
   return color ? { color, '--log-seat-glow': color } : undefined;
@@ -684,15 +704,19 @@ const topPanelBox = ref<{ left: number; bottom: number; width: number } | null>(
 // Owner 2026-07-05: the CENTER panel (scoreboard) left edge, host-relative — anchors
 // the floating turn-timer's default position (re-measured whenever the UI reflows).
 const centerPanelBox = ref<{ left: number; top: number; center: number; bottom: number } | null>(null);
-// Keep the spectator/replay-only Sketch launcher immediately left of the recording
-// indicator (or the brand plate when nobody is watching). Both axes are measured from
-// the live quick bar so swapped/customized/resized layouts stay aligned.
-const telestratorBottom = ref(72);
+// Keep the client-wide Sketch launcher immediately left of the quick bar on the same
+// bottom row. Both axes are measured so customized/resized layouts stay aligned.
+const telestratorBottom = ref(8);
 const telestratorRight = ref(12);
 // Owner 09-06: quick-bar LEFT/RIGHT edges (host coords) — the Sketch launcher docks left of the bar and the
 // player card docks above it, right edges aligned.
 const quickBarLeft = ref<number | null>(null);
 const quickBarRight = ref<number | null>(null);
+/** Owner 09-14: the quick bar's RENDERED height (it is CSS-scaled) — the Sketch launcher matches it top and bottom. */
+const quickBarHeight = ref<number | null>(null);
+/** Owner 09-14: host-relative bottom for the DOCKED player card — clear of the pause / turn / Super FUMBBL badge row
+ *  that sits above the quick bar (the card used to land on it). */
+const playerCardDockBottom = ref<number | null>(null);
 // Bottom (host coords) of the whole top-left stack (coach panel + config-bar) —
 // anchors the incoming-chat toast just below it.
 const leftStackBottom = ref<number | null>(null);
@@ -702,25 +726,26 @@ function measureTopPanel() {
   if (!host) {
     topPanelBox.value = null;
     leftStackBottom.value = null;
-    telestratorBottom.value = 72;
+    telestratorBottom.value = 8;
     telestratorRight.value = 12;
     quickBarLeft.value = null; quickBarRight.value = null;
     return;
   }
   const hr = host.getBoundingClientRect();
   const quickBar = document.querySelector('.config-bar') as HTMLElement | null;
-  telestratorBottom.value = quickBar
-    ? Math.max(8, Math.round(hr.bottom - quickBar.getBoundingClientRect().top + 8))
-    : 72;
   if (quickBar) {
     const qr = quickBar.getBoundingClientRect();
+    telestratorBottom.value = Math.max(8, Math.round(hr.bottom - qr.bottom));
     quickBarLeft.value = Math.round(qr.left - hr.left);
     quickBarRight.value = Math.round(hr.right - qr.right);
-  } else { quickBarLeft.value = null; quickBarRight.value = null; }
-  const sketchNeighbour = document.querySelector('.quick-live, .quick-super-logo') as HTMLElement | null;
+    quickBarHeight.value = Math.round(qr.height);
+  } else { telestratorBottom.value = 8; quickBarLeft.value = null; quickBarRight.value = null; quickBarHeight.value = null; }
+  const sketchNeighbour = document.querySelector('.quick-match-controls') as HTMLElement | null;
   telestratorRight.value = sketchNeighbour
     ? Math.max(8, Math.round(hr.right - sketchNeighbour.getBoundingClientRect().left + 8))
     : 12;
+  const aboveRow = sketchNeighbour?.getBoundingClientRect() ?? quickBar?.getBoundingClientRect() ?? null;
+  playerCardDockBottom.value = aboveRow ? Math.max(telestratorBottom.value, Math.round(hr.bottom - aboveRow.top + 8)) : null;
   if (!el) {
     topPanelBox.value = null;
     leftStackBottom.value = null;
@@ -1007,7 +1032,7 @@ watch(
 // the older toasts up; a 4th drops the oldest off the top.
 let chatToastId = 0;
 const CHAT_TOAST_MAX = 3;
-const chatToasts = reactive<{ id: number; sender: string; text: string; side: ChatAuthorSide; timer: number }[]>([]);
+const chatToasts = reactive<{ id: number; sender: string; text: string; side: ChatAuthorSide; timer: number; owner: 'connection' | 'match' | 'local' }[]>([]);
 function removeChatToast(id: number) {
   const i = chatToasts.findIndex((t) => t.id === id);
   if (i >= 0) {
@@ -1019,7 +1044,17 @@ function clearChatToasts() {
   for (const toast of chatToasts) window.clearTimeout(toast.timer);
   chatToasts.splice(0);
 }
-const chatPaneOpen = computed(() => settings.chatPoppedOut || (panelTab.value === 'chat' && !panelCollapsed.value));
+function clearMatchToasts() {
+  for (let index = chatToasts.length - 1; index >= 0; index--) {
+    const toast = chatToasts[index]!;
+    if (toast.owner !== 'match') continue;
+    window.clearTimeout(toast.timer);
+    chatToasts.splice(index, 1);
+  }
+}
+const chatPaneOpen = computed(() => !reviewChatHidden.value && (settings.chatPoppedOut || (panelTab.value === 'chat' && !panelCollapsed.value)));
+watch(reviewChatHidden, (hidden) => { if (hidden) clearChatToasts(); }, { flush: 'sync' });
+watch(replayerOpen, (open) => { if (open) clearChatToasts(); }, { flush: 'sync' });
 useChatToastQuietClear({
   open: () => chatPaneOpen.value,
   // The store caps logs at 400 entries, so length can remain unchanged while a
@@ -1058,10 +1093,13 @@ const chatToastStyle = computed(() => {
   }
 });
 watch(
-  () => chatEntries.value,
+  () => liveChatEntries.value,
   (entries, previous = []) => {
     const incoming = newlyAppendedChatOccurrences(entries, previous);
     for (const entry of incoming) {
+    if (reviewChatHidden.value) {
+      continue;
+    }
     // talk lines are logged as "<coach>: <message>"
     const sep = entry.text.indexOf(': ');
     const sender = sep > 0 ? entry.text.slice(0, sep) : '';
@@ -1079,12 +1117,13 @@ watch(
     // owner 2026-07-08: count the unread line(s) for the CHAT-tab badge (surfaced when
     // toasts are off) — the reset watcher below clears it when the tab is opened. Use the
     // length delta so a batch of lines arriving in one tick all count.
-    chatUnread.value += 1;
+    gameStore.incrementSpectatorChatUnread();
+    if (replayerOpen.value) continue;
     // owner 2026-07-08: toasts can be disabled — then the badge is the only surfacing.
     if (!settings.chatToastsEnabled) continue;
     const id = ++chatToastId;
     const timer = scheduleAuthoredChatToastExpiry(id, removeChatToast);
-    chatToasts.push({ id, sender, text: body, side: entry.side ?? 'unknown', timer });
+    chatToasts.push({ id, sender, text: body, side: entry.side ?? 'unknown', timer, owner: 'connection' });
     playSound('chatToast');
     // owner 2026-07-07: cap at 3 on screen — the oldest drops off (pushed up and out)
     while (chatToasts.length > CHAT_TOAST_MAX) {
@@ -1116,7 +1155,7 @@ watch(
     if (!text) return;
     const id = ++chatToastId;
     const timer = window.setTimeout(() => removeChatToast(id), 6000);
-    chatToasts.push({ id, sender: '', text, side: 'unknown', timer });
+    chatToasts.push({ id, sender: '', text, side: 'unknown', timer, owner: 'match' });
     while (chatToasts.length > CHAT_TOAST_MAX) {
       const dropped = chatToasts.shift();
       if (dropped) clearTimeout(dropped.timer);
@@ -1147,13 +1186,18 @@ watch(
     if (!text) return;
     const id = ++chatToastId;
     const timer = window.setTimeout(() => removeChatToast(id), 6000);
-    chatToasts.push({ id, sender: '', text, side: 'unknown', timer });
+    chatToasts.push({ id, sender: '', text, side: 'unknown', timer, owner: 'match' });
     while (chatToasts.length > CHAT_TOAST_MAX) {
       const dropped = chatToasts.shift();
       if (dropped) clearTimeout(dropped.timer);
     }
   },
 );
+function openLiveChat() {
+  gameStore.openSpectatorLiveChat();
+  panelTab.value = 'chat';
+  panelCollapsed.value = false;
+}
 function openChatFromToast() {
   panelTab.value = 'chat';
   panelCollapsed.value = false;
@@ -1162,7 +1206,7 @@ function openChatFromToast() {
 watch(
   () => [panelTab.value, panelCollapsed.value, settings.chatPoppedOut] as const,
   ([tab, collapsed, poppedOut]) => {
-    if ((tab === 'chat' && !collapsed) || poppedOut) chatUnread.value = 0;
+    if (!reviewChatHidden.value && ((tab === 'chat' && !collapsed) || poppedOut)) gameStore.resetSpectatorChatUnread();
   },
 );
 // owner ruling 2026-08-17: disabling chat while the Chat tab is active falls back to Log
@@ -1487,7 +1531,7 @@ function openReport() {
 function pushReportToast(text: string, ms = 6000) {
   const id = ++chatToastId;
   const timer = window.setTimeout(() => removeChatToast(id), ms);
-  chatToasts.push({ id, sender: '', text, side: 'unknown', timer });
+  chatToasts.push({ id, sender: '', text, side: 'unknown', timer, owner: 'local' });
   while (chatToasts.length > CHAT_TOAST_MAX) {
     const dropped = chatToasts.shift();
     if (dropped) clearTimeout(dropped.timer);
@@ -1915,6 +1959,11 @@ function blockDiceWebGlAvailable(): boolean {
   return typeof window !== 'undefined'
     && (typeof window.WebGLRenderingContext !== 'undefined' || typeof window.WebGL2RenderingContext !== 'undefined');
 }
+/** Owner 09-14: the on-pitch action dice ride the same 3D setting; roll RESULTS show in spectator-clean too. */
+function actionDice3dWanted(): boolean {
+  return settings.blockDice3d && !bpReducedMotion.value && blockDiceWebGlAvailable();
+}
+watch(() => [settings.blockDice3d, bpReducedMotion.value] as const, () => { renderer?.setReducedMotion(bpReducedMotion.value); renderer?.setActionDice3d(actionDice3dWanted()); });
 function blockDice3dEligible(): boolean {
   return settings.order66 && settings.blockDice3d && !settings.spectatorClean && !gameStore.playbackCatchingUp.value
     && !bpReducedMotion.value && !bpReplaySeekFallback && !bpDice3dFailed && blockDiceWebGlAvailable();
@@ -1993,11 +2042,19 @@ async function presentBlockDice3d(key: string, results: readonly number[], durat
     row.settle(results);
   }
 }
+// Live-review snap (seek / GO TO LIVE handover): the PNG tumble stops and the 3D row retires exactly like a replay seek;
+// the next live tumble key re-arms both (see bpReplaySeekFallback).
+watch(() => gameStore.spectatorPublishedPosition.value, (position) => {
+  if (!position?.snap) return;
+  bpReplaySeekFallback = true;
+  stopBlockTumble();
+  disposeBlockDice3d();
+});
 watch(() => gameStore.state.blockPartial?.tumbleKey, (key) => {
   stopBlockTumble();
   if (key && !gameStore.playbackCatchingUp.value) bpReplaySeekFallback = false;
   const bp = gameStore.state.blockPartial;
-  if (!key || !bp || bp.dice.length === 0 || gameStore.playbackCatchingUp.value || settings.spectatorClean || bpReducedMotion.value) return;
+  if (gameStore.spectatorPublishedPosition.value?.snap || !key || !bp || bp.dice.length === 0 || gameStore.playbackCatchingUp.value || settings.spectatorClean || bpReducedMotion.value) return;
   bpTumble.value = { key, faces: randomBlockFaces(bp.dice.length) };
   bpTumbleTimer = setInterval(() => {
     if (bpTumble.value) bpTumble.value = { key, faces: randomBlockFaces(bp.dice.length, bpTumble.value.faces) };
@@ -2645,6 +2702,9 @@ watch(() => gameStore.state.negatraitCue?.seq, () => {
 });
 onBeforeUnmount(() => { cancelAnimationFrame(negatraitCueRaf); clearTimeout(negatraitCueTimer); });
 
+let viewPresentationEpoch = 0;
+const actionDieTimers = new Set<number>();
+
 // On-pitch action d6 (owner 2026-07-03 r3) — pop a die with the rolled value
 // next to each acting player's square. Shown regardless of spectator-clean (it's
 // a roll RESULT, not a planner preview).
@@ -2662,9 +2722,13 @@ watch(
     // ONLY pickups get the beat — dodge/GFI/block/catch keep their timing. ⚖ delays WHEN a
     // resolved report shows, never what's known; the beat scales with the movement-speed setting.
     const pickupBeat = a.rolls.some((r) => r.cause === 'pickup') ? presentationMs(settings.moveSpeedMs) : 0;
-    const show = () => { for (const roll of a.rolls) renderer?.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed, roll.rerollSkill, roll.rerollTeam, roll.opponentRerollPending); };
+    const epoch = viewPresentationEpoch;
+    const show = () => { if (epoch !== viewPresentationEpoch) return; for (const roll of a.rolls) renderer?.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed, roll.rerollSkill, roll.rerollTeam, roll.opponentRerollPending); };
     const wait = delay + pickupBeat;
-    if (wait > 0) window.setTimeout(show, wait); else show();
+    if (wait > 0) {
+      const timer = window.setTimeout(() => { actionDieTimers.delete(timer); show(); }, wait);
+      actionDieTimers.add(timer);
+    } else show();
   },
 );
 
@@ -2927,13 +2991,6 @@ const KO_BASE = 0x05; // PlayerStateBase.KNOCKED_OUT
 const DEAD_BASE = 0x08; // PlayerStateBase.DEAD — the crowd's skull-dice cheer
 const injuryIsKo = computed(() => gameStore.state.injurySplash?.injuryBase === KO_BASE);
 const injuryIsRockImpact = computed(() => gameStore.state.injurySplash?.rockImpactOnly === true);
-// Owner 2026-07-08 (pipeline Phase 3b): a STUN may show as a lightweight token TAG
-// instead of the full banner (Settings → Display · Stun display). KO/casualty unchanged.
-const injuryIsStunTag = computed(
-  () => !injuryIsRockImpact.value
-    && gameStore.state.injurySplash?.injuryBase === STUNNED_BASE
-    && settings.stunDisplay === 'tag',
-);
 // Owner 2026-07-07: a CASUALTY (Badly Hurt / Seriously Hurt / Dead — anything worse than a KO)
 // now reads as a TOKEN-BOUND toast at the injured square (like the KO toast + fend/sidestep/stand
 // firm skill toasts), NOT the full-width banner.
@@ -3036,7 +3093,7 @@ let rerollMenuRaf = 0;
 // answering, i.e. just after the card unmounts, so track the card's last-seen position + a short
 // recency window rather than requiring it to still be mounted. No card in the window (opponent's
 // reroll, auto-reroll, headless) ⇒ style helper below returns undefined ⇒ CSS default (top:76px) fallback.
-const rerollCardLastSeen = reactive({ x: 0, y: 0, at: 0 });
+const rerollCardLastSeen = reactive({ x: 0, y: 0, h: 0, at: 0 }); // h = the card's height, so the splash lands BELOW it (owner 09-14)
 const REROLL_SPLASH_ANCHOR_WINDOW_MS = 2500;
 // Owner W25: an inducement-use message (Weather Mage etc. — carries its own `.text`, unlike the
 // plain team/skill reroll toast) is a match-level announcement, not a routine in-turn reroll cue —
@@ -3063,11 +3120,12 @@ watch(
       const p = renderer?.playerScreenPos(pid);
       const host = pitchHost.value;
       if (p && host && renderer) {
-        rerollSplashTokenPos.x = Math.min(Math.max(p.x, 90), Math.max(host.clientWidth - 90, 90));
-        // Owner 09-06: the splash sat ON the action-die toast (die at 0.7 tile above the anchor, 28 px tall) —
-        // lift past the die's top edge in screen px, then the computed's −46 clears the toast's own height.
-        const dieTop = (TILE_H * 0.7 + 16) * renderer.cameraScale();
-        rerollSplashTokenPos.y = Math.max(p.y - dieTop, 60);
+        // Owner 09-14: the splash sits BELOW the die cluster (die 0.7 tile above the anchor, FAILED plate to +35 under
+        // it; the team caption is gone) and centred on the die (half a tile right of the token), never over it.
+        const scale = renderer.cameraScale();
+        rerollSplashTokenPos.x = Math.min(Math.max(p.x + TILE_W * 0.5 * scale, 90), Math.max(host.clientWidth - 90, 90));
+        const dieCentre = p.y - TILE_H * 0.7 * scale;
+        rerollSplashTokenPos.y = Math.max(dieCentre + 48 * scale + 46, 60); // the computed subtracts 46 below
         rerollSplashTokenPos.ready = true;
       }
       rerollSplashTokenRaf = requestAnimationFrame(follow);
@@ -3083,7 +3141,10 @@ const rerollSplashAnchorStyle = computed(() => {
   if (fresh) {
     const x = rerollMenuPos.ready ? rerollMenuPos.x : rerollCardLastSeen.x;
     const y = rerollMenuPos.ready ? rerollMenuPos.y : rerollCardLastSeen.y;
-    return { left: `${x}px`, top: `${Math.max(0, y - 46)}px` };
+    // Owner 09-14: BELOW the card (block dice card / re-roll prompt) — `y` is the card's CENTRE (reactivePromptStyle
+    // centres the card on its anchor) and the card can still be mounted (the block dice card stays up through the
+    // reveal), so half its height plus a gap puts the splash just under it, never behind it.
+    return { left: `${x}px`, top: `${Math.max(0, y + (rerollCardLastSeen.h || 120) / 2 + 8)}px` };
   }
   // No card on this screen → the acting player's token; CSS default (top:76px band) only if neither resolves.
   if (rerollSplashTokenPos.ready) return { left: `${rerollSplashTokenPos.x}px`, top: `${Math.max(0, rerollSplashTokenPos.y - 46)}px` };
@@ -3186,6 +3247,7 @@ watch(
         rerollMenuPos.ready = true;
         rerollCardLastSeen.x = placed.x;
         rerollCardLastSeen.y = placed.y;
+        rerollCardLastSeen.h = rerollCardBox(host)?.height ?? rerollCardLastSeen.h;
         rerollCardLastSeen.at = Date.now();
       }
       rerollMenuRaf = requestAnimationFrame(follow);
@@ -3879,7 +3941,7 @@ watch(
     // rides the server's turnEnd per the send-off rules)
     sendOffTimers.push(setTimeout(() => {
       gameStore.dismissSendOffResult();
-      renderer?.resetCamera();
+      renderer?.resize(); // owner 09-14: re-legalise only — a coach's zoom is never consumed by the return
     }, presentationMs(4200)));
   },
 );
@@ -4147,6 +4209,8 @@ function trackBlockReroll() {
     // Anchor Order-66 block dice to the server defender's square.
     const g = gameStore.game.value;
     let sq: [number, number] | null = null; // owner 09-06: legacy block-cine square ripped; the server defender anchors
+    // Owner 09-14 UAT: the square captured when the dice landed wins — the live defender moves with the push/follow-up.
+    if (gameStore.state.blockPartial?.defenderSquare) sq = normSquare(gameStore.state.blockPartial.defenderSquare);
     if (!sq && g) {
       const defId = String((g as { defenderId?: string | null }).defenderId ?? '');
       const dc = defId
@@ -4168,6 +4232,7 @@ function trackBlockReroll() {
       // splash lands above THIS dialog instead of falling back to the scoreboard band.
       rerollCardLastSeen.x = blockRerollPos.value.x;
       rerollCardLastSeen.y = blockRerollPos.value.y;
+      rerollCardLastSeen.h = (host.querySelector('.block-partial') as HTMLElement | null)?.offsetHeight ?? rerollCardLastSeen.h;
       rerollCardLastSeen.at = Date.now();
     }
     blockRerollRaf = requestAnimationFrame(step);
@@ -5992,7 +6057,7 @@ watch(
     // play — on SELECT, decoupled from arming the move overlay. renderer.activePlayerId tracks the acting player
     // on BOTH turns, so the my-side gate (isPlaying + myTurn) lives here where the viewer's side is known.
     renderer.o66OppTzActive = settings.order66 && gameStore.isPlaying.value && gameStore.myTurn.value && !!id;
-    if (id && settings.autoDirector && !gameStore.playbackCatchingUp.value) renderer.focusActivePlayer();
+    if (id && settings.autoDirector && !spectatorDirectorSuspended.value && !gameStore.playbackCatchingUp.value) renderer.focusActivePlayer();
   },
 );
 
@@ -6023,6 +6088,8 @@ watch(() => gameStore.state.snapshotEpoch, async () => {
   if (!renderer) return;
   renderer.setActivePlayer(gameStore.state.activePlayerId);
   renderer.setActedPlayers(gameStore.state.actedPlayers ?? []);
+  // 09-14: the game watcher below already rebuilt for this exact snap publication — one rebuild per snap.
+  if (!snapshotTickNeedsRebuild(gameStore.spectatorPublishedPosition.value, lastSnapRestoredPublication)) return;
   renderer.refresh();
 });
 // Owner 2026-07-14 (#10 part 2): the store's "recovering" latch → the renderer keeps the stun X on those players.
@@ -6033,7 +6100,7 @@ watch(
 );
 
 // Owner 2026-07-03: Auto Director master toggle → the renderer (gates cinematicZoom).
-watch(() => settings.autoDirector, (on) => renderer?.setAutoDirectorEnabled(on));
+watch(() => settings.autoDirector && !spectatorDirectorSuspended.value, (on) => renderer?.setAutoDirectorEnabled(on));
 // Historical replay catch-up applies snapshots much faster than their original
 // presentation cadence. Keep camera authority entirely passive until the paced
 // replay/live tail resumes; the renderer restarts from its current camera without a snap.
@@ -6172,10 +6239,11 @@ const cardStyle = computed(() => {
     style.bottom = 'auto';
     style.transform = 'none'; // drop the default vertical-centre translate
   } else {
-    // Owner 09-06: default dock = bottom-left, sitting on the quick bar with right edges aligned.
+    // Owner 09-06: default dock = bottom-right, right edges aligned with the quick bar; owner 09-14: its bottom
+    // sits ABOVE the pause / turn / Super FUMBBL badge row (which used to occlude the card's skill rail).
     style.top = 'auto';
     style.transform = 'none';
-    style.bottom = `${telestratorBottom.value}px`;
+    style.bottom = `${playerCardDockBottom.value ?? telestratorBottom.value}px`;
     style.right = `${Math.max(14, quickBarRight.value ?? 14)}px`;
   }
   if (cardSize.value) {
@@ -7377,6 +7445,39 @@ function onGlobalPointerDown(event: PointerEvent) {
 /** Q4 Option B: rejected actions show a transient tooltip at the click point. */
 const toast = reactive({ visible: false, text: '', x: 0, y: 0, below: false });
 let toastTimer = 0;
+/** Cancel match-owned work synchronously before a different replay position is published. */
+function cancelViewMatchPresentation() {
+  viewPresentationEpoch++;
+  for (const timer of actionDieTimers) window.clearTimeout(timer);
+  actionDieTimers.clear();
+  for (const timer of [masterChefSplashTimer, riotousRookiesSplashTimer, negatraitCueTimer,
+    stallerSplashTimer, fallOverHideTimer, toastTimer, infoNoticeTimer]) window.clearTimeout(timer);
+  masterChefSplashTimer = riotousRookiesSplashTimer = negatraitCueTimer = 0;
+  stallerSplashTimer = fallOverHideTimer = toastTimer = infoNoticeTimer = 0;
+  for (const frame of [negatraitCueRaf, skillToastRaf, koToastRaf, fallOverRaf,
+    rerollSplashTokenRaf, followupRaf]) cancelAnimationFrame(frame);
+  negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = 0;
+  for (const timer of sendOffTimers) clearTimeout(timer);
+  sendOffTimers = [];
+  masterChefSplashVisible.value = false;
+  riotousRookiesSplashVisible.value = false;
+  negatraitCue.value = null;
+  stallerSplash.value = null;
+  toast.visible = false;
+  koToastPos.ready = false;
+  fallOverPos.ready = false;
+  fallOverVisible.value = false;
+  rerollSplashTokenPos.ready = false;
+  followupPos.value = null;
+  clearMatchToasts();
+  resetMvpPresentation();
+  kickoffArcSettled = false;
+  stopBlockTumble();
+  renderer?.cancelSpectatorPresentation();
+}
+onBeforeUnmount(cancelViewMatchPresentation);
+
+
 
 function showToast(message: string, x: number, y: number, durationMs = 1800, below = false) {
   toast.text = message;
@@ -7392,6 +7493,12 @@ function showToast(message: string, x: number, y: number, durationMs = 1800, bel
 // that the renderer eases into a velocity (glide-stop on release), instead of a
 // per-keypress tile jump.
 const heldPanKeys = new Set<string>();
+/** Owner 09-14: the arrow keys pan exactly like WASD (Up=W, Down=S, Left=A, Right=D); an arrow is folded onto its WASD
+ *  twin so holding both never double-counts. The replay toolbar's own arrow shortcuts only apply while IT has focus. */
+const PAN_KEY_ALIASES: Record<string, string> = {
+  KeyW: 'KeyW', KeyA: 'KeyA', KeyS: 'KeyS', KeyD: 'KeyD',
+  ArrowUp: 'KeyW', ArrowLeft: 'KeyA', ArrowDown: 'KeyS', ArrowRight: 'KeyD',
+};
 function updatePanDir() {
   let x = 0;
   let y = 0;
@@ -7401,8 +7508,14 @@ function updatePanDir() {
   if (heldPanKeys.has('KeyD')) x -= 1;
   renderer?.setPanDirection(x, y);
 }
+/** A control that consumes letters/arrows itself (the window handler's HTMLInputElement bail covers inputs). */
+function keyboardOwnedByTextControl(target: EventTarget | null): boolean {
+  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+    || (target instanceof HTMLElement && target.isContentEditable);
+}
 function onKeyup(event: KeyboardEvent) {
-  if (/^Key[WASD]$/.test(event.code)) { heldPanKeys.delete(event.code); updatePanDir(); }
+  const pan = PAN_KEY_ALIASES[event.code];
+  if (pan) { heldPanKeys.delete(pan); updatePanDir(); }
 }
 function clearPan() { heldPanKeys.clear(); renderer?.setPanDirection(0, 0); }
 
@@ -7790,11 +7903,14 @@ function onKeydown(event: KeyboardEvent) {
     // (Space would otherwise scroll / re-click a focused button).
     if (confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
     else if (queuedSteps.value > 0) { event.preventDefault(); confirmMove(); }
-  } else if (/^Key[WASD]$/.test(event.code)) {
-    // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04): W/A pan
+  } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target)) {
+    // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04; arrow keys 09-14): W/A pan
     // toward the top/left (content shifts down/right), S/D the opposite. Held keys
     // drive a smooth velocity glide (setPanDirection) rather than a per-key tile jump.
-    heldPanKeys.add(event.code);
+    // Astra 09-14: a textarea (bug report, unknown-call note), a <select> (log font) or an editable region keeps its
+    // own arrows/letters — the pan never steals them.
+    if (event.code.startsWith('Arrow')) event.preventDefault(); // never scroll the page
+    heldPanKeys.add(PAN_KEY_ALIASES[event.code]!);
     updatePanDir();
   } else if (event.key === 'Enter' && !settings.chatDisabled) {
     // Enter initiates a chat message (owner 2026-07-03 r3): open + focus chat.
@@ -7886,9 +8002,13 @@ onMounted(async () => {
         );
         return;
       }
+      // Owner 09-14: the default corner follows the bottom-bar layout — swapped (the default) docks the Log at the
+      // bottom-LEFT 27px up (.log-panel[data-swapped]); unswapped keeps the bottom-right 56px up. This re-anchor
+      // (mount + every resize) used to hard-code the unswapped corner, dragging the default Log to the right.
+      const swapped = settings.bottomBarsSwapped;
       panelAnchor.value = {
-        x: Math.max(0, pw - el.offsetWidth - 14),
-        y: Math.max(0, ph - 56 - el.offsetHeight),
+        x: swapped ? 14 : Math.max(0, pw - el.offsetWidth - 14),
+        y: Math.max(0, ph - (swapped ? 27 : 56) - el.offsetHeight),
       };
     };
     panelReanchorHandler = reanchorPanel;
@@ -7909,6 +8029,7 @@ onMounted(async () => {
     pitchHost.value!,
     () => rendererMountActive && renderer === mountedRenderer,
   )) return;
+  rendererReady.value++;
   refreshApothecarySubject();
   // The confirmation dialog and its armed renderer chips consume the same BB2025 Pass projection as hover and
   // committed destination cues (including Nerves of Steel), never ffb-pitch's standalone fallback formula.
@@ -7916,7 +8037,9 @@ onMounted(async () => {
     const g = gameStore.game.value;
     return g ? passDestinationRollPreview(g, from, to, throwerId, 'PASS')?.throwRoll ?? null : null;
   });
-  gameStore.setReplayPresentationIdleProbe(() => renderer?.isReplayPresentationIdle() ?? true);
+  gameStore.setReplayPresentationIdleProbe(() => !bpTumble.value && (renderer?.isReplayPresentationIdle() ?? true));
+  unregisterSpectatorRendererCancellation?.();
+  unregisterSpectatorRendererCancellation = gameStore.registerSpectatorRendererCancellation(cancelViewMatchPresentation);
   refreshSeatTint(); // #157: the game watch may have run its `immediate` pass before the renderer existed
   // A snapshot can derive TRICKSTER before Pixi mounts; upstream enters that state during game-state handling.
   // `ffb-client-logic/src/main/java/com/fumbbl/ffb/client/handler/ClientCommandHandlerGameState.java:136-154`
@@ -7984,6 +8107,8 @@ onMounted(async () => {
   renderer.setPanSpeed(settings.cameraPanSpeed); // owner 09-05: WASD pan speed
   renderer.setPositionRingOptions({ density: settings.positionRingDensity, color: ringColorOverrideInt() });
   renderer.setDieTagPosition(settings.dieTagPosition); // owner 2026-07-04: on-die cause tag
+  renderer.setReducedMotion(bpReducedMotion.value);
+  renderer.setActionDice3d(actionDice3dWanted()); // owner 09-14: 3D action d6 over the pitch
   renderer.setActivePlayerEcho(settings.activePlayerEcho); // owner 2026-07-06: deprecated echo opt-in
   renderer.moveStyle = settings.moveStyle;
   renderer.setMoveStepMs(settings.moveSpeedMs); // owner 2026-07-15: initial movement speed
@@ -7991,7 +8116,7 @@ onMounted(async () => {
   renderer.trailMarkStyle = settings.trailMarks; // owner 2026-07-08: echo | numbers
   renderer.plannerEnabled = plannerAllowed.value;
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
-  renderer.setAutoDirectorEnabled(settings.autoDirector); // owner 2026-07-03: Auto Director
+  renderer.setAutoDirectorEnabled(settings.autoDirector && !spectatorDirectorSuspended.value); // owner 2026-07-03: Auto Director
   renderer.setAutoDirectorSuspended(gameStore.playbackCatchingUp.value);
   renderer.setPitchOrientation(settings.pitchOrientation); // B8-8
   renderer.setFlatMode(settings.flatRender); // owner 2026-07-04f: flat (non-iso) mode
@@ -8805,6 +8930,17 @@ onMounted(async () => {
   // victim. Seed the report-authoritative set before the first model token is constructed.
   gazeVictimPresentation.publish();
   setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, gameStore.game.value);
+  const publishedPosition = gameStore.spectatorPublishedPosition.value;
+  if (publishedPosition && gameStore.game.value) {
+    const p = publishedPosition.checkpoint.durableProjection;
+    renderer.restoreSpectatorPosition(gameStore.game.value, {
+      activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
+      recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
+      fieldFlip: !p.drive.offenseIsHome,
+      blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
+      heldTeamMate: p.heldTeamMate, passDestination: publishedPosition.passive.passDestination,
+    });
+  }
   // The held-mate watcher can run before Pixi exists on reconnect/mode mount. Reassert the complete shared Pass
   // surface after the authoritative model is installed so the Quick+Short chart is never reduced to a lone ruler.
   syncHeldMatePassSurface();
@@ -8876,6 +9012,8 @@ onBeforeUnmount(() => {
   unregisterConfirmedMovementPresentation?.();
   unregisterConfirmedMovementPresentation = null;
   gameStore.setReplayPresentationIdleProbe(null);
+  unregisterSpectatorRendererCancellation?.();
+  unregisterSpectatorRendererCancellation = null;
   window.removeEventListener('keydown', onKeydown);
   window.removeEventListener('keyup', onKeyup);
   window.removeEventListener('blur', clearPan);
@@ -8908,8 +9046,11 @@ onBeforeUnmount(() => {
   renderer = null;
 });
 
+let unregisterSpectatorRendererCancellation: (() => void) | null = null;
 let lastRenderedGameId: number | null = null;
 let lastReplaySnapRenderEpoch = 0;
+/** The snap publication the game watcher last restored (identity gate for the snapshotEpoch watcher, 09-14). */
+let lastSnapRestoredPublication: object | null = null;
 watch(
   gameStore.game,
   (game) => {
@@ -8917,7 +9058,18 @@ watch(
       lastReplaySnapRenderEpoch = gameStore.replay.snapRenderEpoch;
       renderer?.snapReplayFrame();
     }
-    if (renderer) setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, game);
+    const published = gameStore.spectatorPublishedPosition.value;
+    if (renderer && published?.snap && game) {
+      lastSnapRestoredPublication = published;
+      const p = published.checkpoint.durableProjection;
+      renderer.restoreSpectatorPosition(game, {
+        activePlayerId: p.board.activePlayerId, actedPlayers: p.board.actedPlayers,
+        recoveringPlayers: p.recoveringIds, gazeVictims: p.gazeVictimIds, dodgySnackPlayers: p.dodgySnackPlayers,
+        fieldFlip: !p.drive.offenseIsHome,
+        blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
+        heldTeamMate: p.heldTeamMate, passDestination: published.passive.passDestination,
+      });
+    } else if (renderer) setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, game);
     // B9-12 G11: a NEW game (fresh join) must re-fit the camera — otherwise it
     // keeps the previous game's pan/zoom. Defer a frame so the layout is ready.
     const gid = (game as { gameId?: number } | null)?.gameId ?? null;
@@ -9036,7 +9188,7 @@ function joinPlay() {
 /** Request a bot-built fork JNLP for seamless launch; fall back to the equivalent direct join if unavailable. */
 async function launchViaBot(creds: { coach: string; password: string }, gameNameStr: string, teamId: string) {
   const log = (text: string) =>
-    gameStore.state.log.push({ time: logTimestamp(), kind: 'system', text });
+    gameStore.appendSystemNotice(text);
   const directJoin = () => {
     applyServerTarget('fork');
     void gameStore.connectAsPlayer({
@@ -9373,10 +9525,7 @@ async function fumbblLoginNoJnlp() {
     fumbblNoJnlpTeamId.value = '';
     ui.browserOpen = true;
     void refreshBrowser();
-    gameStore.state.log.push({
-      time: logTimestamp(), kind: 'system',
-      text: `FUMBBL login ready as ${coach} (${teamName}) — no JNLP. Enter a game name to create/join a match.`,
-    });
+    gameStore.appendSystemNotice(`FUMBBL login ready as ${coach} (${teamName}) — no JNLP. Enter a game name to create/join a match.`);
   } catch (e) {
     fumbblLoginError.value = e instanceof FumbblCredentialsMissing
       ? e.message
@@ -9803,7 +9952,7 @@ watch(finalPresentationReady, (ready) => renderer?.setBoardCleared(ready));
 
 // B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
 type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
-type PostGamePlayer = { name: string; position: string; spp: number }; // #25-v2 per-player roster/SPP row
+type PostGamePlayer = { name: string; position: string; spp: number; addedSkills: string }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills)
 interface PostGameSide {
   which: 'home' | 'away';
   team: string;
@@ -9868,7 +10017,8 @@ function postGameSide(side: 'home' | 'away'): PostGameSide | null {
   const rosterRows: PostGamePlayer[] = results
     .map((r) => {
       const p = team.playerArray.find((pl) => pl.playerId === r.playerId);
-      return { name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r) };
+      // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
+      return { name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r), addedSkills: p ? acquiredSkills(p, team) : '' };
     })
     .sort((a, b) => b.spp - a.spp);
   return {
@@ -9905,6 +10055,42 @@ const spectatorEndGateInput = computed(() => ({
 const spectatorMvpPendingActive = computed(() =>
   spectatorMvpPending(spectatorEndGateInput.value) && !!endGamePublic.value);
 const spectatorExitVisible = computed(() => spectatorExitActionsVisible(spectatorEndGateInput.value));
+const dismissedConcedeOccurrence = ref<string | null>(null);
+const concedeNoticeOccurrence = computed(() => {
+  const position = gameStore.spectatorPublishedPosition.value;
+  return spectatorConcedeOccurrenceKey(
+    position?.checkpoint.cursor,
+    position?.checkpoint.model.gameId,
+    gameStore.state.concedeNotice,
+  );
+});
+const visibleConcedeNotice = computed(() => {
+  const occurrence = concedeNoticeOccurrence.value;
+  return occurrence && occurrence === dismissedConcedeOccurrence.value ? null : gameStore.state.concedeNotice;
+});
+function dismissConcedeNotice() {
+  const occurrence = concedeNoticeOccurrence.value;
+  if (occurrence) dismissedConcedeOccurrence.value = occurrence;
+  else gameStore.state.concedeNotice = null;
+}
+const dismissedPenaltyShootoutOccurrence = ref<string | null>(null);
+const penaltyShootoutOccurrence = computed(() => {
+  const position = gameStore.spectatorPublishedPosition.value;
+  return spectatorPenaltyShootoutOccurrenceKey(
+    position?.checkpoint.cursor,
+    position?.checkpoint.model.gameId,
+    gameStore.state.penaltyShootout,
+  );
+});
+const visiblePenaltyShootout = computed(() => {
+  const occurrence = penaltyShootoutOccurrence.value;
+  return occurrence && occurrence === dismissedPenaltyShootoutOccurrence.value ? null : gameStore.state.penaltyShootout;
+});
+function closePenaltyShootout() {
+  const occurrence = penaltyShootoutOccurrence.value;
+  if (occurrence) dismissedPenaltyShootoutOccurrence.value = occurrence;
+  else gameStore.confirmPenaltyShootout();
+}
 // Result is always separate; MVP reflects server awards, and iConceded is true only for the conceding local coach.
 const iConceded = computed(() => {
   const cn = gameStore.state.concedeNotice;
@@ -10007,10 +10193,92 @@ const mvpRoll = ref<{ home: MvpRoll; away: MvpRoll }>({
 // existing surfaced asset, NO new fetch/CDN, C-44) when a side's server award first appears; null if the
 // MVP is off-pitch (KO/cas → no sprite) → the chip just shows the name. Shown only at phase 'landed'.
 const mvpPortrait = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
+// Owner 09-14: the MVP tab lifts the in-game portrait card for the SELECTED award winner (first winner by default) —
+// sprite, full skill rail in the user's icon/markings mode, SPP tag (pre-game + this game, upstream
+// PlayerDetailComponent:390-395) and, only here, whether the banked SPP already buys the next advancement.
+interface PgMvpCard {
+  playerId: string; nr: number; name: string; position: string; positionId: string; portrait: string | null;
+  spp: number; sppGain: number; advancement: AdvancementReadiness; skills: PlayerDetailSkill[];
+}
+const pgMvpSelected = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
+function selectPgMvp(side: 'home' | 'away', playerId: string) { pgMvpSelected.value[side] = playerId; }
+function pgMvpCardFor(game: NonNullable<typeof gameStore.game.value>, side: 'home' | 'away', playerId: string): PgMvpCard | null {
+  {
+    const team = side === 'home' ? game.teamHome : game.teamAway;
+    const player = team.playerArray.find((pl) => pl.playerId === playerId);
+    if (!player) return null;
+    const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
+    const r = results.find((x) => x.playerId === playerId);
+    const spp = (r?.currentSpps as number | undefined) ?? 0;
+    const sppGain = r ? sppEarnedThisGame(r as unknown as Record<string, unknown>, (team as { specialRules?: string[] }).specialRules) : 0;
+    const pos = (team.roster as { positionArray?: Array<{ positionId: string; skillArray?: string[] }> })
+      .positionArray?.find((x) => x.positionId === player.positionId);
+    const baseline = new Set(pos?.skillArray ?? []);
+    // Advancements already taken: skillArray is the LEARNED list (upstream RosterPlayer.java:680-683; a characteristic
+    // improvement rides it as "+MA"/"+ST"/...), counted the BB2025 way (advancementsTaken mirrors bb2025
+    // SkillMechanic.countAdvancements). Temporary grants live in temporarySkillsMap, so they never count.
+    const taken = advancementsTaken((player.skillArray ?? []).filter((n) => !baseline.has(n)));
+    return {
+      playerId, nr: player.playerNr, name: player.playerName, position: positionNameFor({ player, side }), positionId: player.positionId,
+      portrait: renderer?.playerPortrait(playerId) ?? null, spp, sppGain,
+      advancement: advancementReadiness(spp + sppGain, taken),
+      skills: playerDetailSkills(player, baseline), // every skill the player has (owner 09-14), base + acquired
+    };
+  }
+}
+const pgMvpCards = computed<Record<'home' | 'away', PgMvpCard | null>>(() => {
+  const out: Record<'home' | 'away', PgMvpCard | null> = { home: null, away: null };
+  const game = gameStore.game.value;
+  const pg = endGamePublic.value;
+  void rendererReady.value; // the portrait comes from the renderer once it is up
+  if (!game || !pg) return out;
+  for (const side of ['home', 'away'] as const) {
+    const playerId = pgMvpSelected.value[side] ?? pg[side].mvps[0]?.playerId;
+    if (playerId) out[side] = pgMvpCardFor(game, side, playerId);
+  }
+  return out;
+});
+/** Owner 09-14: a CONCESSION hands the winner two MVPs — both cards show, not one selected; a single MVP shows the
+ *  selected card as before. */
+const pgMvpCardList = computed<Record<'home' | 'away', PgMvpCard[]>>(() => {
+  const out: Record<'home' | 'away', PgMvpCard[]> = { home: [], away: [] };
+  const game = gameStore.game.value;
+  const pg = endGamePublic.value;
+  void rendererReady.value;
+  if (!game || !pg) return out;
+  for (const side of ['home', 'away'] as const) {
+    if (pg[side].mvps.length > 1) {
+      out[side] = pg[side].mvps.map((m) => pgMvpCardFor(game, side, m.playerId)).filter((c): c is PgMvpCard => !!c);
+    } else {
+      const selected = pgMvpCards.value[side];
+      out[side] = selected ? [selected] : [];
+    }
+  }
+  return out;
+});
+/** The side that conceded (server dedicated-fans stats carry it): it forfeits its MVP, so no "Awaiting result". */
+const pgMvpConceded = computed<Record<'home' | 'away', boolean>>(() => {
+  const game = gameStore.game.value;
+  const conceded = gameStore.state.endGameStats?.dedFans?.concededTeamId ?? null;
+  return {
+    home: !!game && !!conceded && conceded === game.teamHome.teamId,
+    away: !!game && !!conceded && conceded === game.teamAway.teamId,
+  };
+});
+const mvpFlashSide = ref<'home' | 'away' | null>(null);
 let mvpRollTimers: ReturnType<typeof setInterval>[] = [];
+let mvpFlashTimer = 0;
 function clearMvpRollTimers() {
   mvpRollTimers.forEach((t) => { clearInterval(t); clearTimeout(t); });
   mvpRollTimers = [];
+}
+function resetMvpPresentation() {
+  clearMvpRollTimers();
+  if (mvpFlashTimer) clearTimeout(mvpFlashTimer);
+  mvpFlashTimer = 0;
+  mvpRoll.value = { home: { phase: 'awaiting', display: '' }, away: { phase: 'awaiting', display: '' } };
+  mvpPortrait.value = { home: null, away: null };
+  mvpFlashSide.value = null;
 }
 function startMvpRoll(side: 'home' | 'away', pool: string[], winner: string) {
   const reduced = typeof window !== 'undefined'
@@ -10032,27 +10300,34 @@ function startMvpRoll(side: 'home' | 'away', pool: string[], winner: string) {
 }
 // Drive the reveal off gameOver + the post-game award. Guard makes it idempotent across
 // the many endgame syncs: a side only starts spinning once, when its winner first appears.
-watch([() => gameStore.state.endGame.phase, endGamePublic], () => {
+watch([() => gameStore.state.endGame.phase, endGamePublic, () => gameStore.state.endGameStats?.dedFans?.concededTeamId], () => {
   const pg = endGamePublic.value;
   const phase = gameStore.state.endGame.phase;
   if ((phase !== 'mvp' && !finalPresentationReady.value) || !pg) {
     clearMvpRollTimers();
     mvpRoll.value = { home: { phase: 'awaiting', display: '' }, away: { phase: 'awaiting', display: '' } };
     mvpPortrait.value = { home: null, away: null };
+    pgMvpSelected.value = { home: null, away: null };
     return;
   }
   const settled = !!gameStore.state.endGameSettled;
+  const restoreWithoutAnimation = gameStore.spectatorPublishedPosition.value?.snap === true;
   (['home', 'away'] as const).forEach((side) => {
     const s = pg[side];
     const cur = mvpRoll.value[side];
     if (s.mvps.length) {
+      if (restoreWithoutAnimation) {
+        mvpPortrait.value[side] = (s.mvps[0]!.playerId ? renderer?.playerPortrait(s.mvps[0]!.playerId) : null) ?? null;
+        mvpRoll.value[side] = { phase: 'landed', display: s.mvps[0]!.name };
+        return;
+      }
       // Winner present — spin once (don't restart once cycling/landed on it).
       if (cur.phase !== 'cycling' && cur.phase !== 'landed') {
         // #44: capture the winner's local sprite portrait now (playerId known); shown at 'landed'.
         mvpPortrait.value[side] = (s.mvps[0]!.playerId ? renderer?.playerPortrait(s.mvps[0]!.playerId) : null) ?? null;
         startMvpRoll(side, s.players, s.mvps[0]!.name);
       }
-    } else if (settled) {
+    } else if (settled || pgMvpConceded.value[side]) {
       if (cur.phase !== 'none') mvpRoll.value[side] = { phase: 'none', display: '' };
     } else if (cur.phase !== 'awaiting') {
       mvpRoll.value[side] = { phase: 'awaiting', display: '' };
@@ -10082,12 +10357,19 @@ const mvpResult = computed(() => {
   return { homeTeam: pg.home.team, homeScore: pg.home.score, awayTeam: pg.away.team, awayScore: pg.away.score };
 });
 // primary-glow flash-in when a side's MVP first LANDS (the opponent's reveal, and my own).
-const mvpFlashSide = ref<'home' | 'away' | null>(null);
 watch(() => [mvpRoll.value.home.phase, mvpRoll.value.away.phase] as const, (now, prev) => {
+  if (gameStore.spectatorPublishedPosition.value?.snap) {
+    mvpFlashSide.value = null;
+    return;
+  }
   (['home', 'away'] as const).forEach((s, i) => {
     if (now[i] === 'landed' && (!prev || prev[i] !== 'landed')) {
       mvpFlashSide.value = s;
-      window.setTimeout(() => { if (mvpFlashSide.value === s) mvpFlashSide.value = null; }, presentationMs(1000));
+      if (mvpFlashTimer) clearTimeout(mvpFlashTimer);
+      mvpFlashTimer = window.setTimeout(() => {
+        if (mvpFlashSide.value === s) mvpFlashSide.value = null;
+        mvpFlashTimer = 0;
+      }, presentationMs(1000));
     }
   });
 });
@@ -10262,7 +10544,9 @@ function startTimerDrag(event: PointerEvent) {
 }
 
 function sendChat() {
+  if (reviewChatHidden.value) return;
   const text = chatInput.value.trim();
+  if (gameStore.spectatorReview.value.active && text.startsWith('/')) return;
   if (text) {
     // Owner 2026-07-08: a leading '/' routes to the DEV CONSOLE (e.g. /stuck to pass a
     // stuck turn) instead of being sent as chat.
@@ -10310,7 +10594,7 @@ function sendChat() {
         </p>
         <div class="conn-closed-actions">
           <button v-if="!gameStore.state.connectionClosed.reconnecting" type="button" class="primary" @click="gameStore.reconnect()">Reconnect</button>
-          <button type="button" @click="gameStore.disconnect()">{{ gameStore.state.connectionClosed.reconnecting ? 'Cancel' : 'Disconnect' }}</button>
+          <button type="button" @click="gameStore.state.connectionClosed.reconnecting ? gameStore.cancelReconnect() : gameStore.disconnect()">{{ gameStore.state.connectionClosed.reconnecting ? 'Cancel' : 'Disconnect' }}</button>
         </div>
       </div>
     </div>
@@ -10336,7 +10620,7 @@ function sendChat() {
 
     <!-- Owner 2026-07-07: a spectated CONCEDE — name who conceded, shown over the
          end-game screen. Dismiss reveals the post-game panel underneath. -->
-    <div v-if="gameStore.state.concedeNotice" class="concede-overlay" role="alertdialog" aria-modal="true">
+    <div v-if="visibleConcedeNotice" class="concede-overlay" role="alertdialog" aria-modal="true">
       <div class="concede-card">
         <!-- #25-v2 (owner ask #1): the CONCEDING coach gets the "no MVP" explanation; spectators + the opponent see the generic notice. -->
         <template v-if="iConceded">
@@ -10345,10 +10629,10 @@ function sendChat() {
         </template>
         <template v-else>
           <h2>Game conceded</h2>
-          <p><b>{{ gameStore.state.concedeNotice.coach || gameStore.state.concedeNotice.teamName || 'A coach' }}</b> conceded the match.</p>
-          <p v-if="gameStore.state.concedeNotice.coach && gameStore.state.concedeNotice.teamName" class="concede-team">{{ gameStore.state.concedeNotice.teamName }}</p>
+          <p><b>{{ visibleConcedeNotice.coach || visibleConcedeNotice.teamName || 'A coach' }}</b> conceded the match.</p>
+          <p v-if="visibleConcedeNotice.coach && visibleConcedeNotice.teamName" class="concede-team">{{ visibleConcedeNotice.teamName }}</p>
         </template>
-        <button type="button" @click="gameStore.state.concedeNotice = null">View result</button>
+        <button type="button" @click="dismissConcedeNotice">View result</button>
       </div>
     </div>
 
@@ -10610,18 +10894,19 @@ function sendChat() {
         :class="settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
         :style="hudAccessibilityStyle">
         <ReplayTelestrator
-          :enabled="props.mode === 'spectate' || props.mode === 'replay'"
+          :enabled="true"
           :toolbar-bottom="telestratorBottom"
           :toolbar-right="telestratorRight"
           :toolbar-left="quickBarLeft"
+          :toolbar-height="quickBarHeight"
           :toolbar-position="settings.uiLayout.telestrator ?? null"
           @update:toolbar-position="setTelestratorPosition"
-          :session-key="props.mode === 'replay' ? gameStore.replay.sessionKey : `spectate:${gameStore.game.value?.gameId ?? ''}`"
+          :session-key="props.mode === 'replay' ? gameStore.replay.sessionKey : gameStore.state.demoMode ? `demo:${gameStore.game.value?.gameId ?? ''}` : props.mode === 'spectate' ? gameStore.spectatorReview.value.annotationSessionKey : `play:${gameStore.game.value?.gameId ?? ''}`"
           :to-world="(x: number, y: number) => renderer?.localToWorld(x, y) ?? { x, y }"
           :to-local="(x: number, y: number) => renderer?.worldToLocal(x, y) ?? { x, y }"
           :camera-scale="() => renderer?.cameraScale() ?? 1"
         />
-        <ReplayControls v-if="props.mode === 'replay'" />
+        <ReplayControls v-if="props.mode === 'replay' || gameStore.spectatorReview.value.active" :review="gameStore.spectatorReview.value.controls" />
         <!-- BB2-style HUD (owner 2026-07-02): coach corners + center cluster -->
         <div v-if="homePanel && !inducePhaseOpen" class="coach-panel home ui-panel" :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['coach-home'] }"
           :data-playing="homePanel.playing" :style="customPanelStyle('coach-home')">
@@ -10780,12 +11065,22 @@ function sendChat() {
           <QuickBarButton class="report-btn" title="Report an issue — sends your description with the wire log"
             @click="openReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
           <div class="quick-brand-menu">
+            <div class="quick-match-controls">
+            <button v-if="props.mode === 'spectate' && !gameStore.state.demoMode"
+              ref="spectatorPauseButton" class="quick-spectator-pause" type="button"
+              :class="{ 'go-live-action': gameStore.spectatorReview.value.active }"
+              :disabled="gameStore.spectatorReview.value.active ? !gameStore.spectatorReview.value.controls?.canGoLive : !gameStore.spectatorReview.value.canPause"
+              :aria-label="gameStore.spectatorReview.value.active ? 'Go to live' : 'Pause spectator view'"
+              :title="gameStore.spectatorReview.value.feedStale ? (gameStore.spectatorReview.value.active ? 'Live feed unavailable — GO TO LIVE reconnects.' : 'Pause unavailable — recorded history was interrupted; reconnect to restore it.') : gameStore.spectatorReview.value.active ? 'Go to live — jump to the latest received match position.' : gameStore.spectatorReview.value.canPause ? 'Pause your view; the match continues.' : 'Waiting for match data'"
+              @pointerdown.stop @contextmenu.stop.prevent @keydown.stop
+              @click.stop="gameStore.spectatorReview.value.active ? gameStore.goToLiveSpectatorView() : gameStore.pauseSpectatorView()"
+            ><template v-if="gameStore.spectatorReview.value.active"><span class="go-live-arrow" aria-hidden="true">↩</span><span>LIVE</span><span class="go-live-dot" aria-hidden="true"></span></template><span v-else class="quick-pause-icon" aria-hidden="true">Ⅱ</span></button>
             <button v-if="!gameStore.state.demoMode && gameStore.state.spectatorCount > 0"
               class="quick-live" :class="{ expanded: liveSpectatorsExpanded }"
               :data-flash="liveFlashing"
               :aria-expanded="liveSpectatorsExpanded"
-              :aria-label="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} watching live`"
-              :title="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} watching live`"
+              :aria-label="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
+              :title="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
               @click="liveSpectatorsExpanded = !liveSpectatorsExpanded">
               <!-- Owner 09-09: expanded, the spectating coaches list ABOVE the "N watching live" line (upstream
                    spectatorNames on serverJoin / serverLeave). -->
@@ -10798,6 +11093,9 @@ function sendChat() {
               </span>
             </button>
             <img class="quick-super-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
+            </div>
+
+            <span v-if="gameStore.spectatorReview.value.active" class="sr-only" role="status">{{ gameStore.spectatorReview.value.feedStale ? 'Live feed unavailable — GO TO LIVE reconnects' : gameStore.spectatorReview.value.phase === 'pausing' ? 'Pausing…' : 'Reviewing recorded match position' }}</span>
           </div>
         </nav>
 
@@ -10805,7 +11103,7 @@ function sendChat() {
              when the chat tab isn't focused; click to open chat. -->
         <!-- Owner 2026-07-07: chat toasts STACK (oldest→newest, newest at the bottom);
              a new line fills in at the bottom and pushes older ones up, capped at 3. -->
-        <div v-if="chatToasts.length" class="chat-toast-stack" :class="{ 'endgame-front': endGameFront }" :style="chatToastStyle">
+        <div v-if="chatToasts.length && !replayerOpen" class="chat-toast-stack" :class="{ 'endgame-front': endGameFront }" :style="chatToastStyle">
           <ChatToast v-for="t in chatToasts" :key="t.id" :sender="t.sender" :text="t.text"
             :role="chatToastRole(t.side, gameStore.mySeat.value, gameStore.isPlaying.value)"
             :text-size="settings.chatToastTextSize" @open="openChatFromToast" />
@@ -10842,11 +11140,12 @@ function sendChat() {
             <!-- Owner 08-19: while chat is POPPED OUT the tab leaves the row entirely (the old
                  click-to-redock tab is retired) — the popout's own dock (⤓) button is the sole
                  way back. -->
-            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" title="Chat"
+            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
+              :aria-label="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
               :data-active="panelTab === 'chat'"
-              :class="{ 'has-badge': chatUnread > 0 && !settings.chatToastsEnabled }"
-              @click="panelTab = 'chat'; panelCollapsed = false"><span class="tab-emoji">💬</span><span class="tab-stencil">CHAT</span><span
-                v-if="chatUnread > 0 && !settings.chatToastsEnabled" class="chat-badge">{{ chatUnread > 99 ? '99+' : chatUnread }}</span></button>
+              :class="{ 'has-badge': chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden), 'live-chat-tab': gameStore.spectatorReview.value.active }"
+              @click="openLiveChat"><span class="tab-emoji">💬</span><span v-if="gameStore.spectatorReview.value.active" class="tab-stencil live-chat-copy">LIVE CHAT</span><span v-else class="tab-stencil">CHAT</span><span
+                v-if="chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden)" class="chat-badge">{{ chatUnread > 99 ? '99+' : chatUnread }}</span></button>
             <!-- Pop-Out Chat control. Own class (not .collapse) so it keeps a fixed, never-
                  shrinking slot in the tab bar — the old build reused .collapse and the bar
                  could squeeze it. data-testid is the owner's live-verify handle. -->
@@ -10918,7 +11217,8 @@ function sendChat() {
             :pos="settings.chatPopPos" :size="settings.chatPopSize" :opacity="settings.logOpacity"
             @update:pos="settings.chatPopPos = $event" @update:size="settings.chatPopSize = $event"
             @dock="dockChat">
-            <div class="log-holder">
+            <button v-if="reviewChatHidden" class="live-chat-opt-in" @click="openLiveChat">Live chat — may reveal newer events<span v-if="chatUnread"> ({{ chatUnread > 99 ? '99+' : chatUnread }})</span></button>
+            <div v-else class="log-holder">
               <!-- Owner 08-19: chat — muted HH:MM stamp, coach NAME seat-coloured (logNameColor),
                    spectator LINES pale green, names in Nuffle over sans-serif message text. -->
               <pre ref="chatEl" class="log chat-log" :style="logTextStyle" @scroll="onLogScroll('chat', $event)"><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else>{{ entry.text }}</template>
@@ -10927,8 +11227,8 @@ function sendChat() {
                 New messages ↓
               </button>
             </div>
-            <form class="chat" @submit.prevent="sendChat">
-              <input ref="chatInputEl" v-model="chatInput" placeholder="Chat… (Enter) · /help for dev commands" :disabled="gameStore.state.sessionState !== 'joined'" />
+            <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
+              <input ref="chatInputEl" v-model="chatInput" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" />
             </form>
           </ChatDock>
         </div>
@@ -11005,26 +11305,26 @@ function sendChat() {
              roll-off (client makes ZERO inputs) — this is display-only: the per-round breakdown + a
              single Confirm that dismisses (mutual — server waits for both coaches). home* is THIS
              coach's team (per-recipient mirror). Copy = "Penalty Shootout" (owner 2026-07-13). -->
-        <div v-if="gameStore.state.penaltyShootout" class="penalty-shootout">
+        <div v-if="visiblePenaltyShootout" class="penalty-shootout">
           <div class="ps-title">Penalty Shootout</div>
           <div class="ps-score">
-            <span class="ps-team" :class="{ 'ps-win': gameStore.state.penaltyShootout.homeWins }">{{ gameStore.state.penaltyShootout.homeName }}</span>
-            <span class="ps-tally">{{ gameStore.state.penaltyShootout.scoreHome }}&nbsp;–&nbsp;{{ gameStore.state.penaltyShootout.scoreAway }}</span>
-            <span class="ps-team" :class="{ 'ps-win': !gameStore.state.penaltyShootout.homeWins }">{{ gameStore.state.penaltyShootout.awayName }}</span>
+            <span class="ps-team" :class="{ 'ps-win': visiblePenaltyShootout.homeWins }">{{ visiblePenaltyShootout.homeName }}</span>
+            <span class="ps-tally">{{ visiblePenaltyShootout.scoreHome }}&nbsp;–&nbsp;{{ visiblePenaltyShootout.scoreAway }}</span>
+            <span class="ps-team" :class="{ 'ps-win': !visiblePenaltyShootout.homeWins }">{{ visiblePenaltyShootout.awayName }}</span>
           </div>
           <ol class="ps-rounds">
-            <li v-for="(r, i) in gameStore.state.penaltyShootout.rounds" :key="i" class="ps-round">
+            <li v-for="(r, i) in visiblePenaltyShootout.rounds" :key="i" class="ps-round">
               <span class="ps-round-label">{{ r.label }}</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :label="`${gameStore.state.penaltyShootout.homeName} rolled ${r.home}`" />
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': r.homeWon }" :value="r.home" :label="`${visiblePenaltyShootout.homeName} rolled ${r.home}`" />
               <span class="ps-vs">vs</span>
-              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :label="`${gameStore.state.penaltyShootout.awayName} rolled ${r.away}`" />
-              <span class="ps-round-win">{{ r.homeWon ? gameStore.state.penaltyShootout.homeName : gameStore.state.penaltyShootout.awayName }}</span>
+              <D6Face class="ps-roll" :class="{ 'ps-roll-win': !r.homeWon }" :value="r.away" :label="`${visiblePenaltyShootout.awayName} rolled ${r.away}`" />
+              <span class="ps-round-win">{{ r.homeWon ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }}</span>
             </li>
           </ol>
           <div class="ps-result">
-            {{ gameStore.state.penaltyShootout.homeWins ? gameStore.state.penaltyShootout.homeName : gameStore.state.penaltyShootout.awayName }} wins the shootout
+            {{ visiblePenaltyShootout.homeWins ? visiblePenaltyShootout.homeName : visiblePenaltyShootout.awayName }} wins the shootout
           </div>
-          <button class="ps-confirm" @click="gameStore.confirmPenaltyShootout()">{{ gameStore.isPlaying.value ? 'Proceed to MVPs and upload' : 'Close' }}</button>
+          <button class="ps-confirm" @click="closePenaltyShootout">{{ gameStore.isPlaying.value ? 'Proceed to MVPs and upload' : 'Close' }}</button>
         </div>
 
         <!-- Owner 2026-07-08: full-screen shader while inducements are chosen/revealed. -->
@@ -11068,41 +11368,40 @@ function sendChat() {
                    NEW game starts (gameOver→false resets postGameDismissed + postGame becomes null). -->
             </header>
             <section class="pg-result">
-              <div class="pg-team" :class="{ winner: pgSurface.winner === pgSurface.home }">
+              <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.home }">
                 <img v-if="pgSurface.home.logo" :src="pgSurface.home.logo" alt="" />
                 <div class="pg-team-name">{{ pgSurface.home.team }}</div>
                 <div class="pg-team-coach">{{ pgSurface.home.coach }}</div>
+                <!-- Owner 09-14: winnings + dedicated fans live in a lifted box under the team card; no team name repeated. -->
+                <div v-if="gameStore.state.endGameStats" class="pg-team-box pg-bevel">
+                  <span v-if="gameStore.state.endGameStats.winningsHome != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsHome.toLocaleString() }}g winnings</span>
+                  <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamHome.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollHome" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollHome}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollHome }}</span> → {{ gameStore.state.endGameStats.dedFans.modHome > 0 ? '+' + gameStore.state.endGameStats.dedFans.modHome : gameStore.state.endGameStats.dedFans.modHome }}</span>
+                  <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
+                </div>
               </div>
-              <div class="pg-scoreline">
+              <div class="pg-scoreline pg-bevel">
                 <div class="pg-score">{{ pgSurface.home.score }}<span>–</span>{{ pgSurface.away.score }}</div>
                 <div class="pg-verdict">
                   {{ pgSurface.draw ? 'Draw' : `${pgSurface.winner?.team} wins!` }}
                 </div>
               </div>
-              <div class="pg-team" :class="{ winner: pgSurface.winner === pgSurface.away }">
+              <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.away }">
                 <img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" alt="" />
                 <div class="pg-team-name">{{ pgSurface.away.team }}</div>
                 <div class="pg-team-coach">{{ pgSurface.away.coach }}</div>
+                <!-- Owner 09-14: winnings + dedicated fans live in a lifted box under the team card; no team name repeated. -->
+                <div v-if="gameStore.state.endGameStats" class="pg-team-box pg-bevel">
+                  <span v-if="gameStore.state.endGameStats.winningsAway != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsAway.toLocaleString() }}g winnings</span>
+                  <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamAway.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollAway" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollAway}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollAway }}</span> → {{ gameStore.state.endGameStats.dedFans.modAway > 0 ? '+' + gameStore.state.endGameStats.dedFans.modAway : gameStore.state.endGameStats.dedFans.modAway }}</span>
+                  <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
+                </div>
               </div>
             </section>
             <!-- #169 (owner, last v0.3.9 payload): end-of-match RESULT rows on the persistent end-screen — gold
                  winnings + the BB2025 dedicated-fans roll per team. state.endGameStats MERGES winnings + dedFans
                  across separate end reports (Tarkin 131c82a9) and persists here until game-change (like
                  state.defectors). dedFans is NULL on a DRAW (empty dedicated-fans report) → a "fans unchanged" note. -->
-            <section v-if="gameStore.state.endGameStats" class="pg-endstats">
-              <div class="pg-endstat-row">
-                <span class="pg-endstat-team">{{ pgSurface.home.team }}</span>
-                <span v-if="gameStore.state.endGameStats.winningsHome != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsHome.toLocaleString() }}g winnings</span>
-                <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamHome.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollHome" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollHome}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollHome }}</span> → {{ gameStore.state.endGameStats.dedFans.modHome > 0 ? '+' + gameStore.state.endGameStats.dedFans.modHome : gameStore.state.endGameStats.dedFans.modHome }}</span>
-                <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
-              </div>
-              <div class="pg-endstat-row">
-                <span class="pg-endstat-team">{{ pgSurface.away.team }}</span>
-                <span v-if="gameStore.state.endGameStats.winningsAway != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsAway.toLocaleString() }}g winnings</span>
-                <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamAway.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollAway" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollAway}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollAway }}</span> → {{ gameStore.state.endGameStats.dedFans.modAway > 0 ? '+' + gameStore.state.endGameStats.dedFans.modAway : gameStore.state.endGameStats.dedFans.modAway }}</span>
-                <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
-              </div>
-            </section>
+
             <!-- #140 (owner concede consequence): the DEFECTORS reveal on the PERSISTENT end-screen (Meero SR-67 DF-1
                  relocate — ReportDefectingPlayers fires at game-END, after the concede notice can be dismissed, so the
                  end-screen is the correct surface; state.defectors survives here until game-change). Only when someone
@@ -11143,38 +11442,58 @@ function sendChat() {
                   <span class="pg-star">★</span>
                   <span class="pg-mvp-name pg-mvp-spin">{{ mvpRoll[side.which].display }}</span>
                 </div>
-                <ul v-else-if="side.mvps.length">
-                  <li v-for="m in side.mvps" :key="m.playerId">
-                    <span class="pg-star">★</span>
-                    <span class="pg-mvp-name">{{ m.name }}</span>
-                    <span class="pg-mvp-pos">{{ m.position }}</span>
-                    <span v-if="m.awards > 1" class="pg-mvp-x">×{{ m.awards }}</span>
-                  </li>
-                </ul>
-                <p v-else-if="mvpRoll[side.which].phase === 'none'" class="pg-mvp-none">No MVP awarded</p>
+                <div v-else-if="side.mvps.length" class="pg-mvp-body">
+                  <ul>
+                    <li v-for="m in side.mvps" :key="m.playerId" class="pg-mvp-row"
+                      :class="{ selected: pgMvpCardList[side.which].some((c) => c.playerId === m.playerId) }" @click="selectPgMvp(side.which, m.playerId)">
+                      <span class="pg-star">★</span>
+                      <span class="pg-mvp-name">{{ m.name }}</span>
+                      <span class="pg-mvp-pos">{{ m.position }}</span>
+                      <span v-if="m.awards > 1" class="pg-mvp-x">×{{ m.awards }}</span>
+                    </li>
+                  </ul>
+                  <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
+                       hands the winner two MVPs and BOTH cards show. -->
+                  <template v-for="card in pgMvpCardList[side.which]" :key="card.playerId">
+                    <div class="pg-mvp-card pg-bevel">
+                      <div class="pg-mvp-portrait card-portrait">
+                        <img v-if="card.portrait" :src="card.portrait" alt="" />
+                        <span v-else class="portrait-missing">no portrait</span>
+                      </div>
+                      <div class="pg-mvp-card-info">
+                        <div class="pg-mvp-card-name" :data-side="side.which">#{{ card.nr }} {{ card.name }}</div>
+                        <div class="pg-mvp-card-pos">{{ card.position }}</div>
+                        <!-- Owner 09-14: SPP on its own line under the position (the one-liner wrapped mid-tag). -->
+                        <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span></div>
+                        <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
+                        <PlayerDetailSkillList v-if="card.skills.length" :skills="card.skills" :mode="skillMode" :icon-style="effectiveIconStyle"
+                          :position-id="card.positionId" :side="side.which" />
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <p v-else-if="mvpRoll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
                 <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
               </div>
             </section>
 
             <!-- Phase 3: statistics -->
             <section v-else-if="postGamePhase === 'stats'" class="pg-stats">
-              <table>
-                <thead>
-                  <!-- #235 (owner-fg 07-29): keep the empty header aligned with the centered stat-label column. -->
-                  <tr><th class="pg-h">{{ pgSurface.home.team }}</th><th class="pg-stat-label"></th><th class="pg-a">{{ pgSurface.away.team }}</th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="s in POSTGAME_STATS" :key="s.key">
-                    <td class="pg-h" :data-lead="(pgSurface.home.totals[s.key] ?? 0) > (pgSurface.away.totals[s.key] ?? 0)">
-                      {{ pgSurface.home.totals[s.key] ?? 0 }}
-                    </td>
-                    <td class="pg-stat-label">{{ s.label }}</td>
-                    <td class="pg-a" :data-lead="(pgSurface.away.totals[s.key] ?? 0) > (pgSurface.home.totals[s.key] ?? 0)">
-                      {{ pgSurface.away.totals[s.key] ?? 0 }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+              <!-- Owner 09-14: three lifted columns; the side is read from the header bevel (crest + side edge), not a name. -->
+              <div class="pg-stats-cols">
+                <div class="pg-stat-col pg-bevel" data-side="home">
+                  <div class="pg-stat-col-head"><img v-if="pgSurface.home.logo" :src="pgSurface.home.logo" :alt="pgSurface.home.team" /><span v-else class="pg-stat-col-side">Home</span></div>
+                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-h" :data-lead="(pgSurface.home.totals[s.key] ?? 0) > (pgSurface.away.totals[s.key] ?? 0)">{{ pgSurface.home.totals[s.key] ?? 0 }}</div>
+                </div>
+                <div class="pg-stat-col pg-bevel" data-side="label">
+                  <div class="pg-stat-col-head"></div>
+                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-stat-label">{{ s.label }}</div>
+                </div>
+                <div class="pg-stat-col pg-bevel" data-side="away">
+                  <div class="pg-stat-col-head"><img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" :alt="pgSurface.away.team" /><span v-else class="pg-stat-col-side">Away</span></div>
+                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-a" :data-lead="(pgSurface.away.totals[s.key] ?? 0) > (pgSurface.home.totals[s.key] ?? 0)">{{ pgSurface.away.totals[s.key] ?? 0 }}</div>
+                </div>
+              </div>
             </section>
 
             <!-- #25-v2 (owner 2026-07-14): per-player roster/SPP summary — name · position · SPP-gained this game -->
@@ -11197,6 +11516,7 @@ function sendChat() {
                   <li v-for="pl in pgSurface[selectedRosterTeam].roster" :key="pl.name">
                     <span class="pg-roster-name">{{ pl.name }}</span>
                     <span class="pg-roster-pos">{{ pl.position }}</span>
+                    <span v-if="pl.addedSkills" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">+ {{ pl.addedSkills }}</span>
                     <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
                   </li>
                 </ul>
@@ -12306,7 +12626,7 @@ function sendChat() {
         <!-- Owner 2026-07-08 (queue 3): KNOCKOUT toast — bound to the injured
              player's TOKEN (RAF-follow via renderer.playerScreenPos), so it reads
              right at the square where the KO occurred. -->
-        <div v-if="gameStore.state.injurySplash && !injuryIsStunTag && koToastPos.ready" class="ko-toast"
+        <div v-if="gameStore.state.injurySplash && koToastPos.ready" class="ko-toast"
           :class="{ 'is-casualty': injuryIsCasualty }"
           :data-side="gameStore.state.injurySplash.side"
           :style="{ left: koToastPos.x + 'px', top: (koToastPos.y - 58) + 'px' }">
@@ -12322,16 +12642,6 @@ function sendChat() {
             <span class="ko-toast-type">{{ injuryIsKo ? 'K.O.' : gameStore.state.injurySplash.type }}</span>
             <span class="ko-toast-player">{{ gameStore.state.injurySplash.player }}</span>
           </template>
-        </div>
-
-        <!-- Owner 2026-07-08 (pipeline Phase 3b): STUN token TAG — the lightweight
-             alternative to the banner (Settings → Display · Stun display = 'tag').
-             Token-anchored like the KO toast; reads and clears fast (1200ms). -->
-        <div v-if="gameStore.state.injurySplash && injuryIsStunTag && koToastPos.ready" class="stun-tag"
-          :data-side="gameStore.state.injurySplash.side"
-          :style="{ left: koToastPos.x + 'px', top: (koToastPos.y - 50) + 'px' }">
-          <span class="stun-tag-type">STUNNED</span>
-          <span class="stun-tag-player">{{ gameStore.state.injurySplash.player }}</span>
         </div>
 
         <!-- Owner 2026-07-08: FALLS OVER toast — a failed Dodge / Rush knocks the player
@@ -12423,7 +12733,8 @@ function sendChat() {
              same idiom as .turn-toast (side-tinted, same corner). -->
         <div v-if="gameStore.state.rerollSplash" :key="'rr-' + gameStore.state.rerollSplash.seq"
           class="reroll-toast" :data-side="gameStore.state.rerollSplash.side" :style="rerollSplashAnchorStyle">
-          <img v-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
+          <img v-if="gameStore.state.rerollSplash.skill && settings.skillDisplay === 'icons'" class="reroll-toast-icon" :src="skillIconUrl(gameStore.state.rerollSplash.skill, effectiveIconStyle)" alt="" />
+          <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? `${gameStore.state.rerollSplash.coach} uses ${gameStore.state.rerollSplash.source}!` }}</span>
         </div>
@@ -12904,7 +13215,7 @@ function sendChat() {
 .active-indicator {
   position: absolute;
   bottom: 0;
-  z-index: 0;
+  z-index: 1; /* owner 09-14: one level above the Prayers to Nuffle tag (both drawers hang off the coach panel) */
   display: flex;
   justify-content: center;
   align-items: center;
@@ -13786,12 +14097,18 @@ function sendChat() {
   /* Owner 09-09: CENTRED in the viewport (was top-anchored at 44px) and every window scaled up LINEARLY via
      `zoom` (--pg-scale) so text, dice, crests, padding and gaps all grow together; the viewport-relative caps
      divide the scale back out so the zoomed stack still fits the screen. */
-  --pg-scale: 1.25;
+  /* Owner 09-14: the scale FOLLOWS the viewport (1.25 at ~1400x1000, ~1.35 at 1920x1080, ~1.8 at 2560x1440) so the
+     result + Stats/MVP stack fills a big monitor instead of sitting small in its middle; height is the binding axis
+     because two windows stack. */
+  --pg-scale: 1.25; /* fallback where length/length division is unsupported (the @supports block below wins) */
   justify-content: center;
   gap: calc(12px * var(--pg-scale));
   padding: 24px 0;
   background: radial-gradient(ellipse at center, #000c 0%, #0009 60%, #0006 100%);
   animation: coin-caption-in var(--p-350) ease-out;
+}
+@supports (zoom: calc(100vw / 1120px)) {
+  .postgame { --pg-scale: clamp(0.9, min(calc(100vw / 1120px), calc(100vh / 800px)), 2.2); }
 }
 .pg-window {
   zoom: var(--pg-scale);
@@ -13947,7 +14264,6 @@ function sendChat() {
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem);
   flex-wrap: wrap;
 }
-.pg-endstat-team { flex: 0 0 auto; min-width: 120px; font-weight: 700; color: var(--ui-heading); }
 .pg-endstat-gold { color: #ffd76a; font-variant-numeric: tabular-nums; font-weight: 700; }
 .pg-endstat-fans { color: var(--ui-text); font-variant-numeric: tabular-nums; }
 .pg-endstat-d6 { --d6-size: 1.6em; margin: -0.18em 0.08em -0.12em; }
@@ -14030,6 +14346,23 @@ function sendChat() {
 .pg-mvp-pos { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
 .pg-mvp-x { margin-left: auto; color: var(--ui-accent); }
 .pg-mvp-none { color: var(--ui-text-dim); font-style: italic; }
+/* Owner 09-14: MVP rows select; the selected winner's portrait card sits under the list. */
+.pg-mvp-row { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
+.pg-mvp-row:hover { background: color-mix(in srgb, var(--ui-surface-2) 70%, var(--ui-text) 8%); }
+.pg-mvp-row.selected { background: color-mix(in srgb, var(--ui-surface-2) 60%, var(--ui-text) 14%); }
+/* Owner 09-14 UAT: the portrait is a FIXED box (never stretched by a long name / advancement line) and its sprite is
+   fitted inside it (the in-game card's 1.35 zoom crop is not applied here) so the MVP tab never overflows or scrolls. */
+.pg-mvp-card { display: flex; gap: 12px; margin-top: 6px; padding: 8px; align-items: flex-start; }
+.pg-mvp-card .card-portrait { flex: 0 0 auto; width: 6.8em; height: 8em; min-height: 0; } /* (0,2,0) beats the later .card-portrait { flex: 1 } */
+.pg-mvp-card .card-portrait img { height: 100%; max-height: 100%; width: auto; transform: none; } /* (0,2,1) beats the later .card-portrait img rule */
+.pg-mvp-card-name { line-height: 1.15; }
+.pg-mvp-card-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.pg-mvp-card-name { font-weight: 800; font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem); }
+.pg-mvp-card-name[data-side='home'] { color: #6d9bff; }
+.pg-mvp-card-name[data-side='away'] { color: #ff7a7e; }
+.pg-mvp-card-pos { color: var(--ui-muted); }
+.pg-mvp-card-spp { line-height: 1.1; }
+.pg-mvp-advance { color: var(--ui-accent); font-weight: 800; }
 /* #25-v2: per-player roster/SPP summary */
 .pg-roster { padding: 22px 20px; }
 /* #235 (owner-fg 07-29): two-name selector above the single visible roster. */
@@ -14048,13 +14381,17 @@ function sendChat() {
   font-weight: 800;
   cursor: pointer;
 }
-.pg-roster-team-toggle button[data-active='true'] { border-bottom-color: var(--ui-accent); color: var(--ui-text); }
+/* Owner 09-14: the selected team block reads as a lighter panel, not just an underline. */
+.pg-roster-team-toggle button { padding: 6px 10px; border-radius: 8px; }
+.pg-roster-team-toggle button[data-active='true'] { border-bottom-color: var(--ui-accent); color: var(--ui-text); background: color-mix(in srgb, var(--ui-surface-2) 72%, var(--ui-text) 14%); }
 .pg-roster-team-toggle img { width: 26px; height: 26px; flex: 0 0 auto; object-fit: contain; }
 .pg-roster-team-toggle span { min-width: 0; }
 .pg-roster-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
 .pg-roster-list li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-top: 1px solid var(--ui-border); }
 .pg-roster-name { font-weight: 700; }
 .pg-roster-pos { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
+/* Owner 09-14: added-skills pill (advancements + in-game grants beyond the position's base). */
+.pg-roster-skills { font-size: max(var(--ui-min-primary-text-size, 16px), 0.72rem); color: var(--ui-text); background: color-mix(in srgb, var(--ui-accent) 22%, transparent); border: 1px solid color-mix(in srgb, var(--ui-accent) 55%, transparent); border-radius: 999px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .pg-roster-spp { margin-left: auto; color: var(--ui-accent); font-variant-numeric: tabular-nums; font-weight: 700; }
 .pg-roster-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
 
@@ -14184,6 +14521,32 @@ function sendChat() {
 /* stats phase */
 /* owner 2026-07-05: larger post-game statistics text */
 .pg-stats { padding: 16px 20px 22px; }
+/* Owner 09-14: raised bevel shared by the end-screen blocks — a lifted panel is easier to read than a flat row. */
+.pg-bevel {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ui-surface-2) 88%, var(--ui-text) 8%) 0%, var(--ui-surface) 100%);
+  border: 1px solid color-mix(in srgb, var(--ui-border) 70%, var(--ui-text) 12%);
+  border-top-color: color-mix(in srgb, var(--ui-text) 28%, var(--ui-border));
+  border-left-color: color-mix(in srgb, var(--ui-text) 18%, var(--ui-border));
+  border-bottom-color: #000c;
+  border-right-color: #000a;
+  border-radius: 10px;
+  box-shadow: 0 3px 0 #000b, 0 8px 18px #0008, inset 0 1px 0 #ffffff1f;
+}
+.pg-scoreline.pg-bevel { padding: 14px 22px; }
+.pg-team-box { margin-top: 8px; padding: 6px 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.86rem); text-align: center; }
+.pg-stats-cols { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 12px; align-items: stretch; }
+.pg-stat-col { display: flex; flex-direction: column; padding: 0 0 6px; overflow: hidden; }
+.pg-stat-col-head { min-height: 46px; display: flex; align-items: center; justify-content: center; padding: 6px; border-bottom: 1px solid #000a; box-shadow: 0 1px 0 #ffffff14; }
+.pg-stat-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
+.pg-stat-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
+.pg-stat-col[data-side='label'] .pg-stat-col-head { border-top: 3px solid color-mix(in srgb, var(--ui-text) 25%, transparent); }
+.pg-stat-col-head img { width: 34px; height: 34px; object-fit: contain; image-rendering: pixelated; }
+.pg-stat-col-side { font-weight: 800; color: var(--ui-muted); letter-spacing: .06em; }
+.pg-stat-cell { padding: 8px 12px; border-top: 1px solid var(--ui-border); font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem); font-variant-numeric: tabular-nums; }
+.pg-stat-cell.pg-h { text-align: left; }
+.pg-stat-cell.pg-a { text-align: right; }
+.pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: max(var(--ui-min-primary-text-size, 16px), 1.02rem); }
+.pg-stat-cell[data-lead='true'] { color: var(--ui-accent); font-weight: 800; }
 .pg-stats table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .pg-stats th { padding: 8px 10px; font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); color: var(--ui-text); }
 /* #235 (owner-fg 07-29): clamp team headers within fixed statistic columns. */
@@ -15611,34 +15974,6 @@ function sendChat() {
   white-space: normal; /* owner 08-05: wrap long casualty phrases; pill grows vertically */
   overflow-wrap: break-word;
 }
-/* Owner 2026-07-08 (pipeline Phase 3b): STUN token TAG — a smaller, softer, amber
-   variant of the KO toast (a stun is a mild result, so it doesn't interrupt hard). */
-.stun-tag {
-  position: absolute;
-  z-index: 40;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 2px 8px;
-  border-radius: 9px;
-  overflow: hidden; /* #227: clip content to the rounded plate */
-  background: #4a3a18e6;
-  border: 1px solid #d7a53aaa;
-  box-shadow: 0 3px 10px #0009;
-  pointer-events: none;
-  animation: injury-in var(--p-240) ease-out;
-  white-space: nowrap;
-}
-.stun-tag-type {
-  font-family: 'Nuffle', system-ui, sans-serif;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  color: #ffd97a;
-  text-shadow: 0 1px 3px #000c;
-}
-.stun-tag-player { font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 600; color: #efe2c4; }
 /* Owner 2026-07-08: FALLS OVER toast (failed Dodge/Rush) — token-anchored like the stun tag,
    a cooler slate palette so a fall reads distinct from an injury. */
 .fall-toast {
@@ -16200,13 +16535,26 @@ function sendChat() {
   margin: 0 2.4px; /* breathing room so the scaled glyph clears "REPORT" */
   filter: saturate(1.7) brightness(1.12) drop-shadow(0 0 1.8px #ff2a2a);
 }
+/* Owner 09-14: the hamburger is gone (Esc menu), so this is a zero-width anchor only — the pause / GO TO LIVE / logo
+   cluster above the bar still hangs off its right edge; no reserved slot in the bar itself. */
 .quick-brand-menu {
   position: relative;
-  flex: 0 0 43.2px;
-  width: 43.2px;
+  flex: 0 0 0;
+  width: 0;
   height: 39.6px;
 }
-.config-bar .quick-menu { width: 43.2px; height: 39.6px; font-size: max(var(--ui-min-primary-text-size, 16px), 1.38rem); }
+.config-bar .quick-spectator-pause { width: auto; flex: 0 0 auto; min-width: 38px; white-space: nowrap; color: var(--ui-text, #eee); background: var(--ui-panel, #222); border: 1px solid var(--ui-border, #666); border-radius: 4px; padding: 6px 8px; font: inherit; cursor: pointer; }
+.config-bar .quick-spectator-pause.go-live-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 118px; font-weight: 800; letter-spacing: .06em; }
+.quick-pause-icon { font-size: 1.12rem; font-weight: 900; line-height: 1; letter-spacing: -.18em; padding-right: .18em; }
+.quick-spectator-pause .go-live-arrow { font-size: 1.15em; line-height: 1; }
+.quick-spectator-pause .go-live-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: #f2363c; box-shadow: 0 0 0 2px #f2363c38, 0 0 8px #f2363ccc; animation: quick-go-live-recording-pulse 1.15s ease-in-out infinite; }
+@keyframes quick-go-live-recording-pulse { 0%, 100% { opacity: .62; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.08); } }
+.quick-spectator-pause:disabled { opacity: .5; cursor: default; }
+.quick-spectator-pause:focus-visible { outline: 2px solid var(--ui-accent, #f2cf66); outline-offset: 2px; }
+.quick-match-controls { position: absolute; z-index: 3; right: 0; bottom: calc(100% + 8.4px); display: flex; align-items: center; gap: 7.2px; width: max-content; }
+.quick-match-controls .quick-super-logo, .config-bar .quick-match-controls .quick-live { position: static; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) { .quick-spectator-pause .go-live-dot { animation: none; opacity: 1; transform: none; } }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .quick-super-logo {
   position: absolute;
   z-index: 2;
@@ -16643,6 +16991,27 @@ function sendChat() {
 /* owner 2026-07-08: unread-chat count badge on the CHAT tab (only shown when toasts
    are off). The tab lets it overflow so the pill can sit at the top-right corner. */
 .tabs button.stencil-tab.has-badge { overflow: visible; }
+.tabs button.stencil-tab.live-chat-tab {
+  flex-grow: 1.8;
+  min-height: 42px;
+  padding: 3px 2px;
+}
+.live-chat-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: normal;
+}
+.live-chat-warning {
+  font-family: system-ui, sans-serif;
+  font-size: max(var(--ui-min-text-size, 12px), 0.43rem);
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1.05;
+  text-wrap: balance;
+}
 .chat-badge {
   position: absolute;
   top: -2px;

@@ -72,3 +72,27 @@ export function stadiumStandTileTransform(input: {
     translateY: origin.y - atlasOffset * b,
   };
 }
+
+/**
+ * Owner 09-14: the riser (step face) under an elevated stand cell belongs on the edge that FACES THE PITCH — the edge
+ * shared with the ring in front (the transform's `inward` axis), not "the two corners with the largest screen Y". The
+ * old rule was right only when the tier stepped along screen depth; when a band steps across the screen (end stands in
+ * N-S, side stands in E-W) it painted a black bar along the bottom of every seat cell. A step face is only visible when
+ * the shared edge runs across the screen (|dx| >= |dy|); a sideways step shows purely as the jagged tier silhouette.
+ */
+export function stadiumRiserEdge(
+  stand: StadiumStandSide,
+  corners: StadiumCellCorners,
+): { edge: [{ x: number; y: number }, { x: number; y: number }]; visible: boolean } {
+  const [xy, xy1, x1y1, x1y] = corners;
+  const edge: [{ x: number; y: number }, { x: number; y: number }] = stand === 'home'
+    ? [xy1, x1y1] // ring = -5 - y: the ring in front is y + 1
+    : stand === 'away'
+      ? [xy, x1y] // ring = y - 19: the ring in front is y - 1
+      : stand === 'nearEnd'
+        ? [x1y, x1y1] // ring = -2 - x: the ring in front is x + 1
+        : [xy, xy1]; // ring = x - 27: the ring in front is x - 1
+  const dx = Math.abs(edge[1].x - edge[0].x);
+  const dy = Math.abs(edge[1].y - edge[0].y);
+  return { edge, visible: dx >= dy };
+}
