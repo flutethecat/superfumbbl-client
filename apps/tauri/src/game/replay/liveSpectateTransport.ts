@@ -56,9 +56,14 @@ export class LiveSpectateTransport {
         : !inLiveSegment ? 'Earlier segment — live position beyond a gap'
         : behind === 0 ? 'At live edge — GO TO LIVE to follow' : behind + ' events behind',
       selectedSegment: visible?.cursor.segmentId ?? null,
-      segments: segments.map((segment) => ({ id: segment.identity.segmentId,
-        label: positionLabel(this.history.checkpointAt({ ...segment.identity, sequence: segment.start }))
-          + (segment.interruption ? ' · ' + segment.interruption : ' · Current connection') })),
+      // Owner 09-16: the pre-join backfill's start line reads as history only; its "Before you joined" note moves to
+      // the last turn it holds (ReplayControls, keyed by joinBoundary) — the line that really is before the join.
+      segments: segments.map((segment) => {
+        const joinBoundary = segment.interruption === 'Before you joined';
+        const start = positionLabel(this.history.checkpointAt({ ...segment.identity, sequence: segment.start }));
+        return { id: segment.identity.segmentId, joinBoundary,
+          label: joinBoundary ? start + ' · Earlier history' : start + (segment.interruption ? ' · ' + segment.interruption : ' · Current connection') };
+      }),
       selectSegment: (id) => this.selectSegment(id),
       status: { phase: ['paused', 'playing'].includes(this.review.phase) ? 'ready' : this.review.phase,
         cursor, total: this.review.scrubMaximum?.sequence ?? window?.end ?? cursor,

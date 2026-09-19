@@ -63,3 +63,15 @@ export function reactiveSkillDecisionText(
   const skillName = skill.trim() || 'this skill';
   return `${coach} is deciding whether to use ${skillName}`;
 }
+
+/** Owner 09-15: the same card once the skill is USED and its follow-up choice is still open. */
+export function reactiveSkillUsingText(
+  game: GameJson | null | undefined,
+  playerId: string,
+  skill: string,
+): string {
+  const side = game ? playerSide(game, playerId) : null;
+  const team = side === 'home' ? game?.teamHome : side === 'away' ? game?.teamAway : null;
+  const coach = String(team?.coach ?? team?.teamName ?? 'Opponent').trim() || 'Opponent';
+  return `${coach} is using ${skill.trim() || 'the skill'}`;
+}

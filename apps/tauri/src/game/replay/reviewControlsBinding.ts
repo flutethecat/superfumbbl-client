@@ -9,7 +9,9 @@ export interface ReviewControlsBinding {
   turnMarkers: readonly ReplayTurnMarker[];
   liveDistanceLabel: string;
   selectedSegment: number | null;
-  segments: { id: number; label: string }[];
+  /** `joinBoundary` (owner 09-16): the pre-join backfill — its "Before you joined" note belongs on the LAST turn it
+   *  holds (the turn the spectator arrived in), not on the segment's start line. */
+  segments: { id: number; label: string; joinBoundary?: boolean }[];
   selectSegment(id: number): Promise<unknown>;
   playing: boolean;
   speed: ReplaySpeed;

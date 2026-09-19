@@ -224,6 +224,42 @@ function selectTurn(event: Event): void {
   if (!marker) return;
   if (props.review?.seekTurn) void props.review.seekTurn(marker); else seek(marker.cursor);
 }
+// Owner 09-15: the HISTORY SEGMENT list nests each segment's turns (their START boundaries) under the segment
+// entry, so a pre-join backfill reads as its turns, not one opaque "Before you joined" row. Values are tagged:
+// `seg:<id>` selects the segment (its start), `turn:<key>` seeks that turn.
+function segmentTurnStarts(segmentId: number): (typeof turnMarkers.value)[number][] {
+  return turnMarkers.value.filter((marker) => marker.segmentId === segmentId && marker.boundary === 'start');
+}
+// Owner 09-16: the "Before you joined" note sits on the LAST turn line of the pre-join backfill (the turn the
+// spectator arrived in) — dynamic, never on the segment's start line. A backfill with no turn line keeps it on
+// the segment line itself.
+function turnRowLabel(segment: { id: number; joinBoundary?: boolean }, marker: (typeof turnMarkers.value)[number], index: number, count: number): string {
+  const base = marker.label.replace(/ — Start$/, '');
+  return segment.joinBoundary && index === count - 1 ? base + ' · Before you joined' : base;
+}
+function segmentRowLabel(segment: { id: number; label: string; joinBoundary?: boolean }): string {
+  return segment.joinBoundary && segmentTurnStarts(segment.id).length === 0 ? segment.label.replace(/ · Earlier history$/, ' · Before you joined') : segment.label;
+}
+const selectedSegmentValue = computed(() => {
+  const review = props.review;
+  if (!review) return '';
+  const visible = review.selectedSegment;
+  if (visible == null) return '';
+  const cursor = status.value.cursor;
+  const starts = segmentTurnStarts(visible).filter((marker) => marker.cursor <= cursor);
+  const last = starts.at(-1);
+  return last ? `turn:${turnMarkerKey(last)}` : `seg:${visible}`;
+});
+function selectSegmentOrTurn(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  if (!props.review) return;
+  if (value.startsWith('seg:')) { void props.review.selectSegment(Number(value.slice(4))); return; }
+  if (value.startsWith('turn:')) {
+    const key = value.slice(5);
+    const marker = turnMarkers.value.find((candidate) => turnMarkerKey(candidate) === key);
+    if (marker) { if (props.review.seekTurn) void props.review.seekTurn(marker); else seek(marker.cursor); }
+  }
+}
 function openRecentHistory(): void {
   const segment = props.review?.segments.at(-1);
   if (segment) void props.review!.selectSegment(segment.id);
@@ -288,10 +324,14 @@ function openRecentHistory(): void {
     <div v-if="props.review && (props.review.segments.length > 1 || props.review.pinned)" class="review-coverage">
       <label>
         <span>History segment</span>
-        <select aria-label="History segment" :value="props.review.selectedSegment"
-          @change="props.review.selectSegment(Number(($event.target as HTMLSelectElement).value))">
-          <option v-if="!props.review.segments.some((segment) => segment.id === props.review!.selectedSegment)" :value="props.review.selectedSegment" disabled>Pinned position outside recent history</option>
-          <option v-for="segment in props.review.segments" :key="segment.id" :value="segment.id">{{ segment.label }}</option>
+        <!-- Owner 09-15: each segment's turns are nested under it (see selectSegmentOrTurn). -->
+        <select aria-label="History segment" :value="selectedSegmentValue" @change="selectSegmentOrTurn">
+          <option v-if="!props.review.segments.some((segment) => segment.id === props.review!.selectedSegment)" value="" disabled>Pinned position outside recent history</option>
+          <template v-for="segment in props.review.segments" :key="segment.id">
+            <option :value="`seg:${segment.id}`">{{ segmentRowLabel(segment) }}</option>
+            <option v-for="(marker, index) in segmentTurnStarts(segment.id)" :key="turnMarkerKey(marker)" :value="`turn:${turnMarkerKey(marker)}`"
+              class="segment-turn">&nbsp;&nbsp;&nbsp;↳ {{ turnRowLabel(segment, marker, index, segmentTurnStarts(segment.id).length) }}</option>
+          </template>
         </select>
       </label>
       <button v-if="props.review.pinned && props.review.segments.length" type="button" class="open-recent-history"

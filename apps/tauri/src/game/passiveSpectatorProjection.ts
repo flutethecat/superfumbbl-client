@@ -112,8 +112,15 @@ export function interceptionWaitFromGame(g: GameJson, rolls: ActionRollProjectio
   const target = g.passCoordinate as [number, number] | null;
   const from = g.fieldModel.playerDataArray.find((d) => d.playerId === throwerId)?.playerCoordinate;
   if (!throwerId || !from || !target) return null;
-  if (interceptors(g, throwerId, from, target).some((c) => ownedPlayerIds.has(c.playerId))) return null;
-  return { throwerId, target: [...target] as [number, number], passRoll: actionRollFor(rolls, throwerId)?.pass ?? null };
+  const candidates = interceptors(g, throwerId, from, target);
+  if (candidates.some((c) => ownedPlayerIds.has(c.playerId))) return null;
+  // Owner 09-15: the viewer (passer's coach, spectators) sees WHO may intercept — the same candidate set the
+  // chooser is offered (upstream UtilServerCatchScatterThrowIn / interceptors(): every opponent within 1.5 squares
+  // of the pass line who may catch), with the interference roll each would need.
+  return {
+    throwerId, target: [...target] as [number, number], passRoll: actionRollFor(rolls, throwerId)?.pass ?? null,
+    candidates: candidates.map((c) => ({ playerId: c.playerId, square: [c.square[0], c.square[1]] as [number, number], roll: c.roll })),
+  };
 }
 
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
@@ -132,10 +139,13 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
   const dialog = g.dialogParameter as Record<string, unknown> | null;
   const offered = p.pendingDecision?.state === 'offered';
   const prayer = offered ? interactivePrayerDialog(g) : null;
+  const usingCard = p.skillDecision.current?.using ? p.skillDecision.current : null;
   const skill = offered && dialog?.dialogId === 'skillUse' ? {
     playerId: String(dialog.playerId ?? ''), skill: String(dialog.skill ?? ''),
     label: prettySkillName(String(dialog.skill ?? '')), minimumRoll: Number(dialog.minimumRoll ?? 0),
     ...(p.skillDecision.current?.details ?? {}),
+  } : usingCard ? { // owner 09-15: "<Coach> is using <Skill>" while the follow-up choice (push square) is open
+    playerId: usingCard.playerId, skill: usingCard.skill, label: prettySkillName(usingCard.skill), minimumRoll: 0, using: true,
   } : null;
   const shadowTeam = offered && dialog?.dialogId === 'playerChoice' && dialog.playerChoiceMode === 'shadowing'
     ? [g.teamHome, g.teamAway].find((team) => team.teamId === dialog.teamId) : null;

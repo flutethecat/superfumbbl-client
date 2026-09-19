@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect, defineAsyncComponent, type Component } from 'vue';
 import SpectateView from './views/SpectateView.vue';
+import WaitingBoardView from './views/WaitingBoardView.vue';
 // Owner 09-12: FUMBBL Classic is a fork-edition feature. The public export omits ClassicView.vue entirely (see
 // public-export.exclude); the glob tolerates the missing file, so the public build carries no Classic code.
 const classicModules = import.meta.glob('./views/ClassicView.vue');
@@ -25,7 +26,7 @@ import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour } from './game/settings';
+import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
 import { clearConfigWebToken } from './game/configWebAuth';
 import {
@@ -793,7 +794,7 @@ const filteredSkills = computed(() => {
 const skillKind = computed<'icon' | 'marker'>(() => (skillConfigGroup.value === 'icons' ? 'icon' : 'marker'));
 /** Render position for the CURRENT group (owner 2026-07-03 r6f): icons default to
  *  'head', markers to 'feet'; either can be switched to the other. */
-const skillGroupPosition = computed<'head' | 'feet'>({
+const skillGroupPosition = computed<SkillRenderPosition>({
   get: () => (skillConfigGroup.value === 'icons' ? settings.iconPosition : settings.markerPosition),
   set: (v) => {
     if (skillConfigGroup.value === 'icons') settings.iconPosition = v;
@@ -1030,9 +1031,10 @@ async function selectSpriteChoice(value: string): Promise<void> {
     await commitAssetAssignments({ ...settings.assetPackAssignments, playerSprites: '', walkSheets: '' }, persist, beginAssetAssignmentIntent());
   }
 }
-// A FUMBBL mode persisted from an older build (or a pack that was removed) falls back to the placeholder set.
+// A FUMBBL iconset mode persisted from an older build (or a pack that was removed) falls back to the placeholder
+// set. Owner 09-15: 'checkers' is original art and never falls back.
 watchEffect(() => {
-  if (!fumbblSpriteModesAvailable.value && settings.spriteSet !== 'walk') settings.spriteSet = 'walk';
+  if (!fumbblSpriteModesAvailable.value && settings.spriteSet !== 'walk' && settings.spriteSet !== 'checkers' && settings.spriteSet !== 'chess') settings.spriteSet = 'walk';
 });
 
 function escSettings(e: KeyboardEvent) {
@@ -1419,6 +1421,9 @@ function captureKey(event: KeyboardEvent) {
          caches ONLY TeamBuilderView (include filter; every other blade mounts/unmounts exactly as before),
          so returning to Team restores the draft (slots, name, mode, pack, skills) instead of a reset.
          Entering a live game unmounts the KeepAlive (the game branch above) — that edge drops the draft. -->
+    <!-- Owner 09-17: a join that is still waiting for the other coach loads the BOARD with the waiting modal over
+         it, instead of sitting on the console shell until the game state arrives. -->
+    <WaitingBoardView v-else-if="gameStore.state.waitingForMatch" />
     <KeepAlive v-else include="TeamBuilderView">
       <PlayView v-if="view === 'play'" />
       <SpectateBrowserView v-else-if="view === 'spectate'" @spectate="openSpectateGame" />
@@ -1612,6 +1617,16 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">FUMBBL: declare Blitz from the player context menu. Modern: select your player,
               then an opponent; click the target again (or use Confirm) to commit the previewed route.</p>
+            <!-- Owner 09-16: planner colours — Primary = the route line; Secondary = steps that owe a roll. -->
+            <label class="row">
+              <span>Primary color</span>
+              <input v-model="settings.plannerPrimaryColor" type="color" />
+            </label>
+            <label class="row">
+              <span>Secondary color</span>
+              <input v-model="settings.plannerSecondaryColor" type="color" />
+            </label>
+            <p class="hint">Primary draws the planned route. Secondary marks each step that needs a roll — a dodge, a rush or a pickup.</p>
           </fieldset>
 
           <fieldset class="settings-group">
@@ -1903,10 +1918,20 @@ function captureKey(event: KeyboardEvent) {
               <span>Player sprites</span>
               <select v-model="spriteChoice">
                 <option value="walk">Super FUMBBL</option>
-                <template v-if="fumbblSpriteModesAvailable">
-                  <option value="checkers">FUMBBL Checkers</option>
-                </template>
+                <!-- Owner 09-15: the checker discs are ORIGINAL art (67af2368) — offered always, no pack gate. -->
+                <option value="checkers">Checkers</option>
+                <option value="chess">Chess</option>
                 <option v-for="pack in spritePackOptions" :key="pack.installId" :value="spritePackValue(pack)">{{ pack.name }} {{ pack.version }}</option>
+              </select>
+            </label>
+            <!-- Owner 09-15: the Checkers disc letter font. -->
+            <label v-if="settings.spriteSet === 'checkers'" class="row">
+              <span>Checker letter font</span>
+              <select v-model="settings.checkerLetterFont">
+                <option value="arial">Arial / Helvetica</option>
+                <option value="helvetica">Helvetica / Arial</option>
+                <option value="system">System sans</option>
+                <option value="nuffle">Nuffle</option>
               </select>
             </label>
             <!-- Owner 09-10: sprite-set explainer paragraph cut. -->
@@ -2009,6 +2034,39 @@ function captureKey(event: KeyboardEvent) {
             </label>
           </fieldset>
 
+          <!-- Owner 09-16: every log APPEARANCE setting lives here (moved from UI > Log window) + the dice toggles. -->
+          <fieldset class="settings-group">
+            <legend>Log</legend>
+            <label class="row">
+              <span>Opacity</span>
+              <input v-model.number="settings.logOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <span>{{ Math.round(settings.logOpacity * 100) }}%</span>
+            </label>
+            <label class="row">
+              <span>Font size</span>
+              <input v-model.number="settings.logFontSize" type="range" min="8" max="22" step="0.5" />
+              <span>{{ settings.logFontSize }}px</span>
+            </label>
+            <label class="row">
+              <span>Font</span>
+              <select v-model="settings.logFont">
+                <option value="nuffle">Nuffle (Blood Bowl)</option>
+                <option value="arial">Arial / Helvetica</option>
+                <option value="mono">Monospace</option>
+              </select>
+            </label>
+            <label class="row">
+              <span>Display dice rolls as numbers</span>
+              <input v-model="settings.logDiceAsNumbers" type="checkbox" />
+            </label>
+            <p class="hint">Rolls show as one summed number instead of individual dice.</p>
+            <label class="row">
+              <span>Display dice roll needed as numbers</span>
+              <input v-model="settings.logNeededAsNumbers" type="checkbox" />
+            </label>
+            <p class="hint">The roll needed shows as a number instead of a die.</p>
+          </fieldset>
+
           <fieldset class="settings-group">
             <legend>Skill display</legend>
             <!-- B2-17: icons and markings are mutually exclusive display modes -->
@@ -2081,6 +2139,7 @@ function captureKey(event: KeyboardEvent) {
                 <select v-model="skillGroupPosition">
                   <option value="head">Over head</option>
                   <option value="feet">At feet</option>
+                  <option value="centre">On token</option>
                 </select>
               </label>
               <div v-if="skillConfigGroup === 'markers'" class="sc-prefill">
@@ -2313,28 +2372,6 @@ function captureKey(event: KeyboardEvent) {
               <span>Chat toasts</span>
               <input v-model.number="settings.hudToastOpacity" type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudToastOpacity * 100) }}%</span>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>Log window</legend>
-            <label class="row">
-              <span>Opacity</span>
-              <input v-model.number="settings.logOpacity" type="range" min="0.2" max="1" step="0.01" />
-              <span>{{ Math.round(settings.logOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>Font size</span>
-              <input v-model.number="settings.logFontSize" type="range" min="8" max="22" step="0.5" />
-              <span>{{ settings.logFontSize }}px</span>
-            </label>
-            <label class="row">
-              <span>Font</span>
-              <select v-model="settings.logFont">
-                <option value="nuffle">Nuffle (Blood Bowl)</option>
-                <option value="arial">Arial / Helvetica</option>
-                <option value="mono">Monospace</option>
-              </select>
             </label>
           </fieldset>
 

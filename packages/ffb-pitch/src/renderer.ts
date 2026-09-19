@@ -1,4 +1,4 @@
-import { Application, Assets, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, Sprite, Text, TextStyle, Texture } from 'pixi.js';
+import { Application, Assets, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
@@ -462,6 +462,9 @@ export const AD_FOLLOW_TAU_MS = 180; // exp time-constant
  *  return to the camera the viewer had. Independent of the auto director (it plays with the director OFF too); the
  *  director yields while it runs. */
 export const KICK_FOLLOW_TAU_MS = 650;
+/** Owner 09-14: turn modes where a coordinate change is a PLACEMENT (drag/preset/formation), never a walk — the
+ *  token teleports to its square. kickoffReturn / passBlock stay real moves. */
+export const PLACEMENT_TURN_MODES: ReadonlySet<string> = new Set(['setup', 'perfectDefence', 'solidDefence', 'quickSnap', 'swarming', 'highKick']);
 export const KICK_FOLLOW_RETURN_MS = 900;
 /** Extra dwell on the landing square before the return starts. */
 export const KICK_FOLLOW_LANDING_DWELL_MS = 350;
@@ -821,6 +824,8 @@ const ACTION_DIE_OUT_MS = 300;
 /** The on-pitch action d6 edge in world px (buildD6's S); the 3D cube parks at this size times the node's world scale. */
 const ACTION_DIE_SIZE = 28;
 interface ActionDieRecord {
+  /** Owner 09-15: an ARMOUR roll (with its 'ARMOR BREAKS!' stencil) — the injury result waits for it to retire. */
+  armour?: boolean;
   node: Container;
   baseScale: number;
   start: number;
@@ -848,6 +853,9 @@ interface ActionDieRecord {
 const MOVEMENT_INTENT_INITIAL_PROGRESS = 0.06;
 const MOVEMENT_INTENT_HOLD_PROGRESS = 0.45;
 const MOVEMENT_INTENT_ROLLBACK_MS = 500;
+/** Owner 09-17: the longest the first-stride glide may stretch to fill the smoothed round trip (the estimator
+ *  itself clamps at 500 ms). */
+const MOVEMENT_INTENT_MAX_STRIDE_MS = 350;
 // item3 (owner 08-18): base duration of the acted/activation dim CROSS-FADE. Rides the presentationMs
 // family, so spectate/replay lands at ~350ms (260 × 1.33) — the owner's "even transition between the
 // two players" — while live keeps the untrimmed 260ms base.
@@ -987,6 +995,24 @@ const NAME_STYLE = new TextStyle({
   fontWeight: 'bold',
   fill: 0xffffff,
   stroke: { color: 0x14161a, width: 3 },
+});
+/** Owner 09-15: the Checkers position letter — large and heavily outlined so it survives the disc's gloss highlight. */
+/** Owner 09-15 (r3): fraction of the letter's text-box height the anchor drops so the capital's INK is centred.
+ *  Measured on the dev page (extract diff): Arial bold caps land within 0.01 of the disc centre with NO drop, so
+ *  this is 0 — it stays as the one knob if a future family needs it. */
+const CHECKER_LETTER_DY = 0;
+/** Owner 09-15: decor-1 units the feet skill marking lifts when a feet word-art state marker is present. */
+const FEET_ART_MARKING_LIFT = 12;
+/** Owner 09-15 (r2): the feet word art (ROOTED / DODGY SNACK / CHOMPED) centres this far below the feet line —
+ *  was 4; now 1 so the word sits OVER the feet rather than hanging under them. */
+const FEET_ART_DY = 1;
+// Owner 09-15 (r3): the font is a Display setting (Arial by default) — the family is applied per token.
+const CHECKER_LETTER_STYLE = new TextStyle({
+  fontFamily: 'Arial, Helvetica, sans-serif',
+  fontSize: 15,
+  fontWeight: 'bold',
+  fill: 0xffffff,
+  stroke: { color: 0x14161a, width: 4 },
 });
 const BADGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 8, fontWeight: 'bold', fill: COLORS.badgeText });
 // owner 08-13: skill badges dim when they'd occlude the player standing behind them, instead of going opaque.
@@ -1128,6 +1154,21 @@ export function offscreenIndicatorForTarget(
     angle: Math.atan2(target.y - y, target.x - x),
   };
 }
+/** Owner 09-15: the stat a lasting injury cut, from the server's result string ("Smashed Knee (-MA)" → "-MA");
+ *  a lasting injury with no readable stat reads "SI". */
+function casualtyMarkerText(seriousInjury: string | null): string {
+  const s = String(seriousInjury ?? '');
+  if (/seriously hurt|\(mng\)/i.test(s)) return 'SH';
+  if (/\(ni\)|niggling/i.test(s)) return 'NI'; // BB2025 "Serious Injury (NI)" — a niggling injury, no stat cut
+  const stat = s.match(/\(\s*-\s*(AV|MA|PA|AG|ST)\s*\)/i)?.[1];
+  return stat ? `-${stat.toUpperCase()}` : 'SI';
+}
+/** Severity of a lasting injury's stat cut: -AV mildest … -ST worst (the BB casualty table's order). */
+function lastingInjuryRank(seriousInjury: string): number {
+  const stat = seriousInjury.match(/\(\s*-\s*(AV|MA|PA|AG|ST)\s*\)/i)?.[1]?.toUpperCase();
+  if (stat === 'ST') return 5; if (stat === 'AG') return 4; if (stat === 'PA') return 3; if (stat === 'MA') return 2; if (stat === 'AV') return 1;
+  return /\(ni\)|niggling/i.test(seriousInjury) ? 0.5 : 0; // a niggling injury sits under every stat cut
+}
 // B9-2: gold active-player arrow, matching the HUD current-player arrow
 const ACTIVE_MARKER_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
@@ -1155,6 +1196,7 @@ const DIE_TAG_STYLE_DARK = new TextStyle({ fontFamily: 'Arial, sans-serif', font
  *  to resolve the active pack's official skill icon through buildRerollLabel(). */
 const DIE_CAUSE_SKILL: Record<string, string> = {
   breatheFire: 'BreatheFire', // owner 08-18: Breathe Fire roll die, tagged with the skill's own icon
+  breakTackle: 'BreakTackle', // owner 09-14: the skill's icon, not the old BREAK TACKLE pill (pill = icon-missing fallback)
   dauntless: 'Dauntless',
   pickup: 'PickUp',
   gfi: 'GFI',
@@ -1217,12 +1259,13 @@ const TZ_OPPOSITION_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 
 const TZ_FRIENDLY_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0x9ab8ff });
 // B2-16/UI11: Nuffle display font, heavier weight; sized at render time so
 // the word spans the full end-zone length
+// Owner 09-16: bold WHITE (was a cream 0xf0ece0 at 0.8 alpha, which read as cream over the red band).
 const ENDZONE_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
   fontSize: 28,
   fontWeight: '900',
   letterSpacing: 6,
-  fill: 0xf0ece0,
+  fill: 0xffffff,
 });
 
 /**
@@ -1284,7 +1327,26 @@ function positionNameOf(player: PlayerJson, team: TeamJson): string | undefined 
 
 /** Owner: checker discs carry the POSITION letter — B blitzer, T thrower,
  *  C catcher, L lineman, BG big guy, … — instead of the shirt number. */
+/** Owner 09-15: chess piece per position — Big Guy = king, Star = queen, Blitzer = knight, Blocker = rook,
+ *  Catcher / Thrower / Runner / Assassin = bishop, anything else (Lineman, …) = pawn. The shorthand is written on
+ *  EVERY piece. */
+function chessPieceFor(player: PlayerJson, team: TeamJson): 'king' | 'queen' | 'knight' | 'rook' | 'bishop' | 'pawn' {
+  if (isBigGuy(player, team)) return 'king';
+  if (isStarPlayer(player, team)) return 'queen';
+  const name = `${positionNameOf(player, team) ?? ''} ${String(player.positionId ?? '').split('.').pop() ?? ''}`.toLowerCase().replace(/[^a-z]/g, '');
+  if (name.includes('blitzer')) return 'knight';
+  if (name.includes('blocker') || name.includes('bigun')) return 'rook';
+  // owner 09-15: the ball-handlers are bishops — catchers, throwers, runners, assassins
+  if (name.includes('catcher') || name.includes('thrower') || name.includes('runner') || name.includes('assassin')) return 'bishop';
+  return 'pawn';
+}
+
 function positionLetter(player: PlayerJson, team: TeamJson): string {
+  // Owner 09-15: upstream's disc letter IS the roster position's `shorthand` (L, B, T, G, RO, vR…) — use it first.
+  // Live FUMBBL positionIds are NUMERIC, so the id-keyed map below never matched there and the fallback drew a digit.
+  const positions = (team.roster as { positionArray?: { positionId: string; shorthand?: string }[] }).positionArray;
+  const shorthand = String(positions?.find((p) => p.positionId === player.positionId)?.shorthand ?? '').trim();
+  if (shorthand) return shorthand;
   if (isBigGuy(player, team)) return 'BG';
   const pos = String(player.positionId ?? '').split('.').pop() ?? '';
   const key = pos.toLowerCase().replace(/[^a-z]/g, '');
@@ -1708,6 +1770,10 @@ export class PitchRenderer {
   private overlayLayer = new Container();
   private movementReachLayer = new Container();
   private tokenLayer = new Container();
+  /** Owner 09-15: skill MARKINGS render through this layer, ABOVE every token (and the dugout) while staying children
+   *  of their token for position/scale — so a front-row figure never covers the row behind's markings, and the
+   *  state markers (ROOTED / CHOMPED / DODGY SNACK …, token children) always sit under them. */
+  private markingLayer = new RenderLayer();
   /** Queued path: line, step numbers, rush dice, dodge chips — over the tokens. */
   private pathLayer = new Container();
   private movementPathCostLayer = new Container();
@@ -1740,6 +1806,8 @@ export class PitchRenderer {
   private blockFaceLoadGeneration = 0;
   /** Owner-supplied skull used only for the RIP/casualty marker. */
   private casualtySkullTexture: Texture | null = null;
+  /** Owner 09-15 (art handoff): the KO lettering (dazed head + stars + tilted KO) for the dugout knockout marker. */
+  private knockoutDecoTexture: Texture | null = null;
   private d6FaceTextures: Array<Texture | undefined> = [];
   private d6FaceVariant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT;
   private d6FaceLoadGeneration = 0;
@@ -1767,6 +1835,11 @@ export class PitchRenderer {
   private blitzTargetDecoTexture: Texture | null = null;
   /** Owner 09-07: the ROOTED word (yellow wood lettering on roots) drawn at the rooted player's feet. */
   private rootedDecoTexture: Texture | null = null;
+  /** Owner 09-15 (art handoff): DODGY SNACK word art at the feet (ROOTED family) + the HYPNOGAZE target reticle. */
+  private dodgySnackDecoTexture: Texture | null = null;
+  private hypnogazeTargetDecoTexture: Texture | null = null;
+  /** Owner 09-15 (CHOMPED handoff): CHOMPED word art at the feet (ROOTED / DODGY SNACK family). */
+  private chompedDecoTexture: Texture | null = null;
   /** Owner 09-06: Move / Pass / Foul player-action decorations (approved art) — same path as the Blitz marker. */
   private actionMoveDecoTexture: Texture | null = null;
   private actionPassDecoTexture: Texture | null = null;
@@ -1830,6 +1903,8 @@ export class PitchRenderer {
   private downDecorations = new Map<string, Texture>();
   /** FUMBBL checker discs (upstream abstract icon mode, UI-5). */
   private checkerTextures = new Map<string, Texture>();
+  /** Owner 09-15 ("for giggles"): chess-piece token set — king / queen / knight / rook / bishop / pawn, Home red / Away blue. */
+  private chessTextures = new Map<string, Texture>();
   /** Stadium pack (Sprites/Stadium): seat-stand modules + crowd spectators. */
   private standTextures = new Map<string, Texture>();
   private crowdTextures: Texture[] = [];
@@ -1859,7 +1934,9 @@ export class PitchRenderer {
    * 'classic' (FUMBBL iconsets supplied by an installed local pack) is the
    * standard; 'new' = original placeholder manifest sprites.
    */
-  private spriteSet: 'new' | 'classic' | 'checkers' | 'walk' = 'classic';
+  private spriteSet: 'new' | 'classic' | 'checkers' | 'chess' | 'walk' = 'classic';
+  /** Checkers and Chess are the ABSTRACT token sets (no iconsets, no walkers) — owner 09-15. */
+  private abstractSpriteSet(): boolean { return this.spriteSet === 'checkers' || this.spriteSet === 'chess'; }
   /** Match7 hook: when false (default), baseline positional skills are hidden. */
   showDefaultSkills = false;
   /** Skill-badge legibility style (owner 2026-07-02 study, queue item 10). */
@@ -1868,9 +1945,13 @@ export class PitchRenderer {
   showSkillIcons = true;
   /** Where skill ICONS draw (owner 2026-07-03 r6f): 'head' (default, above the
    *  token) or 'feet' (below, like the markers). */
-  iconPosition: 'head' | 'feet' = 'head';
+  iconPosition: 'head' | 'feet' | 'centre' = 'head';
   /** Where skill MARKERS draw: 'feet' (default, foot text) or 'head' (above). */
-  markerPosition: 'feet' | 'head' = 'feet';
+  markerPosition: 'feet' | 'head' | 'centre' = 'feet';
+  /** Owner 09-15 (upstream target): Checkers keeps the ordinary defaults — icons over the head, markings tucked under
+   *  the disc — and the letter centred; 'centre' ("On token") is an explicit choice in every mode. */
+  private resolvedIconPosition(): 'head' | 'feet' | 'centre' { return this.iconPosition; }
+  private resolvedMarkerPosition(): 'head' | 'feet' | 'centre' { return this.markerPosition; }
   /** Which skill-icon set to draw on badges — BB3 (default) or BB2 (owner). */
   skillIconStyle: SkillIconStyle = 'bb3';
   /** Badge/marking groups that rescale with zoom (B2-4/B2-20). Pickup/GFI
@@ -1895,8 +1976,8 @@ export class PitchRenderer {
   /** Pixel zoom on by default; the camera-geometry tests switch it off to assert the raw fit maths. */
   pixelZoom = true;
   /** Owner 09-06: physical-px-per-world-px rungs where the walker snap is EXEMPT (true fractional size). */
-  /** Owner 09-06: was 4 — one more rung (9/8) past the old top. */
-  private static readonly MAX_WHEEL_ZOOM = 4.5;
+  /** Owner 09-06: was 4 — one more rung (9/8) past the old top. Owner 09-15: 6 — the 3:1 art rung is the new top. */
+  private static readonly MAX_WHEEL_ZOOM = 6;
   private static readonly FREE_ZOOM_RUNGS = [2.25, 4.5, 9]; // owner 09-06: 9/8 over fit, and 9/8 over the old top at DPR 1 / DPR 2
   private walkerSnapExempt(): boolean {
     const r = this.world.scale.x * (globalThis.devicePixelRatio ?? 1);
@@ -1931,7 +2012,10 @@ export class PitchRenderer {
     // there (every 8th art pixel doubled, the mildest fractional case) instead of snapping; see FREE_ZOOM_RUNGS.
     // Owner 09-06 (r2): the wheel cap rose from 4 to 4.5 world so there is one rung PAST the old top — 4.5 physical
     // at DPR 1 (9/8 over 4) and 9 at DPR 2 (9/8 over 8); both free rungs, walkers draw at 1.125 there.
-    const ladder = [0.5, 1, 2, 2.25, 4, 4.5, 6, 8, 9, 10, 12, 16];
+    // Owner 09-15: 3 joins the ladder as the in-between step (2.25 -> 3 -> 4). It is 1.5 device px per art px, so
+    // the WALKERS do not follow it — snapWalker rounds the 1.5 tie UP to the 2:1 whole ratio (same pixel size as
+    // rung 4) while the ground, grid, markers and discs zoom to 3.
+    const ladder = [0.5, 1, 2, 2.25, 3, 4, 4.5, 6, 8, 9, 10, 12, 16];
     const eps = 1e-6;
     let q: number;
     if (mode === 'floor') q = [...ladder].reverse().find((v) => v <= r + eps) ?? ladder[0]!;
@@ -1943,6 +2027,14 @@ export class PitchRenderer {
   /** FUMBBL auto-markings per playerId (UI-6); empty map = markings off. */
   private playerMarkings = new Map<string, string>();
   private skillMarkingFontFamily: string = DEFAULT_MARKING_STYLE.fontFamily;
+  /** Owner 09-15: the Checkers disc letter font (Display setting); Arial by default. */
+  private checkerLetterFontFamily = 'Arial, Helvetica, sans-serif';
+  setCheckerLetterFont(fontFamily: string): void {
+    const next = fontFamily.trim() || 'Arial, Helvetica, sans-serif';
+    if (next === this.checkerLetterFontFamily) return;
+    this.checkerLetterFontFamily = next;
+    this.refresh();
+  }
   private skillMarkingFontSize: number = DEFAULT_MARKING_STYLE.fontSize;
   private skillMarkingColor: number = DEFAULT_MARKING_STYLE.color;
   /** Per-skill-config icon-skill lists per playerId (owner 2026-07-03 r6f). When
@@ -2062,6 +2154,16 @@ export class PitchRenderer {
     this.gazeVictims = next;
     this.refresh();
   }
+  /** Owner 09-15: the candidate interceptors of a pass the OTHER side is choosing over (passer's coach / spectators):
+   *  drawn with the same ✋ tips the passer saw while aiming. null = none. */
+  private interceptCandidates: { playerId: string; square: [number, number]; roll: number }[] | null = null;
+  setInterceptCandidates(list: { playerId: string; square: [number, number]; roll: number }[] | null): void {
+    const same = (list?.length ?? 0) === (this.interceptCandidates?.length ?? 0)
+      && (list ?? []).every((c, i) => this.interceptCandidates?.[i]?.playerId === c.playerId && this.interceptCandidates?.[i]?.roll === c.roll);
+    if (same && (list === null) === (this.interceptCandidates === null)) return;
+    this.interceptCandidates = list ? list.map((c) => ({ ...c, square: [c.square[0], c.square[1]] })) : null;
+    this.redrawOverlays();
+  }
   /** Client-declared Gaze target; cleared before CLIENT_GAZE is sent. */
   private gazeTarget: string | null = null;
   setGazeTarget(playerId: string | null): void {
@@ -2072,6 +2174,15 @@ export class PitchRenderer {
   /** Owner 2026-07-04: path-trail echo colour. 'auto' → white on a dark background,
    *  black on a light one (from the app background luminance). */
   trailColorMode: 'auto' | 'white' | 'black' | 'gold' = 'auto';
+  /** Owner 09-16: planner path colours — `base` for plain steps (and the plot numbers), `roll` for a step that
+   *  owes a roll (dodge / rush / pickup). Defaults: the plot blue + gold. The view feeds the custom UI theme's
+   *  Primary / Secondary here when the user has changed it (⚖ #16 boundary — the renderer never reads settings). */
+  private plannerColors = { base: 0x66ccff, roll: 0xf5c542 };
+  setPlannerColors(base: number, roll: number): void {
+    if (base === this.plannerColors.base && roll === this.plannerColors.roll) return;
+    this.plannerColors = { base, roll };
+    this.redrawOverlays();
+  }
   /** Owner 2026-07-08: what the movement trail leaves at each departed square —
    *  'echo' (fading footprint, default) or 'numbers' (1,2,3… counting squares
    *  moved this activation). Only applies to the trail / hoptrail styles. */
@@ -2225,6 +2336,18 @@ export class PitchRenderer {
     return this.moveTweens.has('__ball__');
   }
 
+  /** Owner 09-14: is any PLAYER token still visibly moving? Live tweens (walk/slide/hop, intent, step) plus an
+   *  o66 full-path walk still inside its duration. Presentation-only probe for the touchdown-sound gate: the
+   *  server pushes the sound while the scorer is still walking on screen. */
+  playersAnimating(): boolean {
+    for (const key of this.moveTweens.keys()) if (key !== '__ball__') return true;
+    const now = performance.now();
+    for (const anim of this.o66MovePath.values()) {
+      if (now - anim.start < Math.max(1, anim.squares.length - 1) * this.moveStepMs) return true;
+    }
+    return false;
+  }
+
   private beginVisualEffect(): () => void {
     this.noteAutoDirectorActivity();
     this.activeVisualEffects += 1;
@@ -2302,7 +2425,8 @@ export class PitchRenderer {
 
   /** Owner 09-14: kick-off camera — see KICK_FOLLOW_TAU_MS. `until` = the flight/bounce is over (wall clock). */
   private kickFollow: {
-    track: () => { x: number; y: number };
+    /** The LIVE ball's world position, or null once no live ball token exists (the camera then holds). */
+    track: () => { x: number; y: number } | null;
     until: number;
     savedX: number; savedY: number;
     returnStart: number | null; fromX: number; fromY: number;
@@ -2311,7 +2435,18 @@ export class PitchRenderer {
     if (!this.app) return;
     const now = performance.now();
     const until = now + flightMs + presentationMs(KICK_FOLLOW_LANDING_DWELL_MS);
-    const track = () => ({ x: ball.position.x, y: ball.position.y });
+    // Owner 09-15 (FUMBBL g1942731 + g1942552, "renderer froze on a kick-off"): every refresh() DESTROYS and rebuilds
+    // the ball container, and Pixi 8 nulls a destroyed container's position — the closure that captured `ball` at
+    // kick time then threw inside the ticker on every frame, and the ticker has no error isolation, so the render
+    // listener behind it never ran: the board froze while the model, sounds and log went on, until something
+    // cleared the follow (a block cinematic's clearEffects, a camera drag). Track the LIVE ball each tick instead —
+    // the freshly rebuilt token (renderedBall) or, while an arc is in flight, the token the tween drives.
+    void ball;
+    const track = () => {
+      const tween = this.moveTweens.get('__ball__');
+      const live = tween && !tween.token.destroyed ? tween.token : this.renderedBall;
+      return live && !live.destroyed ? { x: live.position.x, y: live.position.y } : null;
+    };
     if (this.kickFollow) { // a descent chained onto a fly-in: keep the ORIGINAL saved camera, extend the follow
       this.kickFollow.track = track;
       this.kickFollow.until = Math.max(this.kickFollow.until, until);
@@ -2326,6 +2461,7 @@ export class PitchRenderer {
     if (kf.returnStart === null) {
       if (now >= kf.until) { kf.returnStart = now; kf.fromX = this.world.position.x; kf.fromY = this.world.position.y; return; }
       const p = kf.track();
+      if (!p) return; // no live ball token this frame: hold the camera, keep the follow window open
       const scale = this.world.scale.x;
       const cx = this.app.screen.width / 2 - p.x * scale;
       const cy = this.app.screen.height / 2 - p.y * scale;
@@ -3496,6 +3632,15 @@ export class PitchRenderer {
       this.casualtySkullTexture = null;
     }
     if (!this.initActive(generation, app)) return;
+    try { // owner 09-15: KO lettering (1312x1199, visible 981x1136) drawn ~22 units tall — mipmapped, never decimated
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/knockout-ko.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.knockoutDecoTexture = texture;
+    } catch {
+      this.knockoutDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
     try {
       await this.loadD6FaceTextures(this.d6FaceVariant);
       if (!this.initActive(generation, app)) return;
@@ -3591,6 +3736,33 @@ export class PitchRenderer {
       this.rootedDecoTexture = texture;
     } catch {
       this.rootedDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try { // owner 09-15: DODGY SNACK word art (1536x1024, visible 1501x997) — drawn small like ROOTED
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/dodgy-snack.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.dodgySnackDecoTexture = texture;
+    } catch {
+      this.dodgySnackDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try { // owner 09-15: CHOMPED word art (1944x809, visible 1931x798) — drawn small like ROOTED
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/chomped.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.chompedDecoTexture = texture;
+    } catch {
+      this.chompedDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try { // owner 09-15: HYPNOGAZE target reticle (1312x1199, visible 1089x1133 — the block target's own canvas)
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/hypnogaze-target.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.hypnogazeTargetDecoTexture = texture;
+    } catch {
+      this.hypnogazeTargetDecoTexture = null;
     }
     if (!this.initActive(generation, app)) return;
     try {
@@ -3787,7 +3959,10 @@ export class PitchRenderer {
     // presented token/ball rather than an immediate-apply model endpoint.
     app.ticker.add(() => {
       this.tickAutoDirector(this.app?.ticker.deltaMS ?? 0, performance.now());
-      this.tickKickFollow(this.app?.ticker.deltaMS ?? 0, performance.now());
+      // Owner 09-15: a throw here would abort the ticker's remaining listeners (the render) every frame — the
+      // "renderer froze" shape. Presentation-only camera work never gets to take the board down with it.
+      try { this.tickKickFollow(this.app?.ticker.deltaMS ?? 0, performance.now()); }
+      catch (error) { this.kickFollow = null; console.warn('[pitch] kick-off camera follow aborted:', (error as Error)?.message); }
       this.adCompletedMotionTargets.clear();
     });
     // knockdown/injury flash rings (F-5): expand + fade over 600ms.
@@ -4007,6 +4182,14 @@ export class PitchRenderer {
         this.ballMarker.node.position.y =
           this.ballMarker.baseY - Math.abs(Math.sin(performance.now() / presentationMs(350))) * (this.ballMarker.bob ?? 6);
       }
+      // Owner 09-15: on a planned walk the token is HELD at the presentation cursor between FIFO steps while the
+      // ball is drawn at the model (already-applied) square — the ball ran ahead of the carrier. The tween ticker
+      // only follows a token while it tweens; glue the carried-ball group to the carrier's live position every frame.
+      const cf = this.carrierFollow;
+      if (cf && !this.moveTweens.has(cf.carrierId)) {
+        const carrierToken = this.tokensById.get(cf.carrierId);
+        if (carrierToken && !carrierToken.destroyed) this.followTokenDecorations(cf.carrierId, carrierToken.position.x, carrierToken.position.y);
+      }
       this.updateOffscreenBallIndicator();
       this.updateOffscreenActivePlayerIndicator();
       if (this.ballGlow) {
@@ -4109,11 +4292,24 @@ export class PitchRenderer {
       if (!this.initActive(generation, app)) return;
       // FUMBBL checker discs (upstream "abstract" icon mode — UI-5): team
       // counters with the player number, normal/large/small variants
+      // Owner 09-15: 64 px PixelLab masters drawn at ~20-34 px on the pitch — linear sampling on purpose (nearest
+      // decimates the rim detail), same as the block decorations.
       for (const name of ['normalHome', 'normalAway', 'largeHome', 'largeAway', 'smallHome', 'smallAway']) {
         const texture = await Assets.load<Texture>(new URL(`../assets/checkers/${name}.png`, import.meta.url).href);
         if (!this.initActive(generation, app)) return;
-        texture.source.scaleMode = 'nearest';
+        texture.source.scaleMode = 'linear';
+        texture.source.autoGenerateMipmaps = true;
         this.checkerTextures.set(name, texture);
+      }
+      // Owner 09-15: chess pieces (PixelLab, art repo decorations/chess/set1-64) — 64 px masters, linear sampling.
+      for (const piece of ['pawn', 'knight', 'bishop', 'rook', 'queen', 'king']) {
+        for (const kit of ['Home', 'Away']) {
+          const texture = await Assets.load<Texture>(new URL(`../assets/chess/${piece}${kit}.png`, import.meta.url).href);
+          if (!this.initActive(generation, app)) return;
+          texture.source.scaleMode = 'linear';
+          texture.source.autoGenerateMipmaps = true;
+          this.chessTextures.set(`${piece}${kit}`, texture);
+        }
       }
       // stadium pack: seat-stand modules (tile horizontally; stairs read as
       // aisles) + crowd spectators for the sprinkle pass
@@ -4219,6 +4415,7 @@ export class PitchRenderer {
       this.tokenLayer,
       this.pathLayer,
       this.dugoutLayer,
+      this.markingLayer, // owner 09-15: skill markings over every token, on-pitch and in the dugout
       this.turnTrackLayer, // owner 2026-07-07: SW turn/score/re-roll track
       this.effectsLayer, // F-5 transient effects — never cleared by refresh
     );
@@ -4386,15 +4583,15 @@ export class PitchRenderer {
       // warm cache so shared iconsets still switch instantly.
       resetIconCaches();
       this.lastGameId = gid;
-      if (game && this.spriteSet !== 'checkers') {
+      if (game && !this.abstractSpriteSet()) {
         this.game = game; // preload reads the rosters
         this.preloadBundledWalkSheets();
       }
-      if (game && this.spriteSet !== 'checkers') {
+      if (game && !this.abstractSpriteSet()) {
         const acquireAbort = new AbortController();
         this.classicIconAcquireAbort = acquireAbort;
         void acquireClassicIcons(game, acquireAbort.signal, (team, positionId) => this.modTierIconNeeded(team, positionId)).then((lease) => {
-          if (leaseGeneration !== this.classicIconLeaseGeneration || this.spriteSet === 'checkers' || this.destroyed) {
+          if (leaseGeneration !== this.classicIconLeaseGeneration || this.abstractSpriteSet() || this.destroyed) {
             lease.release();
             return;
           }
@@ -5004,7 +5201,12 @@ export class PitchRenderer {
       // capability is enabled: if Vue delivery is delayed/missed, that broad hold has no occurrence identity or
       // recovery clock and can freeze the actor indefinitely. The generic authoritative interpolation below is
       // the fail-open path until an exact step snapshot arrives.
-      if (carried && !deferred) {
+      const placement = PLACEMENT_TURN_MODES.has(String(this.game?.turnMode ?? ''));
+      if (placement && !deferred && previous && (previous[0] !== nx || previous[1] !== ny)) {
+        // Owner 09-14: setup placements teleport — no walk tween across the pitch while coaches arrange a formation.
+        this.moveTweens.delete(data.playerId);
+        const p = this.tokenPos(nx, ny); token.position.set(p.x, p.y);
+      } else if (carried && !deferred) {
         // Owner 2026-07-13: CONTINUE an in-flight walk across the token rebuild. Same destination: re-attach the
         // tween unchanged (style, clock, remaining path) so the walk neither restarts nor changes character.
         // Destination moved this sync: ease from the token's current visual position to the new model square.
@@ -6976,14 +7178,33 @@ export class PitchRenderer {
     // host passes [from, ...route]; the start square gets no dot. Minimal by design (owner tunes on return).
     if (this.o66PathSquares.length > 1) {
       const pts = this.o66PathSquares.map(([sx, sy]) => this.tokenPos(sx, sy));
+      // Owner 09-16: a step that OWES A ROLL (dodge leaving a marked square, rush beyond normal MA, pickup on the
+      // loose ball) draws in the ROLL colour — its segment and its dot — the rest in the base colour. Same three
+      // tests as the cost-chip loop below (kept separate: this is the line's colour, that is the chip).
+      const rollSteps = new Set<number>();
+      if (this.o66PathMover) {
+        const rb = this.o66MovementBudget(this.o66PathMover);
+        const rHome = this.game?.teamHome.playerArray.some((p) => p.playerId === this.o66PathMover) ?? false;
+        const rOpp = this.tackleZoneCounts(rHome).opposition;
+        const rfm = this.game?.fieldModel;
+        const rBall = rfm?.ballInPlay && !rfm?.ballMoving ? (rfm?.ballCoordinate as [number, number] | undefined) : undefined;
+        if (rb) for (let k = 1; k < this.o66PathSquares.length; k++) {
+          const [dx, dy] = this.o66PathSquares[k]!;
+          const [fx, fy] = this.o66PathSquares[k - 1]!;
+          if (rOpp.has(`${fx},${fy}`) || k > rb.normal || (!!rBall && rBall[0] === dx && rBall[1] === dy)) rollSteps.add(k);
+        }
+      }
+      const { base, roll } = this.plannerColors;
       const line = new Graphics();
-      pts.forEach((p, i) => (i === 0 ? line.moveTo(p.x, p.y) : line.lineTo(p.x, p.y)));
-      line.stroke({ color: 0x66ccff, alpha: 0.7, width: 3 });
+      for (let i = 1; i < pts.length; i++) {
+        line.moveTo(pts[i - 1]!.x, pts[i - 1]!.y).lineTo(pts[i]!.x, pts[i]!.y)
+          .stroke({ color: rollSteps.has(i) ? roll : base, alpha: 0.7, width: 3 });
+      }
       // Intermediate steps: small dots. The route START gets none. The DESTINATION carries the
       // confirm crosshair below (owner g478: crosshair = the confirm marker), so no dot there.
       pts.forEach((p, i) => {
         if (i === 0 || i === pts.length - 1) return;
-        line.circle(p.x, p.y, 4).fill({ color: 0x66ccff, alpha: 0.72 });
+        line.circle(p.x, p.y, 4).fill({ color: rollSteps.has(i) ? roll : base, alpha: 0.72 });
       });
       this.overlayLayer.addChild(line);
       // Owner o66m+ (#9/#10/#11): stamp the per-step COST along the auto-path — a "D N+" dodge chip on each step
@@ -7214,6 +7435,7 @@ export class PitchRenderer {
     // Owner 2026-07-04c: armed foul/handoff/pass preview (arrow, roll chips,
     // interceptor tips) draws over the mode overlays.
     this.drawArmedAction();
+    this.drawInterceptCandidates(); // owner 09-15: the viewer's copy of the interceptor offer
 
     // Owner 2026-07-04e: range shading recalculated from the END of the queued
     // path (each plot re-derives it). For MY player (a legal ACTOR) we DON'T
@@ -7583,29 +7805,41 @@ export class PitchRenderer {
       }
       if (catchRoll != null) targetChip('Catch', catchRoll, a.square, 1.35, 0x2ec24f);
       // interceptor tips: ✋ with a prohibited slash + the interference roll
-      for (const it of interceptors(this.game, this.selectedPlayerId, from, a.square)) {
-        const p = squareAnchor(it.square[0], it.square[1]);
-        const s = depthScale(it.square[0], it.square[1]);
-        const tip = new Container();
-        const glyph = new Text({ text: '✋', style: INTERCEPT_GLYPH_STYLE });
-        glyph.anchor.set(0.5, 0.5);
-        tip.addChild(glyph);
-        const slash = new Graphics();
-        slash.circle(0, 0, 9).stroke({ color: 0xe03030, width: 2.5, alpha: 0.95 });
-        slash.moveTo(-6.4, -6.4).lineTo(6.4, 6.4).stroke({ color: 0xe03030, width: 2.5, alpha: 0.95 });
-        tip.addChild(slash);
-        const roll = this.buildPassRollChip(0, 18, 1, it.roll);
-        tip.addChild(roll);
-        tip.scale.set(Math.max(0.7, s));
-        tip.position.set(p.x, p.y - TILE_H * 1.2 * s);
-        tip.zIndex = 21;
-        this.overlayLayer.addChild(tip);
-      }
+      for (const it of interceptors(this.game, this.selectedPlayerId, from, a.square)) this.overlayLayer.addChild(this.buildInterceptTip(it.square, it.roll));
     } else if (a.mode === 'handoff') {
       const target = catchTarget(this.game, a.targetId);
       if (target != null) targetChip('Hand', target, a.square, 1.2, 0x2ec24f);
     } else {
       chip(a.rollText, a.square, 1.2); // Armour is a 2D6 total, not a D6 face.
+    }
+  }
+
+  /** The ✋ + prohibited-slash interceptor tip with the interference roll, over a candidate's square. */
+  private buildInterceptTip(square: Square, roll: number): Container {
+    const p = squareAnchor(square[0], square[1]);
+    const s = depthScale(square[0], square[1]);
+    const tip = new Container();
+    const glyph = new Text({ text: '✋', style: INTERCEPT_GLYPH_STYLE });
+    glyph.anchor.set(0.5, 0.5);
+    tip.addChild(glyph);
+    const slash = new Graphics();
+    slash.circle(0, 0, 9).stroke({ color: 0xe03030, width: 2.5, alpha: 0.95 });
+    slash.moveTo(-6.4, -6.4).lineTo(6.4, 6.4).stroke({ color: 0xe03030, width: 2.5, alpha: 0.95 });
+    tip.addChild(slash);
+    tip.addChild(this.buildPassRollChip(0, 18, 1, roll));
+    tip.scale.set(Math.max(0.7, s));
+    tip.position.set(p.x, p.y - TILE_H * 1.2 * s);
+    tip.zIndex = 21;
+    return tip;
+  }
+
+  /** Owner 09-15: while the OTHER side chooses an interceptor, the viewer sees the candidates the server offered
+   *  (setInterceptCandidates) — the same ✋ tips the passer saw while aiming. Drawn on the overlay redraw. */
+  private drawInterceptCandidates(): void {
+    if (!this.interceptCandidates || !this.game) return;
+    for (const c of this.interceptCandidates) {
+      if (!isOnPitch(c.square)) continue;
+      this.overlayLayer.addChild(this.buildInterceptTip(c.square, c.roll));
     }
   }
 
@@ -8434,13 +8668,15 @@ export class PitchRenderer {
     // scrimmage (owner 2026-07-02): CAS at the end-zone edge, KO in the middle,
     // RESERVES nearest midfield/opposition (owner 2026-07-07, case 353 — CAS and
     // RESERVES swapped so reserves sit closest to the opposing players). Four rows/section.
+    // Owner 09-15: the KO and CAS boxes MERGE into one INJURED box (the old KO label row becomes squares); its
+    // members sort by severity and fill from the end-zone corner outward — bottom-right first (see the placement
+    // order below). #133: BANNED stays split out → free-standing corner apron.
     const SECTION_DEFS: { label: string; states: number[] }[] = [
       {
-        label: 'CAS',
-        states: [PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY, PlayerStateBase.RIP], // #133: BANNED split out → free-standing corner apron (owner)
+        label: 'INJURED',
+        states: [PlayerStateBase.KNOCKED_OUT, PlayerStateBase.BADLY_HURT, PlayerStateBase.SERIOUS_INJURY, PlayerStateBase.RIP],
       },
-      { label: 'KO', states: [PlayerStateBase.KNOCKED_OUT] },
-      { label: 'RESERVES', states: [PlayerStateBase.RESERVE, PlayerStateBase.MISSING] },
+      { label: 'RESERVES', states: [PlayerStateBase.RESERVE] },
     ];
     // States explicitly claimed by the KO + CAS boxes; RESERVES is the catch-all for
     // everything else off-pitch. Built BY LABEL (order-independent) so reordering the
@@ -8451,6 +8687,9 @@ export class PitchRenderer {
     // #133 (owner): BANNED is CLAIMED (kept out of the RESERVES catch-all) but has NO section — the sent-off
     // players are rendered free-standing in the corner apron below, not in a boxed section.
     claimedDugoutStates.add(PlayerStateBase.BANNED);
+    // Owner 09-14: MISSING (Missing Next Game) is CLAIMED with NO section — upstream never draws MNG players
+    // (ffb-client-logic BoxComponent.drawPlayers: the MNG box is commented out); they are not a bench option.
+    claimedDugoutStates.add(PlayerStateBase.MISSING);
     for (const isHome of [true, false]) {
       const team = isHome ? this.game.teamHome : this.game.teamAway;
       // home flanks the RIGHT sideline (owner 2026-07-02; SWAPPED right 2026-07-07 case 352).
@@ -8487,19 +8726,24 @@ export class PitchRenderer {
       // perceived. Ripple (same audit as #1b): home dugout x0..11, away x14..25, gap x12..13 (no overlap);
       // along-axis within pitch 0..25; ground/trim/separators/tokens/dugoutHits all key off X0/X1 (auto);
       // camera-fit uses dugoutW on the across-axis, not dugoutRows (unaffected).
-      const SECTION_ROWS = [2, 3, 7]; // CAS, KO, RESERVES (RESERVES +1 #1b, +1 more #22)
-      const dugoutRows = SECTION_ROWS.reduce((a, b) => a + b, 0); // 12 (owner #22; was 11 #1b, 10 orig)
+      // Owner 09-15: DUGOUT_START_ROW is the box's end-zone-side row (0 = flush with the end-zone edge, the owner's
+      // ruling after a one-row trial). Everything downstream keys off X0/X1 (ground/trim/separators/tokens/dugoutHits).
+      const DUGOUT_START_ROW = 0; // owner 09-15 (3rd): the box bottom stays flush with the end-zone edge
+      // Owner 09-15 (2nd): INJURED = the old CAS (2) + KO (3) rows — label band + 4 token rows; the extra CAS row is
+      // gone again. RESERVES keeps 7 (+1 #1b, +1 more #22).
+      const SECTION_ROWS = [5, 7]; // INJURED, RESERVES
+      const dugoutRows = SECTION_ROWS.reduce((a, b) => a + b, 0); // 12
       let racc = 0;
       const sections = SECTION_DEFS.map((def, i) => {
         const rows = SECTION_ROWS[i]!;
         const s = isHome
-          ? { ...def, x0: racc, x1: racc + rows - 1 } // 0-2, 3-5, 6-9
-          : { ...def, x0: 25 - (racc + rows - 1), x1: 25 - racc }; // 23-25, 20-22, 16-19
+          ? { ...def, x0: DUGOUT_START_ROW + racc, x1: DUGOUT_START_ROW + racc + rows - 1 } // 0-4, 5-11
+          : { ...def, x0: 25 - DUGOUT_START_ROW - (racc + rows - 1), x1: 25 - DUGOUT_START_ROW - racc }; // 21-25, 14-20
         racc += rows;
         return s;
       });
-      const X0 = isHome ? 0 : 26 - dugoutRows; // away 16
-      const X1 = isHome ? dugoutRows - 1 : 25; // home 9
+      const X0 = isHome ? DUGOUT_START_ROW : 25 - DUGOUT_START_ROW - (dugoutRows - 1); // home 0, away 14
+      const X1 = isHome ? DUGOUT_START_ROW + dugoutRows - 1 : 25 - DUGOUT_START_ROW; // home 11, away 25
 
       // stone-tiled squares in the pitch projection
       const ground = new Graphics();
@@ -8579,13 +8823,14 @@ export class PitchRenderer {
         // a band shaded like that side's end zone (owner 2026-07-02); text
         // reads upright — legible to the home coach
         const labelRow = isHome ? section.x0 : section.x1;
+        // Owner 09-15 (3rd): the band is ONE smooth slab across the three columns — no per-square trim strokes
+        // (they read as lines through INJURED / RESERVES) and no ground tile seams showing through.
         const band = new Graphics();
-        for (const y of columns) {
-          const quad = squareQuad(labelRow, y);
-          if (physicalChrome) band.poly(quad.points.flat()).fill({ color: 0x0a0d11, alpha: 0.88 });
-          band.poly(quad.points.flat()).fill({ color: isHome ? 0x1a3a9a : 0x9a1a1a, alpha: physicalChrome ? 0.64 : 0.9 });
-          if (physicalChrome) band.poly(quad.points.flat()).stroke({ color: trim, width: 1.3, alpha: 0.9 });
-        }
+        const bandQuad = [extPoint(labelRow, Math.min(...columns)), extPoint(labelRow, Math.max(...columns) + 1),
+          extPoint(labelRow + 1, Math.max(...columns) + 1), extPoint(labelRow + 1, Math.min(...columns))].flatMap((q) => [q.x, q.y]);
+        if (physicalChrome) band.poly(bandQuad).fill({ color: 0x0a0d11, alpha: 1 });
+        band.poly(bandQuad).fill({ color: isHome ? 0x1a3a9a : 0x9a1a1a, alpha: physicalChrome ? 0.64 : 0.9 });
+        if (physicalChrome) band.poly(bandQuad).stroke({ color: trim, width: 1.3, alpha: 0.9 });
         band.zIndex = -0.5;
         this.dugoutLayer.addChild(band);
 
@@ -8607,13 +8852,31 @@ export class PitchRenderer {
         // KO or CAS sections lands here (rather than matching no section and silently
         // vanishing). Covers transient/unmapped off-pitch states (e.g. SETUP_PREVENTED,
         // or an on-pitch-type state that briefly carries an off-pitch coordinate).
-        const members =
+        const unsortedMembers =
           section.label === 'RESERVES'
             ? offPitch.filter((d) => {
                 const b = baseState(d.playerState);
                 return !claimedDugoutStates.has(b);
               })
             : offPitch.filter((d) => section.states.includes(baseState(d.playerState)));
+        // Owner 09-15: the INJURED box orders by SEVERITY — Dead, Seriously Injured (a lasting injury), Seriously
+        // Hurt (MNG), Badly Hurt, KO — the server's casualty result string tells the two SERIOUS_INJURY cases apart.
+        const results = (isHome ? this.game.gameResult?.teamResultHome : this.game.gameResult?.teamResultAway)?.playerResults ?? [];
+        const severity = (d: PlayerDataJson): number => {
+          const b = baseState(d.playerState);
+          if (b === PlayerStateBase.RIP) return 5;
+          if (b === PlayerStateBase.SERIOUS_INJURY) {
+            const result = String(results.find((r) => r.playerId === d.playerId)?.seriousInjury ?? '');
+            if (/seriously hurt|mng/i.test(result)) return 3;
+            return 4 + lastingInjuryRank(result) / 10; // owner 09-15: within the lasting injuries, by the stat cut
+          }
+          if (b === PlayerStateBase.BADLY_HURT) return 2;
+          if (b === PlayerStateBase.KNOCKED_OUT) return 1;
+          return 0;
+        };
+        const members = section.label === 'INJURED'
+          ? [...unsortedMembers].sort((a, b) => severity(b) - severity(a))
+          : unsortedMembers;
         // Owner 2026-07-07: HARD-BOUNDED zones — every player that belongs in a section
         // stays VISIBLE inside it (no clipping/occlusion). When the count exceeds the slots
         // (rows below the label × columns), the rows PACK tighter into the section and the
@@ -8626,7 +8889,9 @@ export class PitchRenderer {
         const step = overfull ? (playerRows - 1) / (rowsNeeded - 1) : 1; // <1 packs more rows in
         const packScale = overfull ? step : 1; // token shrink factor when overfull
         const placements = members.map((data, i) => {
-          const column = columns[i % cols]!;
+          // Owner 09-15: INJURED fills from the end-zone corner — row nearest the label first, RIGHT-most column
+          // (the highest column value) first, then leftward, then the next row out. RESERVES keeps left→right.
+          const column = section.label === 'INJURED' ? columns[cols - 1 - (i % cols)]! : columns[i % cols]!;
           const row = Math.floor(i / cols);
           const offset = 1 + row * step;
           const x = isHome ? section.x0 + offset : section.x1 - offset;
@@ -8678,11 +8943,14 @@ export class PitchRenderer {
           const dugoutBaseline = new Set(posDef?.skillArray ?? []);
           // #95: stunCaption=false — the stub fakes STUNNED for the lying pose, but KO/casualty
           // players must NOT get the "STUNNED" caption (the X still renders as the down mark).
+          // Owner 09-15 (r2): downMark=false — the faked STUNNED stub keeps the lying pose, shadow and stun tint, but
+          // the X is not drawn on injured players in the box, whatever the sprite set.
           token = this.buildPlayerToken(
             player, stub, isHome, team, dugoutBaseline, true, false, false,
             section.label === 'RESERVES'
               ? renderedReservePlacements.some((other) => other.column === column && other.x > x)
               : undefined,
+            false,
           );
           // Dwarfen Wisdom re-setup gate (SR-119-adjacent, 58062c45): the server flips an
           // ineligible reserve's base state RESERVE→PRONE while it sits in the box (self-restores
@@ -8704,7 +8972,7 @@ export class PitchRenderer {
           this.dugoutTokensById.set(data.playerId, token);
           this.dugoutCompartmentById.set(
             data.playerId,
-            section.label === 'KO' ? 'ko' : section.label === 'CAS' ? 'cas' : 'reserve',
+            section.label === 'INJURED' ? (base === PlayerStateBase.KNOCKED_OUT ? 'ko' : 'cas') : 'reserve',
           );
           // #22-b (owner 07-22): KO + CASUALTY box entries carry the same over-token STATE markers as
           // on-pitch (confused/rooted/chomped/dodgy-snack/gaze) — reserves never have one, so skip them.
@@ -8714,10 +8982,22 @@ export class PitchRenderer {
           // owner 2026-07-08: register this dugout token for the direct proximity hit-test
           // (it's outside the pitch bands, so the square lookup can't select it → no card).
           this.dugoutHits.push({ x: anchor.x, y: anchor.y, r: TILE_W * 0.55 * scale, playerId: data.playerId });
-          const marker = this.buildInjuryMarker(baseState(data.playerState));
-          if (marker) {
-            // ~6px gap above the head (classic icon tops out ~21px over the anchor; walkers report figure bounds)
-            marker.position.set(anchor.x, Math.min(anchor.y - 27 * scale, anchor.y + token.getLocalBounds().minY * token.scale.y - 6 * scale));
+          const marker = this.buildInjuryMarker(baseState(data.playerState),
+            String(results.find((r) => r.playerId === data.playerId)?.seriousInjury ?? '') || null);
+          const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+          if (marker && chip) {
+            // Owner 09-15: under CHECKERS the marker is MOUNTED ON THE DISC — a token child at the disc's upper-right
+            // (like a badge corner) instead of floating above the head, where it landed over the disc behind and
+            // read as dodging the skill icons. It rides the token's scale and paints over the letter.
+            marker.position.set(chip.r * 0.62, chip.y - chip.r * 0.62);
+            marker.zIndex = 200;
+            token.sortableChildren = true;
+            token.addChild(marker);
+          } else if (marker) {
+            // ~6px gap above the head (classic icon tops out ~21px over the anchor; walkers report figure bounds).
+            // Owner 09-15: sits LOWER on the lying figure (27 -> 17 over the anchor, gap 6 -> 2) — it floated a
+            // full row above the lying walkers and landed on the token behind.
+            marker.position.set(anchor.x, Math.min(anchor.y - 17 * scale, anchor.y + token.getLocalBounds().minY * token.scale.y - 2 * scale));
             marker.scale.set(scale);
             marker.zIndex = this.depthZ(x, column) + 1;
             this.dugoutLayer.addChild(marker);
@@ -9055,7 +9335,10 @@ export class PitchRenderer {
 
   /** BB3-style status marker: K.O. text / red cross (casualty) / red skull
    *  (dead), each on a soft dark shadow disc for readability over the stone. */
-  private buildInjuryMarker(base: number): Container | null {
+  /** Owner 09-15: the dugout casualty marker is STYLISED TEXT like K.O. — BH (Badly Hurt), SH (Seriously Hurt /
+   *  MNG), or the lasting injury's stat cut (-AV / -MA / -PA / -AG / -ST) read off the server's casualty result
+   *  string; the skull stays for the dead, the cross only for a sent-off player. */
+  private buildInjuryMarker(base: number, seriousInjury: string | null = null): Container | null {
     const withShadow = (content: Container | Text, w: number, h: number): Container => {
       const marker = new Container();
       marker.addChild(
@@ -9067,7 +9350,17 @@ export class PitchRenderer {
       return marker;
     };
     if (base === PlayerStateBase.KNOCKED_OUT) {
-      const ko = new Text({ text: 'K.O.', style: KO_STYLE });
+      // Owner 09-15 (art handoff): the KO lettering sprite in the K.O. text's footprint (~22 units tall, aspect kept:
+      // visible 981x1136 centred at 675.5, 605 of 1312x1199); the text stays as the fallback while the art loads.
+      const art = this.knockoutDecoTexture;
+      if (art) {
+        const KO_H = 22;
+        const sprite = new Sprite(art);
+        sprite.anchor.set(675.5 / 1312, 605 / 1199);
+        sprite.scale.set(KO_H / 1136);
+        return withShadow(sprite, KO_H * 981 / 1136, KO_H);
+      }
+      const ko = new Text({ text: 'K.O.', style: KO_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // owner 09-15: 4x raster (marking-text rule)
       ko.anchor.set(0.5, 0.5);
       ko.angle = -12; // old-Batman-cartoon slant
       return withShadow(ko, 34, 16);
@@ -9083,15 +9376,18 @@ export class PitchRenderer {
         skull.tint = 0xff2a2a; // red shader
         return withShadow(skull, 20, 20);
       }
-      const skull = new Text({ text: '☠', style: SKULL_STYLE });
+      const skull = new Text({ text: '☠', style: SKULL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       skull.anchor.set(0.5, 0.5);
       return withShadow(skull, 18, 18);
     }
-    if (
-      base === PlayerStateBase.BADLY_HURT ||
-      base === PlayerStateBase.SERIOUS_INJURY ||
-      base === PlayerStateBase.BANNED
-    ) {
+    if (base === PlayerStateBase.BADLY_HURT || base === PlayerStateBase.SERIOUS_INJURY) {
+      const label = base === PlayerStateBase.BADLY_HURT ? 'BH' : casualtyMarkerText(seriousInjury);
+      const text = new Text({ text: label, style: KO_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // owner 09-15: 4x raster
+      text.anchor.set(0.5, 0.5);
+      text.angle = -12; // the K.O. slant
+      return withShadow(text, Math.max(22, label.length * 9), 16);
+    }
+    if (base === PlayerStateBase.BANNED) {
       const cross = new Graphics()
         .roundRect(-2.5, -9, 5, 18, 1.5)
         .fill(0xd82020)
@@ -9373,13 +9669,13 @@ export class PitchRenderer {
 
   /** Available sprite sets for UI pickers; the standard set lists first. */
   spriteSetOptions(): string[] {
-    return ['classic', 'checkers', 'walk'];
+    return ['classic', 'checkers', 'chess', 'walk'];
   }
 
   /** Switches between FUMBBL Classic iconsets and checker discs (UI-5;
    *  'new' HD-2D stays accepted programmatically but is out of the UI). */
   setSpriteSet(set: string): void {
-    if ((set !== 'new' && set !== 'classic' && set !== 'checkers' && set !== 'walk') || set === this.spriteSet) return;
+    if ((set !== 'new' && set !== 'classic' && set !== 'checkers' && set !== 'chess' && set !== 'walk') || set === this.spriteSet) return;
     const priorClassicLease = this.classicIconLease;
     this.classicIconLease = null;
     const leaseGeneration = ++this.classicIconLeaseGeneration;
@@ -9388,11 +9684,11 @@ export class PitchRenderer {
     // Owner 09-05: there is no separate 'classic' path any more — the value is accepted from old settings and
     // behaves as the chain (user-selected > installed mods (incl. FUMBBL upstream) > placeholder).
     this.spriteSet = set === 'classic' ? 'walk' : set;
-    if (this.spriteSet !== 'checkers' && this.game) {
+    if (!this.abstractSpriteSet() && this.game) {
       const acquireAbort = new AbortController();
       this.classicIconAcquireAbort = acquireAbort;
       void acquireClassicIcons(this.game, acquireAbort.signal, (team, positionId) => this.modTierIconNeeded(team, positionId)).then((lease) => {
-        if (leaseGeneration !== this.classicIconLeaseGeneration || this.spriteSet === 'checkers') {
+        if (leaseGeneration !== this.classicIconLeaseGeneration || this.abstractSpriteSet()) {
           lease.release();
           return;
         }
@@ -11497,6 +11793,26 @@ export class PitchRenderer {
     };
   }
 
+  /** Owner 09-14: the canvas-px TOP of the block-dice PREVIEW drawn over `square` (the staged block target), or
+   *  null when no preview sits there. The DOM block-confirm pill (SpectateView .o66-target-cue) used a fixed
+   *  88 px lift, while the dice rise with zoom (TILE_H·1.85·depth·zoom) — at larger zoom the pill covered them.
+   *  Mirrors drawBlockDiceAt's geometry (side-effect free: no blockPreviewSquares push) incl. the OPPONENT'S
+   *  CHOICE caption. Re-query while the camera moves, like squareToCanvas. */
+  blockPreviewTopCanvas(square: [number, number]): number | null {
+    if (!this.app || !this.pendingBlock) return null;
+    const [bx, by] = this.pendingBlock.square;
+    if (bx !== square[0] || by !== square[1]) return null;
+    const anchor = squareAnchor(bx, by);
+    const scale = depthScale(bx, by);
+    const dieH = (this.blockFaceTextures.length > 0 ? 27 : 18) * scale;
+    const tuned = anchor.y - TILE_H * 1.85 * scale;
+    const decorTop = this.blockDecorTopWorld(square);
+    const y = decorTop == null ? tuned : Math.min(tuned, decorTop - dieH / 2 - BLOCK_PREVIEW_RING_GAP * scale);
+    const captionH = this.pendingBlock.preview.opponentChoice ? 17 * scale + 14 * scale : 0;
+    const topWorld = y - dieH / 2 - captionH;
+    return topWorld * this.world.scale.y + this.world.position.y;
+  }
+
   /** Owner 08-18 (bullseye unify): project a square's TOKEN BODY CENTRE to canvas px — the
    *  block-crosshair anchor convention (tokenPos x-nudge, anchor.y − TILE_H·0.55·depth). For
    *  DOM badges that must sit ON the occupant's torso (the #94 blitz-target 🎯 / spent-blitzer ⚡)
@@ -12215,7 +12531,13 @@ export class PitchRenderer {
     node.alpha = 0;
     node.zIndex = this.depthZ(x, y) + 60;
     this.effectsLayer.addChild(node);
-    this.actionDice.push({ node, baseScale: scale, start: performance.now() });
+    this.actionDice.push({ node, baseScale: scale, start: performance.now(), armour: true });
+  }
+
+  /** Owner 09-15: is an armour roll (dice + 'ARMOR BREAKS!' stencil) still on screen? The store gates the KO /
+   *  casualty toast on this so the two never overlap, whatever pacing compressed the store-side wait. */
+  armourDiceShowing(): boolean {
+    return this.actionDice.some((die) => die.armour);
   }
 
   /** A doctor/apothecary figure — the bundled sprite, else a drawn medic (white
@@ -13247,10 +13569,10 @@ export class PitchRenderer {
       return;
     }
     // X → pitch + dugout box (dugouts flank the horizontal in N-S). Excludes the crowd.
-    // Pull both camera limits inward by one rendered column so a zoomed/panned
-    // view stays inside the arena instead of riding its outermost edge.
+    // Owner 09-15: the one-column inward inset is GONE — it clipped the outer column of the INJURED box
+    // (the end-zone corner) off the pannable range; the camera now reaches the dugout's outer edge.
     const dugoutW = 4 * TILE_W;
-    const sideInset = TILE_W;
+    const sideInset = 0;
     const xMin = (ew ? 0 : -dugoutW) + sideInset;
     const xSize = worldWidth() + (ew ? 0 : 2 * dugoutW) - sideInset * 2;
     this.world.position.x = clampAxis(this.world.position.x, xMin, xSize, this.app.screen.width);
@@ -14014,9 +14336,11 @@ export class PitchRenderer {
       // "TOUCHDOWN" when a team name is missing (standalone/unnamed teams).
       const teamName = endX === 0 ? this.game?.teamHome.teamName : this.game?.teamAway.teamName;
       const label = this.endZoneLabel === 'touchdown' ? 'TOUCHDOWN' : (teamName?.trim() || 'TOUCHDOWN');
-      const td = new Text({ text: label.toUpperCase(), style: ENDZONE_STYLE });
+      // Owner 09-16: 4x raster + linear filtering + mipmaps (the marking-text rule) — the 1x canvas read low-res
+      // under the camera zoom; full alpha so the white stays white.
+      const td = new Text({ text: label.toUpperCase(), style: ENDZONE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       td.anchor.set(0.5, 0.5);
-      td.alpha = 0.8;
+      td.alpha = 1;
       if (ew) {
         // E-W TD fix: the end zone is a column that RECEDES up the sideline, so
         // its long edge is a slanted perspective line, NOT screen-vertical. Build
@@ -14089,7 +14413,10 @@ export class PitchRenderer {
           // Owner 09-07 (r2): the Nuffle digits sit a little high-left inside their text box — keep the centred anchor
           // (a fresh Text has EMPTY local bounds before its first render, so a pivot built from them landed the
           // digits down-right by half a glyph) and nudge by a fraction of the measured, depth-scaled box instead.
-          label.position.set(cx + label.width * 0.04, cy + label.height * 0.08);
+          // Owner 09-15: measured on the dev page (extract diff of the rendered glyphs): the Nuffle digits' INK
+          // centre sits 0.11 w LEFT and 0.105 h BELOW the label's anchor point, so the nudge is the exact inverse —
+          // the ink's centre lands on the square's centre (the old +0.04 w / +0.08 h read down-left).
+          label.position.set(cx + label.width * 0.11, cy - label.height * 0.105);
           this.pitchLayer.addChild(label);
         }
       }
@@ -14205,6 +14532,9 @@ export class PitchRenderer {
     // there so the caption doesn't fire on every downed/injured player (the X still draws).
     stunCaption = true,
     badgeOccluded?: boolean,
+    // Owner 09-15 (r2): false = no stun/prone X — the dugout's injured box; the lying pose, prone shadow and the
+    // stun tint still draw there.
+    downMark = true,
   ): Container {
     const [x, y] = data.playerCoordinate!;
     const pos = this.tokenPos(x, y);
@@ -14237,7 +14567,7 @@ export class PitchRenderer {
       frog.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
       if (down) frog.rotation = Math.PI / 2;
       token.addChild(frog);
-      if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption);
+      if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, undefined, downMark);
       if (isHome && this.showPlayerNumbers) {
         const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE });
         nr.anchor.set(0.5, 0.5);
@@ -14256,31 +14586,88 @@ export class PitchRenderer {
     const customPlayerSprite = customPlayerAsset?.texture;
     if (customPlayerAsset) this.retainPlayerAssetOnToken(token, team.teamId, player.positionId, playerSide, team.race);
 
+    // Owner 09-15 ("for giggles"): CHESS token set — the piece IS the identifier, no letter. Big Guy = King,
+    // Star = Queen, Blitzer = Knight, Blocker = Rook, Catcher = Bishop, everyone else = Pawn. Markings hang under the
+    // base; icons over the head; prone/stunned keep the slash/X.
+    if (!customPlayerSprite && this.spriteSet === 'chess') {
+      const piece = chessPieceFor(player, team);
+      const texture = this.chessTextures.get(`${piece}${isHome ? 'Away' : 'Home'}`);
+      if (texture) {
+        if (down) token.addChild(this.buildProneShadow());
+        const sprite = new Sprite(texture);
+        sprite.anchor.set(0.5, 1);
+        // 64 px canvas, pieces stand 60-63 px tall on it: one tile high at the near edge, base on the token origin.
+        const size = TILE_W * 1.0;
+        sprite.width = size;
+        sprite.height = size;
+        const feetY = 10 + TOKEN_BASE_SHIFT_PX;
+        sprite.position.set(0, feetY);
+        token.addChild(sprite);
+        if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, feetY - size * 0.5);
+        (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre = { y: feetY - size * 0.5, r: size * 0.5 };
+        if (includeBadges) this.addSkillBadges(token, player, data, trim, team, baselineSkills, badgeOccluded);
+        this.addMarkingText(token, player, down);
+        // Owner 09-15: the position shorthand on the piece, as on the checkers — over the body just above the base,
+        // clear of the markings hanging below. Added after the overlays so it paints on top.
+        const shorthand = new Text({ text: positionLetter(player, team), style: CHECKER_LETTER_STYLE });
+        shorthand.anchor.set(0.5, 0.5);
+        shorthand.position.set(0, feetY - size * 0.42); // owner 09-15: up a touch, onto the piece's body
+        token.addChild(shorthand);
+        if (shading) this.applyActivationShading(token, data, isHome, player.strength);
+        return token;
+      }
+    }
+
     // FUMBBL checker discs (upstream abstract icon mode, UI-5): team-colored
     // counters carrying the player number; big guys use the large disc.
     // Prone/stunned keep FUMBBL's slash/X decorations over the disc.
     if (!customPlayerSprite && this.spriteSet === 'checkers') {
       const big = isBigGuy(player, team);
+      // Owner 09-15: three disc tiers as upstream (PlayerIconFactory): BIG_GUY -> large, the Stunty
+      // smallIcon property -> small, everyone else normal. The small tier was loaded but never used.
+      // Owner 09-15 (r2): ST 1-2 players (Gutter Runners, Goblins without Stunty on the roster…) take the small
+      // gem too — same tier as Stunty.
+      const small = !big && (playerHasSkill(player, 'stunty') || Number(player.strength) <= 2);
+      const tier = big ? 'large' : small ? 'small' : 'normal';
       // colorway flipped like the classic iconsets: upstream home = RED, but
       // the end-color convention puts BLUE on the south/home side
-      const texture = this.checkerTextures.get(`${big ? 'large' : 'normal'}${isHome ? 'Away' : 'Home'}`);
+      const texture = this.checkerTextures.get(`${tier}${isHome ? 'Away' : 'Home'}`);
       if (texture) {
         if (down) token.addChild(this.buildProneShadow());
         const disc = new Sprite(texture);
         disc.anchor.set(0.5, 0.5);
-        const size = TILE_W * (big ? 0.8 : 0.64);
+        // 64 px canvases whose discs occupy 58 / 54 / 49 px. Owner 09-15 ("I cannot tell what is what"): the
+        // counters fill the square like upstream's (26 px disc in a 30 px square) — canvas factors put the DISC at
+        // ~0.95 / 0.8 / 0.58 of a tile (42 / 35 / 26 px at the near edge).
+        const size = TILE_W * (big ? 1.05 : small ? 0.76 : 0.95);
         disc.width = size;
         disc.height = size;
-        disc.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
+        const centreY = -3 + TOKEN_BASE_SHIFT_PX;
+        disc.position.set(0, centreY);
         token.addChild(disc);
-        if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption);
-        // owner: the disc carries the POSITION letter (B/T/C/BG…), not the number
-        const nr = new Text({ text: positionLetter(player, team), style: NAME_STYLE });
+        if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, undefined, downMark);
+        // owner: the disc carries the POSITION letter (B/T/C/BG…), not the number. Owner 09-15: when skill icons or
+        // markings render ON the chip the letter moves to the chip's upper third so both stay readable.
+        const discR = size * (big ? 58 : small ? 49 : 54) / 64 / 2;
+        const overlaysOnChip = (this.showSkillIcons && includeBadges && this.resolvedIconPosition() === 'centre'
+            && this.badgeSkillsFor(player, baselineSkills).length > 0)
+          || (this.resolvedMarkerPosition() === 'centre' && !!this.playerMarkings.get(player.playerId)?.trim());
+        // Big outlined letter (owner 09-15): 14 px Nuffle bold with a 4 px ink stroke so it reads over the gloss highlight;
+        // with overlays on the chip it sits in the upper band and the overlays take the lower two thirds.
+        // Owner 09-15 (r2): 4x raster + linear filtering + mipmaps (the marking-text rule) — the 1x canvas read
+        // low-res under the camera zoom.
+        const letterStyle = CHECKER_LETTER_STYLE.clone();
+        letterStyle.fontFamily = this.checkerLetterFontFamily;
+        const nr = new Text({ text: positionLetter(player, team), style: letterStyle, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         nr.anchor.set(0.5, 0.5);
-        nr.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
-        token.addChild(nr);
+        // Owner 09-15 (r3): CENTRED on the disc — the capital's ink sits above the text box's centre (the box
+        // carries the descender), so the anchor point drops by CHECKER_LETTER_DY of the box height.
+        // (nr.height measures through a canvas — only touched when the knob is non-zero, so headless tests stay clean)
+        nr.position.set(0, (overlaysOnChip ? centreY - discR * 0.55 : centreY) + (CHECKER_LETTER_DY ? nr.height * CHECKER_LETTER_DY : 0));
+        (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre = { y: centreY + (overlaysOnChip ? discR * 0.28 : 0), r: discR };
         if (includeBadges) this.addSkillBadges(token, player, data, trim, team, baselineSkills, badgeOccluded);
         this.addMarkingText(token, player, down);
+        token.addChild(nr); // after the overlays so the position letter always paints on top of them
         if (shading) this.applyActivationShading(token, data, isHome, player.strength);
         return token;
       }
@@ -14295,7 +14682,7 @@ export class PitchRenderer {
     const bundledWalker = customPlayerSprite || slotWalker ? undefined
       : this.spriteSet === 'walk' ? bundledWalkSheetFor(team.race, positionNameOf(player, team), playerSide) : undefined;
     const selectedWalker = slotWalker ?? (slotPackSelected ? undefined : bundledWalker);
-    if (!customPlayerSprite && !selectedWalker && this.spriteSet !== 'checkers') {
+    if (!customPlayerSprite && !selectedWalker && !this.abstractSpriteSet()) {
       const moving = baseState(data.playerState) === PlayerStateBase.MOVING;
       // colorway flipped: FUMBBL "away" columns (usually the blue/light
       // variant) go to the south/home side per the end-color convention above.
@@ -14346,7 +14733,7 @@ export class PitchRenderer {
         sprite.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
         if (down) sprite.rotation = Math.PI / 2;
         token.addChild(sprite);
-        if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption);
+        if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption, undefined, downMark);
         // number on the right foot, home team only (owner 2026-07-02) — off by default (owner 2026-07-04)
         if (isHome && this.showPlayerNumbers) {
           const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE });
@@ -14373,11 +14760,22 @@ export class PitchRenderer {
         void walkerStrengthScaleFor;
         token.scale.set(1);
       }
-      if (walker) return buildWalkerToken({
-        token, walker, player, team, isHome, down, data, includeBadges, shading,
-        baselineSkills, badgeOccluded, stunCaption, trim, body,
-        ownerId: this.walkerOwnerId, facing: this.facingGeometry(), helpers: this.walkerHelpers(),
-      });
+      if (walker) {
+        const built = buildWalkerToken({
+          token, walker, player, team, isHome, down, data, includeBadges, shading,
+          baselineSkills, badgeOccluded, stunCaption, downMark, trim, body,
+          ownerId: this.walkerOwnerId, facing: this.facingGeometry(), helpers: this.walkerHelpers(),
+        });
+        // Owner 09-16: keep the FEET inside the square. With uniform figures the token keeps one scale while the
+        // ground squares shrink toward the far edge, and the pixel snap can draw the figure over its ideal size,
+        // so the boots crossed the square's bottom edge there. The square's half-height below the anchor rides the
+        // token (token-local units); snapWalker lifts the token by exactly the overflow on every re-snap.
+        if (!down && isOnPitch([x, y])) {
+          (built as Container & { squareHalfBelow?: number }).squareHalfBelow =
+            (squareQuad(x, y).yBottom - squareAnchor(x, y).y) / (token.scale.x || 1);
+        }
+        return built;
+      }
     }
 
     const pair = customPlayerSprite
@@ -14442,7 +14840,7 @@ export class PitchRenderer {
       token.addChild(g);
     }
 
-    if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption);
+    if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption, undefined, downMark);
 
     // number centered on the right foot, home team only (owner 2026-07-02) — off by default (owner 2026-07-04)
     this.addPlayerNumber(token, player, isHome, down);
@@ -14478,7 +14876,7 @@ export class PitchRenderer {
   selectedSpritePack = false;
   /** Owner 09-05: a mod-tier icon is worth loading only for positions the tiers above do not cover. */
   private modTierIconNeeded(team: TeamJson, positionId: string): boolean {
-    if (this.spriteSet === 'checkers') return false;
+    if (this.abstractSpriteSet()) return false;
     for (const side of ['home', 'away'] as const) {
       if (walkSheetFor(team.teamId, positionId, side, team.race)) return false;
     }
@@ -14566,7 +14964,10 @@ export class PitchRenderer {
     // A confirmed declaration and a successfully confused victim share the token-local eye.
     const confused = !isDown(playerState) && hasFlag(playerState, PlayerStateFlag.CONFUSED);
     const gazeMarked = this.gazeTarget === playerId || (confused && this.gazeVictims.has(playerId));
-    if (gazeMarked) this.addGazeVictimMarker(token);
+    // Owner 09-15: the DECLARED target wears the hypno token inside the crosshair ring (like the blitz target);
+    // a confused victim keeps the plain eye.
+    if (this.gazeTarget === playerId) this.addGazeTargetMarker(token, isDown(playerState));
+    else if (gazeMarked) this.addGazeVictimMarker(token);
     // Owner 09-07: EYE GOUGE rides the same chest mount as the gaze eye while the server's EYE_GOUGED bit is set
     // (it clears on the victim's activation) — was a DOM overlay floating over the head.
     if (!isDown(playerState) && (playerState & EYE_GOUGED_BIT) !== 0) this.addEyeGougeMarker(token);
@@ -14583,7 +14984,12 @@ export class PitchRenderer {
     // the server writes into player.temporaryModifiersMap as `<STAT>-…TemporaryStatDecrementer` — surface the
     // stat-down marker on the state row for as long as the source is active (the server removes it with the drive).
     // (owner 09-07: they ride the SKILL BADGE row — see addSkillBadges — not this torso row)
-    if (hasFlag(playerState, PlayerStateFlag.CHOMPED)) markers.push({ text: '👄', emoji: true, deco: 'chomped' });
+    // Owner 09-15 (CHOMPED handoff): CHOMPED wears the word art at the FEET (addChompedMarker); the 👄 row glyph is
+    // only the unloaded-art fallback. Same server flag drives both (set on the bite, cleared with the state).
+    if (hasFlag(playerState, PlayerStateFlag.CHOMPED)) {
+      if (this.chompedDecoTexture) this.addChompedMarker(token);
+      else markers.push({ text: '👄', emoji: true, deco: 'chomped' });
+    }
     if (bloodlust) markers.push({ text: '🩸', emoji: true, deco: 'bloodlust' });
     // ⚖ SERVER-DERIVED (owner 08-19): upstream decorates the DEFENDER while a block result
     // applies — PlayerIconFactory draws DECORATION_BLOCK_HOME/_AWAY on base BLOCKED/FALLING/
@@ -14612,6 +15018,9 @@ export class PitchRenderer {
     // longer the oversized torso emoji it shared with the state-marker row.
     if (this.dodgySnackPlayers.has(playerId)) {
       this.addDodgySnackGlow(token);
+      if (this.dodgySnackDecoTexture) {
+        this.addDodgySnackMarker(token);
+      } else {
       const vom = new Text({
         text: '🤮',
         style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 11 }, // owner 08-12: match the skill/status badge scale (was 13, oversized)
@@ -14620,6 +15029,7 @@ export class PitchRenderer {
       placeWalkerDecor(token, vom, 0, -4); // token centre (sprite body is anchored at y=-3); walkers: decor-1 units
       vom.zIndex = 51;
       token.addChild(vom);
+      }
     }
     if (markers.length === 0) return;
     const spacing = 16;
@@ -14641,6 +15051,23 @@ export class PitchRenderer {
 
   /** Owner 09-07: the stats a player is temporarily DOWN on (MA / AV / AG / ST / PA order), read off the model's
    *  temporaryModifiersMap — every source's `<STAT>-<class>` entries ending in StatDecrementer. */
+  /** The skills a badge cluster would draw for this player (per-skill config, else the baseline filter, plus
+   *  temporary stat decrements). Shared by addSkillBadges and the checker branch's "anything on the chip?" test. */
+  private badgeSkillsFor(player: PlayerJson, baselineSkills?: Set<string>): string[] {
+    // Per-skill config (owner 2026-07-03 r6f): when set, the app precomputes exactly
+    // which skills to draw (MY TEAM / OPPOSITION behaviour + baseline already applied);
+    // else fall back to the legacy showDefaultSkills baseline filter.
+    const configured = this.playerIconSkills?.get(player.playerId);
+    const base = configured ?? playerSkillNames(player).filter(
+      (skill) => this.showDefaultSkills || !baselineSkills?.has(skill),
+    );
+    // Owner 09-07: TEMPORARY stat decrements (Greasy Cleats -MA, Dodgy Snack -MA/-AV, any TemporaryStatDecrementer in
+    // player.temporaryModifiersMap) join the badge row as '-MA' / '-AV' — the stat-down art (or the red glyph plate)
+    // resolves through the same skill-icon chain; they leave when the server drops the source.
+    const decrements = this.temporaryStatDecrements(player.playerId).map((stat) => `-${stat}`);
+    return [...base, ...decrements.filter((d) => !base.includes(d))];
+  }
+
   private temporaryStatDecrements(playerId: string): string[] {
     const g = this.game;
     if (!g) return [];
@@ -14719,10 +15146,58 @@ export class PitchRenderer {
     node.label = 'rootedMarker';
     const scale = ROOTED_H / 741;
     if (isWalkerToken(token)) {
-      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + 4, scale);
+      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + FEET_ART_DY, scale);
     } else {
       const bounds = token.getLocalBounds();
-      node.position.set(0, bounds.maxY + 4);
+      node.position.set(0, bounds.maxY + FEET_ART_DY);
+      node.scale.set(scale);
+    }
+    node.zIndex = 49;
+    token.sortableChildren = true;
+    token.addChild(node);
+  }
+
+  /** Owner 09-15 (CHOMPED handoff): the CHOMPED word art at the feet, exactly where ROOTED sits and the same
+   *  perceived size — sized by HEIGHT to CHOMPED_H (= ROOTED_H; the visible art is 798 tall in the 809 canvas, so the
+   *  wide jaws come out ~48 units across vs ROOTED's ~52, never stretched). Visible 1931x798 centred at (965, 409.5)
+   *  of the 1944x809 canvas (owner's transparent regeneration). Label 'chompedMarker'; z under the state row like ROOTED. */
+  private addChompedMarker(token: Container): void {
+    const tex = this.chompedDecoTexture;
+    if (!tex) return;
+    const CHOMPED_H = 20;
+    const node = new Sprite(tex);
+    node.anchor.set(965 / 1944, 409.5 / 809);
+    node.label = 'chompedMarker';
+    const scale = CHOMPED_H / 798;
+    if (isWalkerToken(token)) {
+      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + FEET_ART_DY, scale);
+    } else {
+      const bounds = token.getLocalBounds();
+      node.position.set(0, bounds.maxY + FEET_ART_DY);
+      node.scale.set(scale);
+    }
+    node.zIndex = 49;
+    token.sortableChildren = true;
+    token.addChild(node);
+  }
+
+  /** Owner 09-15 (art handoff): the DODGY SNACK word art at the feet, exactly where ROOTED sits and the same
+   *  perceived size — the stacked two-line layout is taller than the ROOTED word, so it is sized by HEIGHT to
+   *  SNACK_H (a touch over ROOTED_H) rather than stretched to ROOTED's width. Visible 1501x997 centred at
+   *  (771.5, 510.5) of the 1536x1024 canvas. Label 'dodgySnackMarker'; z under the state row like ROOTED. */
+  private addDodgySnackMarker(token: Container): void {
+    const tex = this.dodgySnackDecoTexture;
+    if (!tex) return;
+    const SNACK_H = 24; // decor-1 units: ROOTED_H 20 + the second line
+    const node = new Sprite(tex);
+    node.anchor.set(771.5 / 1536, 510.5 / 1024);
+    node.label = 'dodgySnackMarker';
+    const scale = SNACK_H / 997;
+    if (isWalkerToken(token)) {
+      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + FEET_ART_DY, scale);
+    } else {
+      const bounds = token.getLocalBounds();
+      node.position.set(0, bounds.maxY + FEET_ART_DY);
       node.scale.set(scale);
     }
     node.zIndex = 49;
@@ -14765,6 +15240,38 @@ export class PitchRenderer {
 
   /** Hypnotic Gaze's eye sits up toward the head so it follows the victim without being
    *  covered by the ball when the gazed player is the carrier (owner 08-20; was -3 chest). */
+  /** Owner 09-15: the DECLARED Hypnotic Gaze target — the crosshair ring (the blitz-target art) with the hypno eye
+   *  token centred in it, on the chest like the blitz ring; the emoji appearance style keeps the eye alone. */
+  private addGazeTargetMarker(token: Container, down: boolean): void {
+    const y = down ? 0 : -16;
+    const art = this.hypnogazeTargetDecoTexture;
+    if (art && this.actionDecorationStyle === 'art') {
+      // Owner 09-15 (art handoff): the violet/gold eye inside the thick red reticle — the block target's canvas
+      // (visible 1089x1133 centred at 656.5, 566.5), drawn TARGET_H tall on the chest like the block/blitz rings.
+      const node = new Sprite(art);
+      node.anchor.set(656.5 / 1312, 566.5 / 1199);
+      node.label = 'gazeTargetDeco';
+      placeWalkerDecor(token, node, 0, y, TARGET_H / 1133);
+      node.zIndex = 50;
+      token.sortableChildren = true;
+      token.addChild(node);
+      return;
+    }
+    const ring = this.buildBlockDecorationNode('blitzTarget');
+    if (ring) {
+      ring.node.label = 'gazeTargetRing';
+      placeWalkerDecor(token, ring.node, 0, y, ring.scale);
+      ring.node.zIndex = 50;
+      token.sortableChildren = true;
+      token.addChild(ring.node);
+    }
+    const eye = this.buildStateMarkerNode({ text: '👁️', emoji: true, deco: 'gaze' });
+    eye.label = 'gazeTargetMarker';
+    placeWalkerDecor(token, eye, 0, y);
+    eye.zIndex = 61;
+    token.sortableChildren = true;
+    token.addChild(eye);
+  }
   private addGazeVictimMarker(token: Container): void {
     const node = this.buildStateMarkerNode({ text: '👁️', emoji: true, deco: 'gaze' });
     node.label = 'gazeVictimMarker';
@@ -14822,6 +15329,17 @@ export class PitchRenderer {
   /** FUMBBL auto-marking text (UI-6): small gold tag at the token's feet,
    *  mirroring upstream's marker text drawn onto the player icon. B2-20:
    *  zoom-relative sizing rides the same group mechanism as skill icons. */
+  /** Owner 09-15: does this player currently wear a feet WORD-ART state marker (ROOTED / DODGY SNACK / CHOMPED)?
+   *  Read from the same server state + loaded textures the markers key off, so the marking lift never desyncs. */
+  private hasFeetWordArt(playerId: string): boolean {
+    if (this.dodgySnackPlayers.has(playerId) && this.dodgySnackDecoTexture) return true;
+    const state = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerState;
+    if (state == null) return false;
+    if (this.rootedDecoTexture && hasFlag(state, PlayerStateFlag.ROOTED)) return true;
+    if (this.chompedDecoTexture && hasFlag(state, PlayerStateFlag.CHOMPED)) return true;
+    return false;
+  }
+
   private addMarkingText(token: Container, player: PlayerJson, down: boolean): void {
     // Markings are compact skill glyphs. Strip separators/newlines from both
     // current per-skill settings and legacy/imported FUMBBL marking payloads.
@@ -14848,18 +15366,33 @@ export class PitchRenderer {
     });
     // owner 2026-07-03 r6f: markers default to the FEET (text hangs below), but can
     // render OVER THE HEAD (text sits above) like the icons.
-    if (this.markerPosition === 'head') {
+    const markerPosition = this.resolvedMarkerPosition();
+    if (markerPosition === 'centre') {
+      // Owner 09-15: ON the token — the checker chip's face or the sprite's visual centre.
+      const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+      const bounds = token.getLocalBounds() as unknown as { minY: number; maxY: number };
+      group.position.set(0, chip ? chip.y : (bounds.minY + bounds.maxY) / 2);
+      tag.anchor.set(0.5, 0.5);
+    } else if (markerPosition === 'head') {
       group.position.set(0, down ? -30 : -46);
       tag.anchor.set(0.5, 1);
     } else {
-      group.position.set(0, down ? 6 : 2);
+      // Owner 09-15 (upstream target): on a checker disc the feet markings hang directly under the disc's rim.
+      const chipBelow = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+      // Owner 09-15 (r2): TIGHT against the feet — the text top rides up into the boots (was a clear gap below).
+      // Owner 09-15 (r3): DODGES a feet word-art state marker (ROOTED / DODGY SNACK / CHOMPED) by shifting UP the
+      // token so the two never overlap — the marking stays the top-most layer either way.
+      const lift = this.hasFeetWordArt(player.playerId) ? FEET_ART_MARKING_LIFT : 0;
+      group.position.set(0, (chipBelow ? chipBelow.y + chipBelow.r - 3 : down ? 3 : -2) - lift);
       tag.anchor.set(0.5, 0);
     }
     group.label = 'skillMarkings'; // owner 09-05: the BALL marker checks for feet markings by label
     group.addChild(tag);
     token.addChild(group);
+    this.markingLayer.attach(group); // owner 09-15: painted above every token; detached with the token's removal
     this.overlayScaleGroups.push(group);
-    this.markingFit.set(group, { tag, maxWidth: SKILL_MARKING_MAX_WIDTH });
+    const chipForFit = markerPosition === 'centre' ? (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre : undefined;
+    this.markingFit.set(group, { tag, maxWidth: chipForFit ? chipForFit.r * 1.8 : SKILL_MARKING_MAX_WIDTH });
     this.applyOverlayScale(group, this.overlayZoomFactor());
   }
 
@@ -14885,7 +15418,8 @@ export class PitchRenderer {
    *  whole activation (no echo/fade) and is cleared when the activation ends. */
   private addTrailNumber(sx: number, sy: number, n: number, color: number, outline: number): void {
     const anchor = squareAnchor(sx, sy);
-    const label = new Text({
+    const label = new Text({ resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true, // owner 09-15: 4x raster (the trail numbers read low-res under zoom)
+
       text: String(n),
       style: { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 15, fontWeight: 'bold', fill: color, stroke: { color: outline, width: 3 } },
     });
@@ -14936,7 +15470,7 @@ export class PitchRenderer {
     const ds = depthScale(sx, sy);
     const label = new Text({
       text: String(n),
-      style: { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 13, fontWeight: 'bold', fill: 0x66ccff, stroke: { color: 0x08233a, width: 3 } },
+      style: { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 13, fontWeight: 'bold', fill: this.plannerColors.base, stroke: { color: 0x08233a, width: 3 } },
     });
     label.anchor.set(0.5, 0.5);
     // bottom-right corner of the tile, pulled slightly inward (0.4) so the glyph stays on the square
@@ -15589,9 +16123,9 @@ export class PitchRenderer {
       case PlayerStateBase.SERIOUS_INJURY:
       case PlayerStateBase.RIP: return 'cas';
       case PlayerStateBase.RESERVE:
-      case PlayerStateBase.MISSING:
       case PlayerStateBase.PRONE:
       case PlayerStateBase.SETUP_PREVENTED: return 'reserve';
+      case PlayerStateBase.MISSING: return 'removed'; // owner 09-14: MNG players are not drawn (upstream parity)
       case PlayerStateBase.BANNED: return 'banned';
       default: return coordinate ? 'pitch' : 'removed';
     }
@@ -15852,7 +16386,9 @@ export class PitchRenderer {
       start: performance.now(),
       // Fill the measured wire interval instead of racing to the hold point and visibly waiting there. The
       // authoritative confirmation can pre-empt this tween at any time.
-      segmentMs: Math.min(180, Math.max(30, Math.round(intent.expectedRttMs))),
+      // Owner 09-17: the cap rose 180 -> MOVEMENT_INTENT_MAX_STRIDE_MS. On a 207 ms route (US -> Sweden) the
+      // stride finished at 180 and the token stood at the hold point for the rest of every step.
+      segmentMs: Math.min(MOVEMENT_INTENT_MAX_STRIDE_MS, Math.max(30, Math.round(intent.expectedRttMs))),
       easeOut: false,
       movementIntent: intent,
     });
@@ -16463,7 +16999,7 @@ export class PitchRenderer {
 
   /** `centreY`: token-local centre of the downed figure — classic icons lie about y=-10; a walker's prone sprite
    *  sits at WALKER_FEET_Y_PX-9 (owner 09-05: the stun X must land ON the prone token). */
-  private addDownDecoration(token: Container, stunned: boolean, withCaption = true, centreY = -10): void {
+  private addDownDecoration(token: Container, stunned: boolean, withCaption = true, centreY = -10, withX = true): void {
     // Owner batch §N #80: a STUNNED player reads distinctly — the sprite art is muted and a
     // small gold letter-spaced "STUNNED" caption sits below the X. Gated on the SAME STUNNED
     // predicate as the X (the callers pass stunned = showStunMark(data)), so caption + X never
@@ -16478,8 +17014,11 @@ export class PitchRenderer {
         if (child instanceof Sprite && child.label !== 'castShadow') child.tint = 0x7f8a99; // 09-06: shadow stays black
       }
     }
-    const texture = this.downDecorations.get(stunned ? 'stunned' : 'prone');
-    if (texture) {
+    // Owner 09-15 (r2): withX=false (the dugout's injured box) keeps the tint + caption rules but draws no X.
+    const texture = withX ? this.downDecorations.get(stunned ? 'stunned' : 'prone') : undefined;
+    if (!withX) {
+      /* no X */
+    } else if (texture) {
       const overlay = new Sprite(texture);
       overlay.anchor.set(0.5, 0.5);
       overlay.width = TILE_W * 0.68;
@@ -16630,21 +17169,18 @@ export class PitchRenderer {
     badgeOccluded?: boolean,
   ): void {
     if (!this.showSkillIcons) return; // B2-17: markings mode disables icons
-    // Per-skill config (owner 2026-07-03 r6f): when set, the app precomputes exactly
-    // which skills to draw (MY TEAM / OPPOSITION behaviour + baseline already applied);
-    // else fall back to the legacy showDefaultSkills baseline filter.
-    const configured = this.playerIconSkills?.get(player.playerId);
-    const base = configured ?? playerSkillNames(player).filter(
-      (skill) => this.showDefaultSkills || !baselineSkills?.has(skill),
-    );
-    // Owner 09-07: TEMPORARY stat decrements (Greasy Cleats -MA, Dodgy Snack -MA/-AV, any TemporaryStatDecrementer in
-    // player.temporaryModifiersMap) join the badge row as '-MA' / '-AV' — the stat-down art (or the red glyph plate)
-    // resolves through the same skill-icon chain; they leave when the server drops the source.
-    const decrements = this.temporaryStatDecrements(player.playerId).map((stat) => `-${stat}`);
-    const skills = [...base, ...decrements.filter((d) => !base.includes(d))];
+    const skills = this.badgeSkillsFor(player, baselineSkills);
+    const position = this.resolvedIconPosition();
+    const atFeet = position === 'feet';
+    // Owner 09-15: 'centre' = the cluster sits ON the token — the checker chip's face (chipCentre, set by the checker
+    // branch) or the sprite's visual centre; rows are centred vertically. On a chip the grid is capped to 2x2 and the
+    // icons shrink to fit inside the disc so the counter stays identifiable (owner: identification first).
+    const atCentre = position === 'centre';
+    const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+    const onChip = atCentre && !!chip;
     // Owner 09-07: up to EIGHT skills in TWO rows of four — the second row sits below the first (over the head the
     // cluster grows upward from the head: first row on top; at the feet it grows downward).
-    const PER_ROW = 4;
+    const PER_ROW = onChip ? 2 : 4;
     const shown = skills.slice(0, PER_ROW * 2);
     // legibility study (owner 2026-07-02, queue item 10): icon size and an
     // optional dark backing plate are style-driven
@@ -16652,7 +17188,7 @@ export class PitchRenderer {
     const plate = this.skillBadgeStyle === 'plate' || this.skillBadgeStyle === 'large-plate';
     // owner: bumped base sizes (was 11/16) — the detailed BB2/BB3 icon art needs
     // more pixels to read at the default fit zoom.
-    const iconSize = large ? 19 : 14;
+    const iconSize = onChip ? Math.min(large ? 19 : 14, Math.max(9, Math.floor(chip.r * 0.7))) : large ? 19 : 14;
     const badgeW = iconSize; // owner 09-06: icon edges may touch (no gap) — the row is capped to one tile width
     const rowCount = Math.ceil(shown.length / PER_ROW);
     const totalW = Math.min(shown.length, PER_ROW) * badgeW;
@@ -16663,9 +17199,10 @@ export class PitchRenderer {
     // the old feet offsets (7/11) sat inside centered classic/checker tokens.
     // The group remains a token child, so this local offset already inherits the
     // token's depthScale exactly once (as well as its movement/dugout transform).
-    const atFeet = this.iconPosition === 'feet';
     const tokenBounds = token.getLocalBounds() as unknown as { minY: number; maxY: number };
-    const badgeAnchorY = (atFeet ? tokenBounds.maxY : tokenBounds.minY) + (atFeet ? 2 : -2);
+    const badgeAnchorY = atCentre
+      ? (chip ? chip.y : (tokenBounds.minY + tokenBounds.maxY) / 2)
+      : (atFeet ? tokenBounds.maxY : tokenBounds.minY) + (atFeet ? 2 : -2);
     // B2-3/B2-4: badges live in a group; the group scales inversely with zoom.
     const group = new Container();
     group.label = 'skillBadges';
@@ -16688,7 +17225,7 @@ export class PitchRenderer {
       if (plate) {
         group.addChild(
           new Graphics()
-            .roundRect(-totalW / 2 - 2, atFeet ? -2 : -iconSize * rowCount - 2, totalW + 4, iconSize * rowCount + 4, 3)
+            .roundRect(-totalW / 2 - 2, atCentre ? -iconSize * rowCount / 2 - 2 : atFeet ? -2 : -iconSize * rowCount - 2, totalW + 4, iconSize * rowCount + 4, 3)
             .fill({ color: 0x14161a, alpha: 0.72 }),
         );
       }
@@ -16699,20 +17236,20 @@ export class PitchRenderer {
         const rowW = rowLen * badgeW;
         const bx = -rowW / 2 + col * badgeW + badgeW / 2;
         // over the head: row 0 highest, the last row rests on the anchor; at the feet: rows step downward
-        const rowY = atFeet ? row * iconSize : -(rowCount - 1 - row) * iconSize;
+        const rowY = atCentre ? (row - (rowCount - 1) / 2) * iconSize : atFeet ? row * iconSize : -(rowCount - 1 - row) * iconSize;
         const side = this.game?.teamHome.teamId === team.teamId
           ? 'home'
           : this.game?.teamAway.teamId === team.teamId ? 'away' : undefined;
         const icon = skillIcon(skill, this.skillIconStyle, { positionId: player.positionId, side });
         if (icon) {
           const chip = new Sprite(icon);
-          chip.anchor.set(0.5, atFeet ? 0 : 1);
+          chip.anchor.set(0.5, atCentre ? 0.5 : atFeet ? 0 : 1);
           chip.width = iconSize;
           chip.height = iconSize;
           chip.position.set(bx, rowY);
           group.addChild(chip);
         } else {
-          const by = (atFeet ? 0 : -10) + rowY;
+          const by = (atCentre ? -5 : atFeet ? 0 : -10) + rowY;
           const presentation = skillBadgePresentation(skill);
           const isCharacteristic = /^[-+](?:AG|MA|MV|AV|ST|PA)$/i.test(skill.trim());
           const badge = new Graphics()

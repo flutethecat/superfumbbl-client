@@ -29,11 +29,12 @@ import {
   type SetupTemplate,
   type BlockDiceRow,
   bundledStadiumPacks,
+  PLACEMENT_TURN_MODES,
 } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillNames } from '@fumbbl40k/ffb-protocol';
-import { gameStore, reRollPromptScreenPosition, bindBallAnimating } from '../game/store';
+import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing } from '../game/store';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
@@ -118,7 +119,9 @@ import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner'
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { allowsFumblerooskieAction } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
-import { decidingCoachSide, reactiveSkillDecisionText } from '../game/logic/coachDecisionStatus';
+import { decidingCoachSide, reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
+import { TWO_D6_SHARE, actionFaces, armourLikelihood, blockLikelihood, blockTotal, d6Likelihood, diceFacts, diceStats, emptyTally, injuryLikelihood, oneInGames, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from '../game/diceStats';
+import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeTargetClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips } from '../game/logic/coachPanelChips';
@@ -503,7 +506,7 @@ function logNameColor(team: LogNameTeam): string | undefined {
   return tint[logNameSeatKey(team, gameStore.mySeat.value)];
 }
 /** Cache segmented log entries; entries are immutable once pushed, so a WeakMap keyed on them is safe. */
-type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string };
+type LogSegment = { t?: string; side?: LogNameTeam; pid?: string; tk?: LogTagKind | 'dienum'; face?: 1 | 2 | 3 | 4 | 5 | 6; kind?: 'roll' | 'target'; blockFace?: BlockDieFaceValue; result?: string };
 const logSegCache = new WeakMap<object, LogSegment[]>();
 function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 | 3 | 4 | 5 | 6; kind: 'roll' | 'target' }[]; blockDice?: BlockDieLogToken[]; names?: LogNameToken[]; tags?: LogTagToken[] }) {
   const hit = logSegCache.get(entry);
@@ -531,6 +534,38 @@ function logSegments(entry: { text: string; d6?: { index: number; value: 1 | 2 |
   }
   logSegCache.set(entry, segs);
   return segs;
+}
+/** Owner 09-16 (Settings > Display > Log): the rendered segments under the numbers toggles — a run of ROLL dice
+ *  (faces joined only by hidden separators or whitespace/commas, e.g. the "[3, 4]" pair) collapses to ONE summed
+ *  number; a NEEDED die renders as its digit (the "+" that follows stays in the text). Applied over the cached
+ *  tokenisation so the toggles flip live without rebuilding the log. */
+function logSegmentsFor(entry: Parameters<typeof logSegments>[0]): LogSegment[] {
+  const segs = logSegments(entry);
+  const dice = settings.logDiceAsNumbers;
+  const need = settings.logNeededAsNumbers;
+  if (!dice && !need) return segs;
+  const isRoll = (x: LogSegment | undefined) => !!x?.face && x.kind === 'roll';
+  const isSep = (x: LogSegment) => !x.face && !x.blockFace && !x.side && x.t !== undefined && (x.tk === 'hidden' || !x.tk) && /^[\s,]*$/.test(x.t);
+  const out: LogSegment[] = [];
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i]!;
+    if (dice && isRoll(seg)) {
+      let sum = seg.face as number;
+      let j = i + 1;
+      while (j < segs.length) {
+        const next = segs[j]!;
+        if (isRoll(next)) { sum += next.face as number; j++; continue; }
+        if (isSep(next) && isRoll(segs[j + 1])) { j++; continue; }
+        break;
+      }
+      out.push({ t: String(sum), tk: 'dienum' });
+      i = j - 1;
+      continue;
+    }
+    if (need && seg.face && seg.kind === 'target') { out.push({ t: String(seg.face), tk: 'dienum' }); continue; }
+    out.push(seg);
+  }
+  return out;
 }
 
 // Owner 2026-07-08: the top-of-UI LIVE badge flashes brighter for ~1.4s each time a NEW
@@ -1145,6 +1180,12 @@ const interceptWaitText = computed(() => {
   void w;
   return 'Waiting for interceptor choice';
 });
+// Owner 09-15: the candidate interceptors the server offered ride the wait object — the viewer sees the ✋ tips.
+watch(
+  () => gameStore.interceptWait.value,
+  (w) => renderer?.setInterceptCandidates(w?.candidates ?? null),
+  { deep: true },
+);
 // owner 2026-07-07: the store's defenderAction notice rides the chat-toast stack (reuses its
 // positioning + stacking). A short 6s toast, no sender. Owed a live pass (demo can't fire it).
 watch(
@@ -1373,13 +1414,11 @@ function acquiredSkills(player: PlayerJson, team: { roster: unknown }): string {
 // owner 2026-07-02 (UI-5): HD-2D removed from the picker (set stays parked);
 // FUMBBL's checker-disc mode replaces it
 const SPRITE_SET_LABELS: Record<string, string> = {
-  classic: 'Super FUMBBL', checkers: 'FUMBBL Checkers', walk: 'Super FUMBBL',
+  classic: 'Super FUMBBL', checkers: 'Checkers', chess: 'Chess', walk: 'Super FUMBBL',
 };
-/** Owner 2026-09-04: FUMBBL modes are offered only when an installed pack supplies FUMBBL iconsets. */
-const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => {
-  const fumbbl = assetMods.installed.some((pack) => pack.capabilities.some((name) => name === 'player-iconsets' || name === 'fumbbl-id-images'));
-  return fumbbl ? ['walk', 'checkers'] : ['walk']; // owner 09-05: no separate Classic mode — mods ride the chain
-});
+/** Owner 09-15: the checker discs are ORIGINAL art (67af2368), so the mode is offered always — the 09-04 pack gate
+ *  (FUMBBL iconsets) no longer applies. Owner 09-05: no separate Classic mode — mods ride the chain. */
+const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => ['walk', 'checkers', 'chess']); // owner 09-15: Chess (original PixelLab pieces)
 
 /** Match11: all display states, including a real Off state, live on the quick bar. */
 const TZ_MODES = ['opposition', 'friendly', 'both', 'off'] as const;
@@ -1732,6 +1771,9 @@ watch(
   () => [settings.skillMarkingColor, settings.skillMarkingFont, settings.skillMarkingSize] as const,
   applySkillMarkingStyle,
 );
+// Owner 09-15: the Checkers disc letter font rides the same family table.
+function applyCheckerLetterFont(): void { renderer?.setCheckerLetterFont(SKILL_MARKING_FONTS[settings.checkerLetterFont]); }
+watch(() => settings.checkerLetterFont, applyCheckerLetterFont);
 // Accessibility field markers (owner 2026-07-03 r4): row markers, sweet spot, logos.
 watch(
   () => [settings.showRowMarkers, settings.showSweetSpot, settings.showFieldLogos] as const,
@@ -1875,9 +1917,11 @@ const gazeVictimPresentation = installGazeVictimPresentation(
   () => gameStore.state.gazeVictims,
   () => renderer,
 );
+// Owner 09-15: the target marker has two sources — the acting coach's local intent, and the wire's declared target
+// (gazeTargetReveal) that every seat sees; either paints the hypno token + crosshair on the victim.
 watch(
-  () => gameStore.state.gazeIntent,
-  (intent) => renderer?.setGazeTarget(intent?.phase === 'active' ? intent.victimId : null),
+  [() => gameStore.state.gazeIntent, () => gameStore.state.gazeTargetReveal],
+  ([intent, reveal]) => renderer?.setGazeTarget(intent?.phase === 'active' ? intent.victimId : (reveal?.targetId ?? null)),
   { deep: true },
 );
 // Owner 2026-07-04d: bomb blast — the 3×3 explosion (injuries cascade separately).
@@ -2990,6 +3034,10 @@ const STUNNED_BASE = 0x04; // PlayerStateBase.STUNNED
 const KO_BASE = 0x05; // PlayerStateBase.KNOCKED_OUT
 const DEAD_BASE = 0x08; // PlayerStateBase.DEAD — the crowd's skull-dice cheer
 const injuryIsKo = computed(() => gameStore.state.injurySplash?.injuryBase === KO_BASE);
+// Owner 09-15: a crowd-surfed player whose injury roll was STUNNED returns to the reserves — a yellow pill, not the
+// red casualty toast that "is Badly Hurt!" used to paint on it.
+const RESERVE_BASE = 0x09; // PlayerStateBase.RESERVE
+const injuryIsReserves = computed(() => gameStore.state.injurySplash?.injuryBase === RESERVE_BASE);
 const injuryIsRockImpact = computed(() => gameStore.state.injurySplash?.rockImpactOnly === true);
 // Owner 2026-07-07: a CASUALTY (Badly Hurt / Seriously Hurt / Dead — anything worse than a KO)
 // now reads as a TOKEN-BOUND toast at the injured square (like the KO toast + fend/sidestep/stand
@@ -3143,8 +3191,9 @@ const rerollSplashAnchorStyle = computed(() => {
     const y = rerollMenuPos.ready ? rerollMenuPos.y : rerollCardLastSeen.y;
     // Owner 09-14: BELOW the card (block dice card / re-roll prompt) — `y` is the card's CENTRE (reactivePromptStyle
     // centres the card on its anchor) and the card can still be mounted (the block dice card stays up through the
-    // reveal), so half its height plus a gap puts the splash just under it, never behind it.
-    return { left: `${x}px`, top: `${Math.max(0, y + (rerollCardLastSeen.h || 120) / 2 + 8)}px` };
+    // reveal). Owner 09-14 (2nd pass): half the height still landed on the block die card — a FULL card height plus
+    // the gap clears it.
+    return { left: `${x}px`, top: `${Math.max(0, y + (rerollCardLastSeen.h || 120) + 8)}px` };
   }
   // No card on this screen → the acting player's token; CSS default (top:76px band) only if neither resolves.
   if (rerollSplashTokenPos.ready) return { left: `${rerollSplashTokenPos.x}px`, top: `${Math.max(0, rerollSplashTokenPos.y - 46)}px` };
@@ -3862,9 +3911,10 @@ function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number
 // player swaps. Shared by onSetupClick and a stationary setup-drag release (on-pitch pointerdowns are intercepted
 // for the drag, so their taps route here). A reserve tap is a no-op (its action is the drag).
 function handleSetupPlayerTap(playerId: string) {
+  showPopup(playerId); // owner 09-14: a setup tap surfaces the player card (portrait + details) exactly as in live play
   const players = setupPhase.value?.players ?? [];
   const tapped = players.find((p) => p.playerId === playerId);
-  if (!tapped || tapped.inert) return; // not fieldable → inert
+  if (!tapped || tapped.inert) return; // not fieldable → inert (the card still shows)
   const sel = selectedSetupPlayerId.value;
   const selPlaced = !!sel && !!players.find((p) => p.playerId === sel)?.coord;
   // Two PLACED players → SWAP their squares. Owner 09-09: a PLACED selection then a RESERVE tap swaps too — the
@@ -5751,9 +5801,11 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
       ? passDestinationRollPreview(g, from, sq, throwerId, mode)
       : null;
     // Pass/Bomb/TTM uses one in-square destination control: projectile icon + full Pass requirement.
+    // Owner 09-14: the block-confirm pill clears the block-dice preview (which rises with zoom) instead of a fixed lift.
+    const diceTop = o66AggroStage.value ? renderer.blockPreviewTopCanvas(sq) : null;
     if (p) o66TargetCue.value = {
       x: p.x,
-      y: throwDestination ? p.y : o66AggroStage.value ? Math.max(p.y - 88, 8) : p.y - 40,
+      y: throwDestination ? p.y : o66AggroStage.value ? Math.max(diceTop != null ? Math.min(diceTop - 6, p.y - 88) : p.y - 88, 8) : p.y - 40,
       label,
       throwRoll: preview?.throwRoll,
     };
@@ -6032,6 +6084,14 @@ const presentationCssVars = computed<Record<string, string>>(() => {
 });
 // Owner 2026-07-04: path-trail colour applies live
 watch(() => settings.trailColor, (c) => { if (renderer) renderer.trailColorMode = c; });
+// Owner 09-16: planner path colours from Settings > Movement planner — Primary = the route, Secondary = every
+// step that owes a roll (dodge / rush / pickup). Defaults: plot blue + gold.
+function applyPlannerColors(): void {
+  if (!renderer) return;
+  const hex = (v: string, fallback: number) => { const n = parseInt(String(v).replace('#', ''), 16); return Number.isFinite(n) ? n : fallback; };
+  renderer.setPlannerColors(hex(settings.plannerPrimaryColor, 0x66ccff), hex(settings.plannerSecondaryColor, 0xf5c542));
+}
+watch(() => [settings.plannerPrimaryColor, settings.plannerSecondaryColor] as const, applyPlannerColors);
 watch(() => settings.trailMarks, (m) => { if (renderer) renderer.trailMarkStyle = m; });
 
 // B8-8: pitch orientation applies live
@@ -8079,6 +8139,8 @@ onMounted(async () => {
   // item4 (owner 08-18): let the turnover-splash settle gate see a still-bouncing ball. Presentation-only
   // probe; the store's 7000ms cap remains the fail-open bound. Live AND spectate — this view serves both.
   bindBallAnimating(() => renderer?.ballAnimating() ?? false);
+  bindPlayersAnimating(() => renderer?.playersAnimating() ?? false); // owner 09-14: touchdown-sound gate sees the rendered walk
+  bindArmourDiceShowing(() => renderer?.armourDiceShowing() ?? false); // owner 09-15: the injury toast waits for 'ARMOR BREAKS!' to retire
   turfCatalog.options = renderer.turfOptions();
   // if a persisted turf is no longer available, fall back to the first option
   if (!turfCatalog.options.includes(settings.turf)) settings.turf = turfCatalog.options[0] ?? 'grass1';
@@ -8113,6 +8175,7 @@ onMounted(async () => {
   renderer.moveStyle = settings.moveStyle;
   renderer.setMoveStepMs(settings.moveSpeedMs); // owner 2026-07-15: initial movement speed
   renderer.trailColorMode = settings.trailColor; // owner 2026-07-04
+  applyPlannerColors(); // owner 09-16
   renderer.trailMarkStyle = settings.trailMarks; // owner 2026-07-08: echo | numbers
   renderer.plannerEnabled = plannerAllowed.value;
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
@@ -8131,6 +8194,7 @@ onMounted(async () => {
   renderer.setOnPitchPresentationStyle(settings.modernHudStyle);
   renderer.setMarkColor(markColorInt()); // owner 2026-07-04f: pitch marking colour
   applySkillMarkingStyle();
+  applyCheckerLetterFont();
   if (swarmingPhase.value) {
     renderer.setSetup(true, null);
     renderer.onSetupClick = handleSwarmingSetupClick;
@@ -9646,8 +9710,8 @@ function playerState(player: PlayerJson): string {
     case PlayerStateBase.SERIOUS_INJURY: return 'Seriously Hurt';
     case PlayerStateBase.RIP: return 'Dead';
     case PlayerStateBase.BANNED: return 'Sent off';
+    case PlayerStateBase.MISSING: return 'Missing next game';
     case PlayerStateBase.RESERVE:
-    case PlayerStateBase.MISSING:
     default: return 'Reserves';
   }
 }
@@ -9910,9 +9974,11 @@ const awayPanel = computed(() => panelFor('away'));
 const coachDecisionSide = computed(() => decidingCoachSide(gameStore.game.value));
 const passiveSkillDecisionText = computed(() => {
   const choice = gameStore.state.skillChoice;
-  return choice
-    ? reactiveSkillDecisionText(gameStore.game.value, choice.playerId, choice.label)
-    : '';
+  if (!choice) return '';
+  // Owner 09-15: once the skill is USED and its follow-up choice is open, the card reads "is using".
+  return choice.using
+    ? reactiveSkillUsingText(gameStore.game.value, choice.playerId, choice.label)
+    : reactiveSkillDecisionText(gameStore.game.value, choice.playerId, choice.label);
 });
 const endTurnButtonText = computed(() => {
   if (!gameStore.myTurn.value) return "Opponent's Turn";
@@ -9952,7 +10018,7 @@ watch(finalPresentationReady, (ready) => renderer?.setBoardCleared(ready));
 
 // B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
 type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
-type PostGamePlayer = { name: string; position: string; spp: number; addedSkills: string }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills)
+type PostGamePlayer = { playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[] }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills, 09-15 player number)
 interface PostGameSide {
   which: 'home' | 'away';
   team: string;
@@ -9978,6 +10044,124 @@ const POSTGAME_STATS: { key: string; label: string }[] = [
   { key: 'fouls', label: 'Fouls' },
   { key: 'spp', label: 'SPP earned' },
 ];
+// Owner 09-17: the Statistics table rows. Blocks and Dodges read "<attempts> / <failed>" (failed = the attacker went
+// down / the dodge ended failed, from the dice tally); Sent off counts the roster's send-offs from the server's
+// PlayerResult (sendToBoxReason). The lead highlight compares the first number only.
+interface PgStatRow { key: string; label: string; home: string; away: string; homeLead: boolean; awayLead: boolean }
+function pgTeamTally(side: 'home' | 'away'): DiceTally {
+  const game = gameStore.game.value;
+  const teamId = side === 'home' ? game?.teamHome.teamId : game?.teamAway.teamId;
+  return (teamId && diceStats.teams[teamId]) || emptyTally();
+}
+function pgSentOff(side: 'home' | 'away'): number {
+  const game = gameStore.game.value;
+  const tr = side === 'home' ? game?.gameResult.teamResultHome : game?.gameResult.teamResultAway;
+  const results = (tr?.playerResults ?? []) as unknown as Record<string, unknown>[];
+  // Upstream SendToBoxReason: only the BAN reasons are a send-off (foulBan, secretWeaponBan, officiousRef,
+  // threwToBombs); the rest name why a player reached the KO / casualty box.
+  return results.filter((r) => /^(foulBan|secretWeaponBan|officiousRef|threwToBombs)$/.test(String(r.sendToBoxReason ?? ''))).length;
+}
+const pgStatRows = computed<PgStatRow[]>(() => {
+  const home = pgSurface.value?.home.totals ?? {};
+  const away = pgSurface.value?.away.totals ?? {};
+  const th = pgTeamTally('home');
+  const ta = pgTeamTally('away');
+  const rows: PgStatRow[] = [];
+  const plain = (key: string, label: string) => {
+    const h = home[key] ?? 0; const a = away[key] ?? 0;
+    rows.push({ key, label, home: String(h), away: String(a), homeLead: h > a, awayLead: a > h });
+  };
+  const pair = (key: string, label: string, h: number, hf: number, a: number, af: number) =>
+    rows.push({ key, label, home: `${h} / ${hf}`, away: `${a} / ${af}`, homeLead: h > a, awayLead: a > h });
+  for (const { key, label } of POSTGAME_STATS) {
+    if (key === 'blocks') {
+      pair('blocks', 'Blocks', home.blocks ?? 0, th.failedBlocks, away.blocks ?? 0, ta.failedBlocks);
+      pair('dodges', 'Dodges', th.dodges, th.failedDodges, ta.dodges, ta.failedDodges);
+      pair('pickups', 'Pickups', th.pickups, th.failedPickups, ta.pickups, ta.failedPickups); // owner 09-17
+    } else if (key === 'fouls') {
+      plain(key, label);
+      const sh = pgSentOff('home'); const sa = pgSentOff('away');
+      rows.push({ key: 'sentOff', label: 'Sent off', home: String(sh), away: String(sa), homeLead: sh > sa, awayLead: sa > sh });
+    } else plain(key, label);
+  }
+  return rows;
+});
+
+// ---- Dice tab: distributions, expected counts and likelihood plots ----
+const BLOCK_FACE_LABELS = ['AD', 'BD', 'Push', 'Push', 'Stumble', 'Pow'];
+interface PgBar { label: string; count: number; expected: number; x: number; y: number; w: number; h: number; ey: number }
+interface PgChart { bars: PgBar[]; expectedPath: string; total: number }
+const PG_CHART_W = 240; const PG_CHART_H = 96; const PG_CHART_BASE = 84; const PG_CHART_TOP = 8;
+function pgBarChart(counts: number[], expectedShare: number[], labels: string[]): PgChart {
+  const total = counts.reduce((a, b) => a + b, 0);
+  const expected = expectedShare.map((share) => total * share);
+  const peak = Math.max(1, ...counts, ...expected);
+  const slot = PG_CHART_W / counts.length;
+  const scale = (PG_CHART_BASE - PG_CHART_TOP) / peak;
+  const bars = counts.map((count, i) => {
+    const w = slot * 0.62; const x = i * slot + (slot - w) / 2; const h = count * scale;
+    return { label: labels[i] ?? String(i + 1), count, expected: expected[i]!, x, y: PG_CHART_BASE - h, w, h, ey: PG_CHART_BASE - expected[i]! * scale };
+  });
+  // the expected count as a dotted step line across each bar (a horizontal line when every share is equal)
+  const expectedPath = bars.map((b, i) => `${i === 0 ? 'M' : 'L'}${(i * slot).toFixed(1)} ${b.ey.toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${b.ey.toFixed(1)}`).join(' ');
+  return { bars, expectedPath, total };
+}
+/** Standard normal curve for the likelihood gauges (viewBox 0 0 200 44, z from -3.2 to 3.2). */
+const PG_GAUGE_CURVE = (() => {
+  const pts: string[] = [];
+  for (let i = 0; i <= 64; i++) {
+    const z = -3.2 + (6.4 * i) / 64;
+    const y = 40 - 34 * Math.exp(-0.5 * z * z);
+    pts.push(`${i === 0 ? 'M' : 'L'}${(100 + z * (90 / 3.2)).toFixed(1)} ${y.toFixed(1)}`);
+  }
+  return pts.join(' ');
+})();
+function pgGaugeX(z: number): number { return 100 + Math.max(-3.2, Math.min(3.2, z)) * (90 / 3.2); }
+function pgZ(like: Likelihood): string { return like.n === 0 ? '—' : `${like.z >= 0 ? '+' : ''}${like.z.toFixed(2)}σ`; }
+// Owner 09-17: the headline reads "1 in N" games — the chance of dice at least this far from fair, in this direction.
+function pgOdds(like: Likelihood): string {
+  if (like.n === 0) return '—';
+  const { n, capped } = oneInGames(like);
+  return `1 in ${n.toLocaleString()}${capped ? '+' : ''}`;
+}
+function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rolls' : Math.abs(like.z) < 0.05 ? 'dead average' : like.z > 0 ? 'this lucky' : 'this unlucky'; }
+interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
+interface PgDiceSide {
+  team: string; logo: string; charts: PgDiceChartRow[]; oneNinth: number; oneThirtySixth: number;
+  /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. */
+  likelihoods: { label: string; like: Likelihood }[];
+  facts: DiceFact[];
+}
+function pgDiceSide(side: 'home' | 'away'): PgDiceSide {
+  const game = gameStore.game.value;
+  const team = side === 'home' ? game?.teamHome : game?.teamAway;
+  const t = pgTeamTally(side);
+  const surface = side === 'home' ? pgSurface.value?.home : pgSurface.value?.away;
+  const even = [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6];
+  const faces = ['1', '2', '3', '4', '5', '6'];
+  const totals = ['2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+  // Owner 09-17: every D6 first, then the block dice, then armour / injury as 2D6 TOTALS (fair share is the
+  // 1-2-3-4-5-6-5-4-3-2-1 / 36 triangle), then dodge and "action" (every other) D6 by face.
+  const charts: PgDiceChartRow[] = [
+    { key: 'd6', title: 'D6 rolled', chart: pgBarChart(t.d6.slice(1), even, faces) },
+    { key: 'block', title: 'Block dice', chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
+    { key: 'armour', title: 'Armour dice', chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
+    { key: 'injury', title: 'Injury dice', chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
+    { key: 'dodge', title: 'Dodge dice', chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
+    { key: 'action', title: 'Action dice', chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
+  ];
+  return {
+    team: surface?.team ?? (team?.teamName ?? side), logo: surface?.logo ?? '', charts,
+    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth,
+    likelihoods: [
+      { label: 'All dice', like: d6Likelihood(t) }, { label: 'Armour', like: armourLikelihood(t) },
+      { label: 'Injury', like: injuryLikelihood(t) }, { label: 'Block dice', like: blockLikelihood(t) },
+    ],
+    facts: diceFacts(t),
+  };
+}
+const pgDice = computed(() => ({ home: pgDiceSide('home'), away: pgDiceSide('away'), blocksHome: blockTotal(pgTeamTally('home')), blocksAway: blockTotal(pgTeamTally('away')) }));
+
 function postGameSide(side: 'home' | 'away'): PostGameSide | null {
   const game = gameStore.game.value;
   if (!game) return null;
@@ -10018,7 +10202,12 @@ function postGameSide(side: 'home' | 'away'): PostGameSide | null {
     .map((r) => {
       const p = team.playerArray.find((pl) => pl.playerId === r.playerId);
       // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
-      return { name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r), addedSkills: p ? acquiredSkills(p, team) : '' };
+      // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
+      const posSkills = new Set((team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] })
+        .positionArray?.find((q) => q.positionId === p?.positionId)?.skillArray ?? []);
+      const addedSkillList = p ? playerDetailSkills(p, posSkills).filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label })) : [];
+      const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
+      return { playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r), addedSkills, addedSkillList };
     })
     .sort((a, b) => b.spp - a.spp);
   return {
@@ -10171,6 +10360,11 @@ function mvpRosterFor(side: 'home' | 'away'): MvpRosterRow[] {
 }
 const mvpRoster = computed(() => mvpRosterFor(gameStore.myTeamIsHome.value ? 'home' : 'away'));
 const postGamePhase = ref<'mvp' | 'stats' | 'roster'>('mvp');
+// Owner 09-17: the Dice tab opens its own PANE (an overlay with an X): distributions left, the likelihood graphs
+// top right, fun facts bottom right. A header selector picks whose distributions fill the left column.
+const diceModalOpen = ref(false);
+const diceSide = ref<'home' | 'away'>('home');
+const pgDiceSelected = computed(() => (diceSide.value === 'home' ? pgDice.value.home : pgDice.value.away));
 // #235 (owner-fg 07-29): roster is a one-team view, defaulted to the viewer's own side.
 const selectedRosterTeam = ref<'home' | 'away'>(gameStore.myTeamIsHome.value ? 'home' : 'away');
 const postGameDismissed = ref(false);
@@ -10199,6 +10393,63 @@ const mvpPortrait = ref<{ home: string | null; away: string | null }>({ home: nu
 interface PgMvpCard {
   playerId: string; nr: number; name: string; position: string; positionId: string; portrait: string | null;
   spp: number; sppGain: number; advancement: AdvancementReadiness; skills: PlayerDetailSkill[];
+}
+/** Owner 09-14: INDUCEMENT-PHASE roster viewer — coaches want the opponent's roster in front of them while buying
+ *  inducements. Both teams (toggle), defaulting to the OPPONENT of the local seat; a row click pops the same
+ *  portrait card the end-game MVP screen uses. Presentation only: reads the loaded game, sends nothing. */
+const induceRosterOpen = ref(false);
+const induceRosterSide = ref<'home' | 'away'>('away');
+const induceRosterCardId = ref<string | null>(null);
+function openInduceRosters(): void {
+  const role = presetInducementsOpen.value ? presetMySide.value : induceMyRole.value;
+  const mine = role === 'overdog' ? induceDisplayOverdogPanel.value.seat : role === 'underdog' ? induceDisplayUnderdogPanel.value.seat : null;
+  induceRosterSide.value = mine === 'away' ? 'home' : 'away';
+  induceRosterCardId.value = null;
+  induceRosterOpen.value = true;
+}
+function closeInduceRosters(): void { induceRosterOpen.value = false; induceRosterCardId.value = null; }
+function selectInduceRosterSide(side: 'home' | 'away'): void { induceRosterSide.value = side; induceRosterCardId.value = null; }
+interface InduceRosterRow { playerId: string; nr: number; name: string; position: string; addedSkills: string; spp: number }
+const induceRosterTeams = computed(() => {
+  const game = gameStore.game.value;
+  const one = (side: 'home' | 'away') => {
+    const team = side === 'home' ? game?.teamHome : game?.teamAway;
+    return { team: team?.teamName ?? '', logo: team ? teamLogo(team, side) : null };
+  };
+  return { home: one('home'), away: one('away') };
+});
+const induceRosterRows = computed<InduceRosterRow[]>(() => {
+  const game = gameStore.game.value;
+  if (!game) return [];
+  const side = induceRosterSide.value;
+  const team = side === 'home' ? game.teamHome : game.teamAway;
+  const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
+  return [...team.playerArray]
+    .sort((a, b) => a.playerNr - b.playerNr)
+    .map((player) => ({
+      playerId: player.playerId, nr: player.playerNr, name: player.playerName ?? '(unknown)',
+      position: positionNameFor({ player, side }), addedSkills: acquiredSkills(player, team),
+      spp: (results.find((r) => r.playerId === player.playerId)?.currentSpps as number | undefined) ?? 0,
+    }));
+});
+const induceRosterCard = computed<PgMvpCard | null>(() => {
+  const game = gameStore.game.value;
+  const id = induceRosterCardId.value;
+  void rendererReady.value;
+  return game && id ? pgMvpCardFor(game, induceRosterSide.value, id) : null;
+});
+watch(inducePhaseOpen, (open) => { if (!open) closeInduceRosters(); }); // the phase closing takes the viewer with it
+/** Owner 09-15: end-game roster portraits — the renderer's player portrait, memoised per player for the game. */
+const pgRosterPortraitCache = new Map<string, string | null>();
+watch(() => gameStore.game.value?.gameId, () => pgRosterPortraitCache.clear());
+function pgRosterPortrait(playerId: string): string | null {
+  if (!playerId) return null;
+  void rendererReady.value;
+  const cached = pgRosterPortraitCache.get(playerId);
+  if (cached !== undefined) return cached;
+  const portrait = renderer?.playerPortrait(playerId) ?? null;
+  if (renderer) pgRosterPortraitCache.set(playerId, portrait);
+  return portrait;
 }
 const pgMvpSelected = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
 function selectPgMvp(side: 'home' | 'away', playerId: string) { pgMvpSelected.value[side] = playerId; }
@@ -10413,6 +10664,7 @@ watch(endTurnWarnCount, () => { reactivePromptDragPos.endTurnWarn = null; });
 const endTurnUnavailableDuringReaction = computed(() =>
   gameStore.isPlaying.value && !gameStore.canPlayerEndTurn(gameStore.game.value?.turnMode),
 );
+watch(finalPostGameVisible, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
 /** Owner 09-08: the idle own players behind the End-Turn guard, as ids (the cue arrows + count both read this). */
 function unactivatedOwnIds(): string[] {
   const g = gameStore.game.value;
@@ -10447,6 +10699,10 @@ function endTurn() {
   // Owner 2026-07-04 (interaction catalog 15): in play mode End Turn sends the
   // real clientEndTurn for the CURRENT turnMode (also closes kick-off mini-phases).
   if (!gameStore.isPlaying.value) { gameStore.demoEndTurn(); return; }
+  // Owner 09-14: CONFIRM SETUP is a placement confirmation, not a turn with activations — nobody has "acted", so
+  // the idle-player guard below would always fire. Send it straight through.
+  const turnMode = String(gameStore.game.value?.turnMode ?? '');
+  if (endTurnButtonText.value === 'Confirm Setup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
   // #8: idle players → raise the confirm modal; only its "End turn" proceeds.
   const idle = unactivatedOwnIds();
   if (idle.length > 0) {
@@ -10477,7 +10733,22 @@ const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActi
 const endActConfirm = ref<EndActivationConfirm | null>(null);
 watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
 function askEndActivation(kind: EndActivationConfirmKind) {
+  // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
+  // Blitz action for the turn — so the prompt says so. Copy only; the wire is the same endActivation.
+  if (kind === 'blitz' && blitzUntouched(gameStore.game.value)) {
+    endActConfirm.value = {
+      kind,
+      text: 'Cancel your blitz? This player has not moved or blocked yet, so your Blitz action will be refunded for this turn.',
+      confirmLabel: 'Cancel Blitz',
+    };
+    return;
+  }
   endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind] };
+}
+/** The declared blitzer has done nothing yet: no squares moved, no block thrown. */
+function blitzUntouched(g: GameJson | null | undefined): boolean {
+  const ap = g?.actingPlayer as { currentMove?: number; hasMoved?: boolean; hasBlocked?: boolean } | null | undefined;
+  return !!ap && !(ap.hasMoved ?? false) && !(ap.hasBlocked ?? false) && Number(ap.currentMove ?? 0) === 0;
 }
 function requestEndActivation() {
   const g = gameStore.game.value;
@@ -10614,6 +10885,76 @@ function sendChat() {
         <p class="hint" v-if="gameStore.state.waitingForMatch.teamName">Playing as {{ gameStore.state.waitingForMatch.coach }} with {{ gameStore.state.waitingForMatch.teamName }}.</p>
         <div class="conn-closed-actions">
           <button type="button" @click="gameStore.disconnect()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Owner 09-17: DICE pane — distributions left, likelihood graphs top right, fun facts bottom right. -->
+    <div v-if="diceModalOpen && finalPostGameVisible" class="pg-dice-modal" role="dialog" aria-modal="true" aria-label="Dice statistics" @click.self="diceModalOpen = false">
+      <div class="pg-dice-card pg-bevel">
+        <header class="pg-dice-head">
+          <span class="pg-title pg-title-sub">Dice</span>
+          <!-- Owner 09-17 (r3): a coach selector in the header picks whose distributions fill the left column;
+               three side-by-side columns squeezed the charts to sparklines, so the pane stays two columns. -->
+          <div class="pg-dice-switch" role="tablist" aria-label="Dice distribution coach">
+            <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'">
+              <img v-if="side.logo" :src="side.logo" alt="" /><span>{{ side.team }}</span>
+            </button>
+          </div>
+          <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
+        </header>
+        <div class="pg-dice-grid">
+          <section class="pg-dice-left">
+            <h3>Dice distribution</h3>
+            <div class="pg-dice-cols pg-dice-cols-charts">
+              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col" :data-side="diceSide">
+                <div v-for="row in side.charts" :key="row.key" class="pg-dice-block">
+                  <h4>{{ row.title }} <span class="pg-dice-n">{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? 'rolls' : 'dice' }}<template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
+                  <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
+                    <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
+                    <path :d="row.chart.expectedPath" class="pg-dice-expected" />
+                    <text v-for="(b, i) in row.chart.bars" :key="'l' + i" :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
+                    <text v-for="(b, i) in row.chart.bars" :key="'c' + i" :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 8, b.y - 3)" class="pg-dice-count">{{ b.count }}</text>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </section>
+          <div class="pg-dice-right">
+          <section class="pg-dice-right-top">
+            <h3>Likelihood</h3>
+            <div class="pg-dice-cols pg-dice-cols-single">
+              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
+                <div class="pg-dice-block">
+                  <div v-for="row in side.likelihoods" :key="row.label" class="pg-dice-gauge-row">
+                    <span class="pg-dice-gauge-label">{{ row.label }}</span>
+                    <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${pgOdds(row.like)} games ${pgLuck(row.like)} (${pgZ(row.like)})`">
+                      <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
+                      <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
+                      <line v-if="row.like.n > 0" :x1="pgGaugeX(row.like.z)" y1="4" :x2="pgGaugeX(row.like.z)" y2="42" class="pg-dice-marker" />
+                    </svg>
+                    <span class="pg-dice-gauge-value" :title="row.like.n > 0 ? `games ${pgLuck(row.like)} · ${row.like.n} rolls · avg ${row.like.mean.toFixed(2)} · ${pgZ(row.like)}` : 'no rolls'"><b>{{ pgOdds(row.like) }}</b></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="pg-dice-right-bottom">
+            <h3>Fun facts</h3>
+            <div class="pg-dice-cols pg-dice-cols-single">
+              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
+                <div class="pg-dice-block">
+                  <div v-if="side.facts.length === 0" class="pg-dice-empty">No dice rolled yet.</div>
+                  <div v-for="fact in side.facts" :key="fact.label" class="pg-dice-fact">
+                    <span class="pg-dice-fact-label">{{ fact.label }}</span>
+                    <span class="pg-dice-fact-value">{{ fact.value }}</span>
+                    <span class="pg-dice-fact-detail">{{ fact.detail }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+          </div>
         </div>
       </div>
     </div>
@@ -11112,7 +11453,8 @@ function sendChat() {
         <!-- Owner 08-17 (row2): interceptor-wait toast — dead air during the opponent's interceptor
              choice, both passer + spectators. Server-derived (gameStore.interceptWait); clears itself
              the instant the predicate does. Reuses .chat-toast look, top-center, not part of the chat stack. -->
-        <div v-if="interceptWaitText" class="chat-toast-stack" style="top: 8px; left: 50%; transform: translateX(-50%);">
+        <!-- Owner 09-15: sits just BELOW the centre (scoreboard) panel, not over the top of the pitch. -->
+        <div v-if="interceptWaitText" class="chat-toast-stack" :style="{ top: ((centerPanelBox?.bottom ?? 0) + 8) + 'px', left: '50%', transform: 'translateX(-50%)' }">
           <div class="chat-toast">
             <span class="chat-toast-text">{{ interceptWaitText }}</span>
           </div>
@@ -11178,7 +11520,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegments(entry)" :key="j"><D6Face v-if="s.face" class="log-d6" :value="s.face" variant="black" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -11343,7 +11685,55 @@ function sendChat() {
           :blade="induceBlade" :cards="induceCards" :selector-limits="induceLimits"
           :confirm-pending="induceConfirmPending" :preset-mode="presetInducementsOpen"
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
-          @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgePresetInducements" />
+          @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgePresetInducements"
+          @rosters="openInduceRosters" />
+        <!-- Owner 09-14: inducement-phase ROSTER viewer — both teams, opponent first; a row pops the MVP-style card. -->
+        <div v-if="inducePhaseOpen && induceRosterOpen" class="mvp-nominate-overlay induce-roster-overlay" data-testid="induce-rosters"
+          @click.self="closeInduceRosters">
+          <div class="mvp-nominate-card induce-roster-card" role="dialog" aria-label="Team rosters">
+            <div class="mvp-nominate-head">
+              <span class="mvp-nominate-title">Rosters</span>
+              <button type="button" class="induce-roster-close" aria-label="Close rosters" @click="closeInduceRosters">✕</button>
+            </div>
+            <div class="pg-roster induce-roster-body">
+              <div class="pg-roster-team-toggle" role="group" aria-label="Select roster team">
+                <button v-for="w in (['home', 'away'] as const)" :key="w" type="button"
+                  :data-active="induceRosterSide === w" @click="selectInduceRosterSide(w)">
+                  <img v-if="induceRosterTeams[w].logo" :src="induceRosterTeams[w].logo" alt="" />
+                  <span>{{ induceRosterTeams[w].team }}</span>
+                </button>
+              </div>
+              <div class="induce-roster-split" :data-card="!!induceRosterCard">
+                <ul v-if="induceRosterRows.length" class="pg-roster-list induce-roster-list">
+                  <li v-for="pl in induceRosterRows" :key="pl.playerId" role="button" tabindex="0"
+                    :data-active="induceRosterCardId === pl.playerId"
+                    @click="induceRosterCardId = pl.playerId" @keydown.enter.prevent="induceRosterCardId = pl.playerId">
+                    <span class="pg-roster-nr">#{{ pl.nr }}</span>
+                    <span class="pg-roster-name">{{ pl.name }}</span>
+                    <span class="pg-roster-pos">{{ pl.position }}</span>
+                    <span v-if="pl.addedSkills" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">+ {{ pl.addedSkills }}</span>
+                    <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
+                  </li>
+                </ul>
+                <p v-else class="pg-mvp-none">No player records</p>
+                <div v-if="induceRosterCard" class="pg-mvp-card pg-bevel induce-roster-popout" :key="induceRosterCard.playerId">
+                  <div class="pg-mvp-portrait card-portrait">
+                    <img v-if="induceRosterCard.portrait" :src="induceRosterCard.portrait" alt="" />
+                    <span v-else class="portrait-missing">no portrait</span>
+                  </div>
+                  <div class="pg-mvp-card-info">
+                    <div class="pg-mvp-card-name" :data-side="induceRosterSide">#{{ induceRosterCard.nr }} {{ induceRosterCard.name }}</div>
+                    <div class="pg-mvp-card-pos">{{ induceRosterCard.position }}</div>
+                    <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ induceRosterCard.spp }}</span></div>
+                    <div v-if="induceRosterCard.advancement" class="pg-mvp-advance">{{ induceRosterCard.advancement.text }}</div>
+                    <PlayerDetailSkillList v-if="induceRosterCard.skills.length" :skills="induceRosterCard.skills" :mode="skillMode"
+                      :icon-style="effectiveIconStyle" :position-id="induceRosterCard.positionId" :side="induceRosterSide" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
 
         <!-- B9-12 G7: full post-game panel. Owner 2026-07-06: SPLIT into two stacked
@@ -11366,6 +11756,10 @@ function sendChat() {
               <span class="pg-title">End of Game</span>
               <!-- Owner 2026-07-15: no manual close — the end-game panel persists over the cleared board until a
                    NEW game starts (gameOver→false resets postGameDismissed + postGame becomes null). -->
+              <!-- Owner 09-15: Return to Menu rides the header (right) — its own row below cost the stack ~50px. -->
+              <div v-if="mode !== 'spectate'" class="pg-actions pg-actions-head">
+                <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
+              </div>
             </header>
             <section class="pg-result">
               <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.home }">
@@ -11379,11 +11773,9 @@ function sendChat() {
                   <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
                 </div>
               </div>
-              <div class="pg-scoreline pg-bevel">
+              <!-- Owner 09-15: no verdict line under the score — the winner card's highlight already says it. -->
+              <div class="pg-scoreline pg-bevel" :title="pgSurface.draw ? 'Draw' : `${pgSurface.winner?.team} wins!`">
                 <div class="pg-score">{{ pgSurface.home.score }}<span>–</span>{{ pgSurface.away.score }}</div>
-                <div class="pg-verdict">
-                  {{ pgSurface.draw ? 'Draw' : `${pgSurface.winner?.team} wins!` }}
-                </div>
               </div>
               <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.away }">
                 <img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" alt="" />
@@ -11413,19 +11805,17 @@ function sendChat() {
             <!-- Owner 08-19: #234's Play Game / Spectate Game pair DEPRECATED (it re-opened the legacy
                  in-game browser overlay OVER the end screen). Non-spectate seats get the confirm-free
                  Return to Menu here; the spectate seat's pair lives in the persistent exit bar below. -->
-            <div v-if="mode !== 'spectate'" class="pg-actions">
-              <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
-            </div>
           </div>
 
           <!-- Window 2: STATS / MVP (tabbed, below) — only once the server's data has landed + settled. -->
           <div v-if="finalPostGameVisible" class="pg-window pg-window-stats">
-            <header class="pg-head">
-              <span class="pg-title pg-title-sub">Statistics &amp; MVP</span>
+            <!-- Owner 09-15 (3rd): no "Statistics & MVP" title — the tab blades sit centred in the header. -->
+            <header class="pg-head pg-head-tabs">
               <nav class="pg-tabs">
                 <button :data-active="postGamePhase === 'mvp'" @click="postGamePhase = 'mvp'">MVP</button>
                 <button :data-active="postGamePhase === 'stats'" @click="postGamePhase = 'stats'">Statistics</button>
                 <button :data-active="postGamePhase === 'roster'" @click="postGamePhase = 'roster'">Roster</button>
+                <button :data-active="diceModalOpen" @click="diceModalOpen = true">Dice</button>
               </nav>
             </header>
 
@@ -11483,18 +11873,20 @@ function sendChat() {
               <div class="pg-stats-cols">
                 <div class="pg-stat-col pg-bevel" data-side="home">
                   <div class="pg-stat-col-head"><img v-if="pgSurface.home.logo" :src="pgSurface.home.logo" :alt="pgSurface.home.team" /><span v-else class="pg-stat-col-side">Home</span></div>
-                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-h" :data-lead="(pgSurface.home.totals[s.key] ?? 0) > (pgSurface.away.totals[s.key] ?? 0)">{{ pgSurface.home.totals[s.key] ?? 0 }}</div>
+                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-h" :data-lead="row.homeLead">{{ row.home }}</div>
                 </div>
                 <div class="pg-stat-col pg-bevel" data-side="label">
                   <div class="pg-stat-col-head"></div>
-                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-stat-label">{{ s.label }}</div>
+                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-stat-label">{{ row.label }}</div>
                 </div>
                 <div class="pg-stat-col pg-bevel" data-side="away">
                   <div class="pg-stat-col-head"><img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" :alt="pgSurface.away.team" /><span v-else class="pg-stat-col-side">Away</span></div>
-                  <div v-for="s in POSTGAME_STATS" :key="s.key" class="pg-stat-cell pg-a" :data-lead="(pgSurface.away.totals[s.key] ?? 0) > (pgSurface.home.totals[s.key] ?? 0)">{{ pgSurface.away.totals[s.key] ?? 0 }}</div>
+                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-a" :data-lead="row.awayLead">{{ row.away }}</div>
                 </div>
               </div>
             </section>
+
+            <!-- Owner 09-17: the DICE pane lives in an overlay (see .pg-dice-modal below the post-game windows). -->
 
             <!-- #25-v2 (owner 2026-07-14): per-player roster/SPP summary — name · position · SPP-gained this game -->
             <section v-else class="pg-roster">
@@ -11513,10 +11905,16 @@ function sendChat() {
               </div>
               <div class="pg-roster-team">
                 <ul v-if="pgSurface[selectedRosterTeam].roster.length" class="pg-roster-list">
-                  <li v-for="pl in pgSurface[selectedRosterTeam].roster" :key="pl.name">
+                  <li v-for="pl in pgSurface[selectedRosterTeam].roster" :key="pl.playerId || pl.name">
+                    <!-- Owner 09-15: the player's portrait (the same renderer portrait the MVP card lifts), far left. -->
+                    <span class="pg-roster-nr">#{{ pl.nr }}</span>
+                    <span class="pg-roster-portrait-slot"><img v-if="pgRosterPortrait(pl.playerId)" class="pg-roster-portrait" :src="pgRosterPortrait(pl.playerId)!" alt="" /></span>
                     <span class="pg-roster-name">{{ pl.name }}</span>
                     <span class="pg-roster-pos">{{ pl.position }}</span>
-                    <span v-if="pl.addedSkills" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">+ {{ pl.addedSkills }}</span>
+                    <!-- Owner 09-15: added skills in their category colour, no "+" prefix, a step under the name size. -->
+                    <span v-if="pl.addedSkillList.length" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">
+                      <span v-for="skill in pl.addedSkillList" :key="skill.name" class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)">{{ skill.label }}</span>
+                    </span>
                     <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
                   </li>
                 </ul>
@@ -12627,7 +13025,7 @@ function sendChat() {
              player's TOKEN (RAF-follow via renderer.playerScreenPos), so it reads
              right at the square where the KO occurred. -->
         <div v-if="gameStore.state.injurySplash && koToastPos.ready" class="ko-toast"
-          :class="{ 'is-casualty': injuryIsCasualty }"
+          :class="{ 'is-casualty': injuryIsCasualty, 'is-reserves': injuryIsReserves }"
           :data-side="gameStore.state.injurySplash.side"
           :style="{ left: koToastPos.x + 'px', top: (koToastPos.y - 58) + 'px' }">
           <!-- Owner 2026-07-08: a CASUALTY names the specific injury (server-resolved result);
@@ -12637,6 +13035,9 @@ function sendChat() {
           </template>
           <template v-else-if="injuryIsCasualty">
             <span class="ko-toast-phrase">{{ casualtyPhrase }}</span>
+          </template>
+          <template v-else-if="injuryIsReserves">
+            <span class="ko-toast-phrase">{{ gameStore.state.injurySplash.player }} returns to reserves</span>
           </template>
           <template v-else>
             <span class="ko-toast-type">{{ injuryIsKo ? 'K.O.' : gameStore.state.injurySplash.type }}</span>
@@ -14102,13 +14503,15 @@ function sendChat() {
      because two windows stack. */
   --pg-scale: 1.25; /* fallback where length/length division is unsupported (the @supports block below wins) */
   justify-content: center;
-  gap: calc(12px * var(--pg-scale));
-  padding: 24px 0;
+  gap: calc(10px * var(--pg-scale));
+  padding: 16px 0; /* owner 09-15: 24→16 */
   background: radial-gradient(ellipse at center, #000c 0%, #0009 60%, #0006 100%);
   animation: coin-caption-in var(--p-350) ease-out;
 }
 @supports (zoom: calc(100vw / 1120px)) {
-  .postgame { --pg-scale: clamp(0.9, min(calc(100vw / 1120px), calc(100vh / 800px)), 2.2); }
+  /* Owner 09-15: the compact result window shortened the stack (~640px unscaled), so the height basis drops
+     800→700 (≈1.54 at 1080p, ≈2.05 at 1440p) and every element grows with it. */
+  .postgame { --pg-scale: clamp(0.9, min(calc(100vw / 1120px), calc(100vh / 860px)), 2.2); } /* owner 09-15: 720→860 — the twelve tall roster rows must fit 1080p */
 }
 .pg-window {
   zoom: var(--pg-scale);
@@ -14124,13 +14527,16 @@ function sendChat() {
 }
 /* owner 2026-07-06: Result window hugs its content; the Stats/MVP window takes the
    remaining height and scrolls internally so both stay on screen. */
+/* Owner 09-15: the RESULT window is compact (one row: crest+name | score | crest+name, winnings/fans as a one-line
+   strip) so the Stats/MVP window below gets the remaining height and the MVP cards fit without scrolling at the
+   default scale; stats still scrolls internally only when the viewport is genuinely too short. */
 .pg-window-result { flex: 0 0 auto; }
-.pg-window-stats { flex: 0 1 auto; min-height: 0; max-height: calc(56vh / var(--pg-scale)); }
+.pg-window-stats { flex: 0 1 auto; min-height: 0; max-height: calc(88vh / var(--pg-scale)); } /* owner 09-15 (2nd): hug the content — the SCALE fills the height, not empty window */
 .pg-head {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 16px;
+  padding: 8px 16px; /* owner 09-15: compact (was 12px) */
   border-bottom: 1px solid var(--ui-border);
 }
 .pg-title {
@@ -14140,13 +14546,13 @@ function sendChat() {
   color: var(--ui-heading);
   letter-spacing: 0.03em;
 }
-/* owner 2026-07-06: the second (Stats/MVP) window's header title is a touch smaller. */
-.pg-title-sub { font-size: max(var(--ui-min-primary-text-size, 16px), 1.1rem); color: var(--ui-heading); }
 .pg-tabs {
   display: flex;
   gap: 4px;
   margin-left: auto;
 }
+.pg-head-tabs { justify-content: center; } /* owner 09-15 (3rd): title gone, blades centred */
+.pg-head-tabs .pg-tabs { margin-left: 0; }
 .pg-tabs button {
   background: var(--ui-surface-2);
   border: 1px solid var(--ui-border);
@@ -14162,6 +14568,7 @@ function sendChat() {
   color: var(--ui-text-on-primary);
   font-weight: 700;
 }
+.pg-actions-head { margin: 0 0 0 auto; padding: 0; border: 0; }
 .pg-actions {
   display: flex;
   justify-content: center;
@@ -14236,7 +14643,7 @@ function sendChat() {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 12px;
-  padding: 28px 20px;
+  padding: 12px 16px; /* owner 09-15: compact (was 28px 20px) */
 }
 /* #140: the defectors reveal on the end-screen result window (which players walked after a concession). */
 .pg-defectors {
@@ -14269,18 +14676,24 @@ function sendChat() {
 .pg-endstat-d6 { --d6-size: 1.6em; margin: -0.18em 0.08em -0.12em; }
 .pg-endstat-fans.muted { color: var(--ui-muted); font-style: italic; }
 .pg-team {
-  display: flex;
-  flex-direction: column;
+  display: grid; /* owner 09-15: crest LEFT, name + coach beside it, the winnings/fans strip under both */
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: 'logo name' 'logo coach' 'box box';
+  column-gap: 10px;
+  row-gap: 2px;
   align-items: center;
-  gap: 6px;
-  padding: 10px;
+  padding: 8px 10px;
   border-radius: 10px;
 }
+.pg-team > img { grid-area: logo; }
+.pg-team > .pg-team-name { grid-area: name; text-align: left; align-self: end; }
+.pg-team > .pg-team-coach { grid-area: coach; align-self: start; }
+.pg-team > .pg-team-box { grid-area: box; }
 .pg-team.winner {
   background: color-mix(in srgb, var(--ui-accent) 10%, transparent);
   outline: 1px solid color-mix(in srgb, var(--ui-accent) 33%, transparent);
 }
-.pg-team img { width: 68px; height: 68px; object-fit: contain; image-rendering: pixelated; }
+.pg-team img { width: 52px; height: 52px; object-fit: contain; image-rendering: pixelated; } /* owner 09-15: 68→52 */
 .pg-team-name { font-weight: 800; text-align: center; }
 /* #235 (owner-fg 07-29): keep long single-line team names inside every post-game panel column. */
 .pg-team { min-width: 0; }
@@ -14322,7 +14735,7 @@ function sendChat() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  padding: 22px 20px;
+  padding: 8px 16px 10px; /* owner 09-15: compact */
 }
 .pg-mvp-head {
   display: flex;
@@ -14364,7 +14777,7 @@ function sendChat() {
 .pg-mvp-card-spp { line-height: 1.1; }
 .pg-mvp-advance { color: var(--ui-accent); font-weight: 800; }
 /* #25-v2: per-player roster/SPP summary */
-.pg-roster { padding: 22px 20px; }
+.pg-roster { padding: 8px 16px 6px; } /* owner 09-15: compact — twelve rows without the window scrolling */
 /* #235 (owner-fg 07-29): two-name selector above the single visible roster. */
 .pg-roster-team-toggle { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-bottom: 8px; }
 .pg-roster-team-toggle button {
@@ -14386,15 +14799,44 @@ function sendChat() {
 .pg-roster-team-toggle button[data-active='true'] { border-bottom-color: var(--ui-accent); color: var(--ui-text); background: color-mix(in srgb, var(--ui-surface-2) 72%, var(--ui-text) 14%); }
 .pg-roster-team-toggle img { width: 26px; height: 26px; flex: 0 0 auto; object-fit: contain; }
 .pg-roster-team-toggle span { min-width: 0; }
-.pg-roster-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
-.pg-roster-list li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; border-top: 1px solid var(--ui-border); }
+/* Owner 09-15: the end-game roster showed ~9 oversized rows — smaller rows, and the list is sized to show TWELVE
+   (a full BB roster page) before it scrolls: 12 × (line 1.25 × 0.86em + 3px) ≈ 12.9em + 36px. */
+.pg-roster-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: calc(24.8em + 50px); overflow-y: auto; } /* exactly 12 rows of 2.4em-slot portraits (46px/row at 1080p) */
+.pg-roster-list li { display: flex; align-items: center; gap: 8px; padding: 1.5px 0; border-top: 1px solid var(--ui-border); font-size: 0.86em; line-height: 1.25; }
+/* Owner 09-15 (2nd): portraits +30% — the sprite frame carries transparent padding, so the image is drawn 1.95em
+   tall and overflows its 1.5em slot a hair above and below; the ROW height (and the twelve-row list) is unchanged. */
+.pg-roster-portrait-slot { flex: 0 0 auto; width: 2.5em; height: 2.4em; display: inline-flex; align-items: center; justify-content: center; overflow: visible; } /* owner 09-15 (3rd): bigger still — the row grows with it */
+.pg-roster-portrait { height: 2.6em; width: auto; max-width: none; object-fit: contain; image-rendering: pixelated; }
+.pg-roster-nr { color: var(--ui-text-dim); font-variant-numeric: tabular-nums; min-width: 2em; text-align: right; } /* owner 09-15: player number, far left of the portrait */
 .pg-roster-name { font-weight: 700; }
-.pg-roster-pos { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
+.pg-roster-pos { font-size: 0.92em; color: var(--ui-muted); }
 /* Owner 09-14: added-skills pill (advancements + in-game grants beyond the position's base). */
-.pg-roster-skills { font-size: max(var(--ui-min-primary-text-size, 16px), 0.72rem); color: var(--ui-text); background: color-mix(in srgb, var(--ui-accent) 22%, transparent); border: 1px solid color-mix(in srgb, var(--ui-accent) 55%, transparent); border-radius: 999px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.pg-roster-skills { display: inline-flex; gap: 6px; font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44%; }
+.pg-roster-skill { font-weight: 700; }
+.pg-roster-skill.skill-general { color: var(--ui-skill-general); }
+.pg-roster-skill.skill-agility { color: var(--ui-skill-agility); }
+.pg-roster-skill.skill-strength { color: var(--ui-skill-strength); }
+.pg-roster-skill.skill-passing { color: var(--ui-skill-passing); }
+.pg-roster-skill.skill-mutation { color: var(--ui-skill-mutation); }
+.pg-roster-skill.skill-trait { color: var(--ui-skill-trait); }
+.pg-roster-skill.skill-extraordinary { color: var(--ui-skill-extraordinary, var(--ui-skill-trait)); }
 .pg-roster-spp { margin-left: auto; color: var(--ui-accent); font-variant-numeric: tabular-nums; font-weight: 700; }
 .pg-roster-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
 
+/* Owner 09-14: inducement-phase roster viewer (mirrors the MVP-nominate modal + .pg-roster; rides over the phase). */
+.induce-roster-overlay { z-index: 80; }
+.induce-roster-card { height: auto; max-height: min(94vh, 940px); }
+.induce-roster-close { margin-left: auto; border: 1px solid var(--ui-border); background: transparent; color: var(--ui-text); border-radius: 6px; padding: 2px 8px; font: inherit; cursor: pointer; }
+.induce-roster-close:hover { background: var(--ui-surface-2); }
+.induce-roster-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; overflow: hidden; }
+.induce-roster-split { display: flex; gap: 14px; min-height: 0; flex: 1 1 auto; align-items: flex-start; }
+.induce-roster-split .induce-roster-list { flex: 1 1 auto; min-width: 0; max-height: min(60vh, 560px); margin-top: 8px; }
+.induce-roster-list li { cursor: pointer; border-radius: 6px; padding: 5px 6px; }
+.induce-roster-list li:hover { background: color-mix(in srgb, var(--ui-surface-2) 70%, var(--ui-text) 8%); }
+.induce-roster-list li[data-active='true'] { background: color-mix(in srgb, var(--ui-accent) 20%, transparent); }
+.induce-roster-list .pg-roster-nr { color: var(--ui-text-dim); font-variant-numeric: tabular-nums; min-width: 2.2em; }
+.induce-roster-popout { flex: 0 0 auto; width: min(340px, 42%); margin-top: 8px; animation: mvp-round-pop 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
+@media (max-width: 760px) { .induce-roster-split { flex-direction: column; } .induce-roster-popout { width: 100%; } }
 /* Owner 2026-07-15: MVP NOMINATION roster-summary modal (mirrors .postgame / .pg-roster; theme-token driven). */
 .mvp-nominate-overlay {
   position: absolute; z-index: 55; inset: 0;
@@ -14520,7 +14962,7 @@ function sendChat() {
 }
 /* stats phase */
 /* owner 2026-07-05: larger post-game statistics text */
-.pg-stats { padding: 16px 20px 22px; }
+.pg-stats { padding: 8px 16px 10px; } /* owner 09-15: compact — the table must fit without scrolling */
 /* Owner 09-14: raised bevel shared by the end-screen blocks — a lifted panel is easier to read than a flat row. */
 .pg-bevel {
   background: linear-gradient(180deg, color-mix(in srgb, var(--ui-surface-2) 88%, var(--ui-text) 8%) 0%, var(--ui-surface) 100%);
@@ -14532,20 +14974,88 @@ function sendChat() {
   border-radius: 10px;
   box-shadow: 0 3px 0 #000b, 0 8px 18px #0008, inset 0 1px 0 #ffffff1f;
 }
-.pg-scoreline.pg-bevel { padding: 14px 22px; }
-.pg-team-box { margin-top: 8px; padding: 6px 10px; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.86rem); text-align: center; }
+.pg-scoreline.pg-bevel { padding: 10px 18px; } /* owner 09-15: compact */
+.pg-team-box { margin-top: 6px; padding: 4px 10px; display: flex; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 2px 12px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.86rem); text-align: center; } /* owner 09-15: one-line strip */
 .pg-stats-cols { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 12px; align-items: stretch; }
 .pg-stat-col { display: flex; flex-direction: column; padding: 0 0 6px; overflow: hidden; }
-.pg-stat-col-head { min-height: 46px; display: flex; align-items: center; justify-content: center; padding: 6px; border-bottom: 1px solid #000a; box-shadow: 0 1px 0 #ffffff14; }
+.pg-stat-col-head { min-height: 34px; display: flex; align-items: center; justify-content: center; padding: 3px; border-bottom: 1px solid #000a; box-shadow: 0 1px 0 #ffffff14; }
 .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
 .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
 .pg-stat-col[data-side='label'] .pg-stat-col-head { border-top: 3px solid color-mix(in srgb, var(--ui-text) 25%, transparent); }
 .pg-stat-col-head img { width: 34px; height: 34px; object-fit: contain; image-rendering: pixelated; }
 .pg-stat-col-side { font-weight: 800; color: var(--ui-muted); letter-spacing: .06em; }
-.pg-stat-cell { padding: 8px 12px; border-top: 1px solid var(--ui-border); font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem); font-variant-numeric: tabular-nums; }
-.pg-stat-cell.pg-h { text-align: left; }
-.pg-stat-cell.pg-a { text-align: right; }
-.pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: max(var(--ui-min-primary-text-size, 16px), 1.02rem); }
+.pg-stat-cell { box-sizing: border-box; height: 1.9rem; padding: 0 12px; border-top: 1px solid var(--ui-border); font-size: 0.98rem; line-height: calc(1.9rem - 1px); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; } /* owner 09-17: one fixed row height so the three columns stay in step (the label font is smaller and the rows drifted) */
+.pg-stat-cell.pg-h { text-align: center; } /* owner 09-17: numbers centred under the crests */
+.pg-stat-cell.pg-a { text-align: center; }
+/* Owner 09-17: the DICE tab */
+.pg-dice-modal { position: fixed; inset: 0; z-index: 210; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
+.pg-dice-card { width: min(1500px, 94vw); height: min(900px, 92vh); display: flex; flex-direction: column; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 20px 60px #000c; color: var(--ui-text); overflow: hidden; }
+.pg-dice-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--ui-border); }
+.pg-dice-close { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); border-radius: 6px; width: 32px; height: 32px; font-size: 16px; cursor: pointer; }
+.pg-dice-close:hover { background: var(--ui-accent); color: var(--ui-text-on-primary); border-color: var(--ui-accent); }
+.pg-dice-switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
+.pg-dice-switch button { display: flex; align-items: center; gap: 6px; padding: 3px 12px 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 0.9rem; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
+.pg-dice-switch button img { width: 22px; height: 22px; object-fit: contain; }
+.pg-dice-switch button:hover { color: var(--ui-text); }
+.pg-dice-switch button[aria-selected='true'] { background: var(--ui-surface-2); color: var(--ui-heading); }
+.pg-dice-switch button[aria-selected='true'][data-side='home'] { border-bottom-color: #3d7cff; }
+.pg-dice-switch button[aria-selected='true'][data-side='away'] { border-bottom-color: #f2363c; }
+/* Owner 09-17 (r4): a single scrollable stack of charts on the left (chart width as before), likelihood + fun facts in the middle. */
+.pg-dice-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 490px minmax(0, 1fr); gap: 12px 24px; padding: 12px 16px 14px; }
+.pg-dice-left { min-height: 0; overflow: auto; padding-right: 6px; }
+.pg-dice-cols.pg-dice-cols-charts { grid-template-columns: 1fr; }
+.pg-dice-cols-charts .pg-dice-col { display: flex; flex-direction: column; }
+.pg-dice-right { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+.pg-dice-right-top { min-height: 0; }
+.pg-dice-right-bottom { min-height: 0; overflow: auto; }
+/* Owner 09-17 (r5): likelihood + fun facts follow the selector (one coach), so everything can come up a size. */
+.pg-dice-cols.pg-dice-cols-single { grid-template-columns: 1fr; }
+.pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 10px 16px 8px; }
+.pg-dice-col-single[data-side='away'] .pg-dice-block { border-top-color: #f2363c; }
+.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 16px; padding: 4px 0; } /* symmetric: the curve sits dead centre of the panel */
+.pg-dice-col-single .pg-dice-gauge-value { text-align: right; max-width: none; }
+.pg-dice-col-single .pg-dice-gauge-label { font-size: 1.15rem; }
+.pg-dice-col-single .pg-dice-gauge { height: 90px; }
+.pg-dice-col-single .pg-dice-curve { stroke-width: 1.6; }
+.pg-dice-col-single .pg-dice-marker { stroke-width: 3.5; }
+.pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.3rem; }
+.pg-dice-col-single .pg-dice-fact { padding: 5px 0; gap: 2px 16px; }
+.pg-dice-col-single .pg-dice-fact-label { font-size: 1.15rem; }
+.pg-dice-col-single .pg-dice-fact-value { font-size: 1.3rem; }
+.pg-dice-col-single .pg-dice-fact-detail { font-size: 0.95rem; }
+.pg-dice-grid h3 { margin: 0 0 6px; font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: 1.05rem; color: var(--ui-heading); letter-spacing: 0.03em; }
+.pg-dice-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.pg-dice-fact { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
+.pg-dice-fact:first-child { border-top: 0; }
+.pg-dice-fact-label { font-size: 0.85rem; }
+.pg-dice-fact-value { font-size: 0.95rem; font-weight: 800; color: var(--ui-accent); text-align: right; font-variant-numeric: tabular-nums; }
+.pg-dice-fact-detail { grid-column: 1 / -1; font-size: 0.75rem; color: var(--ui-muted); white-space: pre-line; }
+.pg-dice-empty { font-size: 0.85rem; color: var(--ui-muted); padding: 4px 0; }
+.pg-dice-col { display: flex; flex-direction: column; padding: 0 0 6px; }
+.pg-dice-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
+.pg-dice-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
+.pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid var(--ui-border); }
+.pg-dice-block h4 { margin: 0 0 4px; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 0.95rem; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
+.pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.78rem; color: var(--ui-muted); letter-spacing: 0; }
+.pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
+.pg-dice-chart { width: 100%; height: auto; display: block; }
+.pg-dice-bar { fill: #3d7cff; opacity: 0.85; }
+.pg-dice-col[data-side='away'] .pg-dice-bar { fill: #f2363c; }
+.pg-dice-bar-block { opacity: 0.75; }
+.pg-dice-expected { fill: none; stroke: var(--ui-text); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.9; }
+.pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: 'Nuffle', sans-serif; }
+.pg-dice-count { fill: var(--ui-text); font-size: 9px; text-anchor: middle; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pg-dice-gauge-row { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 10px; align-items: center; padding: 2px 0; } /* owner 09-17 reflow: labels never truncate, the value is one line */
+.pg-dice-gauge-row > * { min-width: 0; } /* the SVG's 300 px intrinsic width must not size the track */
+.pg-dice-gauge-label { font-size: 0.85rem; white-space: nowrap; }
+.pg-dice-gauge { width: 100%; min-width: 0; height: 30px; display: block; }
+.pg-dice-curve { fill: none; stroke: var(--ui-muted); stroke-width: 1.2; }
+.pg-dice-mean { stroke: var(--ui-muted); stroke-width: 1; stroke-dasharray: 2 2; }
+.pg-dice-marker { stroke: var(--ui-accent); stroke-width: 2.5; stroke-linecap: round; }
+.pg-dice-gauge-value { line-height: 1.2; font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--ui-muted); max-width: 11em; }
+.pg-dice-gauge-value b { white-space: nowrap; }
+.pg-dice-gauge-value b { font-size: 0.95rem; color: var(--ui-text); }
+.pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: 0.9rem; }
 .pg-stat-cell[data-lead='true'] { color: var(--ui-accent); font-weight: 800; }
 .pg-stats table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .pg-stats th { padding: 8px 10px; font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); color: var(--ui-text); }
@@ -15524,6 +16034,7 @@ function sendChat() {
 /* Owner 08-19: a HIDDEN word — zero-visual (zero-width box, clipped transparent text) but the
    text node stays in the DOM so selection/copy carries it (e.g. "rolls" before a die glyph).
    Same substitution family as .log-armour, just no icon overlay. */
+.log-dienum { font-weight: 700; font-variant-numeric: tabular-nums; } /* owner 09-16: dice-as-numbers */
 .log-hidden {
   display: inline-block;
   width: 0;
@@ -15957,6 +16468,9 @@ function sendChat() {
   text-shadow: 0 2px 5px #000d;
 }
 /* owner 2026-07-08: a CASUALTY toast reads RED (style-guide A1 — injury markers are red); 09-06: same red panel */
+/* owner 09-15: RETURNS TO RESERVES (crowd-surf, stunned result) — a yellow pill, no injury red */
+.ko-toast.is-reserves { background: linear-gradient(120deg, #8a6a08f2, #3a2e08e8); border-color: #f2c94ccc; box-shadow: 0 6px 26px #000b, 0 0 22px #f2c94c44; }
+.ko-toast.is-reserves .ko-toast-phrase { color: #fff1b8; }
 .ko-toast.is-casualty { border-color: #e03030cc; }
 .ko-toast.is-casualty .ko-toast-type { color: #ffd7d7; }
 .ko-toast-player { font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); font-weight: 700; color: #ffd7d7; }
@@ -18100,7 +18614,7 @@ function sendChat() {
     inset 0 0 0 7px #171b20;
 }
 .pitch-host.hud-chrome .coach-panel > * { position: relative; z-index: 1; }
-.pitch-host.hud-chrome .coach-panel > .active-indicator { position: absolute; z-index: 0; }
+.pitch-host.hud-chrome .coach-panel > .active-indicator { position: absolute; z-index: 1; } /* owner 09-14: the hud-chrome reset had undone the one-level lift over the prayer tag */
 .pitch-host.hud-chrome .coach-panel > .prayer-tag { position: absolute; z-index: 0; } /* owner 09-06: docks like the Current Player drawer, takes no panel space */
 .pitch-host.hud-chrome .coach-panel > .coach-decision-status { position: absolute; z-index: 3; }
 .pitch-host.hud-chrome .coach-panel::before {

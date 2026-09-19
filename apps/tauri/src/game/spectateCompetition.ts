@@ -29,6 +29,8 @@ export function competitionLabel(match: CompetitionMatchLike, names: Competition
   }
   const division = String(match.division ?? '').trim() || 'Other';
   const scheduler = String(match.scheduler ?? '').trim();
+  // Owner 09-15: a Competitive scheduler (Blackbox, Gamefinder) reads by its own name — "Competitive ·" was noise.
+  if (scheduler && /^competitive$/i.test(division)) return scheduler;
   return scheduler ? `${division} · ${scheduler}` : division;
 }
 

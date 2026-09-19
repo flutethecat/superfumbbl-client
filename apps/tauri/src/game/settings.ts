@@ -69,6 +69,8 @@ export interface AppSettings {
   skillMarkingColor: string;
   skillMarkingFont: 'arial' | 'helvetica' | 'system' | 'nuffle';
   skillMarkingSize: number;
+  /** Owner 09-15: the font of the position letter on the Checkers discs (Display > Player sprites). */
+  checkerLetterFont: 'arial' | 'helvetica' | 'system' | 'nuffle';
   /** One-shot legacy BB2/BB3 migration hint; installed-pack identity owns rendering. */
   skillIconStyle: 'bb3' | 'bb2';
   /** Owner 09-09: which BUNDLED skill-badge family serves when no pack is assigned to the skill-icon slot —
@@ -125,6 +127,10 @@ export interface AppSettings {
   logOpacity: number;
   logFontSize: number;
   logFont: 'nuffle' | 'arial' | 'mono';
+  /** Owner 09-16 (Settings > Display > Log): dice ROLLS render as one summed number instead of die faces. */
+  logDiceAsNumbers: boolean;
+  /** Owner 09-16: the NEEDED roll renders as a number instead of a die face. */
+  logNeededAsNumbers: boolean;
   /** Display-only match-log preference. Internal plan/play sequencing remains stored
    *  for bug reports and developer diagnostics when hidden. */
   showServerSequencingEvents: boolean;
@@ -146,7 +152,7 @@ export interface AppSettings {
   /** B4-2: movement depiction. Owner 2026-07-05: default is `trail` (slide + echo);
    *  `slide` is the plain FUMBBL-style depiction (marked in the UI). */
   moveStyle: 'walk' | 'hop' | 'trail' | 'slide' | 'hoptrail';
-  spriteSet: 'classic' | 'checkers' | 'walk';
+  spriteSet: 'classic' | 'checkers' | 'chess' | 'walk';
   walkAnimation: boolean;
   walkFps: number | null;
   /** Owner 2026-09-04: idle walkers face the camera (south) instead of their end-zone forward. */
@@ -170,6 +176,10 @@ export interface AppSettings {
   /** Owner 2026-07-04: colour of the Slide+Path-Trail echoes. 'auto' = white on a
    *  dark background, black on a light one. */
   trailColor: 'auto' | 'white' | 'black' | 'gold';
+  /** Owner 09-16: movement planner colours (Settings > Movement planner) — Primary = the route line, dots and
+   *  plot numbers; Secondary = every step that owes a roll (dodge / rush / pickup). Defaults: plot blue + gold. */
+  plannerPrimaryColor: string;
+  plannerSecondaryColor: string;
   /** Owner 2026-07-08: what the movement trail leaves — 'echo' (fading footprints,
    *  default) or 'numbers' (1,2,3… counting each square moved this activation). */
   trailMarks: 'echo' | 'numbers';
@@ -407,7 +417,8 @@ export interface AppSettings {
 }
 
 /** Where a skill icon/marker draws relative to the player token. */
-export type SkillRenderPosition = 'head' | 'feet';
+/** 'centre' (owner 09-15): ON the token — the Checkers chip face or the sprite's centre (explicit choice, any mode). */
+export type SkillRenderPosition = 'head' | 'feet' | 'centre';
 
 /** Where the on-pitch die-roll-cause tag sits on the action d6. */
 export type DieTagPosition = 'corner' | 'top' | 'side' | 'bottom' | 'off';
@@ -441,6 +452,7 @@ const DEFAULTS: AppSettings = {
   skillMarkingColor: '#f5c542',
   skillMarkingFont: 'arial',
   skillMarkingSize: 12,
+  checkerLetterFont: 'arial',
   skillIconStyle: 'bb3',
   skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
   skillIconPackInstallId: null,
@@ -466,6 +478,8 @@ const DEFAULTS: AppSettings = {
   logOpacity: 0.79,
   logFontSize: 15, // owner 2026-07-08: larger default Log/Chat/Roster text (was 11.5)
   logFont: 'arial', // owner 09-06: Arial default (was 'nuffle')
+  logDiceAsNumbers: false,
+  logNeededAsNumbers: false,
   showServerSequencingEvents: false,
   logPos: null,
   bottomBarsSwapped: true, // owner 2026-07-08: Log bottom-left, Quick bar bottom-right (default)
@@ -488,6 +502,8 @@ const DEFAULTS: AppSettings = {
   blockTumbleMs: 250,
   blockDice3d: true,
   trailColor: 'auto',
+  plannerPrimaryColor: '#66ccff',
+  plannerSecondaryColor: '#f5c542',
   trailMarks: 'numbers', // owner 08-18: installer default = Numbers (was 'echo')
   chatToastPos: 'left',
   chatToastTextSize: 17, // owner 09-05: 17 px default (was 14.4)
@@ -784,7 +800,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
         /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,95}\/(?:any|home|away)$/.test(key)),
       logos: dataUrlMap(rawLogos, (key) => /^[a-z][a-z0-9]{0,63}$/.test(key)),
     } : null;
-    merged.spriteSet = ['classic', 'checkers', 'walk'].includes(String(raw.spriteSet))
+    merged.spriteSet = ['classic', 'checkers', 'chess', 'walk'].includes(String(raw.spriteSet))
       ? raw.spriteSet as AppSettings['spriteSet']
       : DEFAULTS.spriteSet;
     merged.walkAnimation = typeof raw.walkAnimation === 'boolean' ? raw.walkAnimation : DEFAULTS.walkAnimation;
@@ -814,9 +830,18 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.skillMarkingColor = typeof raw.skillMarkingColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.skillMarkingColor)
       ? raw.skillMarkingColor
       : DEFAULTS.skillMarkingColor;
+    merged.plannerPrimaryColor = typeof raw.plannerPrimaryColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.plannerPrimaryColor)
+      ? raw.plannerPrimaryColor
+      : DEFAULTS.plannerPrimaryColor;
+    merged.plannerSecondaryColor = typeof raw.plannerSecondaryColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.plannerSecondaryColor)
+      ? raw.plannerSecondaryColor
+      : DEFAULTS.plannerSecondaryColor;
     merged.skillMarkingFont = ['arial', 'helvetica', 'system', 'nuffle'].includes(String(raw.skillMarkingFont))
       ? raw.skillMarkingFont as AppSettings['skillMarkingFont']
       : DEFAULTS.skillMarkingFont;
+    merged.checkerLetterFont = ['arial', 'helvetica', 'system', 'nuffle'].includes(String(raw.checkerLetterFont))
+      ? raw.checkerLetterFont as AppSettings['checkerLetterFont']
+      : DEFAULTS.checkerLetterFont;
     merged.legalAcceptanceVersion = normalizeLegalAcceptanceVersion(raw.legalAcceptanceVersion);
     merged.contributionsSeenVersion = typeof raw.contributionsSeenVersion === 'number' && Number.isSafeInteger(raw.contributionsSeenVersion) && raw.contributionsSeenVersion >= 0
       ? raw.contributionsSeenVersion
@@ -834,6 +859,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     delete (merged as { password40k?: unknown }).password40k;
     // fail-closed: a non-boolean/corrupted stored value resolves to the default (chat enabled).
     merged.chatDisabled = raw.chatDisabled === true;
+    merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
+    merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;
     // Fail closed to the quiet match log for fresh, older, or corrupted settings blobs.
     merged.showServerSequencingEvents = raw.showServerSequencingEvents === true;
     // Only an explicit false disables the default cursor theme. Older or malformed

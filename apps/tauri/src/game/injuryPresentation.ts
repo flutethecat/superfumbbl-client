@@ -30,18 +30,24 @@ export interface InjuryEvent {
   bitten?: boolean;
 }
 
+/** Owner 09-15: a crowd-surfed player whose injury roll came up STUNNED goes to the RESERVES (upstream
+ *  InjuryTypeCrowd:41 `setInjury(new PlayerState(PlayerState.RESERVE))`) — the report's `injury` byte is 0x09, which
+ *  the casualty threshold (>= 0x06) used to swallow as a "Badly Hurt" casualty. */
+export const RESERVE_BASE = 0x09;
 const INJURY_LABELS: Record<number, string> = {
   0x04: 'STUNNED',
   0x05: 'KNOCKED OUT',
   0x06: 'BADLY HURT',
   0x07: 'SERIOUS INJURY',
   0x08: 'DEAD',
+  [RESERVE_BASE]: 'RETURNS TO RESERVES',
 };
 
 /** #64 ([RULES] bb2025): INJURY-ROLL result, 3 tiers — STUNNED (0x04) / KNOCKED OUT (0x05) / all casualty bases ≥0x06 collapse to CASUALTY (severity = the separate 5-step below). */
 function injuryRollLabel(base: number): string {
   if (base === 0x04) return 'STUNNED';
   if (base === 0x05) return 'KNOCKED OUT';
+  if (base === RESERVE_BASE) return 'STUNNED'; // the crowd's stunned result: the player walks back to the bench
   if (base >= 0x06) return 'CASUALTY';
   return 'INJURED';
 }
@@ -60,16 +66,17 @@ export function injuryPresentation(report: Record<string, unknown>, game: GameJs
   const player = team.playerArray.find((p) => p.playerId === playerId);
   const data = game.fieldModel.playerDataArray.find((p) => p.playerId === playerId);
   const reported = Number(report.injury ?? 0);
-  const base = reported >= 4 && reported <= 8 ? reported : (data?.playerState ?? 0) & 0xff;
+  const base = reported >= 4 && reported <= RESERVE_BASE ? reported : (data?.playerState ?? 0) & 0xff;
+  const casualty = base >= 0x06 && base <= 0x08; // RESERVE (0x09) sits above the casualty bytes but is no casualty
   const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
   const modelSerious = results.find((r) => r.playerId === playerId)?.seriousInjury;
   const seriousInjury = typeof report.seriousInjury === 'string' && report.seriousInjury.trim() ? report.seriousInjury
-    : base >= 7 && typeof modelSerious === 'string' ? modelSerious : null;
+    : casualty && base >= 7 && typeof modelSerious === 'string' ? modelSerious : null;
   const square: [number, number] | null = coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15 ? [coordinate[0]!, coordinate[1]!] : null;
   const rockThrow = kind.includes('rock') && !!square;
-  return { type: INJURY_LABELS[base] ?? 'INJURED', injuryRoll: injuryRollLabel(base), casualty: casualtyTierLabel(seriousInjury, base),
+  return { type: INJURY_LABELS[base] ?? 'INJURED', injuryRoll: injuryRollLabel(base), casualty: casualty ? casualtyTierLabel(seriousInjury, base) : null,
     player: player?.playerName ?? '', playerId, side, logoUrl: (team.roster as { logoUrl?: string }).logoUrl ?? null,
-    teamName: team.teamName ?? '', square, foul, isCasualty: base >= 6, injuryBase: base, seriousInjury,
+    teamName: team.teamName ?? '', square, foul, isCasualty: casualty, injuryBase: base, seriousInjury,
     crowdSurf: kind.includes('crowd') && !!square, rockThrow, rockImpactOnly: rockThrow && !armorBroke, bitten: kind.includes('bitten') && !!square };
 }
 

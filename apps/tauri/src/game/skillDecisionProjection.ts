@@ -10,8 +10,16 @@ export interface SkillDecisionDetails {
   armorDice?: [number, number];
   hmpScatter?: { ordinal: number; direction: string; showNeverUse: boolean };
 }
+/** Owner 09-15: skills whose USE hands the same coach a follow-up choice on the pitch (Side Step: the push square).
+ *  The passive card persists through that choice as "<Coach> is using <Skill>"; instant-resolving skills clear. */
+const FOLLOWUP_SKILLS = new Set(['sidestep']);
+export function skillUseHasFollowup(skill: unknown): boolean { return FOLLOWUP_SKILLS.has(normalized(skill)); }
+/** The follow-up choice is still open while the server keeps push-back squares on the field model. */
+export function skillUseFollowupPending(game: GameJson): boolean {
+  return ((game.fieldModel?.pushbackSquareArray ?? []) as unknown[]).length > 0;
+}
 export interface SkillDecisionProjection {
-  current: { occurrence: string; playerId: string; skill: string; details: SkillDecisionDetails } | null;
+  current: { occurrence: string; playerId: string; skill: string; details: SkillDecisionDetails; using?: boolean } | null;
   lastScatter: { occurrence: string; gameId: string; playerId: string; context: NonNullable<SkillDecisionDetails['hmpScatter']> } | null;
 }
 export const createSkillDecisionProjection = (): SkillDecisionProjection => ({ current: null, lastScatter: null });
@@ -27,7 +35,16 @@ export function reduceSkillDecisionProjection(
   const action = game.actingPlayer?.playerAction ?? (game as { throwerAction?: unknown }).throwerAction;
   if (normalized(action) !== 'hailmarypass') next.lastScatter = null;
   const dialog = game.dialogParameter as Record<string, unknown> | null;
-  if (dialog?.dialogId !== 'skillUse') { next.current = null; return next; }
+  if (dialog?.dialogId !== 'skillUse') {
+    // Owner 09-15: a follow-up skill just USED keeps its card ("is using") while the push square is still open.
+    const cur = next.current;
+    if (cur && skillUseHasFollowup(cur.skill) && skillUseFollowupPending(game)) {
+      const usedNow = reports.some((r) => r.reportId === 'skillUse' && String(r.playerId ?? '') === cur.playerId
+        && normalized(r.skill) === normalized(cur.skill) && (r as { used?: unknown }).used !== false);
+      if (cur.using || usedNow) { next.current = { ...cur, using: true }; return next; }
+    }
+    next.current = null; return next;
+  }
   const playerId = String(dialog.playerId ?? '');
   const skill = String(dialog.skill ?? '');
   if (next.current?.occurrence !== occurrence || next.current.playerId !== playerId || next.current.skill !== skill) {

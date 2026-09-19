@@ -358,16 +358,18 @@ const slot = (
 export const SETUP_TEMPLATES: readonly SetupTemplate[] = [
   {
     id: 'corners', name: 'Corners', side: 'defense', symmetric: true,
+    // Owner 09-15: relaid on the Setup Peg Board (export 2026-09-16T06:11Z) — corners pulled in to y4 / y10,
+    // the Guard back beside the left corner (adjacent again), supports on x10 inside the corners.
     slots: [
       slot('los-left', 12, 6, LINEMAN, 'los'), slot('los-centre', 12, 7, LINEMAN, 'los'),
       slot('los-right', 12, 8, LINEMAN, 'los'),
       slot('big-guy', 10, 7, HIGH_STRENGTH, 'strength'),
-      slot('left-corner', 10, 5, STRENGTH_FOUR, 'strength'),
-      slot('right-corner', 10, 9, STRENGTH_FOUR, 'strength'),
-      slot('right-corner-mate', 10, 11, STR_OR_STABLE, 'strength'),
-      slot('left-guard', 10, 3, GUARD, 'adjacent', 'left-corner'),
-      slot('left-support', 9, 4, ANY, 'value'), slot('valuable', 9, 7, HIGH_VALUE, 'value'),
-      slot('right-support', 9, 10, ANY, 'value'),
+      slot('left-corner', 9, 4, LINEMAN, 'strength'),
+      slot('right-corner', 10, 10, GUARD, 'strength'),
+      slot('right-corner-mate', 9, 10, STR_OR_STABLE, 'strength'),
+      slot('left-guard', 10, 4, GUARD, 'adjacent', 'left-corner'),
+      slot('left-support', 10, 5, ANY, 'value'), slot('valuable', 9, 7, HIGH_VALUE, 'value'),
+      slot('right-support', 10, 9, ANY, 'value'),
     ],
   },
   {
@@ -387,11 +389,13 @@ export const SETUP_TEMPLATES: readonly SetupTemplate[] = [
   },
   {
     id: 'offset-boat', name: 'Offset Boat', side: 'defense', symmetric: false,
+    // Owner 09-15: relaid on the Setup Peg Board (export 2026-09-16T06:12Z) — wings on x10 at y2 / y8, the
+    // five-wide cluster on x9 y3-7 behind the big guy.
     slots: [
       slot('los-left', 12, 8, LINEMAN, 'los'), slot('los-centre', 12, 9, LINEMAN, 'los'),
       slot('los-right', 12, 10, LINEMAN, 'los'),
-      slot('left-wing', 11, 3, LINEMAN, 'strength'), slot('big-guy', 10, 5, HIGH_STRENGTH, 'strength'),
-      slot('right-wing', 10, 9, LINEMAN, 'strength'),
+      slot('left-wing', 10, 2, LINEMAN, 'strength'), slot('big-guy', 10, 5, HIGH_STRENGTH, 'strength'),
+      slot('right-wing', 10, 8, LINEMAN, 'strength'),
       slot('cluster-left', 9, 3, HIGH_STRENGTH, 'value'), slot('cluster-inner-left', 9, 4, ANY, 'value'),
       slot('valuable', 9, 5, HIGH_VALUE, 'value'), slot('cluster-inner-right', 9, 6, ANY, 'value'),
       slot('cluster-right', 9, 7, HIGH_STRENGTH, 'value'),
@@ -399,14 +403,17 @@ export const SETUP_TEMPLATES: readonly SetupTemplate[] = [
   },
   {
     id: 'offset-chevrons', name: 'Offset Chevrons', side: 'defense', symmetric: false,
+    // Owner 09-15: relaid on the Setup Peg Board (export 2026-09-16T06:09Z) — LOS offset to y 8-10, corners at
+    // x10 y1/y4, the corner mate up at x11 y12, the guard tucked behind the right corner (its anchor — the adjacent-phase rule), backers on x9.
     slots: [
-      slot('los-left', 12, 7, LINEMAN, 'los'), slot('los-centre', 12, 8, LINEMAN, 'los'),
-      slot('los-right', 12, 9, LINEMAN, 'los'),
-      slot('anchor-left-centre', 10, 5, HIGH_STRENGTH, 'strength'),
-      slot('anchor-far-left', 10, 2, STR_OR_STABLE, 'strength'),
-      slot('anchor-centre', 10, 9, ANY, 'strength'), slot('anchor-far-right', 10, 12, STR_OR_STABLE, 'strength'),
-      slot('backer-far-left', 9, 3, HIGH_VALUE, 'value'), slot('backer-left-centre', 9, 6, HIGH_VALUE, 'value'),
-      slot('backer-centre', 9, 10, HIGH_VALUE, 'value'), slot('backer-far-right', 9, 13, HIGH_VALUE, 'value'),
+      slot('los-left', 12, 8, LINEMAN, 'los'), slot('los-centre', 12, 9, LINEMAN, 'los'),
+      slot('los-right', 12, 10, LINEMAN, 'los'),
+      slot('big-guy', 10, 7, HIGH_STRENGTH, 'strength'),
+      slot('left-corner', 10, 1, LINEMAN, 'strength'), slot('right-corner', 10, 4, LINEMAN, 'strength'),
+      slot('right-corner-mate', 11, 12, STR_OR_STABLE, 'strength'),
+      slot('left-guard', 9, 5, GUARD, 'adjacent', 'right-corner'),
+      slot('left-support', 9, 2, ANY, 'value'), slot('valuable', 9, 8, HIGH_VALUE, 'value'),
+      slot('right-support', 10, 11, ANY, 'value'),
     ],
   },
   {
@@ -432,8 +439,10 @@ export const SETUP_TEMPLATES: readonly SetupTemplate[] = [
       slot('los-right', 12, 8, LINEMAN, 'los'),
       slot('front-left-outer', 11, 4, STR_OR_STABLE, 'strength'), slot('front-left-inner', 11, 5, ANY, 'strength'),
       slot('front-right-inner', 11, 9, ANY, 'strength'), slot('front-right-outer', 11, 10, STR_OR_STABLE, 'strength'),
-      slot('rear-left-outer', 10, 1, HIGH_VALUE, 'value'), slot('rear-left-inner', 10, 3, HIGH_VALUE, 'value'),
-      slot('rear-right-inner', 10, 11, HIGH_VALUE, 'value'), slot('rear-right-outer', 10, 13, HIGH_VALUE, 'value'),
+      // Owner 09-15: relaid on the Setup Peg Board (export 2026-09-16T06:13Z) — the rear inners step up to x11
+      // on the wide-zone edge (y2 / y12); each wide zone still holds exactly two.
+      slot('rear-left-outer', 10, 1, HIGH_VALUE, 'value'), slot('rear-left-inner', 11, 2, HIGH_VALUE, 'value'),
+      slot('rear-right-inner', 11, 12, HIGH_VALUE, 'value'), slot('rear-right-outer', 10, 13, HIGH_VALUE, 'value'),
     ],
   },
   {

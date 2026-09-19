@@ -113,6 +113,8 @@ const emit = defineEmits<{
   (e: 'clear'): void;
   (e: 'confirm'): void;
   (e: 'acknowledge'): void;
+  /** Owner 09-14: open the two-team roster viewer (coaches size up the opponent before buying inducements). */
+  (e: 'rosters'): void;
 }>();
 
 const BLADES: { id: Blade; label: string }[] = [
@@ -203,6 +205,8 @@ function panelColor(panel: PanelView): SeatColor {
           <template v-for="(w, i) in words(presetMode ? 'Predefined Inducements' : 'Inducements')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
         </div>
         <span class="ind-spacer" />
+        <button type="button" class="ind-btn ind-btn-neutral ind-rosters-btn" data-testid="rosters-btn" title="View both team rosters"
+          @click="emit('rosters')">📋 <span class="cap">R</span>osters</button>
         <div class="ind-stencil" :data-role="phase" data-testid="phase-stencil">{{ roleLabel }}</div>
       </div>
 
@@ -636,6 +640,7 @@ function panelColor(panel: PanelView): SeatColor {
 .ind-btn:hover:not(:disabled) { filter: brightness(1.25); }
 .ind-btn:disabled { opacity: .5; cursor: default; }
 .ind-btn-neutral { background: #242424; border: 2px outset #4a4a4a; color: #cfd4cf; }
+.ind-rosters-btn { margin-right: 12px; padding: 6px 14px; white-space: nowrap; }
 .ind-btn-primary { padding: 9px 26px; background: var(--ui-primary); border: 2px outset #a83236; color: var(--ui-text-on-primary); }
 
 @media (max-width: 1020px) {

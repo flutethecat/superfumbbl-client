@@ -35,6 +35,14 @@ function dieCauseFromRollModifiers(modifiers: unknown): string | undefined {
   return undefined;
 }
 
+/** Owner 09-14: the server sends NO skillUse report for Break Tackle (bb2025 StepMoveDodge only marks it used);
+ *  the evidence is the dodgeRoll's Break Tackle modifier, which upstream strips again whenever the dodge would have
+ *  passed without it — so its presence on a SUCCESSFUL dodge means the skill genuinely carried the roll. */
+export function dodgeUsedBreakTackle(report: Readonly<Record<string, unknown>>): boolean {
+  return String(report.reportId) === 'dodgeRoll' && report.successful === true
+    && dieCauseFromRollModifiers(report.rollModifiers) === 'breakTackle';
+}
+
 export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean }
 export interface ActionRollCue {
   reRolled: boolean;

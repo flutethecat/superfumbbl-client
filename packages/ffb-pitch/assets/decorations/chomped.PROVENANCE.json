@@ -1,0 +1,19 @@
+{
+  "file": "chomped.png",
+  "purpose": "CHOMPED status decoration at the player's feet (ROOTED / DODGY SNACK family) while PlayerStateFlag.CHOMPED is set.",
+  "license": "Super FUMBBL Media License (original art)",
+  "source": "C:/Users/Jay/Documents/ChatGPT/Super FUMBBL Team Icons/action-icons/chomped/chomped-v3-transparent.png (owner-generated transparent regeneration of the approved v2 design; ImageGen exec-b330c6a4)",
+  "sha256": "009b310873c97e21b7cab758a288c70504a51efbd5fdbdd7e69fb08dde180afa",
+  "size": [
+    1944,
+    809
+  ],
+  "visible_bbox": [
+    0,
+    11,
+    1930,
+    808
+  ],
+  "tool": "Built-in ImageGen (art lane, owner-approved 09-15); genuine RGBA (core alpha ~253); handoff HANDOFF-CHOMPED.md",
+  "note": "No FUMBBL or Games Workshop material."
+}

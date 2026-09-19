@@ -90,7 +90,7 @@ export interface WalkerHelpers {
   addPositionRing(token: Container, player: PlayerJson, team: TeamJson, body: number, opts?: { centreY?: number; bodyRing?: boolean; rx?: number; ry?: number }): void;
   buildProneShadow(): Container;
   showStunMark(data: PlayerDataJson): boolean;
-  addDownDecoration(token: Container, stunned: boolean, stunCaption: boolean, centreY?: number): void;
+  addDownDecoration(token: Container, stunned: boolean, stunCaption: boolean, centreY?: number, withX?: boolean): void;
   addSkillBadges(
     token: Container,
     player: PlayerJson,
@@ -118,6 +118,8 @@ export interface WalkerTokenArgs {
   baselineSkills?: Set<string>;
   badgeOccluded?: boolean;
   stunCaption: boolean;
+  /** Owner 09-15: false = no stun X (the dugout's injured box); the lying pose, shadow and stun tint still draw. */
+  downMark?: boolean;
   trim: number;
   body: number;
   ownerId: symbol;
@@ -817,6 +819,7 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
     token, walker, player, team, isHome, down, data, includeBadges, shading,
     baselineSkills, badgeOccluded, stunCaption, trim, body, ownerId, facing, helpers,
   } = args;
+  const downMark = args.downMark ?? true;
   const initialFacing = travelFacing.get(player.playerId) ?? defaultFacing(isHome, facing, 'S');
   const row = directionIndex.get(initialFacing)!;
   // Owner 09-05: the POSITION ring stays (at the feet, under the ground shadow); only the inner team-colour body
@@ -866,7 +869,7 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
   else token.boundsArea = new Rectangle(-figureW / 2, sprite.position.y - figureH, figureW, figureH);
   // Owner 09-05: the stun X is centred on the PRONE FIGURE (its sprite sits at WALKER_FEET_Y_PX-9), not the
   // classic icon's body centre.
-  if (down && helpers.showStunMark(data)) helpers.addDownDecoration(token, true, stunCaption, 0);
+  if (down && helpers.showStunMark(data)) helpers.addDownDecoration(token, true, stunCaption, 0, downMark);
   helpers.addPlayerNumber(token, player, isHome, down);
   if (includeBadges) helpers.addSkillBadges(token, player, data, trim, team, baselineSkills, badgeOccluded);
   helpers.addMarkingText(token, player, down);
@@ -1121,6 +1124,10 @@ export function walkerShadowRadii(token: Container): { rx: number; ry: number } 
 
 /** Art->device ratios that draw exactly: 1/2^n = box-average mip levels, whole numbers = pixel magnification. */
 const CLEAN_ART_RATIOS = [1 / 8, 1 / 4, 1 / 2, 1, 2, 3, 4, 5, 6, 8];
+/** Owner 09-16: the largest |ln(snapped / true)| a whole-ratio snap may impose (~22%); beyond it the walker draws
+ *  at true size. 0.585 / 0.5 and 1.17 / 1 (the 100%-scaling rungs 2 and 4) are 0.157, inside; 1.32 / 1 (rung 3 at
+ *  150%) is 0.275, outside. */
+const SNAP_MAX_LOG_ERROR = 0.2;
 function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boolean, exempt = false): void {
   const base = record.baseSpriteScale;
   if (!base || record.sprite.destroyed || !Number.isFinite(deviceScale) || deviceScale <= 0) return;
@@ -1132,13 +1139,38 @@ function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boo
   // Owner 09-05 (round 15): always land on the CLEAN ratio nearest the ideal — never a fractional grid.
   void settled;
   // Owner 09-06: a FREE zoom rung (renderer FREE_ZOOM_RUNGS, 2.25 = 9/8 over fit) draws the true fractional size.
-  const r = exempt ? k : CLEAN_ART_RATIOS.reduce((best, v) => (Math.abs(v - k) < Math.abs(best - k) ? v : best), CLEAN_ART_RATIOS[0]!);
+  // Owner 09-16: walker tokens keep scale 1 (the sheets carry one fixed 0.585 normaliser; the row depth is never
+  // folded into a walker), so k IS the zoom-rung ratio and the decision is made on it directly. Ties round UP so
+  // walkers never shrink while zooming in.
+  const nearest = CLEAN_ART_RATIOS.reduce((best, v) => (Math.abs(v - k) < Math.abs(best - k) - 1e-9 || (Math.abs(Math.abs(v - k) - Math.abs(best - k)) < 1e-9 && v > best) ? v : best), CLEAN_ART_RATIOS[0]!);
+  // Owner 09-16 (r2): a whole ratio is only worth its crispness when it is CLOSE to the true size. On a 150%
+  // display the physical rungs land at 0.88 / 1.32 / 1.76 / 2.63 device px per art px, so rungs 2 and 3 both
+  // snapped to 1:1 — the board grew by half while the figures stayed put ("3 looks small"). Past
+  // SNAP_MAX_LOG_ERROR the figure draws at its TRUE size instead; at 100% scaling every rung stays snapped.
+  const snapped = Math.abs(Math.log(nearest / k)) <= SNAP_MAX_LOG_ERROR;
+  const r = exempt || !snapped ? k : nearest;
   const target = base * (r / k);
   if (Math.abs(record.sprite.scale.x - target) > 1e-4) {
     record.sprite.scale.set(target);
     syncCastShadow(record);
     applyDecorScale(record, target);
   }
+  keepFeetInSquare(record);
+}
+
+/** Owner 09-16: token-local px the drawn figure's bottom keeps clear of its square's bottom edge. */
+const FEET_EDGE_MARGIN_PX = 1;
+/** Owner 09-16: with uniform figures the squares shrink toward the far edge while the figure keeps one size, and the
+ *  pixel snap can draw it over its ideal size — the boots crossed the square's bottom edge there. The renderer
+ *  stashes the square's half-height below the anchor on the token (`squareHalfBelow`, token-local); the token is
+ *  lifted through its PIVOT by exactly the overflow (tweens set position, so they are untouched). Standing only. */
+function keepFeetInSquare(record: WalkerTokenRecord): void {
+  const halfBelow = (record.token as Container & { squareHalfBelow?: number }).squareHalfBelow;
+  if (record.prone || halfBelow == null || !Number.isFinite(halfBelow)) return;
+  const sprite = record.sprite;
+  const bottomLocal = sprite.position.y + sprite.height * (1 - sprite.anchor.y);
+  const lift = Math.max(0, bottomLocal + FEET_EDGE_MARGIN_PX - halfBelow);
+  if (Math.abs(record.token.pivot.y - lift) > 1e-3) record.token.pivot.y = lift;
 }
 
 export function tickWalkers(

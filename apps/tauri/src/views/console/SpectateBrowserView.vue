@@ -83,7 +83,7 @@ const filteredMatches = computed(() => {
   return sorted.filter((match) => [
     match.id,
     competitionLabel(match, competitionNames.value), // owner 09-07: the filter also matches the competition
-    ...match.teams.flatMap((team) => [team.name, team.coach]),
+    ...match.teams.flatMap((team) => [team.name, team.coach, team.race]), // owner 09-15: + race
   ].join(' ').toLocaleLowerCase().includes(query));
 });
 /** Owner 09-07: the filtered list grouped by competition (tournament groups first, then League, then Competitive). */
@@ -269,8 +269,8 @@ onBeforeUnmount(() => {
         v-model="browserFilter"
         class="browser-filter"
         type="search"
-        aria-label="Filter live games or enter a game id"
-        placeholder="Filter, or type a game id + Enter to open"
+        aria-label="Filter live games by team, coach, race or competition, or enter a game id"
+        placeholder="Filter by team, coach, race or competition — or a game id + Enter"
         @keyup.enter="onFilterEnter"
       />
       <span class="toolbar-spacer" />
@@ -304,7 +304,7 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else>
-      <h2 class="group-heading testbed-heading">▶ FUMBBL</h2>
+      <!-- Owner 09-15: the "▶ FUMBBL" heading under the FUMBBL plate is gone — the plate already names the source. -->
       <section class="game-list testbed-list" aria-label="FUMBBL live games" aria-live="polite">
         <div v-if="browserStatus" class="list-status">{{ browserStatus }}</div>
         <div v-else-if="filteredMatches.length === 0" class="list-status">No live games match the filter.</div>
@@ -419,8 +419,8 @@ onBeforeUnmount(() => {
 
 .browser-filter {
   flex: 1;
-  max-width: clamp(380px, 28vw, 560px);
-  min-width: 250px;
+  max-width: clamp(520px, 42vw, 820px); /* owner 09-15: wide enough for the full placeholder */
+  min-width: 320px;
   box-sizing: border-box;
   border: 1px solid var(--ui-border);
   border-radius: 4px;

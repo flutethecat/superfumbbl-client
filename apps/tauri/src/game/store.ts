@@ -10,7 +10,7 @@ import { injuryPresentation, armourPresentation, type InjuryEvent } from './inju
 import { rerollPresentation } from './rerollPresentation';
 export { reportedAutomaticRerollSkill } from './rerollPresentation';
 import { presentStages } from './replay/presentationStages';
-import { actionRollPresentation, type ActionRollCue } from './actionRollPresentation';
+import { actionRollPresentation, dodgeUsedBreakTackle, type ActionRollCue } from './actionRollPresentation';
 import { skillUsePresentation } from './skillUsePresentation';
 import { LiveSpectateTransport } from './replay/liveSpectateTransport';
 import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/spectatorPublication';
@@ -19,7 +19,8 @@ import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngre
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
 import { passDestinationFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
-import { createSkillDecisionProjection, reduceSkillDecisionProjection, type SkillDecisionDetails } from './skillDecisionProjection';
+import { diceStats, ingestDiceReports } from './diceStats';
+import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
 import { buildBlockDecision, createBlockContext, reduceBlockContext } from './blockDecisionProjection';
 import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
@@ -632,6 +633,9 @@ const legacyState = reactive({
     instanceKey?: string | null;
     /** Client-owned post-ack elections reuse the standard card without fabricating a server dialog. */
     origin?: 'shotToNothing';
+    /** Owner 09-15: the skill was USED and its follow-up choice (Side Step's push square) is still open — the passive
+     *  card reads "<Coach> is using <Skill>" until the server clears the push-back squares. */
+    using?: boolean;
     declarationSeq?: number;
     roll?: number;
     result?: PassReRollResult;
@@ -914,6 +918,11 @@ const legacyState = reactive({
   gazeVictims: [] as string[],
   /** W40: menu-declared gaze intent. Only the pre-confirm candidate is replaceable. */
   gazeIntent: null as GazeIntent | null,
+  /** Owner 09-15: the DECLARED gaze target as the wire shows it to EVERY seat — the server sets `defenderId` to the
+   *  victim while the acting player's action is a gaze (StepInitMoving CLIENT_GAZE → StepHypnoticGaze), in the same
+   *  frame as the gaze roll. The opponent and spectators had no cue at all; the acting coach's local intent already
+   *  paints it. The renderer wears the hypno token + crosshair on the target; the roll die waits GAZE_REVEAL_MS. */
+  gazeTargetReveal: null as { gazerId: string; targetId: string; seq: number } | null,
   /** Treacherous consent for the next action in this activation. */
   /** Owner 07-08: VAMPIRE FEED 🧛 one-shot over the bitten Thrall, armed just before the "bitten" injury plays. */
   vampireBite: null as { playerId: string; square: [number, number]; seq: number } | null,
@@ -1395,6 +1404,15 @@ export function turnoverArmAfterReport(
   // the server never ended the turn, and the still-armed heuristic painted the opponent's later voluntary End Turn
   // as a turnover. The modification is the disarm.
   if (id === 'modifiedDodgeResultSuccessful') return false;
+  // Owner 09-14 (Akindsir report, g1942502: "dodges: rolls 2 (3+) | fails" → "Steady Footing: rolls 6 (6+)" → the
+  // coach's own End Turn painted as a turnover): a SUCCESSFUL Steady Footing keeps the player on their feet —
+  // upstream bb2025 StepSteadyFooting publishes END_TURN=false and no armour/injury follows — so it DISARMS the
+  // failed roll before it. A failed one changes nothing here: the knockdown's injury report arms on its own.
+  // (No explicit turnover flag exists on the wire — ReportTurnEnd carries only playerIdTouchdown/KO/heat/unzap.)
+  if (id === 'steadyFootingRoll') {
+    const pid = String(report.playerId ?? '');
+    return pid && playingPlayerIds.has(pid) && report.successful === true ? false : armed;
+  }
   if (!TURNOVER_FAIL_IDS.has(id)) return armed;
   const playerId = String(report.playerId ?? '');
   if (!playerId || !playingPlayerIds.has(playerId)) return armed;
@@ -1422,6 +1440,38 @@ const TURNOVER_HOLD_MS = 3800;
 // unconditional fail-open bound, so a lost/never-clearing signal costs at most the existing cap, never forever.
 let ballAnimatingProbe: (() => boolean) | null = null;
 export function bindBallAnimating(fn: (() => boolean) | null): void { ballAnimatingProbe = fn; }
+/** Owner 09-14: renderer probe — any player token still visibly moving (touchdown-sound gate). */
+let playersAnimatingProbe: (() => boolean) | null = null;
+export function bindPlayersAnimating(fn: (() => boolean) | null): void { playersAnimatingProbe = fn; }
+function playersAnimating(): boolean {
+  try { return !!playersAnimatingProbe?.(); } catch { return false; }
+}
+/** Owner 09-15: renderer probe — an armour roll (dice + 'ARMOR BREAKS!') still on screen; the injury toast waits. */
+let armourDiceShowingProbe: (() => boolean) | null = null;
+export function bindArmourDiceShowing(fn: (() => boolean) | null): void { armourDiceShowingProbe = fn; }
+function armourDiceShowing(): boolean {
+  try { return !!armourDiceShowingProbe?.(); } catch { return false; }
+}
+const INJURY_AFTER_ARMOUR_CAP_MS = 2500;
+/** Owner 09-14 (2nd pass, live play still early): the touchdown sound waits for the RENDERED walk — the #67 beat
+ *  drained ahead of the renderer's own tween in play mode. Poll until no step is queued/presenting and no player
+ *  token is tweening; fail-open cap so a wedged animation can only delay it, never drop it. One at a time: a
+ *  second push while one waits (impossible in a real game) replaces the wait. */
+const TOUCHDOWN_SOUND_SETTLE_CAP_MS = 3000;
+const TOUCHDOWN_SOUND_POLL_MS = 50;
+let touchdownSoundTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleTouchdownSound(): void {
+  if (touchdownSoundTimer) cancelGameTimeout(touchdownSoundTimer);
+  const started = Date.now();
+  const tick = () => {
+    touchdownSoundTimer = null;
+    const stepsPending = presentation.presenting?.kind === 'walk' || presentation.queue.some((ev) => ev.kind === 'step'); // an in-flight step presents as the 'walk' gate
+    const waited = Date.now() - started;
+    if ((!stepsPending && !playersAnimating()) || waited >= presentationMs(TOUCHDOWN_SOUND_SETTLE_CAP_MS)) { playSound('touchdown'); return; }
+    touchdownSoundTimer = scheduleGameTimeout(tick, TOUCHDOWN_SOUND_POLL_MS);
+  };
+  tick();
+}
 export function turnoverSplashMinimumDelayMs(afterInjury: boolean): number {
   return afterInjury ? TURNOVER_AFTER_INJURY_DELAY_MS : TURNOVER_DELAY_MS;
 }
@@ -1945,6 +1995,10 @@ const FOUL_CUE_MS = 700; // owner 2026-07-09: the 🥾 foul-target boot reads a 
 /** Owner 09-14: "<Player> uses Stab!" reads a beat over the stabber, THEN the armour roll lands on the target. The server
  *  sends no skillUse report for Stab (bb2020 StabBehaviour: sound + InjuryTypeStab only), so the cue keys off the injury. */
 const STAB_CUE_MS = 650;
+/** Owner 09-15: how long the gaze target reveal reads before the gaze die surfaces (viewer-visible ≥ 450 ms). */
+const GAZE_REVEAL_MS = 700;
+const GAZE_REVEAL_HOLD_MS = 1600; // reveal + die read, then the marker retires on its own
+let gazeRevealTimer: ReturnType<typeof setTimeout> | null = null;
 /** The Stab toast cue for a frame: a stab-typed injury ("stab", and the BB2025 fork's "stabForSpp" for a Violent Innovator)
  *  whose reported attacker HOLDS Stab. InjuryTypeStab is also reused by Spiked Ball (no attacker) and Treacherous (the
  *  acting player, no Stab skill) — neither is a Stab use, so neither toasts (Astra 09-14). */
@@ -2862,11 +2916,23 @@ function pumpInjuries() {
   // Phase 1: mirror the injury slot as an INJURY tracking stage (idle only, no visuals).
   trackPipelineStage('INJURY', stepMs);
   // The injury splash + cinematic (owner: run this AFTER the crowd surf / block dice, if any). `afterBlock` adds the knockdown's dice-beat wait ONLY when we didn't already hold the whole injury behind the dice.
+  // Owner 09-15 (spectator: 'ARMOR BREAKS!' and the KO toast overlapped): whatever the store-side wait, the injury
+  // result never surfaces while the renderer still shows the armour roll — poll it off, fail-open capped.
   const startInjury = () => {
+    if (sppGeneration !== casualtySppGeneration) return;
+    const started = Date.now();
+    const tick = () => {
+      if (sppGeneration !== casualtySppGeneration) return;
+      if (armourDiceShowing() && Date.now() - started < presentationMs(INJURY_AFTER_ARMOUR_CAP_MS)) { scheduleGameTimeout(tick, 50); return; }
+      presentInjury();
+    };
+    tick();
+  };
+  const presentInjury = () => {
     if (sppGeneration !== casualtySppGeneration) return;
     state.injurySplash = event;
     // Owner 07-08: KO/casualty removal frame lands a frame later and yanked the token mid-toast — HOLD the spectator drain for the splash window (no-op in play).
-    if (event.isCasualty || event.injuryBase === 0x05) holdPlayback(stepMs);
+    if (event.isCasualty || event.injuryBase === 0x05 || event.injuryBase === 0x09) holdPlayback(stepMs); // 0x09: crowd-surf -> reserves removal (owner 09-15)
     // Live-authoritative puff is shared by every audience; no seat/cinematic gate.
     if (event.square) {
       state.injuryPuff = { square: event.square, seq: (state.injuryPuff?.seq ?? 0) + 1 };
@@ -3603,6 +3669,10 @@ async function pauseSpectatorView(): Promise<void> {
         const rollCoordinate = observedFailedMovementDestination(position.durableProjection.movementOccurrence, pid) ?? coordinate;
         const roll = actionRollPresentation(report, reports, position.model, rollCoordinate, true, reroll);
         if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
+        if (dodgeUsedBreakTackle(report) && coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15) { // owner 09-14: Break Tackle toast on review too
+          const name = playerName(position.model, pid);
+          state.skillUsed = { playerId: pid, skill: 'Break Tackle', square: [coordinate[0]!, coordinate[1]!], name, toast: `${name} uses Break Tackle!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+        }
       }
       const showRolls = (rolls: ActionRollCue[]) => {
         const dice = rolls.flatMap((roll) => roll.die ? [roll.die] : []);
@@ -6083,6 +6153,9 @@ function applyFrameContents(frame: QueuedFrame) {
   const rawReports = (cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
   // B9-1: dedup echoed reports, then log dice rolls only (all reports in debug).
   const reports = dedupeReports(rawReports, (cmd as { commandNr?: number }).commandNr);
+  // Owner 09-17: the per-game dice tally (end screen Dice tab + failed blocks / dodges) reads the same
+  // de-duplicated reports; commandNr keys out frames a replay seek re-applies.
+  ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
   if (game.value) skillDecisionCardData(game.value, String(game.value.dialogParameter?.playerId ?? ''), String(game.value.dialogParameter?.skill ?? ''), reports);
   // Passive block-choice reveal (live non-choosing seat + spectator): apply the server-reported choice to
   // the already-visible dice, hold for the live viewer's 450 ms reveal (spectator x1.1), then permit teardown/next state.
@@ -7010,6 +7083,12 @@ function applyFrameContents(frame: QueuedFrame) {
         if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
         if (cue?.modal) state.rollModal = { ...cue.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
         if (cue?.die) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
+        // Owner 09-14: Break Tackle gets the same skill-use toast as every other skill (icon pop + "<name> uses
+        // Break Tackle!") — keyed off the successful dodge's modifier, since upstream sends no skillUse report for it.
+        if (dodgeUsedBreakTackle(report) && raw && raw[0] >= 0 && raw[0] < 26 && raw[1] >= 0 && raw[1] < 15) {
+          const name = playerName(game.value, String(pid));
+          state.skillUsed = { playerId: String(pid), skill: 'Break Tackle', square: [raw[0], raw[1]], name, toast: `${name} uses Break Tackle!`, seq: (state.skillUsed?.seq ?? 0) + 1 };
+        }
       }
       if (isSkillUse || isSkillDecline) {
         const cue = skillUsePresentation(report, raw, visibleBlockContext, playerName(game.value, String(pid)));
@@ -7018,10 +7097,28 @@ function applyFrameContents(frame: QueuedFrame) {
     }
     const fireballSpellEffect = reports.some((report) => String(report.reportId) === 'spellEffectRoll'
       && String(report.specialEffect) === 'fireball');
+    // Owner 09-15: a gaze DECLARATION reaches every seat as `gameSetDefenderId` while the acting action is a gaze —
+    // reveal the target (token + crosshair) and let it read before the gaze die lands.
+    const gazeDeclaredChange = changes.find((change) => String(change.modelChangeId) === 'gameSetDefenderId' && !!change.modelChangeValue);
+    const gazeActing = game.value.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+    const gazeDeclared = !!gazeDeclaredChange && /gaze/i.test(String(gazeActing?.playerAction ?? '')) && !!gazeActing?.playerId;
+    if (gazeDeclared) {
+      const reveal = { gazerId: String(gazeActing!.playerId), targetId: String(gazeDeclaredChange!.modelChangeValue), seq: (state.gazeTargetReveal?.seq ?? 0) + 1 };
+      state.gazeTargetReveal = reveal;
+      if (gazeRevealTimer) cancelGameTimeout(gazeRevealTimer);
+      gazeRevealTimer = scheduleGameTimeout(() => { gazeRevealTimer = null; if (state.gazeTargetReveal?.seq === reveal.seq) state.gazeTargetReveal = null; }, presentationMs(GAZE_REVEAL_HOLD_MS));
+    }
     const pushDice = (batch: typeof firstRolls) => {
       if (batch.length === 0) return;
       const surface = () => { state.actionDice = { rolls: batch, seq: (state.actionDice?.seq ?? 0) + 1 }; };
-      if (!fireballSpellEffect || !enqueueBehindFireball(`fireballRoll:${String((cmd as { commandNr?: unknown }).commandNr)}`, surface)) surface();
+      const surfaceNow = () => { if (!fireballSpellEffect || !enqueueBehindFireball(`fireballRoll:${String((cmd as { commandNr?: unknown }).commandNr)}`, surface)) surface(); };
+      if (gazeDeclared && !playback.catchingUp && batch.some((die) => die.cause === 'gaze')) {
+        holdPlayback(presentationMs(GAZE_REVEAL_MS));
+        const modelAtSchedule = game.value;
+        scheduleGameTimeout(() => { if (game.value === modelAtSchedule) surfaceNow(); }, presentationMs(GAZE_REVEAL_MS));
+        return;
+      }
+      surfaceNow();
     };
     const hasFail = firstRolls.some((r) => r.failed);
     // Owner 2026-07-06: a BALL PICKUP roll (success or fail) must RENDER and gate the next turn — hold the drain a beat so the pickup die reads before the ball settles / the turn advances (a failed pickup is also a turnover, gated by hasFail below).
@@ -7178,7 +7275,14 @@ function applyFrameContents(frame: QueuedFrame) {
     } else if (!isSu) {
       autoFiredSkillDialog = null; // dialog gone → re-arm the auto-fire latch for the next prompt
       answeredSkillDialog = null;
-      if (state.skillChoice && !state.skillChoice.mine) state.skillChoice = null; // spectator drop
+      const passive = state.skillChoice && !state.skillChoice.mine ? state.skillChoice : null;
+      // Owner 09-15: a follow-up skill (Side Step) just USED keeps its passive card as "is using" while the push
+      // square is still the deciding coach's to pick; instant-resolving skills drop as before.
+      const usedNow = !!passive && reports.some((r) => String(r.reportId) === 'skillUse' && String(r.playerId ?? '') === passive.playerId
+        && normSkill(r.skill) === normSkill(passive.skill) && (r as { used?: unknown }).used !== false);
+      if (passive && skillUseHasFollowup(passive.skill) && skillUseFollowupPending(skillUseGame) && (passive.using || usedNow)) {
+        if (!passive.using) state.skillChoice = { ...passive, using: true, seq: passive.seq + 1 };
+      } else if (state.skillChoice && !state.skillChoice.mine) state.skillChoice = null; // spectator drop
       // R-A6: retire an OWNED card whose armed instance is gone — the dialog moved on (turnover/injury frames),
       // so R-E1 would refuse its send anyway; without this the surface persisted (Wrestle decline, owner 08-18).
       else if (state.skillChoice?.mine && state.skillChoice.origin === 'shotToNothing') {
@@ -7426,7 +7530,7 @@ function applyFrameContents(frame: QueuedFrame) {
     const playingPlayerIds = new Set(playingRoster.map((player) => player.playerId));
     for (const report of reports) {
       const id = String(report.reportId);
-      if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || TURNOVER_FAIL_IDS.has(id)) {
+      if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || id === 'steadyFootingRoll' || TURNOVER_FAIL_IDS.has(id)) {
         turnoverArmed = turnoverArmAfterReport(turnoverArmed, report, playingPlayerIds);
         if (!turnoverArmed) turnoverArmedAfterInjury = false;
       } else if (id === 'injury') {
@@ -8021,6 +8125,7 @@ function resetPlayback() {
   state.passDestination = null; // a server-owned destination never crosses a snapshot boundary
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
+  state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
   prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
@@ -8784,6 +8889,11 @@ interface PlannerPlan {
   /** A successful re-roll can return the server to move selection without applying the attempted coordinate.
    *  In that exact case the same still-offered destination must be sent once more before the route can continue. */
   retryResolvedIdx: number | null;
+  /** Owner 09-15 (g1942731 cmd 770): the last FAILED flagged roll for the current square, pending a re-roll or the
+   *  fall/turnover. When the server then drops the activation, the plan ended on that roll — an expected outcome,
+   *  not a cancelled plan — so it retires quietly instead of the "lost the activation" warning. A later successful
+   *  re-roll clears it. */
+  failedRoll: PlanResolution | null;
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
    *  server republish of that target, never the surviving entry from the prior roll generation. */
   sentOfferRevisions: number[];
@@ -8983,6 +9093,16 @@ function plannerArmAbort() {
   }, PLANNER_ABORT_MS);
 }
 function plannerClearAbort() { if (plannerAbortTimer) { cancelGameTimeout(plannerAbortTimer); plannerAbortTimer = null; } }
+const PLAN_RESOLUTION_LABEL: Record<PlanResolution, string> = { gfi: 'rush', dodge: 'dodge', pickup: 'pick-up' };
+/** Owner 09-15: the plan ended on a server-resolved outcome (a failed roll → fall / turnover). No ⚠, no notice —
+ *  the roll's own presentation and the turnover splash already say what happened. */
+function plannerRetireQuietly(reason: string) {
+  if (!plannerPlan) return;
+  plannerSet(null); plannerClearAbort();
+  if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
+  state.blitzBlockChoice = null;
+  log('system', `plan ended — ${reason}.`);
+}
 function plannerFlush(reason: string) {
   if (!plannerPlan) return;
   plannerSet(null); plannerClearAbort();
@@ -9153,7 +9273,7 @@ function plannerStart(input: {
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
-    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, sentOfferRevisions: [],
+    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, failedRoll: null, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
@@ -9280,7 +9400,11 @@ function plannerAdvance() {
       return;
     }
     case 'moving': {
-      if (actingId !== p.playerId) { plannerFlush('lost the activation during the walk'); return; }
+      if (actingId !== p.playerId) {
+        if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`); // the fall/turnover tells the story
+        else plannerFlush('lost the activation during the walk');
+        return;
+      }
       if (plannerActingAction() !== p.declare) { plannerFlush('the move action ended'); return; }
       const coord = plannerCoord(p.playerId);
       // Advance after the coordinate echo and successful required rolls; MOVING can persist for the activation.
@@ -12777,7 +12901,9 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
       for (const r of reps) {
         if (String(r.playerId ?? '') !== p.playerId) continue;
         const kind = PLAN_RESOLUTION_REPORT[String(r.reportId ?? '')];
+        if (kind && cur.has(kind) && r.successful === false) { p.failedRoll = kind; continue; } // owner 09-15: remembered for the quiet retire
         if (!kind || r.successful !== true || !cur.has(kind)) continue;
+        p.failedRoll = null; // a success (incl. a rescuing re-roll) supersedes the remembered failure
         if (arrived) cur.delete(kind);
         else if (r.reRolled === true) {
           // A successful reroll may settle the roll but leave the model at the origin. Mark the current destination
@@ -16751,10 +16877,15 @@ function drivePregameStep() {
       // receiving coach NOMINATES the player who takes the touchback. INTERACTIVE:
       // the 0.1 pick rail in confirm mode (click a crosshair, then Confirm, per the
       // movement confirm-bar convention); not declinable. Headless: first player.
-      // Owner 09-06 (game 943): DialogTouchbackParameter carries NO teamId, so the generic gate admitted BOTH seats — the
-      // kicking coach got the offer and the receiver did not. The touchback belongs to the team that is PLAYING
-      // (server: homePlaying true while the home team received; upstream's client keys its touchback state on the same).
-      const touchbackTeamId = (g.homePlaying ? g.teamHome : g.teamAway)?.teamId;
+      // Owner 09-06 (game 943): DialogTouchbackParameter carries NO teamId, so the generic gate admitted BOTH seats.
+      // Owner 09-14 (FUMBBL g1942552 cmd 142→143, Blitz! kick-off then a landing bounce out of bounds): the 09-06
+      // rule keyed the touchback on the PLAYING team — but the KICKER is the playing side all through the kick-off
+      // (upstream ClientStateFactory:206-211 KICKOFF) and StepApplyKickoffResult:412-415 skips the flip on a touchback,
+      // so at dialog time the RECEIVER is the side NOT playing (upstream DialogTouchbackHandler:25 shows it on
+      // `!game.isHomePlaying()`, ClientStateFactory:273-278 likewise). The wire agrees: homePlaying=false at the
+      // dialog, the ball then placed on a home player. Keyed on the playing side, the receiving coach got no prompt
+      // and the game waited on them forever — the owner's "hard freeze".
+      const touchbackTeamId = (g.homePlaying ? g.teamAway : g.teamHome)?.teamId;
       if (!addressedToMe || !myTeamId || touchbackTeamId !== myTeamId) return;
       const eligible = interactiveSetup
         ? myOnFieldPlayers(g).filter((d) => d.playerCoordinate).map((d) => d.playerId)
@@ -17169,7 +17300,12 @@ function handleServerPush(cmd: Record<string, unknown>) {
   const id = String(cmd.netCommandId ?? '');
   const g = game.value;
   if (id === NetCommandId.SERVER_SOUND) {
-    playSound(cmd.sound as string | null | undefined);
+    const sound = cmd.sound as string | null | undefined;
+    // Owner 09-14: the server pushes 'touchdown' the instant the score resolves, while the scorer is still walking
+    // on screen. Gate it on the rendered walk (queued steps + renderer tween probe, capped); catch-up keeps its
+    // immediate (muted) play.
+    if (sound === 'touchdown' && !playback.catchingUp) scheduleTouchdownSound();
+    else playSound(sound);
     return;
   }
   if (id === NetCommandId.SERVER_TEAM_SETUP_LIST) {
