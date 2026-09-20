@@ -2905,6 +2905,10 @@ watch(
     // no icon fade, no crowd cheer (nothing was used). It rides the SAME fading pill as the used-toast
     // (owner 08-19 overruled the 07-13 persistent click-to-acknowledge surface: it read as a modal).
     if (su.declined) {
+      // Owner 09-19: the declined cue pops the same badge (dimmed, struck) over the token — one shape for every skill cue.
+      const liveD = su.anchored ? undefined : gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === su.playerId)?.playerCoordinate;
+      const iconSqD = liveD && liveD[0] >= 0 && liveD[0] < 26 && liveD[1] >= 0 && liveD[1] < 15 ? ([liveD[0], liveD[1]] as [number, number]) : su.square;
+      renderer.playSkillIconFade(iconSqD, su.skill, true);
       const pd = su.anchored ? renderer.feetToCanvas(su.square, true) : renderer.playerFeetScreenPos(su.playerId, su.square);
       showToast(`${su.name} does not use ${su.skill}`, pd?.x ?? 0, pd?.y ?? 44, 3000, true);
       cancelAnimationFrame(skillToastRaf);
@@ -10409,7 +10413,7 @@ function openInduceRosters(): void {
 }
 function closeInduceRosters(): void { induceRosterOpen.value = false; induceRosterCardId.value = null; }
 function selectInduceRosterSide(side: 'home' | 'away'): void { induceRosterSide.value = side; induceRosterCardId.value = null; }
-interface InduceRosterRow { playerId: string; nr: number; name: string; position: string; addedSkills: string; spp: number }
+interface InduceRosterRow { playerId: string; nr: number; name: string; position: string; addedSkills: string; addedSkillList: { name: string; label: string }[]; spp: number }
 const induceRosterTeams = computed(() => {
   const game = gameStore.game.value;
   const one = (side: 'home' | 'away') => {
@@ -10426,11 +10430,17 @@ const induceRosterRows = computed<InduceRosterRow[]>(() => {
   const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
   return [...team.playerArray]
     .sort((a, b) => a.playerNr - b.playerNr)
-    .map((player) => ({
-      playerId: player.playerId, nr: player.playerNr, name: player.playerName ?? '(unknown)',
-      position: positionNameFor({ player, side }), addedSkills: acquiredSkills(player, team),
-      spp: (results.find((r) => r.playerId === player.playerId)?.currentSpps as number | undefined) ?? 0,
-    }));
+    .map((player) => {
+      // Owner 09-19: the same row shape as the end-of-game roster — category-coloured added-skill chips.
+      const posSkills = new Set((team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] })
+        .positionArray?.find((q) => q.positionId === player.positionId)?.skillArray ?? []);
+      const addedSkillList = playerDetailSkills(player, posSkills).filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
+      return {
+        playerId: player.playerId, nr: player.playerNr, name: player.playerName ?? '(unknown)',
+        position: positionNameFor({ player, side }), addedSkills: addedSkillList.map((sk) => sk.label).join(', '), addedSkillList,
+        spp: (results.find((r) => r.playerId === player.playerId)?.currentSpps as number | undefined) ?? 0,
+      };
+    });
 });
 const induceRosterCard = computed<PgMvpCard | null>(() => {
   const game = gameStore.game.value;
@@ -11709,9 +11719,12 @@ function sendChat() {
                     :data-active="induceRosterCardId === pl.playerId"
                     @click="induceRosterCardId = pl.playerId" @keydown.enter.prevent="induceRosterCardId = pl.playerId">
                     <span class="pg-roster-nr">#{{ pl.nr }}</span>
+                    <span class="pg-roster-portrait-slot"><img v-if="pgRosterPortrait(pl.playerId)" class="pg-roster-portrait" :src="pgRosterPortrait(pl.playerId)!" alt="" /></span>
                     <span class="pg-roster-name">{{ pl.name }}</span>
                     <span class="pg-roster-pos">{{ pl.position }}</span>
-                    <span v-if="pl.addedSkills" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">+ {{ pl.addedSkills }}</span>
+                    <span v-if="pl.addedSkillList.length" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">
+                      <span v-for="skill in pl.addedSkillList" :key="skill.name" class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)">{{ skill.label }}</span>
+                    </span>
                     <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
                   </li>
                 </ul>
@@ -14989,19 +15002,21 @@ function sendChat() {
 .pg-stat-cell.pg-a { text-align: center; }
 /* Owner 09-17: the DICE tab */
 .pg-dice-modal { position: fixed; inset: 0; z-index: 210; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
-.pg-dice-card { width: min(1500px, 94vw); height: min(900px, 92vh); display: flex; flex-direction: column; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 20px 60px #000c; color: var(--ui-text); overflow: hidden; }
+/* Owner 09-19: the pane fills ~94% x 91% of the viewport and its type scales with it — every size inside is in em off the card's viewport-driven font-size. */
+.pg-dice-card { width: 94vw; height: 91vh; font-size: clamp(14px, 0.95vw, 24px); display: flex; flex-direction: column; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 10px; box-shadow: 0 20px 60px #000c; color: var(--ui-text); overflow: hidden; }
 .pg-dice-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--ui-border); }
-.pg-dice-close { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); border-radius: 6px; width: 32px; height: 32px; font-size: 16px; cursor: pointer; }
+.pg-dice-close { border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-text); border-radius: 6px; width: 1.8em; height: 1.8em; font-size: 1em; cursor: pointer; }
+.pg-dice-head .pg-title { font-size: 1.5em; } /* the header scales with the card too */
 .pg-dice-close:hover { background: var(--ui-accent); color: var(--ui-text-on-primary); border-color: var(--ui-accent); }
 .pg-dice-switch { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface); }
-.pg-dice-switch button { display: flex; align-items: center; gap: 6px; padding: 3px 12px 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 0.9rem; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
-.pg-dice-switch button img { width: 22px; height: 22px; object-fit: contain; }
+.pg-dice-switch button { display: flex; align-items: center; gap: 0.4em; padding: 0.2em 0.8em 0.2em 0.4em; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-family: 'Nuffle', sans-serif; font-weight: 800; font-size: 1em; letter-spacing: 0.03em; cursor: pointer; border-bottom: 3px solid transparent; }
+.pg-dice-switch button img { width: 1.5em; height: 1.5em; object-fit: contain; }
 .pg-dice-switch button:hover { color: var(--ui-text); }
 .pg-dice-switch button[aria-selected='true'] { background: var(--ui-surface-2); color: var(--ui-heading); }
 .pg-dice-switch button[aria-selected='true'][data-side='home'] { border-bottom-color: #3d7cff; }
 .pg-dice-switch button[aria-selected='true'][data-side='away'] { border-bottom-color: #f2363c; }
 /* Owner 09-17 (r4): a single scrollable stack of charts on the left (chart width as before), likelihood + fun facts in the middle. */
-.pg-dice-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 490px minmax(0, 1fr); gap: 12px 24px; padding: 12px 16px 14px; }
+.pg-dice-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: clamp(380px, 27vw, 640px) minmax(0, 1fr); gap: 0.75em 1.5em; padding: 0.75em 1em 0.9em; }
 .pg-dice-left { min-height: 0; overflow: auto; padding-right: 6px; }
 .pg-dice-cols.pg-dice-cols-charts { grid-template-columns: 1fr; }
 .pg-dice-cols-charts .pg-dice-col { display: flex; flex-direction: column; }
@@ -15010,20 +15025,20 @@ function sendChat() {
 .pg-dice-right-bottom { min-height: 0; overflow: auto; }
 /* Owner 09-17 (r5): likelihood + fun facts follow the selector (one coach), so everything can come up a size. */
 .pg-dice-cols.pg-dice-cols-single { grid-template-columns: 1fr; }
-.pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 10px 16px 8px; }
+.pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 0.6em 1em 0.5em; }
 .pg-dice-col-single[data-side='away'] .pg-dice-block { border-top-color: #f2363c; }
-.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 16px; padding: 4px 0; } /* symmetric: the curve sits dead centre of the panel */
+.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 1em; padding: 0.25em 0; } /* symmetric: the curve sits dead centre of the panel */
 .pg-dice-col-single .pg-dice-gauge-value { text-align: right; max-width: none; }
-.pg-dice-col-single .pg-dice-gauge-label { font-size: 1.15rem; }
-.pg-dice-col-single .pg-dice-gauge { height: 90px; }
+.pg-dice-col-single .pg-dice-gauge-label { font-size: 1.3em; }
+.pg-dice-col-single .pg-dice-gauge { height: clamp(70px, 9vh, 130px); }
 .pg-dice-col-single .pg-dice-curve { stroke-width: 1.6; }
 .pg-dice-col-single .pg-dice-marker { stroke-width: 3.5; }
-.pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.3rem; }
-.pg-dice-col-single .pg-dice-fact { padding: 5px 0; gap: 2px 16px; }
-.pg-dice-col-single .pg-dice-fact-label { font-size: 1.15rem; }
-.pg-dice-col-single .pg-dice-fact-value { font-size: 1.3rem; }
-.pg-dice-col-single .pg-dice-fact-detail { font-size: 0.95rem; }
-.pg-dice-grid h3 { margin: 0 0 6px; font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: 1.05rem; color: var(--ui-heading); letter-spacing: 0.03em; }
+.pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.5em; }
+.pg-dice-col-single .pg-dice-fact { padding: 0.3em 0; gap: 0.1em 1em; }
+.pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
+.pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
+.pg-dice-col-single .pg-dice-fact-detail { font-size: 1.05em; }
+.pg-dice-grid h3 { margin: 0 0 0.35em; font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: 1.2em; color: var(--ui-heading); letter-spacing: 0.03em; }
 .pg-dice-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
 .pg-dice-fact { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 4px 0; border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
 .pg-dice-fact:first-child { border-top: 0; }
@@ -15035,8 +15050,8 @@ function sendChat() {
 .pg-dice-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
 .pg-dice-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
 .pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid var(--ui-border); }
-.pg-dice-block h4 { margin: 0 0 4px; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 0.95rem; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
-.pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.78rem; color: var(--ui-muted); letter-spacing: 0; }
+.pg-dice-block h4 { margin: 0 0 0.25em; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
+.pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.85em; color: var(--ui-muted); letter-spacing: 0; }
 .pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
 .pg-dice-chart { width: 100%; height: auto; display: block; }
 .pg-dice-bar { fill: #3d7cff; opacity: 0.85; }

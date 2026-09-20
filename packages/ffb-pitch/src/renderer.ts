@@ -12423,7 +12423,7 @@ export class PitchRenderer {
    *  skill-use spotlight; reuses the action-die pop-in/hold/fade lifecycle so it
    *  self-removes. Positioned on the token's real column (tokenPos, perspective-
    *  nudged) so it reads as "this player, right here". */
-  playSkillIconFade(square: [number, number], skillName: string): void {
+  playSkillIconFade(square: [number, number], skillName: string, declined = false): void {
     if (!this.app || !isOnPitch(square)) return;
     const [x, y] = square;
     const anchor = squareAnchor(x, y);
@@ -12432,7 +12432,10 @@ export class PitchRenderer {
     const node = new Container();
     this.trackLiveSkillAsset(node, () => {
       for (const child of node.removeChildren()) child.destroy({ children: true });
-      const tex = skillName ? skillIcon(skillName, this.skillIconStyle) : undefined;
+      // Owner 09-19: one look for every skill cue — the badge whenever it resolves (a valued name like "Loner (4+)" or
+      // "Hatred (Orc)" looks up its bare skill), the lettered plate only when no badge exists at all.
+      const bare = skillName.replace(/\s*\(.*\)\s*$/, '').trim();
+      const tex = skillName ? skillIcon(skillName, this.skillIconStyle) ?? (bare && bare !== skillName ? skillIcon(bare, this.skillIconStyle) : undefined) : undefined;
       if (tex) {
         const s = new Sprite(tex);
         s.anchor.set(0.5, 0.5);
@@ -12447,11 +12450,17 @@ export class PitchRenderer {
         t.anchor.set(0.5, 0.5);
         node.addChild(plate, t);
       }
+      // Owner 09-19: a DECLINED skill (Stand Firm not used) pops the same badge, dimmed and struck through, so the
+      // cue reads the same shape either way instead of an icon one time and a bare pill the next.
+      if (declined) {
+        node.addChild(new Graphics().moveTo(-TILE_W * 0.3, -TILE_W * 0.3).lineTo(TILE_W * 0.3, TILE_W * 0.3).stroke({ color: 0xe0443a, width: 3, alpha: 0.95 }));
+        node.alpha = 0.7;
+      }
     });
     node.position.set(tp.x, anchor.y - TILE_H * 0.9 * scale); // over the head
     node.scale.set(0.05);
     node.alpha = 0;
-    node.zIndex = this.depthZ(x, y) + 60;
+    node.zIndex = this.depthZ(x, y) + 75; // owner 09-19: above the armour (+60/62) and injury (+70/72) plates — a Stand Firm icon was hidden behind the armour roll
     this.effectsLayer.addChild(node);
     this.actionDice.push({ node, baseScale: scale * 0.67, start: performance.now() }); // owner 09-07: skill-use pop -33%
   }

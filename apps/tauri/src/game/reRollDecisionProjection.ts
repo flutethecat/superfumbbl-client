@@ -236,10 +236,11 @@ export function offeredReRollOptions(
     : rrProps.includes('PUMP_UP_THE_CROWD') ? 'Pump up the Crowd'
       : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
         : null;
-  const specialTeamSource = rrProps.includes('BRILLIANT_COACHING') ? 'Brilliant Coaching ReRoll'
-    : rrProps.includes('PUMP_UP_THE_CROWD') ? 'Pump up the Crowd'
-      : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
-        : null;
+  // Owner 09-19 (wire g1944287 seq 295/470): the server only enters useTeamReRoll for the "Team ReRoll" source
+  // (upstream bb2025 RollMechanic.useReRoll:288-314) and picks the special source itself, Brilliant Coaching
+  // before TRR (findUsedTeamReRollSource:441-458). A "Brilliant Coaching ReRoll" source has no skill behind
+  // it, so the server dropped the answer: no re-roll, nothing consumed, the pick-up failure stood.
+  const specialTeamSource = specialTeamLabel ? 'Team ReRoll' : null;
   const hasTeam = rrProps.some((property) =>
     ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property))
     || !!dp.teamReRollOption;

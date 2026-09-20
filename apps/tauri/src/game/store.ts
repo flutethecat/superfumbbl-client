@@ -1413,6 +1413,14 @@ export function turnoverArmAfterReport(
     const pid = String(report.playerId ?? '');
     return pid && playingPlayerIds.has(pid) && report.successful === true ? false : armed;
   }
+  // Owner 09-19 (g1944287 seq 3552-3618): a catchRoll failed on a SCATTER ("Inaccurate Pass or Scatter" — the ball
+  // bounced onto a player), which is no turnover; the coach activated three more players and their own End Turn was
+  // painted as a turnover. A fresh activation by the playing side (ReportPlayerAction) proves the turn did not end —
+  // a real turnover closes the turn before any further activation can start — so it is the disarm.
+  if (id === 'playerAction') {
+    const pid = String(report.actingPlayerId ?? report.playerId ?? '');
+    return pid && playingPlayerIds.has(pid) ? false : armed;
+  }
   if (!TURNOVER_FAIL_IDS.has(id)) return armed;
   const playerId = String(report.playerId ?? '');
   if (!playerId || !playingPlayerIds.has(playerId)) return armed;
@@ -1687,7 +1695,7 @@ function clearRerollSplash(): void {
 // any TRR use surfaces the splash (dodge/GFI/pickup included). Skill-source rerolls keep the glow-only read.
 /** Owner 09-14: a Leader re-roll is a team re-roll in all but name — it gets the splash too ("<Coach> uses their Leader reroll!"). */
 const isLeaderReroll = (raw: string | undefined) => String(raw ?? '').replace(/[^a-z]/gi, '').toLowerCase() === 'leader';
-const rerollSplashWanted = (isTeam: boolean, raw?: string) => isTeam || isLeaderReroll(raw);
+const rerollSplashWanted = (isTeam: boolean, raw?: string) => isTeam || !!raw; // owner 09-19: EVERY re-roll rides the re-roll toast (team, Leader, Pro, Dodge/Sure Feet/…) — one surface, not icon-fade for skills and a splash for TRR
 // Owner 07-08 (rev 2/9): FAIL→REROLL staging is STRICTLY SERIAL — the wire delivers fail+spend+result in ONE burst; we show failed die (full display), pause, reroll splash, pause, re-rolled die. Spectator pacing only (holdPlayback no-ops in play). Beats owner-tuned on feel.
 const FAIL_BEAT_MS = 1220; // owner 2026-07-08: −1/3 (was 1830)
 // Owner C3 pt.2: a SUCCESSFUL roll reads ~half the fail beat (owner-tuned to 560); tune here if the feel is off.
@@ -1710,10 +1718,13 @@ function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = t
   if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
   // playerId rides along so the view can anchor the splash over the acting player's token when no card is on-screen (opponent/spectator action rerolls).
   const coach = (team.coach as string | null) ?? '';
+  const seq = (state.rerollSplash?.seq ?? 0) + 1;
   state.rerollSplash = leader
     // Leader rides the team rail (TRR icon) but names the skill; the view swaps in the Leader skill icon when skill icons are on.
-    ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: `${coach} uses their Leader reroll!`, playerId, seq: (state.rerollSplash?.seq ?? 0) + 1 }
-    : { side, coach, logo, source, isTeam, playerId, seq: (state.rerollSplash?.seq ?? 0) + 1 };
+    ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: `${coach} uses their Leader reroll!`, playerId, seq }
+    : isTeam ? { side, coach, logo, source, isTeam, playerId, seq }
+      // Owner 09-19: a SKILL re-roll (Dodge, Sure Feet, Pro, …) rides the same toast — the skill's icon, the player's name.
+      : { side, coach, logo, source, isTeam, skill: source, text: `${playerName(g, playerId)} uses ${source} to re-roll!`, playerId, seq };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
@@ -1792,6 +1803,11 @@ function clearPendingRailCommands(): void {
 // #14b TB-5 (Nom Anor wave-3): shared manual/timeout END_TURN ack-window guard. A genuinely LOST send re-opens only on the next server-derived turn-key change / timeout-enforcement falling edge / reconnect reset — NEVER a timer.
 let endTurnInFlight = false;
 let endTurnInFlightTurnKey: string | null = null;
+// Owner 09-19: the turnMode OUR in-flight End Turn was sent under, and the latch set when the server's model answers
+// it — a regular-turn End Turn of ours, once ACKNOWLEDGED by the server, means the turnEnd that follows is a turn
+// pass, never a turnover (the server ends a turned-over turn itself; ReportTurnEnd carries no turnover flag).
+let endTurnInFlightMode: string | null = null;
+let ownRegularEndTurnAcked = false;
 
 /** #109 (TK g737): DECLARE-time blitz target lives in `fieldModel.targetSelectionState`, NOT `game.defenderId` (which stays '' until the block report). Returns the SELECTED id or ''. ⚖ pure read of the applied model. */
 /** B8-3: one team's fan-factor determination (dedicated fans + a d3 roll). */
@@ -3653,14 +3669,7 @@ async function pauseSpectatorView(): Promise<void> {
       const rerolledRolls: ActionRollCue[] = [];
       const rerollCue = rerollPresentation(reports);
       const reroll = rerollCue?.isBlockReroll ? null : rerollCue;
-      if (rerollCue?.skill) {
-        const coordinate = position.model.fieldModel.playerDataArray.find((player) => player.playerId === rerollCue.pid)?.playerCoordinate;
-        const cue = skillUsePresentation({ reportId: 'skillUse', playerId: rerollCue.pid, skill: rerollCue.skill }, coordinate,
-          position.durableProjection.block, playerName(position.model, rerollCue.pid));
-        if (cue) state.skillUsed = { ...cue,
-          toast: rerollCue.proSucceeded ? playerName(position.model, rerollCue.pid) + ' uses Pro to reroll!' : cue.toast,
-          seq: (state.skillUsed?.seq ?? 0) + 1 };
-      }
+      // Owner 09-19: a re-roll SKILL no longer raises the skill-use icon + pill — the re-roll toast is the one surface.
       for (const report of reports) {
         const pid = String(report.playerId ?? '');
         const coordinate = position.model.fieldModel.playerDataArray.find((player) => player.playerId === pid)?.playerCoordinate;
@@ -6065,7 +6074,8 @@ function applyFrameContents(frame: QueuedFrame) {
   dialogAlreadyAnswered(); // A cleared or replaced server dialog retires the local answer latch.
   reconcilePrimalSavageryIntent();
   if (endTurnInFlight && endTurnInFlightTurnKey !== currentTurnKey(game.value)) {
-    endTurnInFlight = false; endTurnInFlightTurnKey = null; // #14b TB-5: the applied server model advanced the turn — END_TURN ack landed
+    if (endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; // owner 09-19: the server answered OUR regular End Turn
+    endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; // #14b TB-5: the applied server model advanced the turn — END_TURN ack landed
   }
   // Durable pickup identity is shared with detached history; renderer sequence stays local.
   {
@@ -7017,18 +7027,7 @@ function applyFrameContents(frame: QueuedFrame) {
     if (rr && rrPid) {
       const rerollCue = rerollPresentation(reports)!;
       const { raw: rawSource, isTeam, source, proSucceeded, proFailed, skill: rerollSkill } = rerollCue;
-      if (rerollSkill) {
-        const coordinate = game.value.fieldModel.playerDataArray.find((data) => data.playerId === rrPid)?.playerCoordinate
-          ?? preCoords.get(rrPid) ?? null;
-        if (coordinate && coordinate[0] >= 0 && coordinate[0] < 26 && coordinate[1] >= 0 && coordinate[1] < 15) {
-          state.skillUsed = {
-            playerId: rrPid, skill: rerollSkill, square: [coordinate[0], coordinate[1]],
-            name: playerName(game.value, rrPid),
-            toast: proSucceeded ? `${playerName(game.value, rrPid)} uses Pro to reroll!` : undefined,
-            seq: (state.skillUsed?.seq ?? 0) + 1,
-          };
-        }
-      }
+      void rerollSkill; void proSucceeded; // owner 09-19: the re-roll toast (showRerollSplash) is the one surface for every re-roll source
       if (proFailed) showProFailedSplash(rrPid);
       // A BLOCK reroll = `blockReRoll`, OR (team reroll of a block) a generic `reRoll` that co-occurs with a `blockRoll` this frame (wire-confirmed g1920221 cmd 2456). An action reroll (dodge/GFI) is a `reRoll` with NO blockRoll → the action-dice path stages it.
       const { isBlockReroll, lonerFailed } = rerollCue;
@@ -7530,7 +7529,7 @@ function applyFrameContents(frame: QueuedFrame) {
     const playingPlayerIds = new Set(playingRoster.map((player) => player.playerId));
     for (const report of reports) {
       const id = String(report.reportId);
-      if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || id === 'steadyFootingRoll' || TURNOVER_FAIL_IDS.has(id)) {
+      if (id === 'interceptionRoll' || id === 'modifiedDodgeResultSuccessful' || id === 'steadyFootingRoll' || id === 'playerAction' || TURNOVER_FAIL_IDS.has(id)) {
         turnoverArmed = turnoverArmAfterReport(turnoverArmed, report, playingPlayerIds);
         if (!turnoverArmed) turnoverArmedAfterInjury = false;
       } else if (id === 'injury') {
@@ -7594,6 +7593,13 @@ function applyFrameContents(frame: QueuedFrame) {
       if (state.kickDescend) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
       state.kickoffVictimSplash = null; // #131 fail-safe: a stale kickoff victim-splash never survives a turn
       state.multiBlockSel = null; // #58 (ML-7 fail-safe): a stale multi-block selection never survives a turnEnd
+      if (ownRegularEndTurnAcked) {
+        // Owner 09-19: this turnEnd answers OUR acknowledged regular End Turn — a turn pass by definition, whatever
+        // failed roll the heuristic latched earlier (g1944287 seq 3552→3618: a scatter catch). Consumed here.
+        ownRegularEndTurnAcked = false;
+        turnoverArmed = false;
+        turnoverArmedAfterInjury = false;
+      }
       if (turnEnd.playerIdTouchdown) {
         turnoverArmed = false; // a score consumed the drive — not a turnover
         turnoverArmedAfterInjury = false;
@@ -7784,7 +7790,7 @@ function maybeAutoEndOnTimeout() {
   if (!g) return;
   const enforced = !!(g as { timeoutEnforced?: unknown }).timeoutEnforced;
   if (enforced && !prevTimeoutEnforced) timeoutAutoEndArmed = true;   // TB-1 rising edge → arm
-  if (!enforced && prevTimeoutEnforced) { timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; } // TB-1/TB-5 falling edge (server cleared at turn start) → disarm + ack
+  if (!enforced && prevTimeoutEnforced) { timeoutAutoEndArmed = false; if (endTurnInFlight && endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; } // TB-1/TB-5 falling edge (server cleared at turn start) → disarm + ack
   prevTimeoutEnforced = enforced;
   if (!timeoutAutoEndArmed) return;
   if (endTurnInFlight) return;                                       // #14b TB-5: manual/auto END_TURN already awaits the server turn flip
@@ -7801,7 +7807,7 @@ function maybeAutoEndOnTimeout() {
   if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
   const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
   if (!accepted) return;
-  endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g);
+  endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? '');
   log('system', `play: timeout enforced — auto-ending turn (${g.turnMode})`);
 }
 
@@ -8127,7 +8133,7 @@ function resetPlayback() {
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
-  prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
+  prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
@@ -11489,6 +11495,7 @@ export function installStarTerminalTrioTestHarness(
   state.kickEmBlitzTarget = null;
   endTurnInFlight = false;
   endTurnInFlightTurnKey = null;
+  endTurnInFlightMode = null; ownRegularEndTurnAcked = false;
   seedMoveOfferSnapshot();
   session = { send } as unknown as GameSession;
   return {
@@ -18610,7 +18617,7 @@ export const gameStore = {
     } else if (selected?.response === 'skill') {
       log('system', `play: skill ${selected.source} used (${playerName(game.value, p.playerId)})`);
     } else {
-      log('system', `play: re-roll ${source ? source + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`);
+      log('system', `play: re-roll ${source ? (selected?.label ?? source) + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`); // owner 09-19: the option's label — the wire source is 'Team ReRoll' for Brilliant Coaching too
     }
     state.reRollPrompt = null;
   },
@@ -18960,8 +18967,10 @@ export const gameStore = {
       };
       return;
     }
-    endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g);
+    endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? '');
     log('system', `play: end turn (${g.turnMode})`);
+    // Owner 09-19: the turnover disarm waits for the SERVER's answer (ownRegularEndTurnAcked, set when the applied
+    // model advances past this turn) — never at send time.
   },
 
   /** Confirm/dismiss the Penalty Shootout summary → CLIENT_CONFIRM (mutual dismiss; the server
