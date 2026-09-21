@@ -3889,6 +3889,15 @@ export class PitchRenderer {
       if (this.moveTweens.size === 0 && !walkersNeedTick(this.walkerOwnerId)) return;
       const now = performance.now();
       for (const [id, tween] of this.moveTweens) {
+        // Owner 09-19: a tween must move the token the viewer sees. refresh() rebuilds tokens; the carry-over paths
+        // rebind most tweens, but any that slipped through would animate a detached ghost (and the carried ball
+        // with it) while the visible token sat still — rebind to the live token, or drop the tween if there is none.
+        const visibleToken = this.tokensById.get(id);
+        if (visibleToken && !visibleToken.destroyed && visibleToken !== tween.token) {
+          (tween as { token: Container }).token = visibleToken;
+        } else if (!visibleToken || visibleToken.destroyed) {
+          if (tween.token.destroyed || tween.token.parent == null) { this.moveTweens.delete(id); continue; }
+        }
         this.anchorPresentationTileOnFirstTweenPass(id, tween, now);
         const segments = tween.waypoints.length - 1;
         const total = segments * tween.segmentMs;
@@ -4186,9 +4195,14 @@ export class PitchRenderer {
       // ball is drawn at the model (already-applied) square — the ball ran ahead of the carrier. The tween ticker
       // only follows a token while it tweens; glue the carried-ball group to the carrier's live position every frame.
       const cf = this.carrierFollow;
-      if (cf && !this.moveTweens.has(cf.carrierId)) {
+      if (cf) {
         const carrierToken = this.tokensById.get(cf.carrierId);
-        if (carrierToken && !carrierToken.destroyed) this.followTokenDecorations(cf.carrierId, carrierToken.position.x, carrierToken.position.y);
+        const carrierTween = this.moveTweens.get(cf.carrierId);
+        // Owner 09-19: glue unless the tween is the one driving the VISIBLE token — a tween bound to a rebuilt-away
+        // token would otherwise carry the ball to the destination while the token the viewer sees stays behind.
+        if (carrierToken && !carrierToken.destroyed && (!carrierTween || carrierTween.token !== carrierToken)) {
+          this.followTokenDecorations(cf.carrierId, carrierToken.position.x, carrierToken.position.y);
+        }
       }
       this.updateOffscreenBallIndicator();
       this.updateOffscreenActivePlayerIndicator();

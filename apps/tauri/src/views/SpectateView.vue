@@ -10753,9 +10753,18 @@ function askEndActivation(kind: EndActivationConfirmKind) {
     };
     return;
   }
+  // Owner 09-20: the same idiom for a PUNT that has not started (declared, no squares moved, nothing kicked).
+  if (kind === 'punt' && blitzUntouched(gameStore.game.value)) {
+    endActConfirm.value = {
+      kind,
+      text: 'Cancel your punt? This player has not moved yet.',
+      confirmLabel: 'Cancel Punt',
+    };
+    return;
+  }
   endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind] };
 }
-/** The declared blitzer has done nothing yet: no squares moved, no block thrown. */
+/** The declared blitzer (or punter) has done nothing yet: no squares moved, no block thrown. */
 function blitzUntouched(g: GameJson | null | undefined): boolean {
   const ap = g?.actingPlayer as { currentMove?: number; hasMoved?: boolean; hasBlocked?: boolean } | null | undefined;
   return !!ap && !(ap.hasMoved ?? false) && !(ap.hasBlocked ?? false) && Number(ap.currentMove ?? 0) === 0;
@@ -14838,17 +14847,25 @@ function sendChat() {
 
 /* Owner 09-14: inducement-phase roster viewer (mirrors the MVP-nominate modal + .pg-roster; rides over the phase). */
 .induce-roster-overlay { z-index: 80; }
-.induce-roster-card { height: auto; max-height: min(94vh, 940px); }
+/* Owner 09-20: the inducement Rosters popout fills the viewport like the Dice pane (94vw x 91vh) and its type scales
+   with it — the roster rows and the popped card are em-sized off a vw-driven font-size. */
+.induce-roster-card { width: 94vw; height: 91vh; max-height: 91vh; font-size: clamp(14px, 0.95vw, 22px); }
+.induce-roster-card .pg-roster-team-toggle button { font-size: 1em; }
+.induce-roster-card .pg-roster-team-toggle img { width: 1.8em; height: 1.8em; }
+.induce-roster-card .pg-roster-list li { font-size: 1em; padding: 0.3em 0.4em; }
+.induce-roster-card .pg-roster-portrait-slot { width: 3em; height: 2.8em; }
+.induce-roster-card .pg-roster-portrait { height: 3em; }
 .induce-roster-close { margin-left: auto; border: 1px solid var(--ui-border); background: transparent; color: var(--ui-text); border-radius: 6px; padding: 2px 8px; font: inherit; cursor: pointer; }
 .induce-roster-close:hover { background: var(--ui-surface-2); }
 .induce-roster-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; overflow: hidden; }
 .induce-roster-split { display: flex; gap: 14px; min-height: 0; flex: 1 1 auto; align-items: flex-start; }
-.induce-roster-split .induce-roster-list { flex: 1 1 auto; min-width: 0; max-height: min(60vh, 560px); margin-top: 8px; }
+.induce-roster-split .induce-roster-list { flex: 1 1 auto; min-width: 0; max-height: none; align-self: stretch; margin-top: 8px; }
+.induce-roster-split { min-height: 0; height: 100%; }
 .induce-roster-list li { cursor: pointer; border-radius: 6px; padding: 5px 6px; }
 .induce-roster-list li:hover { background: color-mix(in srgb, var(--ui-surface-2) 70%, var(--ui-text) 8%); }
 .induce-roster-list li[data-active='true'] { background: color-mix(in srgb, var(--ui-accent) 20%, transparent); }
 .induce-roster-list .pg-roster-nr { color: var(--ui-text-dim); font-variant-numeric: tabular-nums; min-width: 2.2em; }
-.induce-roster-popout { flex: 0 0 auto; width: min(340px, 42%); margin-top: 8px; animation: mvp-round-pop 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
+.induce-roster-popout { flex: 0 0 auto; width: min(26em, 42%); margin-top: 8px; animation: mvp-round-pop 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
 @media (max-width: 760px) { .induce-roster-split { flex-direction: column; } .induce-roster-popout { width: 100%; } }
 /* Owner 2026-07-15: MVP NOMINATION roster-summary modal (mirrors .postgame / .pg-roster; theme-token driven). */
 .mvp-nominate-overlay {

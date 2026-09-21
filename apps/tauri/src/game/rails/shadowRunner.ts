@@ -1,5 +1,6 @@
 import { dialogDescriptor } from '../dialogRegistry';
 import { playerActionFallbackState } from '../playerActionRegistry';
+import { staleDialogOutlivedPhase } from '../logic/staleDialog';
 import type { MoveRailDiagnostic, RailDiagnosticSink } from '../railDiagnostics';
 import type { DecisionContext, RailId } from './contracts';
 import {
@@ -257,17 +258,13 @@ export function observeShadowModel(
   }
 }
 
-/** Turn modes in which a setupError/swarmingError dialog is still the live correction surface. Mirrors the legacy
- *  gate's STALE_SETUP_NOTICE_LIVE_MODES (store.ts, live game 1940037). */
-const STALE_SETUP_NOTICE_LIVE_MODES: ReadonlySet<string> = new Set(['setup', 'solidDefence', 'perfectDefence', 'swarming']);
 /** Owner 09-15 (FUMBBL g1942731): upstream shows `setupError` with no matching hide, so the OPPONENT's setup notice
  *  (teamId = theirs) is still the model's dialogParameter when turnMode flips to kickoff. It is informational — the
  *  server never waits on it — so it names no command owner; keyed as one, the generic handler refused the kicking
  *  coach's CLIENT_KICKOFF that the legacy gate (correctly) emitted: a false-refusal divergence, not a real drop. */
-function staleSetupNotice(frame: Readonly<ShadowFrameInput>): boolean {
+function staleDialog(frame: Readonly<ShadowFrameInput>): boolean {
   const dialogId = String(frame.dialog?.dialogId ?? '');
-  return (dialogId === 'setupError' || dialogId === 'swarmingError')
-    && !STALE_SETUP_NOTICE_LIVE_MODES.has(String((frame.game as { turnMode?: unknown }).turnMode ?? ''));
+  return staleDialogOutlivedPhase(dialogId, (frame.game as { turnMode?: unknown }).turnMode);
 }
 
 export function observeShadowOutgoing(
@@ -281,7 +278,7 @@ export function observeShadowOutgoing(
   const rail = railForCommand(command, frame.game);
   if (!rail) return null;
   const key = String(command.netCommandId ?? '');
-  const ownerTeamId = staleSetupNotice(frame) ? null
+  const ownerTeamId = staleDialog(frame) ? null
     : String(frame.dialog?.choosingTeamId ?? frame.dialog?.teamId ?? '') || null;
   const shadowFrame = frameWithEvent(frame, { kind: 'outgoing', rail, key, command, ownerTeamId });
   const handler = shadowHandler(rail);

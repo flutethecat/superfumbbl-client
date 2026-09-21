@@ -1128,6 +1128,12 @@ const CLEAN_ART_RATIOS = [1 / 8, 1 / 4, 1 / 2, 1, 2, 3, 4, 5, 6, 8];
  *  at true size. 0.585 / 0.5 and 1.17 / 1 (the 100%-scaling rungs 2 and 4) are 0.157, inside; 1.32 / 1 (rung 3 at
  *  150%) is 0.275, outside. */
 const SNAP_MAX_LOG_ERROR = 0.2;
+/** Owner 09-20 (o66kh, "two rungs below max the players are too small"): a snap that SHRINKS the figure is held to
+ *  ~8%. Rung 4 at 100% scaling is 1.17 device px per art px; snapping it down to 1:1 drew the figures 15% under the
+ *  fit size while rung 4.5 drew true size and rung 6 snapped UP to 2:1 (+14%) — so 4 read as the small oddball. It
+ *  now draws true size like 4.5; growing snaps keep the wider 20% window (crispness is worth a slightly bigger figure,
+ *  never a smaller one). */
+const SNAP_MAX_SHRINK_LOG_ERROR = 0.08;
 function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boolean, exempt = false): void {
   const base = record.baseSpriteScale;
   if (!base || record.sprite.destroyed || !Number.isFinite(deviceScale) || deviceScale <= 0) return;
@@ -1147,7 +1153,8 @@ function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boo
   // display the physical rungs land at 0.88 / 1.32 / 1.76 / 2.63 device px per art px, so rungs 2 and 3 both
   // snapped to 1:1 — the board grew by half while the figures stayed put ("3 looks small"). Past
   // SNAP_MAX_LOG_ERROR the figure draws at its TRUE size instead; at 100% scaling every rung stays snapped.
-  const snapped = Math.abs(Math.log(nearest / k)) <= SNAP_MAX_LOG_ERROR;
+  const logError = Math.log(nearest / k);
+  const snapped = Math.abs(logError) <= (logError < 0 ? SNAP_MAX_SHRINK_LOG_ERROR : SNAP_MAX_LOG_ERROR);
   const r = exempt || !snapped ? k : nearest;
   const target = base * (r / k);
   if (Math.abs(record.sprite.scale.x - target) > 1e-4) {

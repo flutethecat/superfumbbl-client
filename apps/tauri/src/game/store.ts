@@ -82,6 +82,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { availableActions, movesRandomly, moveSquareInfo, blockAlternativeOffers, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
+import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
 import {
   ApothecaryElectionController,
@@ -7590,7 +7591,12 @@ function applyFrameContents(frame: QueuedFrame) {
       publishBoardPresentationFence();
       state.moveTrailClearSeq = (state.moveTrailClearSeq ?? 0) + 1;
       pendingKickDescendSupersede = false;
-      if (state.kickDescend) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
+      // Owner 09-19: the persistent kick-target reticle survived into later turns (spectator seek / catch-up skips
+      // the landing clear; the carrier clear waits on a wall-clock window) — a turnEnd retires the whole kick
+      // presentation whether the aim or the descend is what's still armed, and an idempotent renderer clear covers a
+      // reticle the store no longer tracks. Same rule in play and spectate.
+      if (state.kickDescend || state.kickAim) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
+      else if (String(game.value.turnMode ?? '') === 'regular') state.kickClearSeq++;
       state.kickoffVictimSplash = null; // #131 fail-safe: a stale kickoff victim-splash never survives a turn
       state.multiBlockSel = null; // #58 (ML-7 fail-safe): a stale multi-block selection never survives a turnEnd
       if (ownRegularEndTurnAcked) {
@@ -9171,8 +9177,9 @@ function plannerPromptPending(): boolean {
   // Hold the planner on model-level dialogs/pushback; UI surfaces arm after model application.
   const g = game.value;
   const dialogId = String((g?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
+  const staleDialog = staleDialogOutlivedPhase(dialogId, g?.turnMode);
   const onTheBallInfo = plannerPlan?.onTheBallMode != null && dialogId === plannerPlan.onTheBallMode;
-  if (g?.dialogParameter && !onTheBallInfo && !dialogAlreadyAnswered()) return true;
+  if (g?.dialogParameter && !staleDialog && !onTheBallInfo && !dialogAlreadyAnswered()) return true;
   if (state.failedActionHold) return true; // owner 09-06: a failed roll's walk is still draining
   // SB-3/SR-269: model-truth HOLD, not FLUSH; the existing model-apply pause/resume advances once waitingForOpponent clears.
   if ((g as Record<string, unknown> | undefined)?.waitingForOpponent) return true;
@@ -9818,7 +9825,11 @@ export function installBlitzTargetLockTestHarness(
   seat: 'owner' | 'opponent' | 'spectator' = 'owner',
 ): {
   target(playerId: string): boolean;
+  delayedTarget(attackerId: string, defenderId: string): boolean;
+  playerBlitz(attackerId: string, defenderId: string): void;
   endActivation(blitzConfirmed?: boolean): void;
+  convertBlitzToMove(): void;
+  nominationState(): { blockInFlight: boolean; blitzDriving: boolean; blitzAttackerId: string | null };
   setCommandNr(commandNr: number): void;
   dispose(): void;
 } {
@@ -9828,7 +9839,15 @@ export function installBlitzTargetLockTestHarness(
   const priorInteractiveSetup = interactiveSetup;
   const priorCommandNr = lastAppliedCommandNr;
   const priorSentOccurrence = sentBlitzTargetOccurrence;
+  const priorSrvId = srvActingId;
+  const priorSrvAction = srvActingAction;
+  const priorBlockInFlight = blockInFlight;
+  const priorBlitzDriving = blitzDriving;
+  const priorBlitzAttackerId = blitzAttackerId;
   sentBlitzTargetOccurrence = null;
+  blockInFlight = false;
+  blitzDriving = false;
+  blitzAttackerId = null;
   game.value = fixture;
   play.active = seat !== 'spectator';
   play.coach = seat === 'owner'
@@ -9837,6 +9856,8 @@ export function installBlitzTargetLockTestHarness(
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'spectator';
   interactiveSetup = true;
+  srvActingId = String(fixture.actingPlayer?.playerId ?? '') || null;
+  srvActingAction = String(fixture.actingPlayer?.playerAction ?? '') || null;
   session = {
     send(command: Record<string, unknown>) {
       if (send(command) === false) throw new Error('test transport refusal');
@@ -9844,7 +9865,11 @@ export function installBlitzTargetLockTestHarness(
   } as unknown as GameSession;
   return {
     target: (playerId) => gameStore.sendTargetSelected(playerId),
+    delayedTarget: (attackerId, defenderId) => sendPlayerBlitzTarget(attackerId, defenderId),
+    playerBlitz: (attackerId, defenderId) => gameStore.playerBlitz(attackerId, defenderId, []),
     endActivation: (blitzConfirmed = false) => gameStore.endActivation({ blitzConfirmed }),
+    convertBlitzToMove: () => gameStore.convertBlitzToMove([9, 10]),
+    nominationState: () => ({ blockInFlight, blitzDriving, blitzAttackerId }),
     setCommandNr(commandNr) { lastAppliedCommandNr = commandNr; },
     dispose() {
       session = priorSession;
@@ -9855,6 +9880,11 @@ export function installBlitzTargetLockTestHarness(
       interactiveSetup = priorInteractiveSetup;
       lastAppliedCommandNr = priorCommandNr;
       sentBlitzTargetOccurrence = priorSentOccurrence;
+      srvActingId = priorSrvId;
+      srvActingAction = priorSrvAction;
+      blockInFlight = priorBlockInFlight;
+      blitzDriving = priorBlitzDriving;
+      blitzAttackerId = priorBlitzAttackerId;
     },
   };
 }
@@ -10765,6 +10795,7 @@ export function installInterceptionTestHarness(
   choose(playerId?: string): void;
   decline(): void;
   stuck(): void;
+  logs(): string[];
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -10777,6 +10808,7 @@ export function installInterceptionTestHarness(
   const priorLiveDialog = liveInterceptionDialog;
   const priorLiveCommandNr = liveInterceptionCommandNr;
   const priorElection = interceptionSkillElection;
+  const logStart = state.log.length;
 
   followupHandled.clear();
   state.playerPick = null;
@@ -10841,6 +10873,7 @@ export function installInterceptionTestHarness(
     choose(playerId?: string) { gameStore.resolvePlayerPick(playerId ?? candidateId); },
     decline() { gameStore.resolvePlayerPick(null); },
     stuck() { gameStore.devCommand('stuck'); },
+    logs: () => state.log.slice(logStart).map((entry) => entry.text),
     dispose() {
       followupHandled.clear();
       for (const key of priorHandled) followupHandled.add(key);
@@ -11169,6 +11202,7 @@ export function installWideRailActivationTestHarness(
   terminal(): void;
   options(): ReturnType<typeof wideRailActivationOptions>;
   election(targetId?: string): ReturnType<typeof gameStore.wideRailActivationElection>;
+  correlationState(): { acknowledged: boolean; seq: number };
   use(ruleId: WideRailPreActionRuleId, expectedPlayerId?: string, expectedPlayerAction?: string, expectedSeq?: number): void;
   dismiss(expectedPlayerId?: string, expectedPlayerAction?: string, expectedSeq?: number): void;
   legacyRaidingParty(): void;
@@ -11191,6 +11225,7 @@ export function installWideRailActivationTestHarness(
   const priorPendingWideRailDeclare = pendingWideRailDeclare;
   const priorAcknowledgedWideRailDeclare = acknowledgedWideRailDeclare;
   const priorCompletedWideRailDeclare = completedWideRailDeclare;
+  const priorWideRailDeclareSeq = wideRailDeclareSeq;
   const priorDeferredStandUpWideRail = deferredStandUpWideRail;
   const priorInteractiveSetup = interactiveSetup;
   const priorPregameHandled = [...pregameHandled];
@@ -11263,6 +11298,9 @@ export function installWideRailActivationTestHarness(
     election(targetId) {
       return gameStore.wideRailActivationElection(targetId);
     },
+    correlationState() {
+      return { acknowledged: acknowledgedWideRailDeclare !== null, seq: wideRailDeclareSeq };
+    },
     use(ruleId, expectedPlayerId, expectedPlayerAction, expectedSeq) {
       gameStore.useWideRailActivationRule(ruleId, expectedPlayerId, expectedPlayerAction, expectedSeq);
     },
@@ -11320,6 +11358,7 @@ export function installWideRailActivationTestHarness(
       pendingWideRailDeclare = priorPendingWideRailDeclare;
       acknowledgedWideRailDeclare = priorAcknowledgedWideRailDeclare;
       completedWideRailDeclare = priorCompletedWideRailDeclare;
+      wideRailDeclareSeq = priorWideRailDeclareSeq;
       deferredStandUpWideRail = priorDeferredStandUpWideRail;
       interactiveSetup = priorInteractiveSetup;
       pregameHandled.clear();
@@ -11835,20 +11874,31 @@ export function installSetupErrorRecoveryTestHarness(
   swarmPlace(playerId: string, coordinate: [number, number]): void;
   swarmSubmit(): void;
   attempt(command: Record<string, unknown>): boolean;
+  plannerPending(): boolean;
+  setOrder66(enabled: boolean): void;
+  driveLegacyDialog(): void;
+  playerPick(): typeof state.playerPick;
+  armBlockPartial(): void;
+  stuck(): void;
+  logs(): string[];
   dispose(): void;
 } {
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
   const priorUiMode = settings.uiMode;
+  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorFastPregame = fastPregame;
   const priorSetup = state.setupPhase;
   const priorSwarming = state.swarmingPhase;
+  const priorPlayerPick = state.playerPick;
+  const priorBlockPartial = state.blockPartial;
   const priorHandled = [...pregameHandled];
   const priorAnsweredKey = answeredDialogInstanceKey;
   const priorAnsweredRef = answeredDialogInstanceRef;
   const priorCommandNr = lastAppliedCommandNr;
+  const logStart = state.log.length;
 
   pregameHandled.clear();
   clearAnsweredDialogInstance();
@@ -11865,6 +11915,7 @@ export function installSetupErrorRecoveryTestHarness(
   fastPregame = false;
   state.setupPhase = null;
   state.swarmingPhase = null;
+  state.playerPick = null;
   session = {
     send(command: Record<string, unknown>) {
       if (send(command) === false) throw new Error('test transport refusal');
@@ -11893,6 +11944,13 @@ export function installSetupErrorRecoveryTestHarness(
     swarmPlace: (playerId, coordinate) => gameStore.swarmingPlace(playerId, coordinate),
     swarmSubmit: () => gameStore.swarmingConfirm(),
     attempt: (command) => sendCommand(command),
+    plannerPending: () => plannerPromptPending(),
+    setOrder66: (enabled) => { settings.order66 = enabled; },
+    driveLegacyDialog: () => drivePregameStep(),
+    playerPick: () => state.playerPick,
+    armBlockPartial: () => { state.blockPartial = {} as NonNullable<typeof state.blockPartial>; },
+    stuck: () => gameStore.devCommand('stuck'),
+    logs: () => state.log.slice(logStart).map((entry) => entry.text),
     dispose() {
       clearSetupLoop();
       pregameHandled.clear();
@@ -11906,10 +11964,13 @@ export function installSetupErrorRecoveryTestHarness(
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
       settings.uiMode = priorUiMode;
+      settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       fastPregame = priorFastPregame;
       state.setupPhase = priorSetup;
       state.swarmingPhase = priorSwarming;
+      state.playerPick = priorPlayerPick;
+      state.blockPartial = priorBlockPartial;
     },
   };
 }
@@ -13155,6 +13216,20 @@ function ownedBlitzTargetDialogCommandPermitted(g: GameJson, command: Record<str
   return !!targetId && (g.fieldModel?.playerDataArray ?? []).some((data) => data.playerId === targetId);
 }
 
+function isSelfBlitzNomination(g: GameJson, targetId: string, expectedActingId?: string): boolean {
+  const actingId = expectedActingId
+    ?? String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+  return !!actingId && targetId === actingId;
+}
+
+function sendPlayerBlitzTarget(attackerId: string, defenderId: string): boolean {
+  const g = game.value;
+  if (!g
+    || isSelfBlitzNomination(g, defenderId, attackerId)
+    || isSelfBlitzNomination(g, defenderId)) return false;
+  return sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId: defenderId });
+}
+
 /**
  * Declaration-shaped commands are normally forbidden while a raw server dialog is live. A small number of
  * upstream states deliberately keep such a dialog open while awaiting another declaration-shaped command.
@@ -13187,17 +13262,13 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
   // model's dialogParameter when turnMode flips to kickoff. It is informational (the server never waits on it), so
   // outside the setup turn modes it must not veto declarations: the kicking coach's CLIENT_KICKOFF was dropped here.
   const liveDialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
-  const staleSetupNotice = (liveDialogId === 'setupError' || liveDialogId === 'swarmingError')
-    && !STALE_SETUP_NOTICE_LIVE_MODES.has(String(g.turnMode ?? ''));
-  if (commandActionClass(id) === 'declare' && g.dialogParameter && !dialogAlreadyAnswered() && !staleSetupNotice) {
+  const staleDialog = staleDialogOutlivedPhase(liveDialogId, g.turnMode);
+  if (commandActionClass(id) === 'declare' && g.dialogParameter && !dialogAlreadyAnswered() && !staleDialog) {
     return ownedDeclarationInsideLiveDialogPermitted(g, cmd);
   }
   const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
   return actionAllowed(g, ctx, commandActionClass(id));
 }
-/** Turn modes in which a setupError/swarmingError dialog is still the live correction surface (see above). */
-const STALE_SETUP_NOTICE_LIVE_MODES = new Set(['setup', 'solidDefence', 'perfectDefence', 'swarming']);
-
 function sendCommand(cmd: Record<string, unknown>): boolean {
   if (!play.active || spectatorTransport?.review.source === 'live-review' || !replayAllowsGameCommand(replay.active)) {
     observeOutgoingShadow(cmd, 'dropped');
@@ -15468,7 +15539,15 @@ function setupSurfaceIsServerArmed(g: GameJson): boolean {
     || (SETUP_TURN_MODES.has(turnMode) && !dwarfenWisdomPreMode(g));
 }
 
-function placeSetup(g: GameJson) {
+type SetupAdvanceOutcome = { placementAccepted: boolean[]; completionAccepted: boolean };
+
+function placeSetup(g: GameJson, onComplete?: (outcome: SetupAdvanceOutcome) => void) {
+  const placementAccepted: boolean[] = [];
+  const sendSetupPlayer = (command: Record<string, unknown>) => {
+    const accepted = sendCommand(command);
+    placementAccepted.push(accepted);
+    return accepted;
+  };
   const team = myPlayTeam(g) as { playerArray?: { playerId: string; playerNr?: number; playerType?: string }[] } | undefined;
   // The Solid Defence gate is model-derived, so the headless/auto path honours it even with no setupPhase built.
   const solidDefenceGate = solidDefenceSetupGate(
@@ -15517,11 +15596,11 @@ function placeSetup(g: GameJson) {
     const c = d.playerCoordinate;
     if (myIds.has(d.playerId) && !immovable(d.playerId)
         && !!c && c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14) {
-      sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: d.playerId, coordinate: freeReserveCoordinate(g) });
+      sendSetupPlayer({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: d.playerId, coordinate: freeReserveCoordinate(g) });
     }
   }
   setupPlayers.forEach((p, i) =>
-    sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: p.playerId, coordinate: formation[i] }),
+    sendSetupPlayer({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: p.playerId, coordinate: formation[i] }),
   );
   // G303-B3: echo the LIVE turnMode ('setup' or 're-setup' modes like 'solidDefence') instead of
   // a hardcoded 'setup' — the g303 wire shows the server wants clientEndTurn{turnMode:"solidDefence"}
@@ -15538,11 +15617,12 @@ function placeSetup(g: GameJson) {
   const finishSetup = () => {
     const check = () => {
       if (placedCount() >= wantIds.size || Date.now() - start >= 1500) {
-        sendCommand({
+        const completionAccepted = sendCommand({
           netCommandId: NetCommandId.CLIENT_END_TURN,
           turnMode: tm,
           playersAtCoordinates: game.value ? setupEndTurnCoordinates(game.value) : {},
         });
+        onComplete?.({ placementAccepted: [...placementAccepted], completionAccepted });
         return;
       }
       scheduleGameTimeout(check, 30);
@@ -15567,7 +15647,21 @@ function freeReserveCoordinate(g: GameJson): [number, number] {
   return [-1, -1]; // box impossibly full — legacy fallback
 }
 
-function forceAdvanceCurrentState(g: GameJson): string {
+type ForceAdvanceStepOutcome = {
+  status: 'sent' | 'refused';
+  description: string;
+};
+
+type ForceAdvanceOutcome = {
+  status: 'sent' | 'refused' | 'no-op' | 'pending';
+  description: string;
+  preceding: ForceAdvanceStepOutcome[];
+};
+
+function forceAdvanceCurrentState(
+  g: GameJson,
+  onSettled?: (outcome: ForceAdvanceOutcome) => void,
+): ForceAdvanceOutcome {
   const dp = g.dialogParameter as {
     dialogId?: string;
     playerChoiceMode?: string;
@@ -15576,52 +15670,70 @@ function forceAdvanceCurrentState(g: GameJson): string {
   } | undefined;
   const dlg = dp?.dialogId;
   const myTeamId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
+  let sent = false;
+  let refused = false;
+  const preceding: ForceAdvanceStepOutcome[] = [];
+  const attempt = (command: Record<string, unknown>): boolean => {
+    const accepted = sendCommand(command);
+    sent = accepted || sent;
+    refused = !accepted || refused;
+    return accepted;
+  };
+  const finish = (description: string): ForceAdvanceOutcome => ({
+    status: refused ? 'refused' : sent ? 'sent' : 'no-op',
+    description,
+    preceding: [...preceding],
+  });
   // Clear any pending interactive BLOCK pick first (take the first die) so it can't strand the advance.
-  if (state.blockPartial) { sendCommand({ netCommandId: NetCommandId.CLIENT_BLOCK_CHOICE, diceIndex: 0 }); state.blockPartial = null; }
+  if (state.blockPartial) {
+    const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_BLOCK_CHOICE, diceIndex: 0 });
+    preceding.push({ status: accepted ? 'sent' : 'refused', description: 'Block choice' });
+    state.blockPartial = null;
+  }
   // `/stuck` is also the escape hatch for every server-coordinate pick (Safe Pair of Hands included).
   state.squarePick = null;
   // A blocking pregame/kickoff DIALOG → answer it with the safe default (mirrors drivePregame headless).
   switch (dlg) {
     case 'startGame':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_START_GAME });
-      return 'started the game';
+      attempt({ netCommandId: NetCommandId.CLIENT_START_GAME });
+      return finish('started the game');
     case 'buyInducements':
     case 'buyPrayersAndInducements':
     case 'buyCardsAndInducements':
-      sendCommand({
+      attempt({
         netCommandId: NetCommandId.CLIENT_BUY_INDUCEMENTS, teamId: myTeamId, availableGold: 0,
         starPlayerPositionIds: [], mercenaryPositionIds: [], mercenarySkills: [], staffPositionIds: [],
       });
-      return 'declined inducements';
+      return finish('declined inducements');
     case 'pettyCash':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_PETTY_CASH, pettyCash: 0 });
-      return 'declined petty cash';
+      attempt({ netCommandId: NetCommandId.CLIENT_PETTY_CASH, pettyCash: 0 });
+      return finish('declined petty cash');
     case 'buyCards':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_BUY_CARD }); // {null} = done buying
-      return 'finished buying cards';
+      attempt({ netCommandId: NetCommandId.CLIENT_BUY_CARD }); // {null} = done buying
+      return finish('finished buying cards');
     case 'coinChoice':
     case 'coinThrow':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_COIN_CHOICE, choiceHeads: true });
-      return 'called the coin (heads)';
+      attempt({ netCommandId: NetCommandId.CLIENT_COIN_CHOICE, choiceHeads: true });
+      return finish('called the coin (heads)');
     case 'receiveChoice':
     case 'kickReceive':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_RECEIVE_CHOICE, choiceReceive: true });
-      return 'chose to receive';
+      attempt({ netCommandId: NetCommandId.CLIENT_RECEIVE_CHOICE, choiceReceive: true });
+      return finish('chose to receive');
     case 'kickOffResult':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_KICK_OFF_RESULT_CHOICE, kickoffResult: 'Solid Defence' });
-      return 'chose the kick-off result (Solid Defence)';
+      attempt({ netCommandId: NetCommandId.CLIENT_KICK_OFF_RESULT_CHOICE, kickoffResult: 'Solid Defence' });
+      return finish('chose the kick-off result (Solid Defence)');
     case 'playerChoice': {
       // Game 834: [] with minSelects=1 NPE'd SelectPlayerPrayerHandler.applySelection:28.
       const answer = buildStuckPlayerChoiceIds(dp);
-      if ('refuse' in answer) return answer.refuse;
-      sendCommand({
+      if ('refuse' in answer) return finish(answer.refuse);
+      attempt({
         netCommandId: NetCommandId.CLIENT_PLAYER_CHOICE,
         playerChoiceMode: dp?.playerChoiceMode ?? '',
         playerIds: answer.playerIds,
       });
-      if (answer.playerIds.length === 0) return 'declined the player choice';
+      if (answer.playerIds.length === 0) return finish('declined the player choice');
       const offeredCount = dp?.playerIds?.length ?? 0;
-      return `answered the player choice (picked ${answer.playerIds.length} of ${offeredCount}: ${answer.playerIds.join(', ')})`;
+      return finish(`answered the player choice (picked ${answer.playerIds.length} of ${offeredCount}: ${answer.playerIds.join(', ')})`);
     }
     // selectWeather (owner live wedge 08-05 #3, game_820): the Weather Mage's pick — upstream DialogSelectWeather
     // is a weatherName→modifier MAP ("Select roll modifier"); answer = clientSelectWeather{modifier, weatherName}
@@ -15636,8 +15748,8 @@ function forceAdvanceCurrentState(g: GameJson): string {
         if (e) { name = e[0]; mod = Number(e[1]) || 0; }
       }
       if (name !== undefined) {
-        sendCommand({ netCommandId: NetCommandId.CLIENT_SELECT_WEATHER, modifier: mod, name }); // wire key is "name" (IJsonOption.NAME) — weatherName deserializes NULL (Nom catch, selectWeather build)
-        return `picked the first weather option (${name})`;
+        attempt({ netCommandId: NetCommandId.CLIENT_SELECT_WEATHER, modifier: mod, name }); // wire key is "name" (IJsonOption.NAME) — weatherName deserializes NULL (Nom catch, selectWeather build)
+        return finish(`picked the first weather option (${name})`);
       }
       break;
     }
@@ -15645,26 +15757,56 @@ function forceAdvanceCurrentState(g: GameJson): string {
     // build); until it lands, /stuck declines it — upstream DialogPileDriverHandler:60 sendPileDriver(playerId),
     // ClientCommandPileDriver{playerId}; null = decline. Our vocab already has CLIENT_PILE_DRIVER.
     case 'pileDriver':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_PILE_DRIVER, playerId: null });
-      return 'declined Pile Driver';
+      attempt({ netCommandId: NetCommandId.CLIENT_PILE_DRIVER, playerId: null });
+      return finish('declined Pile Driver');
     // interception (owner live wedge 08-17, game 866): falling through to the bare clientEndTurn below is a
     // no-op — StepIntercept only accepts CLIENT_INTERCEPTOR_CHOICE, so the coach's "passed your turn" toast was
     // a lie and the game stayed wedged until reconnect. Upstream DialogInterceptionHandler.dialogClosed's
     // decline path (a No answer) sends sendInterceptorChoice(null, null); mirror it exactly — the server-safe
     // default for a coach who can't tell which interceptor to pick either.
     case 'interception':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_INTERCEPTOR_CHOICE, interceptorId: null });
-      return 'declined the interception';
+      attempt({ netCommandId: NetCommandId.CLIENT_INTERCEPTOR_CHOICE, interceptorId: null });
+      return finish('declined the interception');
     case 'puntToCrowd':
-      sendCommand({ netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD, puntToCrowd: false });
-      return 'declined the crowd punt and continued normal targeting';
+      attempt({ netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD, puntToCrowd: false });
+      return finish('declined the crowd punt and continued normal targeting');
     default:
       break;
   }
   // No blocking dialog → advance the PHASE. SETUP (and a Solid-Defence RE-setup, G303-B3)
   // must place a legal formation before the end-turn will pass server validation (placeSetup
   // does both); everything else ends the turn.
-  if (SETUP_TURN_MODES.has(g.turnMode ?? '')) { placeSetup(g); return 'auto-placed a formation and ended setup'; }
+  if (SETUP_TURN_MODES.has(g.turnMode ?? '')) {
+    const description = 'Setup completion request';
+    let synchronous = true;
+    let synchronousOutcome: SetupAdvanceOutcome | undefined;
+    const settledOutcome = (outcome: SetupAdvanceOutcome): ForceAdvanceOutcome => {
+      const setupPreceding = [...preceding];
+      if (outcome.placementAccepted.length > 0) {
+        const accepted = outcome.placementAccepted.filter(Boolean).length;
+        const refusedCount = outcome.placementAccepted.length - accepted;
+        setupPreceding.push({
+          status: refusedCount > 0 ? 'refused' : 'sent',
+          description: `Setup placement requests (${accepted} sent, ${refusedCount} refused)`,
+        });
+      }
+      return {
+        status: outcome.completionAccepted ? 'sent' : 'refused',
+        description,
+        preceding: setupPreceding,
+      };
+    };
+    placeSetup(g, (outcome) => {
+      if (synchronous) {
+        synchronousOutcome = outcome;
+        return;
+      }
+      onSettled?.(settledOutcome(outcome));
+    });
+    synchronous = false;
+    if (synchronousOutcome) return settledOutcome(synchronousOutcome);
+    return { status: 'pending', description, preceding: [...preceding] };
+  }
   // safePairOfHands (owner P1 live wedge 08-05 #2, game_818 @16:26): after Use, the server (bb2020/shared
   // StepPlaceBall — handleCommand accepts CLIENT_USE_SKILL / CLIENT_FIELD_COORDINATE) waits for the ball-placement
   // coordinate; bare clientEndTurn{turnMode:'safePairOfHands'} is IGNORED (g818 wire, 2×). Place the ball for the
@@ -15682,8 +15824,8 @@ function forceAdvanceCurrentState(g: GameJson): string {
         if (onPitch(c) && !occupied(c)) { target = c; break; }
       }
       if (target) {
-        sendCommand({ netCommandId: NetCommandId.CLIENT_FIELD_COORDINATE, fieldCoordinate: { x: target[0], y: target[1] } });
-        return `placed the Safe Pair of Hands ball at [${target[0]},${target[1]}]`;
+        attempt({ netCommandId: NetCommandId.CLIENT_FIELD_COORDINATE, fieldCoordinate: { x: target[0], y: target[1] } });
+        return finish(`placed the Safe Pair of Hands ball at [${target[0]},${target[1]}]`);
       }
     }
   }
@@ -15710,13 +15852,31 @@ function forceAdvanceCurrentState(g: GameJson): string {
         && d.playerCoordinate[0] === c[0] && d.playerCoordinate[1] === c[1] && throwerTeamIds.has(String(d.playerId))));
       const target = mate ?? adj[0];
       if (target) {
-        sendCommand({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId: acting, targetCoordinate: target });
-        return `threw the dump-off quick pass to [${target[0]},${target[1]}]`;
+        attempt({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId: acting, targetCoordinate: target });
+        return finish(`threw the dump-off quick pass to [${target[0]},${target[1]}]`);
       }
     }
   }
-  sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
-  return 'passed your turn';
+  attempt({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: g.turnMode, playersAtCoordinates: {} });
+  return finish('End Turn request');
+}
+
+function forceAdvanceReport(outcome: ForceAdvanceOutcome): string {
+  const preceding = outcome.preceding.map((step) => `${step.description} ${step.status}`).join('; ');
+  let primary: string;
+  if (outcome.description === 'End Turn request') {
+    if (outcome.status === 'sent') primary = 'End Turn request sent';
+    else if (outcome.status === 'refused') primary = 'End Turn request refused';
+    else primary = `End Turn request ${outcome.status}`;
+  } else {
+    switch (outcome.status) {
+      case 'sent': primary = `${outcome.description} — request sent`; break;
+      case 'refused': primary = `${outcome.description} — request refused`; break;
+      case 'pending': primary = `${outcome.description} — waiting to send the phase completion request`; break;
+      case 'no-op': primary = `${outcome.description} — no request sent`; break;
+    }
+  }
+  return preceding ? `${preceding}; ${primary}` : primary;
 }
 
 // --- Interactive team setup (owner 2026-07-04) -----------------------------
@@ -16922,6 +17082,11 @@ function drivePregameStep() {
       armOnTheBall(g, dlg);
       return;
     case 'selectBlitzTarget': {
+      if (staleDialogOutlivedPhase('selectBlitzTarget', g.turnMode)) {
+        // Cancellation can leave the raw dialog behind after its picker was already armed.
+        if (state.playerPick?.key.startsWith('blitzTarget:')) clearPlayerPick();
+        return;
+      }
       const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
       const ap = String(acting?.playerId ?? '');
       // Order 66 SELECT_BLITZ_TARGET owns target interaction; bypass the legacy reactive auto-picker.
@@ -19005,9 +19170,10 @@ export const gameStore = {
       case 'endturn': {
         const g = game.value;
         if (!play.active || !g) { say(`/${cmd} — only works while PLAYING a live game.`); return; }
-        const did = forceAdvanceCurrentState(g);
         const where = (g.dialogParameter as { dialogId?: string } | undefined)?.dialogId ?? g.turnMode;
-        say(`/${cmd} — ${did} (${where}).`);
+        const report = (outcome: ForceAdvanceOutcome) => say(`/${cmd} — ${forceAdvanceReport(outcome)} (${where}).`);
+        const outcome = forceAdvanceCurrentState(g, report);
+        if (outcome.status !== 'pending') report(outcome);
         return;
       }
       case 'help':
@@ -20664,6 +20830,7 @@ export const gameStore = {
     const playerId = String(g.actingPlayer?.playerId ?? '');
     const playerAction = String(g.actingPlayer?.playerAction ?? '');
     if (!playerId || !playerAction || !iControlPlayer(playerId)) return null;
+    if (targetId && isSelfBlitzNomination(g, targetId, playerId)) return null;
     // Blitz skills remain pending until a real target click. Backing out before that click sends neither
     // CLIENT_USE_SKILL nor CLIENT_TARGET_SELECTED, preserving the server's native refund path.
     if (playerAction === 'blitzMove' && (g.turnMode !== 'selectBlitzTarget' || !targetId)) return null;
@@ -21078,9 +21245,10 @@ export const gameStore = {
   /** From SELECT_BLITZ_TARGET, send the opponent target once; the state already confirms the acting side. */
   sendTargetSelected(defenderId: string): boolean {
     if (!play.active || !game.value) return false;
-    if (!isMyTurn(game.value)) { log('system', 'ignored: not your turn'); return false; }
     const g = game.value;
     const actingId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+    if (isSelfBlitzNomination(g, defenderId, actingId)) return false;
+    if (!isMyTurn(g)) { log('system', 'ignored: not your turn'); return false; }
     const action = String((g.actingPlayer as { playerAction?: unknown } | null | undefined)?.playerAction ?? '');
     const turn = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
     const occurrence = [
@@ -21455,6 +21623,7 @@ export const gameStore = {
   /** Blitz wire: declare blitzMove, select target, walk with clientBlitzMove, then clientBlock. */
   playerBlitz(attackerId: string, defenderId: string, path: [number, number][]) {
     if (!play.active || !game.value) return;
+    if (isSelfBlitzNomination(game.value, defenderId, attackerId)) return;
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
     // g313 (Yularen correction b): a blitz is a block declaration too — debounce re-declares (owner #21 "declared blitz again") so a re-click doesn't re-arm the clear-then-set race mid-drive.
     if (blockInFlight) { log('system', 'blitz already pending — waiting for the server (ignoring re-click)'); return; }
@@ -21470,7 +21639,7 @@ export const gameStore = {
       const declared = sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: attackerId, playerAction: 'blitzMove', leaping: isJumping() });
       if (!declared) { blockInFlight = false; blitzDriving = false; blitzAttackerId = null; return; }
       // 2) nominate the target (the server surfaces selectBlitzTarget on the declaration)
-      scheduleGameTimeout(() => sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId: defenderId }), 350);
+      scheduleGameTimeout(() => sendPlayerBlitzTarget(attackerId, defenderId), 350);
       // 3) walk to contact via the dedicated blitz-move command (skip if already adjacent — empty path)
       scheduleGameTimeout(() => {
         if (path.length > 0 && from)

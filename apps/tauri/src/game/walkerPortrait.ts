@@ -56,7 +56,12 @@ function renderIdleFrame(key: string, sheet: SheetFrame): void {
   img.onload = () => {
     try {
       const row = Math.max(0, sheet.rows.indexOf('S'));
-      const size = sheet.frame;
+      // Owner 09-20: the cell size comes from the SHEET, not the manifest default — the Amazon sheets (and every other
+      // 128 px master) carry no `frame`, so the 64 fallback cropped the top-left quarter of each idle frame: a
+      // magnified head-and-torso in the team-builder card. height / rows is exact for every bundled sheet; the
+      // manifest frame stays as the fallback when the image does not divide evenly.
+      const byRows = sheet.rows.length > 0 ? img.naturalHeight / sheet.rows.length : 0;
+      const size = byRows > 0 && Number.isInteger(byRows) ? byRows : sheet.frame;
       const canvas = document.createElement('canvas');
       canvas.width = size * PORTRAIT_SCALE;
       canvas.height = size * PORTRAIT_SCALE;
