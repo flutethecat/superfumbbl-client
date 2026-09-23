@@ -40,6 +40,7 @@ import {
 } from './game/authChallenge';
 import { ui } from './game/ui';
 import { gameStore } from './game/store';
+import { gameStatRows, teamLogo } from './game/gameStatRows';
 import {
   ambiguousJnlpEntry,
   cancelAmbiguousJnlpEntry,
@@ -1241,26 +1242,15 @@ function retrySpectate(): void {
  */
 const statsOpen = ref(false);
 
+// Owner 09-22: the Esc > Game statistics pane is the end-of-game Statistics tab — same rows, same crest columns.
 const gameStats = computed(() => {
   const game = gameStore.game.value;
   if (!game) return null;
-  const sum = (side: 'Home' | 'Away', field: string) =>
-    (game.gameResult[`teamResult${side}`].playerResults as Record<string, unknown>[]).reduce(
-      (total, r) => total + (Number(r[field]) || 0),
-      0,
-    );
-  const rows: [string, number, number][] = [
-    ['Touchdowns', game.gameResult.teamResultHome.score, game.gameResult.teamResultAway.score],
-    ['Blocks', sum('Home', 'blocks'), sum('Away', 'blocks')],
-    ['Fouls', sum('Home', 'fouls'), sum('Away', 'fouls')],
-    ['Completions', sum('Home', 'completions'), sum('Away', 'completions')],
-    ['Interceptions', sum('Home', 'interceptions'), sum('Away', 'interceptions')],
-    ['Casualties', sum('Home', 'casualties'), sum('Away', 'casualties')],
-    ['Passing yards', sum('Home', 'passing'), sum('Away', 'passing')],
-    ['Carried ball', sum('Home', 'rushing'), sum('Away', 'rushing')],
-    ['Earned SPPs', sum('Home', 'currentSpps'), sum('Away', 'currentSpps')],
-  ];
-  return { home: game.teamHome.teamName, away: game.teamAway.teamName, rows };
+  return {
+    home: { team: game.teamHome.teamName, logo: teamLogo(game.teamHome, 'home') },
+    away: { team: game.teamAway.teamName, logo: teamLogo(game.teamAway, 'away') },
+    rows: gameStatRows(game),
+  };
 });
 
 const LEAVE_GAME_DIALOG_ID = 'leaveGame' as const;
@@ -1489,22 +1479,22 @@ function captureKey(event: KeyboardEvent) {
           <p class="hint">Esc closes</p>
         </template>
         <template v-else-if="gameStats">
-          <table class="stats-table">
-            <thead>
-              <tr>
-                <th class="home">{{ gameStats.home }}</th>
-                <th></th>
-                <th class="away">{{ gameStats.away }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="[label, home, away] in gameStats.rows" :key="label">
-                <td class="home">{{ home }}</td>
-                <td class="stat-label">{{ label }}</td>
-                <td class="away">{{ away }}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="pg-stats">
+            <div class="pg-stats-cols">
+              <div class="pg-stat-col pg-bevel" data-side="home">
+                <div class="pg-stat-col-head"><img :src="gameStats.home.logo" :alt="gameStats.home.team" /></div>
+                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-h" :data-lead="row.homeLead">{{ row.home }}</div>
+              </div>
+              <div class="pg-stat-col pg-bevel" data-side="label">
+                <div class="pg-stat-col-head"></div>
+                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-stat-label">{{ row.label }}</div>
+              </div>
+              <div class="pg-stat-col pg-bevel" data-side="away">
+                <div class="pg-stat-col-head"><img :src="gameStats.away.logo" :alt="gameStats.away.team" /></div>
+                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-a" :data-lead="row.awayLead">{{ row.away }}</div>
+              </div>
+            </div>
+          </div>
           <button @click="statsOpen = false">Back</button>
         </template>
       </div>
@@ -3468,24 +3458,31 @@ input, textarea, [contenteditable="true"], .log-panel {
 .game-menu button:hover:not(:disabled) { background: #3a5f3f; }
 .game-menu button:disabled { color: var(--ui-text-dim); cursor: default; }
 .game-menu .hint { margin: 0.3rem 0 0; color: var(--ui-text-dim); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); }
-.game-menu[data-wide='true'] { width: min(380px, 92vw); }
-.stats-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
-  margin-bottom: 0.5rem;
+.game-menu[data-wide='true'] { width: min(520px, 94vw); }
+/* Owner 09-22: Esc > Game statistics = the end-of-game Statistics tab (SpectateView .pg-stats), same rules. */
+.pg-stats { padding: 4px 0 8px; }
+.pg-bevel {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ui-surface-2) 88%, var(--ui-text) 8%) 0%, var(--ui-surface) 100%);
+  border: 1px solid color-mix(in srgb, var(--ui-border) 70%, var(--ui-text) 12%);
+  border-top-color: color-mix(in srgb, var(--ui-text) 28%, var(--ui-border));
+  border-left-color: color-mix(in srgb, var(--ui-text) 18%, var(--ui-border));
+  border-bottom-color: #000c;
+  border-right-color: #000a;
+  border-radius: 10px;
+  box-shadow: 0 3px 0 #000b, 0 8px 18px #0008, inset 0 1px 0 #ffffff1f;
 }
-.stats-table th {
-  padding: 0.3rem 0.4rem;
-  border-bottom: 1px solid var(--ui-border);
-  font-size: max(var(--ui-min-text-size, 12px), 0.78rem);
-}
-.stats-table td { padding: 0.28rem 0.4rem; }
-.stats-table tbody tr:nth-child(odd) { background: var(--ui-surface-2); }
-.stats-table .stat-label { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.74rem); text-align: center; }
-.stats-table .home { color: var(--seat-home-text); text-align: right; }
-.stats-table .away { color: var(--seat-away-text); text-align: left; }
-.stats-table th.home, .stats-table th.away { text-align: center; }
+.pg-stats-cols { display: grid; grid-template-columns: 1fr 1.35fr 1fr; gap: 12px; align-items: stretch; }
+.pg-stat-col { display: flex; flex-direction: column; padding: 0 0 6px; overflow: hidden; }
+.pg-stat-col-head { min-height: 34px; display: flex; align-items: center; justify-content: center; padding: 3px; border-bottom: 1px solid #000a; box-shadow: 0 1px 0 #ffffff14; }
+.pg-stat-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
+.pg-stat-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
+.pg-stat-col[data-side='label'] .pg-stat-col-head { border-top: 3px solid color-mix(in srgb, var(--ui-text) 25%, transparent); }
+.pg-stat-col-head img { width: 34px; height: 34px; object-fit: contain; image-rendering: pixelated; }
+.pg-stat-cell { box-sizing: border-box; height: 1.9rem; padding: 0 12px; border-top: 1px solid var(--ui-border); font-size: 0.98rem; line-height: calc(1.9rem - 1px); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; text-align: center; }
+.pg-stat-cell.pg-h { color: var(--seat-home-text); }
+.pg-stat-cell.pg-a { color: var(--seat-away-text); }
+.pg-stat-cell.pg-stat-label { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.78rem); letter-spacing: .04em; text-transform: uppercase; }
+.pg-stat-cell[data-lead='true'] { font-weight: 800; }
 .settings-pane {
   /* B2-16 (owner): Settings render in Arial/Helvetica, not the display font */
   font-family: Arial, Helvetica, sans-serif;

@@ -1716,6 +1716,9 @@ export class PitchRenderer {
   /** Live push-OPTION arrows (owner 2026-07-03): rebuilt each refresh from
    *  fieldModel.pushbackSquareArray; the CHOSEN one alpha-pulses via the ticker. */
   private pushOptionPulse: Graphics[] = [];
+  /** Owner 09-22: the push candidates drawn last refresh (square key → geometry). A candidate that vanishes without
+   *  being the chosen one (the coach picked another, or a chain push re-offered) fades out instead of popping off. */
+  private pushCandidateLast = new Map<string, { from: [number, number]; to: [number, number] }>();
   /** Owner 2026-07-03: pulsing crosshair reticles at each push-option square (the
    *  arrow tips) — the "click here" target. Scale + alpha pulse via the ticker.
    *  Shown for players AND spectators (drawn straight off the model). */
@@ -1750,7 +1753,7 @@ export class PitchRenderer {
       this.stadiumAssetRevision, this.standTextures.size, this.crowdTextures.length, this.signFanTextures.length,
       this.dressingTextures.size, !!this.stoneTexture, !!this.cameraTexture, !!this.lightTexture,
       this.turfTheme, this.pitchTextures.size, pitchWeatherKey(g?.fieldModel.weather), // drawStadiumProps' pitch underlay
-      this.pregameSignNames,
+      this.pregameSignNames.map((e) => (typeof e === 'string' ? e : `${e.top}\u0000${e.bottom}`)),
     ]);
   }
   /** The setGame path: redraw only when an input changed since the last successful draw. */
@@ -1921,7 +1924,7 @@ export class PitchRenderer {
   private signFanSlots: { signCX: number; signCY: number; signW: number; signH: number }[] = [];
   /** Owner 2026-07-08: the "I ♥ name" names assigned to the sign-holders at game
    *  start (proclaimed during pre-game), rendered persistently on their placards. */
-  private pregameSignNames: string[] = [];
+  private pregameSignNames: Array<string | { top: string; bottom: string }> = []; // owner 09-21: a name ("I ❤️" / name) or a two-line saying
   private signTextNodes: Container[] = [];
   /** Owner 2026-07-04: a broadcast CAMERA (sheet 17) + a stadium LIGHT tower (sheet
    *  16), sliced from their sprite sheets — cameras flank the LOS, lights the corners. */
@@ -10051,7 +10054,18 @@ export class PitchRenderer {
       selected?: boolean;
       locked?: boolean;
     }[];
-    if (squares.length === 0) return;
+    // Owner 09-22: fade the candidates that were on offer last refresh and are no longer live-and-unchosen now.
+    const nextLive = new Map<string, { from: [number, number]; to: [number, number] }>();
+    const retire = () => {
+      for (const [key, geo] of this.pushCandidateLast) {
+        if (nextLive.has(key)) continue;
+        const stillChosen = squares.some((sq) => sq.coordinate && `${sq.coordinate[0]},${sq.coordinate[1]}` === key && sq.selected);
+        if (stillChosen) continue;
+        this.fadePushCandidate(geo.from, geo.to);
+      }
+      this.pushCandidateLast = nextLive;
+    };
+    if (squares.length === 0) { retire(); return; }
     // arrows originate at the player being pushed (game.defenderId)
     const defenderId = (this.game as { defenderId?: string | null }).defenderId;
     const dd = defenderId
@@ -10095,7 +10109,11 @@ export class PitchRenderer {
           ? pushedData.playerCoordinate!
           : origin ?? sq.coordinate;
       const arrow = this.pushArrowGraphic(arrowFrom, sq.coordinate);
-      arrow.alpha = sq.selected ? 1 : isLive ? 0.85 : 0.22; // fade only the resolved non-chosen
+      arrow.alpha = sq.selected ? 1 : isLive ? 0.95 : 0.22; // fade only the resolved non-chosen
+      // Owner 09-22: the offer sits ABOVE the tokens (the fan was under the pushed player's figure) and persists
+      // until the coach picks — the model keeps the squares until the server resolves the push.
+      arrow.zIndex = this.depthZ(sq.coordinate[0], sq.coordinate[1]) + 70;
+      if (isLive && !spectator) nextLive.set(`${sq.coordinate[0]},${sq.coordinate[1]}`, { from: arrowFrom, to: sq.coordinate });
       if (sq.selected) this.pushOptionPulse.push(arrow);
       this.tokenLayer.addChild(arrow);
       if (spectator) continue; // spectators: no crosshairs / click targets
@@ -10116,6 +10134,7 @@ export class PitchRenderer {
       // Each unlocked, unchosen candidate is a clickable push-direction target (chain pushes included).
       if (isLive) this.pushOptionCoords.push([sq.coordinate[0], sq.coordinate[1]]);
     }
+    retire();
   }
 
   /** FIX 7: while a player-pick is armed, friendly on-pitch eligibles carry the existing overhead arrow;
@@ -10683,6 +10702,24 @@ export class PitchRenderer {
     return arrow;
   }
 
+  /** Owner 09-22: a retired push candidate (the coach chose another square) fades out over 350 ms on the effects
+   *  layer instead of vanishing on the next refresh. */
+  private fadePushCandidate(from: [number, number], to: [number, number]): void {
+    if (!this.app) return;
+    const arrow = this.pushArrowGraphic(from, to);
+    arrow.zIndex = this.depthZ(to[0], to[1]) + 70;
+    this.effectsLayer.addChild(arrow);
+    const app = this.app;
+    const now0 = performance.now();
+    const fadeMs = presentationMs(350);
+    let cleanup: () => void = () => {};
+    const tick = () => {
+      const now = performance.now();
+      if (now >= now0 + fadeMs || this.app !== app) { cleanup(); return; }
+      arrow.alpha = 0.95 * (1 - (now - now0) / fadeMs);
+    };
+    cleanup = this.registerEffectTicker(app, tick, [arrow]);
+  }
   playPushArrow(from: [number, number], to: [number, number]): void {
     if (!this.app) return;
     const arrow = this.pushArrowGraphic(from, to);
@@ -13036,9 +13073,13 @@ export class PitchRenderer {
   /** Owner 2026-07-08: assign the "I ♥ name" shout-outs to the sign-holders at game
    *  start — each placard proclaims its name PERSISTENTLY (rendered during pre-game
    *  and held through the game). Fed from the store (givethanks.csv). */
-  setPregameSigns(names: string[]): void {
+  setPregameSigns(names: Array<string | { top: string; bottom: string }>): void {
     this.pregameSignNames = names.slice();
     this.renderPregameSigns();
+  }
+  /** Owner 09-21: the two placard lines — a plain string is a supporter name under "I ❤️"; a pair is a saying. */
+  private static signLines(entry: string | { top: string; bottom: string }): { top: string; bottom: string } {
+    return typeof entry === 'string' ? { top: 'I ❤️', bottom: entry } : entry;
   }
 
   /** (Re)draw the persistent name on every sign-holder placard. Called on
@@ -13048,14 +13089,15 @@ export class PitchRenderer {
     this.signTextNodes = [];
     if (!this.app || this.signFanSlots.length === 0 || this.pregameSignNames.length === 0) return;
     this.signFanSlots.forEach((slot, i) => {
-      const name = this.pregameSignNames[i % this.pregameSignNames.length];
-      if (!name) return;
-      // Two lines in a terminal font: "I ❤️" over the sized-to-fit name.
-      const top = new Text({ text: 'I ❤️', style: SIGN_TERMINAL_STYLE });
+      const entry = this.pregameSignNames[i % this.pregameSignNames.length];
+      if (!entry) return;
+      const lines = PitchRenderer.signLines(entry);
+      // Two lines in a terminal font: "I ❤️" (or a saying's first line) over the sized-to-fit second line.
+      const top = new Text({ text: lines.top, style: SIGN_TERMINAL_STYLE });
       top.anchor.set(0.5);
-      const bottom = new Text({ text: name, style: SIGN_TERMINAL_STYLE });
+      const bottom = new Text({ text: lines.bottom, style: SIGN_TERMINAL_STYLE });
       bottom.anchor.set(0.5);
-      const topFit = Math.min((slot.signW * 0.6) / top.width, (slot.signH * 0.42) / top.height, 1.2);
+      const topFit = Math.min((slot.signW * 0.9) / top.width, (slot.signH * 0.42) / top.height, 1.2);
       const nameFit = Math.min((slot.signW * 0.9) / bottom.width, (slot.signH * 0.42) / bottom.height, 1.5);
       top.scale.set(topFit);
       bottom.scale.set(nameFit);

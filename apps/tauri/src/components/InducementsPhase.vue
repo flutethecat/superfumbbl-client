@@ -98,6 +98,9 @@ const props = withDefaults(defineProps<{
   cap: number;
   blade: Blade;
   cards: Record<Blade, PickerCard[]>;
+  /** Owner 09-21: the OPPONENT's offered cards while they choose (read-only), and their derived budget. */
+  oppCards?: Record<Blade, PickerCard[]> | null;
+  oppCap?: number;
   /** Upstream selector caps (stars/mercenaries/staff) so at-limit cards dim. */
   selectorLimits: { stars: number; mercenaries: number; staff: number };
   /** Disable Confirm between send and server ack. */
@@ -230,12 +233,16 @@ function panelColor(panel: PanelView): SeatColor {
         </button>
       </div>
 
-      <div v-else-if="!canAct" class="ind-watch" data-testid="picker-waiting">
+      <div v-else-if="!canAct && !oppCards" class="ind-watch" data-testid="picker-waiting">
         ⧗ {{ phase === 'overdog' ? 'Overdog' : 'Underdog' }} is choosing inducements…
       </div>
 
-      <div v-else class="ind-cardgrid" :data-blade="blade">
-        <div v-for="c in cards[blade]" :key="c.key" class="ind-card" :data-blade="blade"
+      <!-- Owner 09-21: the watching seat sees what the opponent can choose from (their prices, their budget). -->
+      <div v-else-if="!canAct" class="ind-watch ind-watch-inline" data-testid="picker-waiting">
+        ⧗ {{ phase === 'overdog' ? 'Overdog' : 'Underdog' }} is choosing inducements… · budget <span class="ind-cash-gold">{{ fmtGold(oppCap ?? 0) }}</span>
+      </div>
+      <div v-if="!presetMode && (canAct || oppCards)" class="ind-cardgrid" :data-blade="blade" :data-readonly="!canAct">
+        <div v-for="c in (canAct ? cards : oppCards!)[blade]" :key="c.key" class="ind-card" :data-blade="blade"
           :data-live="cardLive(c)" :data-testid="`card-${c.key}`" @click="onCard(c)">
           <div class="ind-card-top">
             <div v-if="blade === 'inducements'" class="ind-icon">
@@ -265,7 +272,7 @@ function panelColor(panel: PanelView): SeatColor {
           </div>
           <div v-if="c.special" class="ind-special">★ {{ c.special }}</div>
         </div>
-        <div v-if="!cards[blade].length" class="ind-empty">— nothing offered on this blade —</div>
+        <div v-if="!(canAct ? cards : oppCards!)[blade].length" class="ind-empty">— nothing offered on this blade —</div>
       </div>
     </section>
 
@@ -647,4 +654,6 @@ function panelColor(panel: PanelView): SeatColor {
   .ind-picker, .ind-summary { height: auto; max-height: none; }
   .ind-cardgrid, .ind-sum-list { overflow-y: visible; }
 }
+.ind-watch-inline { padding: 6px 0 10px; }
+.ind-cardgrid[data-readonly="true"] .ind-card { cursor: default; }
 </style>

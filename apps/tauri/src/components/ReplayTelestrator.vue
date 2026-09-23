@@ -4,6 +4,7 @@ import {
   ReplayTelestrator,
   TELESTRATOR_COLOR_PRESETS,
   TELESTRATOR_THICKNESS_PRESETS,
+  gridSteps,
   type SketchElement,
   type SketchPoint,
   type SketchTool,
@@ -40,6 +41,10 @@ const props = defineProps<{
   /** Rendered height of the quick bar; the COLLAPSED launcher takes exactly this height (owner 09-14: top and bottom edges align). */
   toolbarHeight?: number | null;
   toolbarPosition?: EdgePanelPosition | null;
+  /** Owner 09-22 (square path): world point → the pitch square under it (null off the pitch), and a square's
+   *  centre in world space. Without them the Path tool behaves like a plain arrow-headed stroke. */
+  toSquare?: (worldX: number, worldY: number) => [number, number] | null;
+  squareCenter?: (square: [number, number]) => SketchPoint;
 }>();
 const emit = defineEmits<{
   'update:toolbarPosition': [position: EdgePanelPosition | null];
@@ -48,6 +53,8 @@ const model = new ReplayTelestrator();
 const revision = ref(0);
 const drawing = ref(false);
 const moving = ref<{ point: SketchPoint } | null>(null);
+/** Owner 09-22: the last square the Path tool walked to (the drag steps square by square from here). */
+let pathSquare: [number, number] | null = null;
 const openPopover = ref<'shapes' | 'weight' | 'color' | null>(null);
 const root = ref<SVGSVGElement | null>(null);
 const shell = ref<HTMLDivElement | null>(null);
@@ -129,6 +136,9 @@ function choose(tool: SketchTool): void {
 }
 function toggleExpanded(): void {
   model.setExpanded(!state.value.expanded);
+  // Owner 09-22: opening the telestrator arms the Path tool by default (read the model, not the cached computed).
+  const now = model.state();
+  if (now.expanded && now.tool === 'none') model.selectTool('path');
   closePopovers();
   refresh();
 }
@@ -316,22 +326,42 @@ function onViewportResize(): void {
   const next = clampToolbarAnchor(props.toolbarPosition);
   if (next !== props.toolbarPosition) emit('update:toolbarPosition', next);
 }
-function chooseShape(kind: 'arrow' | 'circle'): void {
+function chooseShape(kind: 'arrow' | 'circle' | 'path'): void {
   const selected = state.value.elements.find((element) => element.id === state.value.selectedId);
-  if (selected && selected.kind !== 'stroke') {
+  if (kind !== 'path' && selected && selected.kind !== 'stroke' && selected.kind !== 'path') {
     model.replaceSelectedShape(kind);
     model.selectTool('none');
   } else model.selectTool(kind);
   closePopovers();
   refresh();
 }
-function path(element: Extract<SketchElement, { kind: 'stroke' }>): string {
+function path(element: Extract<SketchElement, { kind: 'stroke' | 'path' }>): string {
   return element.points.map((p, index) => { const s = toScreen(p); return `${index ? 'L' : 'M'} ${s.x} ${s.y}`; }).join(' ');
+}
+/** Owner 09-22: on the open telestrator, RIGHT-CLICK = Undo (the last drawing), SHIFT + RIGHT-CLICK = Clear all —
+ *  no browser menu either way. Any in-progress draft is dropped first. The layer is pointer-events:none while
+ *  closed, so the pitch's own right-click menu is untouched then. */
+function clearOnRightClick(event: MouseEvent): void {
+  event.preventDefault();
+  if (!props.enabled || !state.value.expanded) return;
+  drawing.value = false;
+  moving.value = null;
+  pathSquare = null;
+  model.cancelDraft();
+  if (event.shiftKey) model.clear(); else model.undo();
+  refresh();
 }
 function pointerDown(event: PointerEvent): void {
   if (!props.enabled) return;
+  if (event.button === 2) { event.preventDefault(); return; } // the contextmenu handler owns right-clicks
   const at = point(event);
-  if (state.value.tool !== 'none' && state.value.tool !== 'select') drawing.value = model.begin(at);
+  if (state.value.tool === 'path') {
+    // Owner 09-22: the path starts at the CENTRE of the clicked square; a click off the pitch starts nothing.
+    const square = props.toSquare?.(at.x, at.y) ?? null;
+    if (!square) { event.preventDefault(); return; }
+    pathSquare = square;
+    drawing.value = model.begin(props.squareCenter?.(square) ?? at);
+  } else if (state.value.tool !== 'none' && state.value.tool !== 'select') drawing.value = model.begin(at);
   else if (state.value.tool === 'select') model.select(null);
   else {
     // Owner 08-17 (ruling 3): still swallow the click — the layer is pointer-events:auto
@@ -346,7 +376,15 @@ function pointerDown(event: PointerEvent): void {
   refresh();
 }
 function pointerMove(event: PointerEvent): void {
-  if (drawing.value) model.update(point(event));
+  if (drawing.value && state.value.tool === 'path' && pathSquare) {
+    // Walk the grid from the last square to the one under the cursor, one square per step, so the line passes
+    // through the centre of every square in between even when the drag jumps several at once.
+    const square = props.toSquare?.(point(event).x, point(event).y) ?? null;
+    if (!square || (square[0] === pathSquare[0] && square[1] === pathSquare[1])) return;
+    const steps = gridSteps(pathSquare, square);
+    model.appendPathPoints(steps.map((sq) => props.squareCenter?.(sq) ?? point(event)));
+    pathSquare = square;
+  } else if (drawing.value) model.update(point(event));
   else if (moving.value) {
     const next = point(event);
     model.moveSelected(next.x - moving.value.point.x, next.y - moving.value.point.y);
@@ -364,6 +402,7 @@ function pointerUp(event: PointerEvent): void {
   } else if (moving.value) model.finishInteraction();
   drawing.value = false;
   moving.value = null;
+  pathSquare = null;
   try { root.value?.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ }
   refresh();
 }
@@ -386,10 +425,13 @@ function keyboard(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '')) return;
   const key = event.key.toLowerCase();
-  if (key === '1') choose('pencil');
-  else if (key === '2') { model.setExpanded(true); togglePopover('shapes'); refresh(); }
-  else if (key === '3') { model.clear(); refresh(); }
+  // Owner 09-22: Ctrl+1 Path (the default tool), Ctrl+2 Shapes (Circle, the default shape), Ctrl+3 Pencil,
+  // Ctrl+Z / Ctrl+4 Undo, Ctrl+5 Clear.
+  if (key === '1') choose('path');
+  else if (key === '2') chooseShape('circle');
+  else if (key === '3') choose('pencil');
   else if (key === '4' || key === 'z') { model.undo(); refresh(); }
+  else if (key === '5') { model.clear(); refresh(); }
   else if (key === 'escape') { choose('none'); }
   else return;
   event.preventDefault();
@@ -427,7 +469,8 @@ onBeforeUnmount(() => {
           @contextmenu.prevent @click="toggleExpandedFromLauncher">✎</button>
         <template v-else>
           <div v-if="state.limitNotice" class="telestrator-limit-notice" role="status" aria-live="polite">{{ state.limitNotice }}</div>
-          <button :aria-pressed="state.tool === 'pencil'" title="Pencil (Ctrl+1)" @click="choose('pencil')">✎</button>
+          <!-- Owner 09-22: Path is the DEFAULT tool and leads the bar; Shapes (Circle by default) then the pencil. -->
+          <button :aria-pressed="state.tool === 'path'" title="Path (Ctrl+1) — click a square and drag; the arrow follows square centres" @click="choose('path')">Path</button>
           <div class="shape-group">
             <button :aria-expanded="openPopover === 'shapes'" :aria-pressed="state.tool === 'arrow' || state.tool === 'circle'"
               title="Shapes (Ctrl+2)" @click="togglePopover('shapes')">Shapes</button>
@@ -436,6 +479,7 @@ onBeforeUnmount(() => {
               <button title="Circle" @click="chooseShape('circle')">◯ Circle</button>
             </div>
           </div>
+          <button :aria-pressed="state.tool === 'pencil'" title="Pencil (Ctrl+3)" @click="choose('pencil')">✎</button>
           <div class="picker-group">
             <button class="weight-trigger" title="Stroke weight" :aria-label="`Stroke weight: ${state.thickness}`"
               :aria-expanded="openPopover === 'weight'" @click="togglePopover('weight')">
@@ -466,8 +510,8 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-          <button title="Undo (Ctrl+Z / Ctrl+4)" @click="model.undo(); refresh()">Undo</button>
-          <button title="Clear (Ctrl+3)" @click="model.clear(); refresh()">Clear</button>
+          <button title="Undo (Ctrl+Z / Ctrl+4 / right-click)" @click="model.undo(); refresh()">Undo</button>
+          <button title="Clear (Ctrl+5 / Shift+right-click)" @click="model.clear(); refresh()">Clear</button>
           <button title="Close telestrator" aria-label="Close telestrator" @click="toggleExpanded">✕</button>
         </template>
       </div>
@@ -486,7 +530,7 @@ onBeforeUnmount(() => {
          every shape off its drawn spot. -->
     <svg ref="root" class="telestrator-layer" :class="{ active: state.expanded }"
       @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerUp"
-      @wheel="forwardWheel">
+      @contextmenu="clearOnRightClick" @wheel="forwardWheel">
       <defs>
         <marker v-for="preset in TELESTRATOR_COLOR_PRESETS" :id="`replay-arrow-head-${preset.value.slice(1)}`"
           :key="preset.value" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto">
@@ -502,6 +546,9 @@ onBeforeUnmount(() => {
       <template v-for="element in visible" :key="element.id">
         <path v-if="element.kind === 'stroke'" :d="path(element)" :stroke="element.color" :stroke-width="element.thickness"
           vector-effect="non-scaling-stroke" :class="{ selected: state.selectedId === element.id }" @pointerdown="selectElement($event, element.id)" />
+        <path v-else-if="element.kind === 'path'" :d="path(element)" :stroke="element.color" :stroke-width="element.thickness"
+          vector-effect="non-scaling-stroke" stroke-linejoin="round" :marker-end="marker(element.color)"
+          :class="{ selected: state.selectedId === element.id }" @pointerdown="selectElement($event, element.id)" />
         <line v-else-if="element.kind === 'arrow'"
           :x1="toScreen(element.from).x" :y1="toScreen(element.from).y" :x2="toScreen(element.to).x" :y2="toScreen(element.to).y"
           :stroke="element.color" :stroke-width="element.thickness" vector-effect="non-scaling-stroke" :marker-end="marker(element.color)"

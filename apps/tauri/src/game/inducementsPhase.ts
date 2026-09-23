@@ -120,6 +120,25 @@ export interface MoneyInput {
  * displayed treasury 1:1. The only arithmetic the client owns is subtraction from
  * server-sent pools — the min(50k, treasury) cap arrives pre-computed.
  */
+/** Owner 09-21: the OPPONENT's budget while they choose. The server sends budgets only to the addressee, so the
+ *  watching seat derives them from the game JSON exactly as bb2025 StepBuyInducements.getAvailableGold does:
+ *  underdog = max(overdogSpent - freeCash, 0) + pettyCashFromTvDiff + freeCash, plus up to 50k of treasury when
+ *  inducementsAllowUnderdogSpending; overdog = freeCash + treasury when overdog spending (or equal TV) is allowed. */
+export const MAX_UNDERDOG_ALLOWANCE = 50_000;
+export function opponentBudget(input: {
+  role: InducementRole; treasury: number; pettyCashFromTvDiff: number; freeCash: number; overdogSpent: number;
+  allowUnderdogSpending: boolean; allowOverdogSpending: boolean; sameTv: boolean; spent: number;
+}): PhaseMoney {
+  const { role, treasury, pettyCashFromTvDiff, freeCash, overdogSpent, allowUnderdogSpending, allowOverdogSpending, sameTv, spent } = input;
+  if (role === 'overdog') {
+    const cap = allowOverdogSpending || sameTv ? freeCash + treasury : 0;
+    return phaseMoney({ role, availableGold: cap, pettyCash: 0, scumPool: 0, teamTreasury: treasury, spent });
+  }
+  const pettyCash = Math.max(overdogSpent - freeCash, 0) + pettyCashFromTvDiff + freeCash;
+  const scumPool = Math.min(allowUnderdogSpending ? MAX_UNDERDOG_ALLOWANCE : 0, treasury);
+  return phaseMoney({ role, availableGold: pettyCash + scumPool, pettyCash, scumPool, teamTreasury: treasury, spent });
+}
+
 export function phaseMoney(input: MoneyInput): PhaseMoney {
   const { role, availableGold, pettyCash, scumPool, teamTreasury, spent } = input;
   if (role === 'overdog') {

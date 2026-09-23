@@ -29,8 +29,7 @@ import {
   type SetupTemplate,
   type BlockDiceRow,
   bundledStadiumPacks,
-  PLACEMENT_TURN_MODES,
-} from '@fumbbl40k/ffb-pitch';
+  PLACEMENT_TURN_MODES, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillNames } from '@fumbbl40k/ffb-protocol';
@@ -73,11 +72,13 @@ import TurnToast from '../components/TurnToast.vue';
 import { visibleMatchLogEntries } from '../game/logVisibility';
 import {
   bladeOf, phaseMoney, phaseOf, roleFromWire, summaryCards,
-  type Blade, type InducementPhase, type InducementRole,
-} from '../game/inducementsPhase';
+  type Blade, type InducementPhase, type InducementRole, opponentBudget, type PhaseOption } from '../game/inducementsPhase';
+import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
+import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
 import { activeInducementSprite } from '../game/inducementPortrait';
 import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
+import { GENERIC_TEAM_LOGO, POSTGAME_STATS, gameStatRows, teamDiceTally, teamLogo, type PgStatRow } from '../game/gameStatRows';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
@@ -321,8 +322,15 @@ import ReplayTelestrator from '../components/ReplayTelestrator.vue';
 // single source of truth — add names to apps/tauri/src/assets/givethanks.csv and
 // they are incorporated on the next build (Vite ?raw import, header row skipped).
 import givethanksRaw from '../assets/givethanks.csv?raw';
+import signSayingsRaw from '../assets/signsayings.csv?raw';
 const GIVE_THANKS: string[] = givethanksRaw
   .split(/\r?\n/).slice(1).map((s) => s.trim()).filter(Boolean);
+/** Owner 09-21: two-line crowd SAYINGS for the placards (signsayings.csv: `top,bottom` per line) — mixed with the
+ *  "I ❤️ name" shout-outs so the four sign-holders are not all declaring love. */
+const SIGN_SAYINGS: { top: string; bottom: string }[] = signSayingsRaw
+  .split(/\r?\n/).slice(1).map((line) => line.trim()).filter(Boolean)
+  .map((line) => { const [top = '', bottom = ''] = line.split(',').map((part) => part.trim()); return { top, bottom }; })
+  .filter((entry) => entry.top && entry.bottom);
 /** Owner 2026-07-06: crowd QUIPS keyed by the FFB skill name the fans react to. */
 const CROWD_QUIPS: Record<string, string> = { fend: 'Get fended, nerd!', 'stand firm': 'Like a rock!' };
 
@@ -1453,6 +1461,15 @@ function cycleSkillDisplay() {
   toggleSkillDisplay(settings);
 }
 
+/** Owner 09-22 (telestrator Path tool): world point → pitch square (null off the pitch), and a square's world centre. */
+function telestratorSquareAt(worldX: number, worldY: number): [number, number] | null {
+  const [sx, sy] = worldToSquare(worldX, worldY);
+  return sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null;
+}
+function telestratorSquareCenter(square: [number, number]): { x: number; y: number } {
+  const a = squareAnchor(square[0], square[1]);
+  return { x: a.x, y: a.y };
+}
 function setTelestratorPosition(position: EdgePanelPosition | null): void {
   if (!position) {
     delete settings.uiLayout.telestrator;
@@ -4492,6 +4509,46 @@ const induceMyMoney = computed(() => {
 });
 
 const induceOptions = computed(() => gameStore.state.inducementBuy?.options ?? []);
+/** Owner 09-21: the opponent's money readouts while THEY choose — derived from the game JSON (upstream formula),
+ *  since the server only sends budgets to the addressee. Play mode only. */
+const induceOppMoney = computed(() => {
+  const g = gameStore.game.value;
+  const opp = induceOppTeam.value;
+  const role = induceOppRole.value;
+  if (!g || !opp || props.mode !== 'play' || !induceMyRole.value) return null;
+  const { options } = purchaseOptionsFromWire(g);
+  const tv = (team: typeof g.teamHome, result: unknown) => Math.max(
+    Number((result as { teamValue?: unknown } | null)?.teamValue ?? 0), Number((team as { teamValue?: unknown }).teamValue ?? 0));
+  const tvHome = tv(g.teamHome, g.gameResult?.teamResultHome);
+  const tvAway = tv(g.teamAway, g.gameResult?.teamResultAway);
+  const oppIsHome = String(opp.teamId) === String(g.teamHome.teamId);
+  const oppResult = (oppIsHome ? g.gameResult?.teamResultHome : g.gameResult?.teamResultAway) as { pettyCashFromTvDiff?: unknown } | null | undefined;
+  const wireDiff = Number(oppResult?.pettyCashFromTvDiff ?? NaN);
+  const tvDiff = Number.isFinite(wireDiff) ? wireDiff : Math.abs(tvHome - tvAway);
+  // The reveal wire carries no costs (a guessed total would be a client invention), so these readouts are shown only
+  // while the opponent is still choosing — spent is 0 by definition then.
+  const spent = 0;
+  return opponentBudget({
+    role,
+    treasury: Number((opp as { treasury?: unknown }).treasury ?? 0),
+    pettyCashFromTvDiff: role === 'underdog' ? tvDiff : 0,
+    freeCash: Number(options['freeInducementCash'] ?? 0) || 0,
+    overdogSpent: role === 'underdog' ? induceSpent.value : 0,
+    allowUnderdogSpending: options['inducementsAllowUnderdogSpending'] === true,
+    allowOverdogSpending: options['inducementsAllowOverdogSpending'] === true,
+    sameTv: tvHome === tvAway,
+    spent,
+  });
+});
+/** Owner 09-21: what the opponent can choose from — the same catalogue seam the store feeds my dialog from, run on
+ *  THEIR team (their special rules price their bribes/chef/etc.). Display only; nothing here is ever sent. */
+const induceOppOptions = computed<PhaseOption[]>(() => {
+  const g = gameStore.game.value;
+  const opp = induceOppTeam.value;
+  if (!g || !opp || props.mode !== 'play') return [];
+  const { options, changedOptionKeys } = purchaseOptionsFromWire(g);
+  return buildCatalogInducementOptions(inducementTeamFromWire(opp), options, changedOptionKeys) as PhaseOption[];
+});
 const induceLimits = computed(() => gameStore.state.inducementBuy?.selectorLimits ?? { stars: 0, mercenaries: 0, staff: 0 });
 
 /** Glyph placeholders per the owner's note (swap when upstream inducement icons are located). */
@@ -4558,12 +4615,12 @@ function inducePortrait(key: string, team: InducementCardTeam | null = induceMyT
 }
 
 /** Picker cards per blade, projected from the server-sent option list. */
-const induceCards = computed<Record<Blade, PickerCard[]>>(() => {
+function buildInduceCards(options: PhaseOption[], picks: Record<string, number>, team: InducementCardTeam | null): Record<Blade, PickerCard[]> {
   const out: Record<Blade, PickerCard[]> = { inducements: [], stars: [], mercenaries: [] };
-  for (const option of induceOptions.value) {
+  for (const option of options) {
     const blade = bladeOf(option.key);
-    const taken = inducePicks.value[option.key] ?? 0;
-    const pos = blade === 'inducements' ? null : inducePosition(option.key, induceMyTeam.value);
+    const taken = picks[option.key] ?? 0;
+    const pos = blade === 'inducements' ? null : inducePosition(option.key, team);
     out[blade].push({
       key: option.key,
       name: option.label,
@@ -4573,7 +4630,7 @@ const induceCards = computed<Record<Blade, PickerCard[]>>(() => {
       countLabel: blade === 'stars'
         ? (taken > 0 ? 'Hired' : '1 available')
         : `${taken} of ${option.max} ${blade === 'mercenaries' ? 'hired' : 'taken'}`,
-      portrait: inducePortrait(option.key, induceMyTeam.value),
+      portrait: inducePortrait(option.key, team),
       stats: induceStats(pos),
       skills: pos?.skillArray ?? [],
       special: null, // upstream sends no star special-rule text on the roster position
@@ -4581,7 +4638,11 @@ const induceCards = computed<Record<Blade, PickerCard[]>>(() => {
     });
   }
   return out;
-});
+}
+const induceCards = computed<Record<Blade, PickerCard[]>>(() => buildInduceCards(induceOptions.value, inducePicks.value, induceMyTeam.value));
+/** Owner 09-21: the opponent's choices, read-only, while they pick. */
+const induceOppCards = computed<Record<Blade, PickerCard[]> | null>(() => (
+  induceOppOptions.value.length ? buildInduceCards(induceOppOptions.value, {}, induceOppTeam.value) : null));
 
 /** My live summary stack — blade-ordered, priced from my own option list. */
 const induceMyCards = computed<SummaryCardView[]>(() => {
@@ -4649,7 +4710,7 @@ function inducePanel(role: InducementRole): PanelView {
     role, seat,
     team: teamLabel,
     status: confirmed ? 'confirmed' : active ? 'selecting' : 'waiting',
-    money: mine ? induceMyMoney.value : null,
+    money: mine ? induceMyMoney.value : active ? induceOppMoney.value : null, // owner 09-21: the opponent's derived budget while they choose
     cards: mine
       ? (induceCanAct.value ? induceMyCards.value : induceRevealCards(reveal?.mine ?? null, induceMyTeam.value))
       : induceRevealCards(reveal?.opp ?? null, induceOppTeam.value),
@@ -9145,9 +9206,12 @@ watch(
       requestAnimationFrame(() => renderer?.resetCamera());
       // Owner 2026-07-08: at GAME START, the sign-holders proclaim their love — assign
       // 4 random supporter names to the placards (rendered through pre-game + the game).
-      if (GIVE_THANKS.length) {
-        const pool = [...GIVE_THANKS].sort(() => Math.random() - 0.5).slice(0, 4);
-        renderer.setPregameSigns(pool);
+      if (GIVE_THANKS.length || SIGN_SAYINGS.length) {
+        // Owner 09-21: two supporter names + two sayings (falling back to whichever list has entries), shuffled.
+        const shuffle = <T,>(list: T[]) => [...list].sort(() => Math.random() - 0.5);
+        const names: Array<string | { top: string; bottom: string }> = shuffle(GIVE_THANKS).slice(0, SIGN_SAYINGS.length ? 2 : 4);
+        const sayings: Array<string | { top: string; bottom: string }> = shuffle(SIGN_SAYINGS).slice(0, 4 - names.length);
+        renderer.setPregameSigns(shuffle([...names, ...sayings]));
       }
     }
     lastRenderedGameId = gid;
@@ -9746,16 +9810,7 @@ function positionLabel(player: PlayerJson, team: { roster?: unknown }): string {
  * neutral crest keeps the logo slot filled for unknown races so the B9-20
  * "Current Player" badge sits under it instead of shifting up.
  */
-const GENERIC_TEAM_LOGO =
-  'data:image/svg+xml,' +
-  encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 60">' +
-      '<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">' +
-      '<stop offset="0" stop-color="#4a5568"/><stop offset="1" stop-color="#232a36"/></linearGradient></defs>' +
-      '<path d="M30 3 L54 11 V31 C54 44 44 53 30 58 C16 53 6 44 6 31 V11 Z" fill="url(#g)" stroke="var(--ui-accent)" stroke-width="2"/>' +
-      '<path d="M30 17 l3.7 8.2 8.9 0.8 -6.7 5.9 2 8.8 -7.9 -4.7 -7.9 4.7 2 -8.8 -6.7 -5.9 8.9 -0.8 Z" fill="var(--ui-accent)" opacity="0.92"/>' +
-      '</svg>',
-  );
+
 
 /** Owner 09-05: every match-level splash (turnover, turn start, injury, reroll, send-off) shows the SAME logo as
  *  the HUD panels — pack logo via the wire URL, else the bundled crest — instead of a bare FUMBBL lookup that
@@ -9766,13 +9821,6 @@ function splashTeamLogo(side: 'home' | 'away', wireLogo?: string | null): string
   return fumbblAsset(wireLogo ?? undefined) ?? teamLogo(team, side);
 }
 
-function teamLogo(team: unknown, side: CrestSide): string {
-  void assetMods.logoRevision; // owner 09-05: pack logos hot-swap — re-render when the bindings change
-  const t = team as { race?: string; roster?: { logoUrl?: string; baseIconPath?: string } } | undefined;
-  const viaServer = fumbblAsset(t?.roster?.logoUrl, t?.roster?.baseIconPath);
-  if (viaServer) return viaServer;
-  return crestDataUrl(t?.race, side) ?? GENERIC_TEAM_LOGO;
-}
 
 function resourceIcon(name: string): string {
   return new URL(`../assets/resources/${name}.png`, import.meta.url).href;
@@ -10036,60 +10084,11 @@ interface PostGameSide {
   roster: PostGamePlayer[];
   totals: Record<string, number>;
 }
-// wire PlayerResult fields (server PlayerResult.java) summed per team
-const POSTGAME_STATS: { key: string; label: string }[] = [
-  { key: 'touchdowns', label: 'Touchdowns' },
-  { key: 'casualties', label: 'Casualties' },
-  { key: 'completions', label: 'Completions' },
-  { key: 'passing', label: 'Passing yards' },
-  { key: 'rushing', label: 'Rushing yards' },
-  { key: 'interceptions', label: 'Interceptions' },
-  { key: 'blocks', label: 'Blocks' },
-  { key: 'fouls', label: 'Fouls' },
-  { key: 'spp', label: 'SPP earned' },
-];
 // Owner 09-17: the Statistics table rows. Blocks and Dodges read "<attempts> / <failed>" (failed = the attacker went
 // down / the dodge ended failed, from the dice tally); Sent off counts the roster's send-offs from the server's
 // PlayerResult (sendToBoxReason). The lead highlight compares the first number only.
-interface PgStatRow { key: string; label: string; home: string; away: string; homeLead: boolean; awayLead: boolean }
-function pgTeamTally(side: 'home' | 'away'): DiceTally {
-  const game = gameStore.game.value;
-  const teamId = side === 'home' ? game?.teamHome.teamId : game?.teamAway.teamId;
-  return (teamId && diceStats.teams[teamId]) || emptyTally();
-}
-function pgSentOff(side: 'home' | 'away'): number {
-  const game = gameStore.game.value;
-  const tr = side === 'home' ? game?.gameResult.teamResultHome : game?.gameResult.teamResultAway;
-  const results = (tr?.playerResults ?? []) as unknown as Record<string, unknown>[];
-  // Upstream SendToBoxReason: only the BAN reasons are a send-off (foulBan, secretWeaponBan, officiousRef,
-  // threwToBombs); the rest name why a player reached the KO / casualty box.
-  return results.filter((r) => /^(foulBan|secretWeaponBan|officiousRef|threwToBombs)$/.test(String(r.sendToBoxReason ?? ''))).length;
-}
-const pgStatRows = computed<PgStatRow[]>(() => {
-  const home = pgSurface.value?.home.totals ?? {};
-  const away = pgSurface.value?.away.totals ?? {};
-  const th = pgTeamTally('home');
-  const ta = pgTeamTally('away');
-  const rows: PgStatRow[] = [];
-  const plain = (key: string, label: string) => {
-    const h = home[key] ?? 0; const a = away[key] ?? 0;
-    rows.push({ key, label, home: String(h), away: String(a), homeLead: h > a, awayLead: a > h });
-  };
-  const pair = (key: string, label: string, h: number, hf: number, a: number, af: number) =>
-    rows.push({ key, label, home: `${h} / ${hf}`, away: `${a} / ${af}`, homeLead: h > a, awayLead: a > h });
-  for (const { key, label } of POSTGAME_STATS) {
-    if (key === 'blocks') {
-      pair('blocks', 'Blocks', home.blocks ?? 0, th.failedBlocks, away.blocks ?? 0, ta.failedBlocks);
-      pair('dodges', 'Dodges', th.dodges, th.failedDodges, ta.dodges, ta.failedDodges);
-      pair('pickups', 'Pickups', th.pickups, th.failedPickups, ta.pickups, ta.failedPickups); // owner 09-17
-    } else if (key === 'fouls') {
-      plain(key, label);
-      const sh = pgSentOff('home'); const sa = pgSentOff('away');
-      rows.push({ key: 'sentOff', label: 'Sent off', home: String(sh), away: String(sa), homeLead: sh > sa, awayLead: sa > sh });
-    } else plain(key, label);
-  }
-  return rows;
-});
+function pgTeamTally(side: 'home' | 'away'): DiceTally { return gameStore.game.value ? teamDiceTally(gameStore.game.value, side) : emptyTally(); }
+const pgStatRows = computed<PgStatRow[]>(() => gameStatRows(gameStore.game.value)); // owner 09-22: shared with Esc > Game statistics
 
 // ---- Dice tab: distributions, expected counts and likelihood plots ----
 const BLOCK_FACE_LABELS = ['AD', 'BD', 'Push', 'Push', 'Stumble', 'Pow'];
@@ -11265,6 +11264,7 @@ function sendChat() {
           :to-world="(x: number, y: number) => renderer?.localToWorld(x, y) ?? { x, y }"
           :to-local="(x: number, y: number) => renderer?.worldToLocal(x, y) ?? { x, y }"
           :camera-scale="() => renderer?.cameraScale() ?? 1"
+          :to-square="telestratorSquareAt" :square-center="telestratorSquareCenter"
         />
         <ReplayControls v-if="props.mode === 'replay' || gameStore.spectatorReview.value.active" :review="gameStore.spectatorReview.value.controls" />
         <!-- BB2-style HUD (owner 2026-07-02): coach corners + center cluster -->
@@ -11703,6 +11703,7 @@ function sendChat() {
           :picks="inducePicks" :options="induceOptions" :cap="gameStore.state.inducementBuy?.availableGold ?? 0"
           :blade="induceBlade" :cards="induceCards" :selector-limits="induceLimits"
           :confirm-pending="induceConfirmPending" :preset-mode="presetInducementsOpen"
+          :opp-cards="induceOppCards" :opp-cap="induceOppMoney?.cap ?? 0"
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
           @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgePresetInducements"
           @rosters="openInduceRosters" />

@@ -574,10 +574,13 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default()
         .register_uri_scheme_protocol("f40kmod", asset_mods::asset_protocol);
-    // Single-instance forwarding is OPT-IN (FUMBBL_SINGLE_INSTANCE): a plain second launch must stay a
-    // full independent client (owner two-coach testing, 08-11). Off = a double-clicked .jnlp opens a NEW
-    // instance and joins via the cold-start argv path above; forward-into-running needs the env var.
-    if std::env::var_os("FUMBBL_SINGLE_INSTANCE").is_some() {
+    // Single-instance forwarding is OPT-IN (FUMBBL_SINGLE_INSTANCE) on the FORK edition: a plain second launch
+    // must stay a full independent client (owner two-coach testing, 08-11). Off = a double-clicked .jnlp opens
+    // a NEW instance and joins via the cold-start argv path above; forward-into-running needs the env var.
+    // Owner 09-21: the PUBLIC edition always enforces one instance — a second launch focuses the running
+    // client (and hands it any .jnlp) instead of opening a second session against FUMBBL.
+    let single_instance = cfg!(public_edition) || std::env::var_os("FUMBBL_SINGLE_INSTANCE").is_some();
+    if single_instance {
         // When enabled it must be registered before every other plugin.
         builder = builder.plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
             if let Some(path) = jnlp_path(&args, Path::new(&cwd)) {

@@ -1504,6 +1504,10 @@ export interface TurnoverSplashFireContext {
   turnMode: unknown;
   actingPlayerId: unknown;
   ballCarrierInEndzone: boolean;
+  /** Owner 09-22 (g1945485 16:20:40): the next coach activating a player inside the settle window is NOT a stale
+   *  timer — the turn genuinely passed. Only an activation by the side that turned over means it did not. Absent
+   *  (older callers/tests) → any activation vetoes, as before. */
+  actingPlayerOnTurnedOverSide?: boolean;
 }
 
 /** Owner 08-19 follow-up: a settled presentation timer is not authority to fire. Keep the originating, real
@@ -1512,7 +1516,7 @@ export function turnoverSplashFireAllowed(context: TurnoverSplashFireContext): b
   return String(context.turnEnd?.reportId ?? '') === 'turnEnd'
     && !context.turnEnd?.playerIdTouchdown
     && String(context.turnMode ?? '') === 'regular'
-    && !context.actingPlayerId
+    && !(context.actingPlayerId && (context.actingPlayerOnTurnedOverSide ?? true))
     && !context.ballCarrierInEndzone;
 }
 
@@ -1564,12 +1568,15 @@ function showTurnover(
     blockPipeline.idle() && // block dice + push chain
     !state.throwAnim && !state.ttmHeld && // projectile throw flight (pass/TTM/bomb…) + TTM landing hold
     !state.scatterAnim && !state.ballCatch && !state.leap; // ball scatter/bounce, catch attempt, jump
+  const turnedOverIds = new Set(team.playerArray.map((p) => String(p.playerId)));
   const tick = () => {
     const current = game.value;
+    const actingId = (current?.actingPlayer as { playerId?: string | null } | undefined)?.playerId;
     const fireAllowed = !!current && turnoverSplashFireAllowed({
       turnEnd,
       turnMode: current.turnMode,
-      actingPlayerId: (current.actingPlayer as { playerId?: string | null } | undefined)?.playerId,
+      actingPlayerId: actingId,
+      actingPlayerOnTurnedOverSide: !!actingId && turnedOverIds.has(String(actingId)),
       ballCarrierInEndzone: ballCarrierInScoringEndzone(current),
     });
     if (!fireAllowed) { turnoverTimer = null; return; }

@@ -38,6 +38,9 @@ export interface DiceTally {
   /** Owner 09-17: pickup attempts and the ones that ended failed, same re-roll rule as dodges. */
   pickups: number;
   failedPickups: number;
+  /** Owner 09-22: rush (Go For It) attempts and the ones that ended failed, same re-roll rule. */
+  rushes: number;
+  failedRushes: number;
   /** Owner 09-17 (fun facts): ordered sequences — every D6 face, every block-die face, and every success-tested
    *  roll (a D6 against a stated minimum) as it happened. */
   d6Seq: number[];
@@ -54,16 +57,17 @@ export interface DiceStats {
   lastBlockAttacker: string | null;
   lastFailedDodge: { playerId: string; teamId: string } | null;
   lastFailedPickup: { playerId: string; teamId: string } | null;
+  lastFailedRush: { playerId: string; teamId: string } | null;
 }
 
 export function emptyTally(): DiceTally {
   return { d6: [0, 0, 0, 0, 0, 0, 0], block: [0, 0, 0, 0, 0, 0, 0], armour: [], injury: [],
     dodgeFaces: [0, 0, 0, 0, 0, 0, 0], armourFaces: [0, 0, 0, 0, 0, 0, 0], injuryFaces: [0, 0, 0, 0, 0, 0, 0], oneNinth: 0, oneThirtySixth: 0,
-    blocks: 0, failedBlocks: 0, dodges: 0, failedDodges: 0, pickups: 0, failedPickups: 0, d6Seq: [], blockSeq: [], tests: [] };
+    blocks: 0, failedBlocks: 0, dodges: 0, failedDodges: 0, pickups: 0, failedPickups: 0, rushes: 0, failedRushes: 0, d6Seq: [], blockSeq: [], tests: [] };
 }
 
 export function emptyDiceStats(gameId: string | null = null): DiceStats {
-  return { gameId, seen: new Set(), teams: {}, players: {}, lastBlockAttacker: null, lastFailedDodge: null, lastFailedPickup: null };
+  return { gameId, seen: new Set(), teams: {}, players: {}, lastBlockAttacker: null, lastFailedDodge: null, lastFailedPickup: null, lastFailedRush: null };
 }
 
 /** The live tally the end screen reads. Reset whenever a different game's frames start arriving. */
@@ -144,7 +148,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
   if (gameId !== stats.gameId) {
     const fresh = emptyDiceStats(gameId);
     stats.gameId = fresh.gameId; stats.seen = fresh.seen; stats.teams = fresh.teams; stats.players = fresh.players;
-    stats.lastBlockAttacker = null; stats.lastFailedDodge = null; stats.lastFailedPickup = null;
+    stats.lastBlockAttacker = null; stats.lastFailedDodge = null; stats.lastFailedPickup = null; stats.lastFailedRush = null;
   }
   if (commandNr != null) {
     if (stats.seen.has(commandNr)) return;
@@ -214,6 +218,23 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         // The failed attempt was re-rolled into a success: it no longer counts as failed.
         for (const t of tallies) t.failedDodges = Math.max(0, t.failedDodges - 1);
         stats.lastFailedDodge = null;
+      }
+      continue;
+    }
+    if (id === 'goForItRoll') {
+      const team = teamOf(game, playerId);
+      const tallies = tallyFor(stats, team?.teamId ?? null, playerId);
+      pushD6(tallies, r.roll);
+      pushTest(tallies, r);
+      const reRolled = r.reRolled === true;
+      const successful = r.successful === true;
+      if (!reRolled) {
+        for (const t of tallies) t.rushes += 1;
+        if (!successful) { for (const t of tallies) t.failedRushes += 1; stats.lastFailedRush = playerId && team ? { playerId, teamId: team.teamId } : null; }
+        else stats.lastFailedRush = null;
+      } else if (successful && stats.lastFailedRush?.playerId === playerId) {
+        for (const t of tallies) t.failedRushes = Math.max(0, t.failedRushes - 1);
+        stats.lastFailedRush = null;
       }
       continue;
     }

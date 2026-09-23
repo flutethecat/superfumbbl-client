@@ -1113,7 +1113,7 @@ dependencies = [
 
 [[package]]
 name = "fumbbl40k"
-version = "1.0.18"
+version = "1.0.19"
 dependencies = [
  "base64 0.22.1",
  "image",

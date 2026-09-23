@@ -1,5 +1,5 @@
 export type SketchPoint = Readonly<{ x: number; y: number }>;
-export type SketchTool = 'none' | 'pencil' | 'arrow' | 'circle' | 'select';
+export type SketchTool = 'none' | 'pencil' | 'arrow' | 'circle' | 'path' | 'select';
 
 interface SketchElementBase { id: string; thickness: number; color: TelestratorColor }
 export interface SketchStroke extends SketchElementBase { kind: 'stroke'; points: readonly SketchPoint[] }
@@ -7,7 +7,25 @@ export interface SketchArrow extends SketchElementBase { kind: 'arrow'; from: Sk
 export interface SketchCircle extends SketchElementBase {
   kind: 'circle'; center: SketchPoint; radiusX: number; radiusY: number;
 }
-export type SketchElement = SketchStroke | SketchArrow | SketchCircle;
+/** Owner 09-22: a SQUARE PATH — click a square, drag; the line runs through the centre of every square the cursor
+ *  crosses (upstream's click-and-drag arrow) and keeps an arrowhead at the last one. Points are square centres
+ *  in world space; the host snaps the pointer to squares and walks the grid between them (gridSteps). */
+export interface SketchPath extends SketchElementBase { kind: 'path'; points: readonly SketchPoint[] }
+export type SketchElement = SketchStroke | SketchArrow | SketchCircle | SketchPath;
+
+/** The squares a drag crosses between two grid squares, excluding `from`, including `to`: one step per square with
+ *  diagonals allowed (a Blood Bowl move), so a fast drag still paths through every square in between. */
+export function gridSteps(from: readonly [number, number], to: readonly [number, number]): [number, number][] {
+  const out: [number, number][] = [];
+  let [x, y] = from;
+  let guard = 0;
+  while ((x !== to[0] || y !== to[1]) && guard++ < 128) {
+    x += Math.sign(to[0] - x);
+    y += Math.sign(to[1] - y);
+    out.push([x, y]);
+  }
+  return out;
+}
 
 export interface TelestratorState {
   expanded: boolean;
@@ -113,9 +131,25 @@ export class ReplayTelestrator {
     else if (this.value.tool === 'arrow') this.draft = { id, kind: 'arrow', ...style, from: start, to: start };
     else if (this.value.tool === 'circle') {
       this.draft = { id, kind: 'circle', ...style, center: start, radiusX: 0, radiusY: 0 };
-    }
+    } else if (this.value.tool === 'path') this.draft = { id, kind: 'path', ...style, points: [start] };
     this.value = { ...this.value, limitNotice: null };
     return this.draft !== null;
+  }
+
+  /** Owner 09-22: extend a square-path draft by the next square centre(s) the host walked to. Consecutive duplicates
+   *  are dropped; the stroke/point limits apply as for a pencil stroke. */
+  appendPathPoints(points: readonly SketchPoint[]): void {
+    if (!this.draft || this.draft.kind !== 'path') return;
+    let next = this.draft.points;
+    for (const raw of points) {
+      const current = copyPoint(raw);
+      const prior = next[next.length - 1];
+      if (prior && current.x === prior.x && current.y === prior.y) continue;
+      if (next.length >= TELESTRATOR_MAX_POINTS_PER_STROKE) { this.value = { ...this.value, limitNotice: TELESTRATOR_STROKE_LIMIT_NOTICE }; break; }
+      if (this.pointCount() + next.length >= TELESTRATOR_MAX_POINTS) { this.value = { ...this.value, limitNotice: TELESTRATOR_LIMIT_NOTICE }; break; }
+      next = [...next, current];
+    }
+    this.draft = { ...this.draft, points: next };
   }
 
   update(at: SketchPoint): void {
@@ -135,6 +169,7 @@ export class ReplayTelestrator {
         this.draft = { ...this.draft, points: [...this.draft.points, current] };
       }
     } else if (this.draft.kind === 'arrow') this.draft = { ...this.draft, to: current };
+    else if (this.draft.kind === 'path') return; // the host feeds square centres through appendPathPoints
     else this.draft = {
       ...this.draft,
       radiusX: Math.abs(current.x - this.draft.center.x),
@@ -160,7 +195,7 @@ export class ReplayTelestrator {
   moveSelected(dx: number, dy: number): void {
     if (!this.value.selectedId) return;
     this.replace(this.value.selectedId, (element) => {
-      if (element.kind === 'stroke') return { ...element, points: element.points.map((point) => movePoint(point, dx, dy)) };
+      if (element.kind === 'stroke' || element.kind === 'path') return { ...element, points: element.points.map((point) => movePoint(point, dx, dy)) };
       if (element.kind === 'arrow') return { ...element, from: movePoint(element.from, dx, dy), to: movePoint(element.to, dx, dy) };
       return { ...element, center: movePoint(element.center, dx, dy) };
     });
@@ -174,14 +209,14 @@ export class ReplayTelestrator {
         x: center.x + (point.x - center.x) * scaleX,
         y: center.y + (point.y - center.y) * scaleY,
       });
-      if (element.kind === 'stroke') return { ...element, points: element.points.map(scale) };
+      if (element.kind === 'stroke' || element.kind === 'path') return { ...element, points: element.points.map(scale) };
       return { ...element, from: scale(element.from), to: scale(element.to) };
     });
   }
   replaceSelectedShape(kind: 'arrow' | 'circle'): void {
     if (!this.value.selectedId) return;
     this.replace(this.value.selectedId, (element) => {
-      if (element.kind === kind || element.kind === 'stroke') return element;
+      if (element.kind === kind || element.kind === 'stroke' || element.kind === 'path') return element;
       if (kind === 'circle' && element.kind === 'arrow') {
         return {
           id: element.id,
@@ -235,17 +270,17 @@ export class ReplayTelestrator {
     this.value = { ...this.value, elements: this.value.elements.map((element) => element.id === id ? transform(element) : element) };
   }
   private pointCount(): number {
-    return this.value.elements.reduce((total, element) => total + (element.kind === 'stroke' ? element.points.length : 2), 0);
+    return this.value.elements.reduce((total, element) => total + (element.kind === 'stroke' || element.kind === 'path' ? element.points.length : 2), 0);
   }
-  private center(element: SketchStroke | SketchArrow): SketchPoint {
-    const points = element.kind === 'stroke' ? element.points : [element.from, element.to];
+  private center(element: SketchStroke | SketchArrow | SketchPath): SketchPoint {
+    const points = element.kind === 'arrow' ? [element.from, element.to] : element.points;
     return {
       x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
       y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
     };
   }
   private degenerate(element: SketchElement): boolean {
-    if (element.kind === 'stroke') return element.points.length < 2;
+    if (element.kind === 'stroke' || element.kind === 'path') return element.points.length < 2;
     if (element.kind === 'arrow') return Math.hypot(element.to.x - element.from.x, element.to.y - element.from.y) < 0.05;
     return element.radiusX < 0.03 || element.radiusY < 0.03;
   }
