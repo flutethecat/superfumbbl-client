@@ -1452,6 +1452,13 @@ export function bindBallAnimating(fn: (() => boolean) | null): void { ballAnimat
 /** Owner 09-14: renderer probe — any player token still visibly moving (touchdown-sound gate). */
 let playersAnimatingProbe: (() => boolean) | null = null;
 export function bindPlayersAnimating(fn: (() => boolean) | null): void { playersAnimatingProbe = fn; }
+/** Owner 09-23: confirmed movement the store still holds for THIS player — the walk gate presenting, or a queued
+ *  step not yet handed to the renderer. The renderer's planner swallows clicks while this is true. */
+export function movementStepsPending(playerId: string): boolean {
+  const p = presentation.presenting;
+  if (p && (p.kind === 'walk' || p.kind === 'rollBeat') && p.id === playerId) return true;
+  return presentation.queue.some((ev) => ev.kind === 'step' && ev.playerId === playerId);
+}
 function playersAnimating(): boolean {
   try { return !!playersAnimatingProbe?.(); } catch { return false; }
 }

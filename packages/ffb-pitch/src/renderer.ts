@@ -1216,6 +1216,7 @@ const DIE_CAUSE_TAG: Record<string, [number, string]> = {
   pickup: [0x7a4a1e, '●'], // football fallback if the dedicated pickup icon is unavailable
   gfi: [0x8a5cff, '»'],
   catch: [0x22b07a, 'C'],
+  pickMeUp: [0x22b07a, '↑'], // owner 09-23: green ↑ fallback if the PICK ME UP badge is unavailable
   pass: [0x2a9ad0, 'P'],
   intercept: [0xd04545, 'I'],
   leap: [0x8a5cff, 'L'],
@@ -1824,6 +1825,8 @@ export class PitchRenderer {
   private passDieTagTexture: Texture | null = null;
   /** Owner 09-08: dedicated Catch roll badge (spiked-rings art). */
   private catchDieTagTexture: Texture | null = null;
+  /** Owner 09-23: PICK ME UP roll badge (1254 px master, transparent, silver rim) — action-badge family like catch. */
+  private pickMeUpDieTagTexture: Texture | null = null;
   /** Owner 09-06: block decorations — the block TARGET (front fist + red Pow burst, replaces the 💥 glyph) and the
    *  ATTACKER (fist only). Null until loaded / when missing: the 💥 glyph stays as the fallback. */
   private blockTargetDecoTexture: Texture | null = null;
@@ -3695,6 +3698,16 @@ export class PitchRenderer {
       this.catchDieTagTexture = texture;
     } catch {
       this.catchDieTagTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try {
+      // owner 09-23: PICK ME UP badge — same 1254 px master treatment as catch (linear + mipmaps).
+      const texture = await Assets.load<Texture>(new URL('../assets/status/pick-me-up.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.pickMeUpDieTagTexture = texture;
+    } catch {
+      this.pickMeUpDieTagTexture = null;
     }
     if (!this.initActive(generation, app)) return;
     // Owner 09-06: block decorations (transparent PNGs, drawn ~20 token units tall — linear sampling on purpose).
@@ -6642,10 +6655,29 @@ export class PitchRenderer {
    * shortest route), truncate it when clicking an existing step or the player's
    * own square, or clear the selection when clicking out of range.
    */
+  /** Owner 09-23: is THIS player's confirmed movement still being presented (walk tween, o66 full-path walk,
+   *  a store-paced step / cursor, or an accepted local intent)? While it is, the model square is already the
+   *  destination but the token is not there yet — a plan started now anchors on the wrong square and the next
+   *  step arrives on top of it ("the planner goes a bit nuts"). Presentation-only probe. */
+  /** Host probe: confirmed steps the store still holds for this player (queued / gated) that the renderer has not
+   *  been handed yet — closes the gap between one presented tile and the next. */
+  movementPendingProbe: ((playerId: string) => boolean) | null = null;
+  private movementInFlight(playerId: string): boolean {
+    if (this.movementPendingProbe?.(playerId)) return true;
+    if (this.moveTweens.has(playerId)) return true;
+    const walk = this.o66MovePath.get(playerId);
+    if (walk && performance.now() - walk.start < Math.max(1, walk.squares.length - 1) * this.moveStepMs) return true;
+    return this.presentationStep?.playerId === playerId
+      || this.movementPresentationCursor?.playerId === playerId
+      || this.movementIntent?.playerId === playerId;
+  }
+
   private handleSquareClick(square: Square): void {
     if (!this.plannerEnabled) return; // B5-2: spectator-clean
     const info = this.selectionInfo();
     if (!info) return;
+    // Owner 09-23: swallow further plans until the rendered move has finished — clicks mid-walk are dropped.
+    if (this.movementInFlight(info.data.playerId)) return;
     const [px, py] = info.data.playerCoordinate!;
     if (square[0] === px && square[1] === py) {
       this.setPath([]);
@@ -13174,7 +13206,7 @@ export class PitchRenderer {
     // the wide view. Enrol the complete cause tag (disc + installed/bundled/fallback art) in the exact same
     // 1×..2× inverse-zoom policy as player skill icons. The parent action die, pips, FAILED/needed readout,
     // and reroll label deliberately keep their existing geometry.
-    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch') { // owner 09-08: + catch
+    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp') { // owner 09-08: + catch; 09-23: + pickMeUp
       this.overlayScaleGroups.push(c);
       c.scale.set(this.overlayZoomFactor());
     }
@@ -13201,7 +13233,9 @@ export class PitchRenderer {
             ? this.passDieTagTexture ?? undefined
             : cause === 'catch'
               ? this.catchDieTagTexture ?? undefined
-              : undefined;
+              : cause === 'pickMeUp'
+                ? this.pickMeUpDieTagTexture ?? undefined
+                : undefined;
     // Owner 09-05: a re-roll cause wears the TRR (team re-roll) token icon instead of the old ↻ arrow glyph.
     const rerollIcon = cause === 'reroll' ? this.tokenRerollIcon ?? undefined : undefined;
     const icon = rerollIcon ?? (skillName
@@ -13221,7 +13255,7 @@ export class PitchRenderer {
       // the former generic badge footprint even after inverse-zoom scaling.
       // Give that canonical target a larger intrinsic face while leaving the
       // shared tag disc, GFI sizing, override precedence, and fallbacks alone.
-      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' ? 2.15 : 1.7;
+      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' ? 2.15 : 1.7;
       s.width = R * iconScale;
       s.height = R * iconScale;
       c.addChild(s);

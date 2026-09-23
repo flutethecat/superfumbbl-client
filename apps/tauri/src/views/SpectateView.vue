@@ -33,7 +33,7 @@ import {
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillNames } from '@fumbbl40k/ffb-protocol';
-import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing } from '../game/store';
+import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing, movementStepsPending } from '../game/store';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
@@ -395,7 +395,23 @@ const fumbblNoJnlpTeamId = ref('');
 const fumbblLoginBusy = ref(false);
 const fumbblLoginError = ref<string | null>(null);
 const chatInput = ref('');
-const chatInputEl = ref<HTMLInputElement | null>(null);
+const chatInputEl = ref<HTMLTextAreaElement | null>(null);
+/** Owner 09-23: the chat entry grows with the message (1 → ~5 lines, then scrolls) instead of scrolling a
+ *  single line sideways — the log above yields the height, so the text runs UP, not off the edge. */
+function growChatInput() {
+  const el = chatInputEl.value;
+  if (!el) return;
+  el.style.height = 'auto';
+  // Empty → back to the one-row rule (Chrome counts a WRAPPED placeholder in scrollHeight, which grew an empty box).
+  el.style.height = el.value ? `${el.scrollHeight}px` : '';
+}
+function onChatKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
+  else if (e.key === 'Escape') { e.preventDefault(); chatInputEl.value?.blur(); } // Esc leaves the entry, nothing else
+}
+/** Owner 09-23: while the chat entry has focus the dock rides ABOVE a modal phase (inducements push it under the
+ *  full-host shader, z 43 < 44) — Enter must reach a chat you can see and type into at any point of the game. */
+const chatFocused = ref(false);
 const pitchHost = ref<HTMLDivElement | null>(null);
 // defaults per owner 2026-07-02: Grass 1 turf, FUMBBL Classic sprites
 // (HD-2D "New" set parked — see upgrades_parkinglot.md). The turf theme now
@@ -8007,6 +8023,7 @@ function onKeydown(event: KeyboardEvent) {
   // run its transactional rollback path rather than this gameplay handler closing it.
   if (appShellModalOwnsKeyboard(ui.settingsOpen)) return;
   if (event.target instanceof HTMLInputElement) return;
+  if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
   if (event.key === 'Escape') {
     // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
     // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
@@ -8205,6 +8222,7 @@ onMounted(async () => {
   // probe; the store's 7000ms cap remains the fail-open bound. Live AND spectate — this view serves both.
   bindBallAnimating(() => renderer?.ballAnimating() ?? false);
   bindPlayersAnimating(() => renderer?.playersAnimating() ?? false); // owner 09-14: touchdown-sound gate sees the rendered walk
+  renderer.movementPendingProbe = movementStepsPending; // owner 09-23: the planner swallows clicks while steps are still pending
   bindArmourDiceShowing(() => renderer?.armourDiceShowing() ?? false); // owner 09-15: the injury toast waits for 'ARMOR BREAKS!' to retire
   turfCatalog.options = renderer.turfOptions();
   // if a persisted turf is no longer available, fall back to the first option
@@ -10144,14 +10162,15 @@ function pgDiceSide(side: 'home' | 'away'): PgDiceSide {
   const faces = ['1', '2', '3', '4', '5', '6'];
   const totals = ['2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
   // Owner 09-17: every D6 first, then the block dice, then armour / injury as 2D6 TOTALS (fair share is the
-  // 1-2-3-4-5-6-5-4-3-2-1 / 36 triangle), then dodge and "action" (every other) D6 by face.
+  // 1-2-3-4-5-6-5-4-3-2-1 / 36 triangle), then dodge D6 by face.
+  // Owner 09-23: "D6 distribution" leads and the "action" (every other) D6 sits right under it.
   const charts: PgDiceChartRow[] = [
-    { key: 'd6', title: 'D6 rolled', chart: pgBarChart(t.d6.slice(1), even, faces) },
+    { key: 'd6', title: 'D6 distribution', chart: pgBarChart(t.d6.slice(1), even, faces) },
+    { key: 'action', title: 'Action dice', chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
     { key: 'block', title: 'Block dice', chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
     { key: 'armour', title: 'Armour dice', chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
     { key: 'injury', title: 'Injury dice', chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
     { key: 'dodge', title: 'Dodge dice', chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
-    { key: 'action', title: 'Action dice', chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
   ];
   return {
     team: surface?.team ?? (team?.teamName ?? side), logo: surface?.logo ?? '', charts,
@@ -10842,6 +10861,7 @@ function sendChat() {
     if (text.startsWith('/')) gameStore.devCommand(text);
     else gameStore.sendTalk(text);
     chatInput.value = '';
+    void nextTick(growChatInput);
   } else {
     // owner 2026-07-08: Enter on an empty field unfocuses the chat input.
     chatInputEl.value?.blur();
@@ -11483,7 +11503,7 @@ function sendChat() {
              B2-8/9 (UI7): draggable by the tab bar, resizable, opacity/font
              settings via the gear; UI8: scroll freeze + new-event pill. -->
         <div ref="panelEl" class="log-panel" :data-collapsed="panelCollapsed" :class="{ 'endgame-front': endGameFront }"
-          :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :style="panelStyle"
+          :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :data-chat-focused="chatFocused" :style="panelStyle"
           @mouseenter="onLogHover(true)" @mouseleave="onLogHover(false)">
           <span v-if="!panelCollapsed" class="log-resizer" role="button" aria-label="Resize Log window"
             title="Resize Log window" @pointerdown="startLogResize">⤡</span>
@@ -11589,7 +11609,7 @@ function sendChat() {
               </button>
             </div>
             <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
-              <input ref="chatInputEl" v-model="chatInput" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" />
+              <textarea ref="chatInputEl" v-model="chatInput" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown" @focus="chatFocused = true" @blur="chatFocused = false"></textarea>
             </form>
           </ChatDock>
         </div>
@@ -11779,10 +11799,7 @@ function sendChat() {
               <span class="pg-title">End of Game</span>
               <!-- Owner 2026-07-15: no manual close — the end-game panel persists over the cleared board until a
                    NEW game starts (gameOver→false resets postGameDismissed + postGame becomes null). -->
-              <!-- Owner 09-15: Return to Menu rides the header (right) — its own row below cost the stack ~50px. -->
-              <div v-if="mode !== 'spectate'" class="pg-actions pg-actions-head">
-                <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
-              </div>
+              <!-- Owner 09-23: Return to Menu moved OFF the header to the exit bar under the tab card (see pg-exit below). -->
             </header>
             <section class="pg-result">
               <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.home }">
@@ -11960,6 +11977,10 @@ function sendChat() {
           <div v-if="spectatorExitVisible" class="pg-window pg-exit">
             <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
             <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">Spectate Another Game</button>
+          </div>
+          <!-- Owner 09-23: the play seat's Return to Menu sits centred under the tab card (was header-right since 09-15). -->
+          <div v-else-if="mode !== 'spectate'" class="pg-window pg-exit">
+            <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
           </div>
         </div>
 
@@ -14591,7 +14612,6 @@ function sendChat() {
   color: var(--ui-text-on-primary);
   font-weight: 700;
 }
-.pg-actions-head { margin: 0 0 0 auto; padding: 0; border: 0; }
 .pg-actions {
   display: flex;
   justify-content: center;
@@ -17392,6 +17412,8 @@ function sendChat() {
    the complete picker/summary/footer surface (47). The attribute makes this phase-only;
    ordinary log stacking stays at 11, while diagnostics at 52+ remain above the phase. */
 .log-panel[data-induce-open='true'] { z-index: 43; }
+/* Owner 09-23: …unless the coach is typing — Enter opens the chat on top of the phase, and it drops back on blur. */
+.log-panel[data-induce-open='true'][data-chat-focused='true'] { z-index: 48; }
 /* Owner 2026-07-08 (default): swap the bottom bars — Log leads at the bottom-left. */
 .log-panel[data-swapped='true'] {
   left: 14px;
@@ -17634,14 +17656,24 @@ function sendChat() {
 /* (Owner 08-19: the 07-08 full-line side colours are retired — the seat colour rides the
    coach-name span only, spectators/unknown senders stay plain.) */
 .log [data-kind='system'] { color: var(--ui-muted); }
-.chat input {
+.chat { flex: none; } /* owner 09-23: the entry keeps its grown height; the log above yields */
+.chat textarea {
+  display: block;
   width: 100%;
   box-sizing: border-box;
   background: var(--ui-surface);
   color: inherit;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; /* the chat-log message face, not the dock's Nuffle */
+  font-size: max(var(--ui-min-text-size, 12px), 0.72rem); /* = .log */
+  line-height: 1.35;
   border: none;
   border-top: 1px solid var(--ui-border);
   padding: 0.45rem 0.6rem;
+  resize: none;
+  overflow-y: auto;
+  max-height: calc(1.35em * 3 + 0.9rem); /* grows up to 3 lines ("slightly"), then scrolls — the log keeps its room */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .roster {
   overflow-y: auto;

@@ -5,6 +5,7 @@ const DIE_CAUSE_BY_REPORT: Record<string, string> = {
   pickUpRoll: 'pickup',
   goForItRoll: 'gfi',
   catchRoll: 'catch',
+  pickMeUp: 'pickMeUp', // owner 09-23: bb2025 ReportPickMeUp {playerId, roll, successful} — the die wears the PICK ME UP badge
   passRoll: 'pass',
   interceptionRoll: 'intercept',
   leapRoll: 'leap',

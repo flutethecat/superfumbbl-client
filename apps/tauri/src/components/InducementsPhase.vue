@@ -654,6 +654,6 @@ function panelColor(panel: PanelView): SeatColor {
   .ind-picker, .ind-summary { height: auto; max-height: none; }
   .ind-cardgrid, .ind-sum-list { overflow-y: visible; }
 }
-.ind-watch-inline { padding: 6px 0 10px; }
+.ind-watch-inline { padding: 6px 0 10px; flex: 0 0 auto; } /* owner 09-23: the note sits on the grid; .ind-watch's flex:1 left a gap above it */
 .ind-cardgrid[data-readonly="true"] .ind-card { cursor: default; }
 </style>
