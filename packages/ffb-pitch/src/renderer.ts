@@ -924,6 +924,12 @@ const STRENGTH_SCALE: Record<number, number> = { 1: 0.76, 2: 0.88, 3: 1, 4: 1.12
 function strengthScale(strength: number | undefined): number {
   return STRENGTH_SCALE[Math.max(1, Math.min(6, Math.round(strength ?? 3)))] ?? 1;
 }
+/** JLeav 09-23 (Checkers/Chess): the FUMBBL convention is THREE disc sizes — ST 2 or less small, ST 3-4 normal,
+ *  ST 5+ big. The six-step token table drew ST 4 visibly larger than ST 3. */
+function abstractStrengthScale(strength: number | undefined): number {
+  const st = Math.round(strength ?? 3);
+  return st <= 2 ? 0.86 : st >= 5 ? 1.24 : 1;
+}
 /** Owner 09-05: walk-sheet tokens carry NO Strength factor for ST 1-4 (the art tiers size them), but the big
  *  guys (treeman, troll, ogre… ST 5+) still read too small at the 60 px art tier — bring the table back for
  *  ST >= 5 only. */
@@ -2022,6 +2028,14 @@ export class PitchRenderer {
     // the WALKERS do not follow it — snapWalker rounds the 1.5 tie UP to the 2:1 whole ratio (same pixel size as
     // rung 4) while the ground, grid, markers and discs zoom to 3.
     const ladder = [0.5, 1, 2, 2.25, 3, 4, 4.5, 6, 8, 9, 10, 12, 16];
+    // JLeav 09-23: the first step in from the whole-stadium fit jumped straight to 2x. Add a rung at the scale
+    // where just the 26x15 pitch fills the viewport, when that lands strictly between two fixed rungs.
+    const pitchFit = this.pitchOnlyFitScale();
+    if (pitchFit != null) {
+      const p = pitchFit * res;
+      const i = ladder.findIndex((v) => v > p + 1e-3);
+      if (i > 0 && ladder[i - 1]! < p - 1e-3) ladder.splice(i, 0, p);
+    }
     const eps = 1e-6;
     let q: number;
     if (mode === 'floor') q = [...ladder].reverse().find((v) => v <= r + eps) ?? ladder[0]!;
@@ -13560,6 +13574,13 @@ export class PitchRenderer {
     return { homeForward, awayForward: { dx: -homeForward.dx, dy: -homeForward.dy } };
   }
 
+  /** The scale at which the playing squares alone (26x15) fill the viewport; null before the app exists. */
+  private pitchOnlyFitScale(): number | null {
+    if (!this.app) return null;
+    const a = squareAnchor(0, 0), b = squareAnchor(PITCH_COLS - 1, PITCH_ROWS - 1);
+    const w = Math.abs(b.x - a.x) + TILE_W, h = Math.abs(b.y - a.y) + TILE_H;
+    return Math.min(this.app.screen.width / w, this.app.screen.height / h);
+  }
   private fitScaleFor(worldW: number, worldH: number, margin: number): number {
     if (!this.app) return this.cameraFitScale;
     return this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (this.app.screen.height - margin) / worldH), 'floor');
@@ -14642,7 +14663,7 @@ export class PitchRenderer {
     // Madden depth scaling × per-Strength scale (owner spec, STRENGTH_SCALE:
     // Str3 = 1.0, big guys land ~Str5/6 ≈ the old 1.25 big-guy bump). The token
     // origin IS the square anchor, so scaling keeps them centered.
-    token.scale.set(depthScale(x, y) * strengthScale(player.strength));
+    token.scale.set(depthScale(x, y) * (this.abstractSpriteSet() ? abstractStrengthScale(player.strength) : strengthScale(player.strength)));
     token.zIndex = this.depthZ(x, y);
 
     const body = isHome ? COLORS.homeBody : COLORS.awayBody;
@@ -17840,6 +17861,14 @@ export class PitchRenderer {
     return Math.hypot(points[0]!.x - points[1]!.x, points[0]!.y - points[1]!.y);
   }
 
+  /** JLeav 09-23: an overlay that sits over the pitch (turn-boundary banners) hands its wheel here so the wheel
+   *  still zooms the pitch instead of scrolling the overlay. Same factor as the canvas listener. */
+  wheelFromOverlay(event: WheelEvent): void {
+    if (!this.app || this.cinematic) return;
+    const rect = this.app.canvas.getBoundingClientRect();
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+  }
   private zoomAt(screenX: number, screenY: number, factor: number): void {
     this.noteManualCameraInput();
     const oldScale = this.world.scale.x;

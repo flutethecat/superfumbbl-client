@@ -26,6 +26,9 @@ import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { fetchLatestRelease, updateAvailable } from './game/updateCheck';
+import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
+import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
 import { clearConfigWebToken } from './game/configWebAuth';
@@ -89,6 +92,61 @@ const appVersion = __APP_VERSION__;
 const gitSha = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'nogit';
 // ORDER 66 (A.2): a port-branch build (0.2.8-o66a…) — surfaces the order66 toggle without needing -dev.
 const isO66Build = appVersion.includes('o66');
+// Owner 09-23: version check — at startup ask GitHub for the latest public release; when it is newer than this
+// build, prompt with a button that opens the release page in the system browser. Dev cuts never prompt.
+const updatePrompt = ref<{ version: string; url: string } | null>(null);
+async function checkForUpdate(): Promise<void> {
+  const latest = await fetchLatestRelease((url, init) => (inTauri ? tauriFetch(url, init) : fetch(url, init)));
+  if (latest && updateAvailable(appVersion, latest.version)) updatePrompt.value = latest;
+}
+onMounted(() => { setTimeout(() => { void checkForUpdate(); }, 1500); });
+// Owner 09-23: ART PACK — a split (public) build downloads its art into app-data on first run and only the
+// changed parts after an update; the pitch views wait for it (menus stay usable). Bundled builds are ready at once.
+async function startArtPackSync(): Promise<void> {
+  if (inTauri) { await syncArtPack(await tauriArtPackHost()); return; }
+  // Web/rig: `?artpack=<base url>` serves an unzipped pack as static files (verification of the alias path).
+  const staticPack = new URLSearchParams(window.location.search).get('artpack');
+  if (staticPack) { await syncArtPack(webArtPackHost(staticPack)); return; }
+  artPack.ready = true;
+}
+onMounted(() => { void startArtPackSync(); });
+// Owner 09-24: Discord Rich Presence — the local Discord shows "vs <Coach>'s <Race> · score · turn" / "Watching …" /
+// "Waiting for a game". Text is shaped in game/discordPresence.ts; the Rust worker owns the socket + rate limit.
+let presenceGameId = 0, presenceStartedAt = 0, presenceLast = '';
+const presenceSpec = computed(() => {
+  const g = gameStore.game.value;
+  const gid = Number((g as { gameId?: unknown } | null)?.gameId ?? 0);
+  if (gid !== presenceGameId) { presenceGameId = gid; presenceStartedAt = Math.floor(Date.now() / 1000); }
+  return presenceFor({
+    game: g, playing: gameStore.isPlaying.value, replay: gameStore.isReplay.value,
+    myCoach: settings.activeServerTarget === 'fork' ? settings.coach40k : settings.coach,
+    server: settings.activeServerTarget === 'fork' ? 'fork' : 'fumbbl',
+    spectateInvites: settings.discordSpectateInvites, startedAt: g ? presenceStartedAt : undefined,
+  });
+});
+async function pushPresence(): Promise<void> {
+  if (!inTauri) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  if (!settings.discordPresence) { if (presenceLast) { presenceLast = ''; await invoke('discord_presence_clear').catch(() => {}); } return; }
+  const spec = presenceSpec.value; const key = JSON.stringify(spec);
+  if (key === presenceLast) return;
+  presenceLast = key;
+  await invoke('discord_presence_set', { spec }).catch(() => {});
+}
+watch([presenceSpec, () => settings.discordPresence], () => { void pushPresence(); }, { immediate: true, deep: true });
+onMounted(async () => {
+  if (!inTauri) return;
+  const { listen } = await import('@tauri-apps/api/event');
+  // A friend pressed Spectate on Discord: Discord hands THIS client the secret → open that game as a spectator.
+  await listen<string>('discord-spectate', (event) => {
+    const target = parseSpectateSecret(event.payload);
+    if (!target) return;
+    if (target.server === 'fork' && !FORK_EDITION) return; // the public edition has no fork target
+    settings.activeServerTarget = target.server;
+    openSpectateGame(target.gameId);
+  });
+});
+function openUpdateRelease(): void { const p = updatePrompt.value; if (!p) return; void openExternal(p.url); updatePrompt.value = null; }
 
 // Legal acceptance is a revisioned launch gate rather than a dismissible preference. Missing or
 // malformed persistence fails closed, including for existing installs that predate this field.
@@ -706,6 +764,17 @@ const themePreview = computed(() => {
 });
 /** When set, the next keydown rebinds this hotkey. */
 const capturingKey = ref<'confirmKey' | null>(null);
+// JLeav 09-23 (#5): a slider at its maximum looked like it could go further — the default track has no fill.
+// v-fill-range paints the track up to the thumb (`--fill`), so the end of the range reads as full.
+const vFillRange = {
+  mounted(el: HTMLInputElement) { fillRange(el); el.addEventListener('input', () => fillRange(el)); },
+  updated(el: HTMLInputElement) { fillRange(el); },
+};
+function fillRange(el: HTMLInputElement): void {
+  const min = Number(el.min || 0), max = Number(el.max || 100), v = Number(el.value);
+  const pct = max > min ? Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100)) : 0;
+  el.style.setProperty('--fill', `${pct}%`);
+}
 
 /**
  * UI-6: pulls the coach's auto-marking config from FUMBBL — the same
@@ -1340,7 +1409,7 @@ function captureKey(event: KeyboardEvent) {
         </div>
       </div>
       <!-- owner 2026-07-03 r5: stencil "ALPHA RELEASE" stamp -->
-      <span class="alpha-stamp" aria-label="Alpha release">ALPHA RELEASE</span>
+      <span class="alpha-stamp" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
       <!-- owner 2026-07-14: build credit + Twitch link MOVED off the menu bar to the bottom-left of the
            opening credentials splash panel (.splash-build-credit below). -->
       <!-- session state + Disconnect, moved off the removed connect bar (Option A) -->
@@ -1398,7 +1467,20 @@ function captureKey(event: KeyboardEvent) {
 
     <!-- owner 2026-07-08 (FC): view-layer fork — the FUMBBL-Classic presentation
          mounts instead of SpectateView when the mode is set (shared store). -->
-    <template v-if="!!gameStore.game.value">
+    <!-- Owner 09-23: the art pack must be installed before the pitch draws (split builds); see startArtPackSync. -->
+    <div v-if="!!gameStore.game.value && !artPack.ready" class="art-pack-wait" role="status" aria-live="polite">
+      <template v-if="artPack.error">
+        <h3>Art pack download failed</h3>
+        <p class="hint">{{ artPack.error }}</p>
+        <button class="primary" type="button" @click="startArtPackSync()">Retry</button>
+      </template>
+      <template v-else>
+        <h3>Downloading the art pack…</h3>
+        <p class="hint">{{ artPack.done }} / {{ artPack.total }} parts · {{ formatMb(artPack.downloadedBytes) }} of {{ formatMb(artPack.pendingBytes) }}<template v-if="artPack.current"> · {{ artPack.current }}</template></p>
+        <div class="art-pack-bar"><div class="art-pack-fill" :style="{ width: artPack.pendingBytes ? (100 * artPack.downloadedBytes / artPack.pendingBytes) + '%' : '0%' }" /></div>
+      </template>
+    </div>
+    <template v-if="!!gameStore.game.value && artPack.ready">
       <component :is="ClassicView" v-if="ClassicView && settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
       <SpectateView v-else :mode="liveGameMode" @end-game-exit="onEndGameExit" />
     </template>
@@ -1502,6 +1584,22 @@ function captureKey(event: KeyboardEvent) {
 
     <!-- W30: reuse the owner-approved compact save-prompt visual. SpectateView's
          yes/no rail is activation-scoped and must not own app-shell navigation. -->
+    <!-- Owner 09-23: art-pack progress strip on the console (split builds, first run / after an update). -->
+    <div v-if="artPack.split && !artPack.ready && !gameStore.game.value" class="art-pack-strip" role="status" aria-live="polite">
+      <template v-if="artPack.error">Art pack download failed — {{ artPack.error }} <button type="button" @click="startArtPackSync()">Retry</button></template>
+      <template v-else>Downloading the art pack… {{ artPack.done }} / {{ artPack.total }} parts · {{ formatMb(artPack.downloadedBytes) }} of {{ formatMb(artPack.pendingBytes) }}</template>
+    </div>
+    <!-- Owner 09-23: a newer public release exists — one button opens its GitHub page. -->
+    <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" data-testid="update-prompt" @click.self="updatePrompt = null">
+      <div class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
+        <h3 id="update-prompt-title">Super FUMBBL {{ updatePrompt.version }} is available</h3>
+        <div class="save-prompt-actions">
+          <button class="primary" @click="openUpdateRelease()">Download now</button>
+          <button @click="updatePrompt = null">Download later</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="leaveGamePrompt" class="modal-backdrop save-prompt-backdrop"
       :data-dialog-id="LEAVE_GAME_DIALOG_ID" @click.self="cancelLeaveGame()">
       <div class="save-prompt">
@@ -1538,6 +1636,17 @@ function captureKey(event: KeyboardEvent) {
         <section v-if="settingsTab === 'general'">
           <AccountSettings v-if="FORK_EDITION" />
 
+          <fieldset class="settings-group">
+            <legend>Discord</legend>
+            <label class="row">
+              <span>Discord Rich Presence (show my game as my Discord activity)</span>
+              <input v-model="settings.discordPresence" type="checkbox" />
+            </label>
+            <label class="row">
+              <span>Let friends join as spectators from Discord (Spectate button)</span>
+              <input v-model="settings.discordSpectateInvites" type="checkbox" :disabled="!settings.discordPresence" />
+            </label>
+          </fieldset>
           <fieldset class="settings-group">
             <legend>Connection</legend>
             <label class="creds-open-row"><!-- owner 09-10: "Login credentials" caption cut -->
@@ -1643,6 +1752,7 @@ function captureKey(event: KeyboardEvent) {
 
           <fieldset class="settings-group">
             <legend>Keyboard</legend>
+            <p class="hint">Only the confirm key can be changed; the other shortcuts are fixed.</p>
             <label class="row">
               <span>Confirm move / pass target</span>
               <button class="keybind" @click="capturingKey = 'confirmKey'">
@@ -1657,7 +1767,7 @@ function captureKey(event: KeyboardEvent) {
             <div class="row"><span>Mark row · column</span><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></div>
             <label class="row">
               <span>Camera pan speed</span>
-              <input v-model.number="settings.cameraPanSpeed" type="range" min="2" max="30" step="1" />
+              <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
               <span>{{ settings.cameraPanSpeed }} px</span>
             </label>
           </fieldset>
@@ -1772,13 +1882,13 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Minimum text size</span>
-              <input v-model.number="settings.uiTextSize" type="range" min="12" max="20" step="1" />
+              <input v-model.number="settings.uiTextSize" v-fill-range type="range" min="12" max="20" step="1" />
               <span>{{ settings.uiTextSize }}px</span>
             </label>
             <p class="hint">Sub-headers and annotations are kept at or above this size; primary text never drops below 16px. Raising this past 16 lifts everything together.</p>
             <label class="row">
               <span>Brightness</span>
-              <input v-model.number="settings.brightness" type="range" min="50" max="150" step="5" />
+              <input v-model.number="settings.brightness" v-fill-range type="range" min="50" max="150" step="5" />
               <span>{{ settings.brightness }}%</span>
             </label>
             <label class="row">
@@ -1800,7 +1910,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Line width</span>
-              <input v-model.number="settings.gridLineWidth" type="range" min="0.1" max="3" step="0.1" :disabled="!settings.gridLines" />
+              <input v-model.number="settings.gridLineWidth" v-fill-range type="range" min="0.1" max="3" step="0.1" :disabled="!settings.gridLines" />
               <span>{{ settings.gridLineWidth }}×</span>
             </label>
             <label class="row">
@@ -1809,7 +1919,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Line opacity</span>
-              <input v-model.number="settings.gridLineOpacity" type="range" min="0.1" max="1" step="0.05" :disabled="!settings.gridLines" />
+              <input v-model.number="settings.gridLineOpacity" v-fill-range type="range" min="0.1" max="1" step="0.05" :disabled="!settings.gridLines" />
               <span>{{ Math.round(settings.gridLineOpacity * 100) }}%</span>
             </label>
             <p class="hint">Turning grid lines off, widening or recolouring them helps legibility over busy pitch textures.</p>
@@ -1831,7 +1941,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Echo size</span>
-              <input v-model.number="settings.echoSize" type="range" min="0.5" max="2" step="0.1" :disabled="!settings.clickEcho" />
+              <input v-model.number="settings.echoSize" v-fill-range type="range" min="0.5" max="2" step="0.1" :disabled="!settings.clickEcho" />
               <span>{{ settings.echoSize }}×</span>
             </label>
             <div class="echo-preview" :style="{ '--click-echo-color': settings.clickEchoColor, '--echo-scale': settings.echoSize }">
@@ -1845,6 +1955,10 @@ function captureKey(event: KeyboardEvent) {
         <section v-if="settingsTab === 'display'">
           <fieldset class="settings-group">
             <legend>Video</legend>
+            <label class="row">
+              <span>Auto Director (camera follows the action)</span>
+              <input v-model="settings.autoDirector" type="checkbox" />
+            </label>
             <label class="row">
               <span>Resolution scale</span>
               <select v-model.number="settings.renderScale">
@@ -2010,7 +2124,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Dice tumble ({{ settings.blockTumbleMs }}ms)</span>
-              <input v-model.number="settings.blockTumbleMs" type="range" min="100" max="600" step="25" />
+              <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
             </label>
             <label class="row">
               <span>Die-roll tag position</span>
@@ -2029,12 +2143,12 @@ function captureKey(event: KeyboardEvent) {
             <legend>Log</legend>
             <label class="row">
               <span>Opacity</span>
-              <input v-model.number="settings.logOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <input v-model.number="settings.logOpacity" v-fill-range type="range" min="0.05" max="1" step="0.01" />
               <span>{{ Math.round(settings.logOpacity * 100) }}%</span>
             </label>
             <label class="row">
               <span>Font size</span>
-              <input v-model.number="settings.logFontSize" type="range" min="8" max="22" step="0.5" />
+              <input v-model.number="settings.logFontSize" v-fill-range type="range" min="8" max="22" step="0.5" />
               <span>{{ settings.logFontSize }}px</span>
             </label>
             <label class="row">
@@ -2048,6 +2162,10 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <span>Display dice rolls as numbers</span>
               <input v-model="settings.logDiceAsNumbers" type="checkbox" />
+            </label>
+            <label class="row">
+              <span>Show timestamps</span>
+              <input v-model="settings.logTimestamps" type="checkbox" />
             </label>
             <p class="hint">Rolls show as one summed number instead of individual dice.</p>
             <label class="row">
@@ -2091,7 +2209,7 @@ function captureKey(event: KeyboardEvent) {
               </label>
               <label class="row">
                 <span>Size</span>
-                <input v-model.number="settings.skillMarkingSize" type="range" min="6" max="24" step="1" />
+                <input v-model.number="settings.skillMarkingSize" v-fill-range type="range" min="6" max="24" step="1" />
                 <span>{{ settings.skillMarkingSize }}px</span>
               </label>
               <p class="hint">All glyphs for a player are antialiased and kept together on one line.</p>
@@ -2240,7 +2358,7 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <label class="row">
               <span>Ring density</span>
-              <input v-model.number="settings.positionRingDensity" type="range" min="0.3" max="1.5" step="0.1" :disabled="!settings.showPositionRings" />
+              <input v-model.number="settings.positionRingDensity" v-fill-range type="range" min="0.3" max="1.5" step="0.1" :disabled="!settings.showPositionRings" />
               <span>{{ settings.positionRingDensity }}×</span>
             </label>
             <label class="row">
@@ -2345,22 +2463,22 @@ function captureKey(event: KeyboardEvent) {
             <legend>Element opacity</legend>
             <label class="row">
               <span>Coach panels</span>
-              <input v-model.number="settings.hudCoachOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <input v-model.number="settings.hudCoachOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudCoachOpacity * 100) }}%</span>
             </label>
             <label class="row">
               <span>Scoreboard</span>
-              <input v-model.number="settings.hudScoreboardOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <input v-model.number="settings.hudScoreboardOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudScoreboardOpacity * 100) }}%</span>
             </label>
             <label class="row">
               <span>Quick bar</span>
-              <input v-model.number="settings.hudQuickBarOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <input v-model.number="settings.hudQuickBarOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudQuickBarOpacity * 100) }}%</span>
             </label>
             <label class="row">
               <span>Chat toasts</span>
-              <input v-model.number="settings.hudToastOpacity" type="range" min="0.2" max="1" step="0.01" />
+              <input v-model.number="settings.hudToastOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudToastOpacity * 100) }}%</span>
             </label>
           </fieldset>
@@ -2387,7 +2505,7 @@ function captureKey(event: KeyboardEvent) {
           </label>
             <label class="row">
               <span>Chat toast text size</span>
-              <input v-model.number="settings.chatToastTextSize" type="range" min="12" max="28" step="1"
+              <input v-model.number="settings.chatToastTextSize" v-fill-range type="range" min="12" max="28" step="1"
                 aria-describedby="chat-toast-text-size-help" />
               <span>{{ settings.chatToastTextSize }}px</span>
             </label>
@@ -2407,7 +2525,7 @@ function captureKey(event: KeyboardEvent) {
             <legend>Sound</legend>
             <label class="row">
               <span>Game sound</span>
-              <input v-model.number="settings.soundVolume" type="range" min="0" max="100" step="5" />
+              <input v-model.number="settings.soundVolume" v-fill-range type="range" min="0" max="100" step="5" />
               <span>{{ settings.soundVolume === 0 ? 'muted' : settings.soundVolume + '%' }}</span>
             </label>
             <label class="row">
@@ -3380,6 +3498,31 @@ input, textarea, [contenteditable="true"], .log-panel {
   font-size: max(var(--ui-min-primary-text-size, 16px), 18px);
   line-height: 1;
 }
+/* JLeav 09-23 (#5): filled slider track — the thumb sits at the end of a fully painted bar at maximum. */
+.settings-pane .settings-content input[type='range'] { /* beats the generic .settings-pane input surface rule */
+  -webkit-appearance: none; appearance: none;
+  height: 6px; padding: 0; border: none; border-radius: 3px; outline: none; cursor: pointer;
+  background: linear-gradient(to right, var(--ui-primary, #b0242a) var(--fill, 0%), #2a2d33 var(--fill, 0%));
+}
+.settings-pane .settings-content input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%; background: #e8ecf2; border: 2px solid var(--ui-primary, #b0242a);
+}
+.settings-pane .settings-content input[type='range']::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #e8ecf2; border: 2px solid var(--ui-primary, #b0242a); }
+.settings-pane .settings-content input[type='range']:focus-visible { box-shadow: 0 0 0 2px rgba(232, 236, 242, 0.35); }
+/* Owner 09-23: art-pack sync surfaces. */
+.art-pack-strip {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 150;
+  background: rgba(20, 22, 26, 0.92); color: var(--ui-text, #e8ecf2); border: 1px solid var(--ui-border, #333);
+  border-radius: 6px; padding: 8px 14px; font-size: max(var(--ui-min-text-size, 12px), 0.8rem); display: flex; gap: 10px; align-items: center;
+}
+.art-pack-wait {
+  position: fixed; inset: 0; z-index: 150; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: rgba(8, 9, 12, 0.85); color: var(--ui-text, #e8ecf2); text-align: center; padding: 24px;
+}
+.art-pack-wait h3 { margin: 0; }
+.art-pack-bar { width: min(420px, 80vw); height: 8px; background: #2a2d33; border-radius: 4px; overflow: hidden; }
+.art-pack-fill { height: 100%; background: var(--ui-primary, #b0242a); transition: width .2s; }
 .modal-backdrop {
   position: fixed;
   inset: 0;

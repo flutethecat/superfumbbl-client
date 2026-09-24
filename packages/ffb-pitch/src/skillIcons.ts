@@ -343,6 +343,14 @@ const bundledSkillIconTextures = new Map<string, Texture>();
 /** Owner 09-09: switch the bundled badge family. Before the icons are loaded this only records the choice (the
  *  loader reads it); afterwards it reloads the family's textures, drops the stable handles that pointed at the old
  *  family so the next `skillIcon()` call mints fresh ones, and resolves when the swap is complete. Idempotent. */
+/** Owner 09-23 (JLeav report, "icons look decimated"): the badges are drawn SMALLER than their 48 px source at
+ *  every normal zoom (the token is ~30 px at fit), and nearest sampling of a minified illustration drops pixels —
+ *  the icons read as noise. Linear + mipmaps minify cleanly; at 1:1 or above linear is indistinguishable here. */
+function badgeSampling(texture: Texture): void {
+  texture.source.scaleMode = 'linear';
+  texture.source.autoGenerateMipmaps = true;
+}
+
 export async function setBundledSkillBadgeFamily(family: BundledSkillBadgeFamily): Promise<boolean> {
   if (family === bundledSkillBadgeFamily) return false;
   bundledSkillBadgeFamily = family;
@@ -352,7 +360,7 @@ export async function setBundledSkillBadgeFamily(family: BundledSkillBadgeFamily
   await Promise.all([...BUNDLED_SKILL_BADGE_FAMILIES[family]].map(async ([key, url]) => {
     if (statusIconKeys.has(key)) return;
     const texture = await Assets.load<Texture>(url);
-    texture.source.scaleMode = 'nearest';
+    badgeSampling(texture);
     loaded.set(key, texture);
   }));
   if (family !== bundledSkillBadgeFamily) return false; // superseded by a later switch
@@ -589,7 +597,7 @@ export async function loadSkillIcons(): Promise<void> {
   // an installed pack's higher-precedence target.
   await Promise.all([...bundledSkillIconUrls.entries()].map(async ([key, url]) => {
     const texture = await Assets.load<Texture>(url);
-    texture.source.scaleMode = 'nearest';
+    badgeSampling(texture);
     bundledSkillIconTextures.set(key, statusIconContentTexture(key, texture));
   }));
 }

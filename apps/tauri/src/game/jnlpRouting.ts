@@ -48,6 +48,9 @@ export interface FumbblLobby {
   teamName: string;
   gameId?: number;
   sourceName?: string;
+  /** Owner 09-24: opened with the stored coach + password (no JNLP) — the list needs no credential, the join
+   *  runs the normal password challenge; the coach picks the game AND its own team from the server's list. */
+  password?: boolean;
 }
 
 export const fumbblLobby = ref<FumbblLobby | null>(null);
@@ -114,6 +117,33 @@ function releaseAcceptedFumbblLobby(prepared: GameSession, generation: number): 
 }
 
 export function stageFumbblPlayerLobby(lobby: FumbblLobby, auth: string): void {
+  stageFumbblLobby(lobby, (prepared) => prepared.prepareFumbblLobby({
+    coach: lobby.coach,
+    password: '',
+    gameId: 0,
+    mode: 'player',
+    teamId: lobby.teamId || undefined,
+    teamName: lobby.teamName || undefined,
+    fumbblAuthToken: auth,
+  }));
+}
+
+/** Owner 09-24: "My FUMBBL games" — open the lobby with the saved coach + password and list the coach's open
+ *  games straight away. No JNLP, no website round-trip; the join authenticates with the password challenge. */
+export function stageFumbblPasswordLobby(coach: string, password: string): void {
+  const lobby: FumbblLobby = { coach, teamId: '', teamName: '', sourceName: 'My FUMBBL games', password: true };
+  stageFumbblLobby(lobby, (prepared) => prepared.prepareFumbblLobbyWithPassword({ coach, password, gameId: 0, mode: 'player' }));
+  const prepared = preparedFumbblSession;
+  const generation = preparedFumbblGeneration;
+  if (!prepared) return;
+  const off = prepared.on('state', (state) => {
+    if (state !== 'ready') return;
+    off();
+    if (prepared === preparedFumbblSession && generation === preparedFumbblGeneration) fumbblListGames();
+  });
+}
+
+function stageFumbblLobby(lobby: FumbblLobby, prepareLobby: (prepared: GameSession) => Promise<void>): void {
   closePreparedFumbblSession();
   const generation = preparedFumbblGeneration;
   const target = activeServerTarget();
@@ -132,7 +162,7 @@ export function stageFumbblPlayerLobby(lobby: FumbblLobby, auth: string): void {
   preparedFumbblConnectTimer = setTimeout(() => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     if (prepared.state !== 'connecting' && prepared.state !== 'versioning') return;
-    fumbblLobbyError.value = 'FUMBBL did not finish connecting. Cancel and load a fresh JNLP to try again.';
+    fumbblLobbyError.value = lobby.password ? 'FUMBBL did not finish connecting. Try again in a moment.' : 'FUMBBL did not finish connecting. Cancel and load a fresh JNLP to try again.';
     fumbblLobbyState.value = 'closed';
     closePreparedFumbblSession();
   }, FUMBBL_LOBBY_CONNECT_TIMEOUT_MS);
@@ -169,19 +199,11 @@ export function stageFumbblPlayerLobby(lobby: FumbblLobby, auth: string): void {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     preparedFumbblSession = null;
     if (!fumbblLobbyError.value) {
-      fumbblLobbyError.value = `FUMBBL lobby connection closed (${code}${reason ? `: ${reason}` : ''}). Reload the JNLP to try again.`;
+      fumbblLobbyError.value = `FUMBBL lobby connection closed (${code}${reason ? `: ${reason}` : ''}). ${lobby.password ? 'Open My FUMBBL games again to retry.' : 'Reload the JNLP to try again.'}`;
     }
   });
 
-  void prepared.prepareFumbblLobby({
-    coach: lobby.coach,
-    password: '',
-    gameId: 0,
-    mode: 'player',
-    teamId: lobby.teamId || undefined,
-    teamName: lobby.teamName || undefined,
-    fumbblAuthToken: auth,
-  }).catch((error) => {
+  void prepareLobby(prepared).catch((error) => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     fumbblLobbyError.value = error instanceof Error ? error.message : String(error);
   });
@@ -310,6 +332,11 @@ export function fumbblJoinLoaded(gameId?: number, match?: BrowserMatch): void {
   if (!lobby || (gameId !== undefined && (!Number.isInteger(gameId) || gameId <= 0))) return;
   const ownTeam = match?.teams.find((team) => lobby.teamId && String(team.teamId ?? '') === lobby.teamId)
     ?? match?.teams.find((team) => team.coach?.toLowerCase() === lobby.coach.toLowerCase());
+  // Owner 09-24: a password lobby has no team until the coach picks a listed game — take it from the entry.
+  if (lobby.password && !lobby.teamId && ownTeam?.teamId != null) {
+    lobby.teamId = String(ownTeam.teamId);
+    lobby.teamName = ownTeam.name || '';
+  }
   const opponent = match?.teams.find((team) => team !== ownTeam);
   connectFumbblPlayer(lobby, {
     gameId,

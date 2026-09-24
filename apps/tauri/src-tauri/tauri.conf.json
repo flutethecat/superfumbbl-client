@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Super FUMBBL",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "identifier": "com.fumbbl40k.app",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
@@ -21,7 +21,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/art-pack/**"]
+      }
     }
   },
   "bundle": {

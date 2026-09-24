@@ -125,6 +125,11 @@ export interface AppSettings {
   soundStyles: Record<string, string>;
   // B2-8/9 (UI7): log window customization
   logOpacity: number;
+  /** Owner 09-23: log line timestamps — OFF by default (clutter). */
+  logTimestamps: boolean;
+  /** Owner 09-24: Discord Rich Presence (local Discord shows the current game) + the Spectate button for friends. */
+  discordPresence: boolean;
+  discordSpectateInvites: boolean;
   logFontSize: number;
   logFont: 'nuffle' | 'arial' | 'mono';
   /** Owner 09-16 (Settings > Display > Log): dice ROLLS render as one summed number instead of die faces. */
@@ -476,6 +481,9 @@ const DEFAULTS: AppSettings = {
   soundVolume: 20,
   soundStyles: {},
   logOpacity: 0.79,
+  logTimestamps: false,
+  discordPresence: FORK_EDITION, // public edition: opt-in
+  discordSpectateInvites: true,
   logFontSize: 15, // owner 2026-07-08: larger default Log/Chat/Roster text (was 11.5)
   logFont: 'arial', // owner 09-06: Arial default (was 'nuffle')
   logDiceAsNumbers: false,
@@ -860,6 +868,9 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // fail-closed: a non-boolean/corrupted stored value resolves to the default (chat enabled).
     merged.chatDisabled = raw.chatDisabled === true;
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
+    merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
+    merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
+    merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;
     // Fail closed to the quiet match log for fresh, older, or corrupted settings blobs.
     merged.showServerSequencingEvents = raw.showServerSequencingEvents === true;

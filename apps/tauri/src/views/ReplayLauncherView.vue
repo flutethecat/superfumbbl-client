@@ -16,11 +16,40 @@ import {
   type CoachGameRow,
   type MyGamesState,
 } from '../game/forkChallenge';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { fetchRecentFumbblMatches, type FumbblRecentMatch } from '../game/fumbblRecentMatches';
 
 const localError = ref('');
 const fileInput = ref<HTMLInputElement | null>(null);
 const fileLoading = ref(false);
 const myGames = reactive<MyGamesState>(createMyGamesState());
+// Owner 09-24: "Your FUMBBL games" — the coach's most recent official matches (public API, no auth), each a
+// one-click replay through the same connectReplay the fork list uses, against the fumbbl.com target.
+const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+const fumbblRecent = reactive({ loading: false, error: '', matches: [] as FumbblRecentMatch[], loaded: false });
+async function refreshFumbblRecent(): Promise<void> {
+  const coach = settings.coach.trim();
+  if (!coach) return;
+  fumbblRecent.loading = true; fumbblRecent.error = '';
+  try {
+    const { matches } = await fetchRecentFumbblMatches(coach, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch);
+    fumbblRecent.matches = matches;
+    fumbblRecent.loaded = true;
+  } catch (error) {
+    fumbblRecent.error = error instanceof Error ? error.message : String(error);
+  } finally { fumbblRecent.loading = false; }
+}
+function loadFumbblReplay(row: FumbblRecentMatch): void {
+  sharedReplayFileImporter.invalidate();
+  applyServerTarget('fumbbl');
+  const target = activeServerTarget();
+  localError.value = '';
+  void gameStore.connectReplay({ url: target.url, compression: target.compression, coach: settings.coach.trim(), gameId: row.replayId });
+}
+function matchWhen(row: FumbblRecentMatch): string {
+  const date = new Date(row.when.replace(' ', 'T'));
+  return Number.isNaN(date.valueOf()) ? row.when : date.toLocaleDateString();
+}
 const stopFileBusy = sharedReplayFileImporter.subscribeBusy((busy) => { fileLoading.value = busy; });
 interface LauncherSessionSnapshot {
   game: typeof gameStore.game.value;
@@ -128,7 +157,7 @@ async function loadFile(event: Event): Promise<void> {
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
-onMounted(() => { if (FORK_EDITION) refreshMyGames(); }); // owner 09-10: no fork games list in the public edition
+onMounted(() => { if (FORK_EDITION) refreshMyGames(); void refreshFumbblRecent(); }); // owner 09-10: no fork games list in the public edition
 </script>
 
 <template>
@@ -138,18 +167,53 @@ onMounted(() => { if (FORK_EDITION) refreshMyGames(); }); // owner 09-10: no for
         <div>
           <span class="replay-kicker">Match archive</span>
           <h1>Open a match replay</h1>
-          <p v-if="FORK_EDITION">Choose a Super FUMBBL match or open a replay file from this device.</p>
-          <p v-else>Open a FUMBBL replay file from this device.</p>
+          <p v-if="FORK_EDITION">Choose one of your FUMBBL or Super FUMBBL matches, or open a replay file from this device.</p>
+          <p v-else>Choose one of your recent FUMBBL matches, or open a replay file from this device.</p>
         </div>
         <span class="read-only-chip">Read only</span>
       </header>
 
       <!-- Presentational port of CreateGameModal.vue:62-84. -->
-      <div class="replay-grid" :data-panels="FORK_EDITION ? 2 : 1">
-        <section v-if="FORK_EDITION" class="replay-panel gb-mygames" aria-labelledby="my-games-title">
+      <div class="replay-grid" :data-panels="FORK_EDITION ? 3 : 2">
+        <!-- Owner 09-24: the coach's recent official FUMBBL matches, one click to replay. -->
+        <section class="replay-panel gb-mygames" aria-labelledby="fumbbl-games-title" data-testid="fumbbl-recent">
           <div class="panel-head gb-mygames-head">
             <div class="panel-title">
               <span class="panel-index" aria-hidden="true">01</span>
+              <div>
+                <span class="panel-label">FUMBBL</span>
+                <h2 id="fumbbl-games-title">Your FUMBBL games</h2>
+              </div>
+            </div>
+            <button class="file-button refresh" type="button" :disabled="fumbblRecent.loading" @click="refreshFumbblRecent()">
+              <span aria-hidden="true">↻</span> {{ fumbblRecent.loading ? 'Loading…' : 'Refresh' }}
+            </button>
+          </div>
+          <div class="games-well" aria-live="polite">
+            <p v-if="!settings.coach.trim()" class="note">Set your FUMBBL coach name in Settings to see your recent games.</p>
+            <p v-else-if="fumbblRecent.loading && !fumbblRecent.loaded" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Loading your games…</p>
+            <p v-else-if="fumbblRecent.error" class="error">Couldn't load your games — {{ fumbblRecent.error }}</p>
+            <p v-else-if="!fumbblRecent.matches.length" class="note">No FUMBBL matches with a replay found for this coach.</p>
+            <ul v-else class="gb-mygames-list">
+              <li v-for="row in fumbblRecent.matches" :key="row.matchId" class="gb-mygames-row">
+                <button class="gb-mygames-open" type="button" :disabled="gameStore.replay.loading" @click="loadFumbblReplay(row)">
+                  <span class="gb-mygames-vs">
+                    <strong>{{ row.myTeam }}</strong>
+                    <span class="opponent-line">vs {{ row.opponentTeam }} <em>({{ row.opponentCoach }})</em></span>
+                    <time>{{ matchWhen(row) }}</time>
+                  </span>
+                  <span class="gb-mygames-status" data-finished="true">{{ row.myScore }}&ndash;{{ row.opponentScore }}</span>
+                  <span class="open-glyph" aria-hidden="true">▶</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </section>
+
+        <section v-if="FORK_EDITION" class="replay-panel gb-mygames" aria-labelledby="my-games-title">
+          <div class="panel-head gb-mygames-head">
+            <div class="panel-title">
+              <span class="panel-index" aria-hidden="true">02</span>
               <div>
                 <span class="panel-label">Super FUMBBL</span>
                 <h2 id="my-games-title">Your Super FUMBBL games</h2>
@@ -186,7 +250,7 @@ onMounted(() => { if (FORK_EDITION) refreshMyGames(); }); // owner 09-10: no for
         <section class="replay-panel file-panel" aria-labelledby="file-replay-title">
           <div class="panel-head">
             <div class="panel-title">
-              <span class="panel-index" aria-hidden="true">{{ FORK_EDITION ? '02' : '01' }}</span>
+              <span class="panel-index" aria-hidden="true">{{ FORK_EDITION ? '03' : '02' }}</span>
               <div>
                 <span class="panel-label">Local archive</span>
                 <h2 id="file-replay-title">Open a replay file</h2>
@@ -269,6 +333,7 @@ h1 { margin-top: 3px; color: var(--ui-text); font-size: max(var(--ui-min-primary
 .replay-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); gap: clamp(14px, 1.4vw, 22px); align-items: stretch; }
 /* Owner 09-10: the public edition has only the local archive — one centred panel, sized to the viewport. */
 .replay-grid[data-panels="1"] { grid-template-columns: minmax(280px, min(520px, 100%)); justify-content: center; }
+.replay-grid[data-panels="3"] { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(260px, .7fr); } /* owner 09-24: FUMBBL · Super FUMBBL · file */
 .replay-panel {
   min-width: 0;
   display: flex;

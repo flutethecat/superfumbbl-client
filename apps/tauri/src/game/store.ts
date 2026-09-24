@@ -19177,7 +19177,8 @@ export const gameStore = {
   devCommand(raw: string) {
     if (spectatorTransport?.review.source === 'live-review') return;
     const cmd = raw.trim().toLowerCase().replace(/^\/+/, '').split(/\s+/)[0] ?? '';
-    const say = (t: string) => log('system', `⚙ ${t}`);
+    // JLeav 09-23: the reply also lands in the CHAT tab (a 'talk' line from "Console"), where the command was typed.
+    const say = (t: string) => { log('system', `⚙ ${t}`); log('talk', `Console: ${t}`); };
     switch (cmd) {
       case 'stuck':
       case 'pass':

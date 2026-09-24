@@ -6,6 +6,8 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 
+mod art_pack;
+mod discord_presence;
 mod asset_drafts;
 mod asset_media;
 mod asset_mods;
@@ -604,6 +606,7 @@ pub fn run() {
     builder
         .manage(pending)
         .manage(asset_mods::AssetPackState::default())
+        .manage(discord_presence::PresenceState::default())
         // Diagnostics: FUMBBL_DEVTOOLS=1 opens the web inspector at launch. The native
         // context menu is suppressed in the UI, so this is the only way to reach the
         // console in a release build (e.g. a blank window on a new platform).
@@ -624,6 +627,12 @@ pub fn run() {
         // Opener: open external promo links (Twitch/Discord) in the system browser.
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            art_pack::art_pack_dir,
+            art_pack::art_pack_installed,
+            art_pack::art_pack_install_part,
+            discord_presence::discord_presence_available,
+            discord_presence::discord_presence_set,
+            discord_presence::discord_presence_clear,
             save_account_session,
             load_account_session,
             clear_account_session,

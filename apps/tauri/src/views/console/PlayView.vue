@@ -18,7 +18,11 @@ import {
   fumbblLobbyWaitTarget,
   readJnlpFile,
   routeJnlpRequest,
+  stageFumbblPasswordLobby,
 } from '../../game/jnlpRouting';
+import { settings } from '../../game/settings';
+import { fetchFumbblCoachTeams, type FumbblCoachTeam } from '../../game/fumbblCoachTeams';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { teamLogoUrl } from '../../game/teamLogos';
 import CreateGameModal from './play/CreateGameModal.vue';
 import { FORK_EDITION } from '../../game/edition';
@@ -34,6 +38,28 @@ interface TeamPreview {
 }
 
 const fileInput = ref<HTMLInputElement | null>(null);
+// Owner 09-24: "My FUMBBL games" — the saved coach + password open the FUMBBL lobby directly; the coach's teams
+// come from the public API and the open games from the FFB server's own list (see stageFumbblPasswordLobby).
+const myGamesAvailable = computed(() => !!settings.coach.trim() && !!settings.password);
+const coachTeams = ref<FumbblCoachTeam[]>([]);
+const coachTeamsError = ref('');
+const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+async function openMyGames(): Promise<void> {
+  const coach = settings.coach.trim();
+  stageFumbblPasswordLobby(coach, settings.password);
+  coachTeams.value = []; coachTeamsError.value = '';
+  try {
+    const result = await fetchFumbblCoachTeams(coach, inTauri ? (tauriFetch as typeof fetch) : fetch);
+    if (result.kind === 'not-found') coachTeamsError.value = `FUMBBL has no coach named "${coach}".`;
+    else coachTeams.value = result.teams;
+  } catch (error) { coachTeamsError.value = `Could not load your teams: ${error instanceof Error ? error.message : String(error)}`; }
+}
+function teamHasOpenGame(team: FumbblCoachTeam): GameListEntry | undefined {
+  return fumbblLobbyGames.value.find((e) => String(e.teamHomeId ?? '') === String(team.id) || String(e.teamAwayId ?? '') === String(team.id));
+}
+function ownTeamName(entry: GameListEntry): string {
+  return (ownSide(entry) === 'away' ? entry.teamAwayName : entry.teamHomeName) || '';
+}
 const fetchedTeam = ref<TeamPreview | null>(null);
 const fetchedOpponentTeam = ref<TeamPreview | null>(null);
 const loadError = ref('');
@@ -218,7 +244,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
 
 <template>
   <main class="play-view" aria-label="FUMBBL Play">
-    <section class="play-card" :data-entries="fumbblLobby ? null : (FORK_EDITION ? 2 : 1)" aria-labelledby="play-title">
+    <section class="play-card" :data-entries="fumbblLobby ? null : ((FORK_EDITION ? 2 : 1) + (myGamesAvailable ? 1 : 0))" aria-labelledby="play-title">
       <!-- Owner ruling (08-18, annotated screenshot): the "PLAY BLADE" eyebrow, the subtitle, and the
            bottom ".jnlp route" note are removed — the heading + two entry cards carry the blade on
            their own. -->
@@ -228,6 +254,10 @@ function formatTeamValue(value: number | undefined): string | undefined {
           <button class="entry-card" type="button" @click="fileInput?.click()">
             <strong>PLAY ON FUMBBL</strong>
             <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /></span>
+          </button>
+          <button v-if="myGamesAvailable" class="entry-card" type="button" data-testid="my-fumbbl-games" @click="openMyGames">
+            <strong>MY FUMBBL GAMES</strong>
+            <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /><span class="my-games-sub">{{ settings.coach }}</span></span>
           </button>
           <button v-if="FORK_EDITION" class="entry-card" type="button" @click="createGameOpen = true">
             <strong>PLAY ON SUPER FUMBBL</strong>
@@ -240,11 +270,25 @@ function formatTeamValue(value: number | undefined): string | undefined {
       </template>
 
       <template v-else>
-        <h1 id="play-title">Ready to play</h1>
+        <h1 id="play-title">{{ fumbblLobby.password ? 'My FUMBBL games' : 'Ready to play' }}</h1>
         <p class="loaded-line">
           {{ checkmark }} {{ fumbblLobby.sourceName || 'JNLP loaded' }}
           <template v-if="fumbblLobby.gameId"> &middot; game {{ fumbblLobby.gameId }}</template>
         </p>
+        <!-- Owner 09-24: the coach's teams (public API) with a JOIN where the FFB server lists an open game. -->
+        <div v-if="fumbblLobby.password" class="coach-teams" data-testid="coach-teams">
+          <p v-if="coachTeamsError" class="load-error" role="alert">{{ coachTeamsError }}</p>
+          <div v-for="team in coachTeams" :key="team.id" class="coach-team" :data-open="!!teamHasOpenGame(team)">
+            <span class="coach-team-identity">
+              <strong>{{ team.name }}</strong>
+              <small>{{ team.race }}<template v-if="team.teamValue"> &middot; TV {{ Math.round(team.teamValue / 1000) }}k</template></small>
+            </span>
+            <button v-if="teamHasOpenGame(team)" class="primary" type="button" :disabled="!lobbyReady" @click="launchListed(teamHasOpenGame(team)!)">
+              {{ playGlyph }} Join vs {{ opponentFor(teamHasOpenGame(team)!).name }}
+            </button>
+            <small v-else class="coach-team-idle">{{ fumbblLobbyListRequested ? 'no open game' : '…' }}</small>
+          </div>
+        </div>
 
         <div class="versus-preview">
           <div class="team-side" data-team-side="own">
@@ -284,7 +328,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
           </div>
         </div>
 
-        <form class="lobby-controls" @submit.prevent="launchNamed">
+        <form v-if="!fumbblLobby.password" class="lobby-controls" @submit.prevent="launchNamed">
           <label for="fumbbl-game-name">Game name</label>
           <div class="join-row">
             <input id="fumbbl-game-name" v-model="fumbblLobbyGameName" type="text" autocomplete="off" placeholder="Both coaches enter the same name" />
@@ -318,6 +362,7 @@ function formatTeamValue(value: number | undefined): string | undefined {
             @click="launchListed(entry)"
           >
             <span class="game-entry-team">
+              <small v-if="fumbblLobby.password" class="game-entry-coach">{{ ownTeamName(entry) }} vs</small>
               <small class="game-entry-coach">{{ opponentFor(entry).coach || 'Coach unavailable' }}</small>
               <span class="game-entry-identity">
                 <span class="game-entry-logo-fallback" aria-hidden="true">{{ initials(opponentFor(entry).name) }}</span>
@@ -521,4 +566,13 @@ button { padding: 10px 14px; color: #eee; text-align: center; border: 1px solid 
   .versus-preview { padding-inline: 8px; }
   .game-entry { align-items: flex-start; }
 }
+
+/* Owner 09-24: My FUMBBL games — the coach's teams with a Join where the server lists an open game. */
+.my-games-sub { position: absolute; right: 8px; bottom: 6px; font-size: 0.7rem; color: var(--ui-muted); }
+.coach-teams { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 14px; }
+.coach-team { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--ui-border); border-radius: 6px; background: rgba(0, 0, 0, 0.25); }
+.coach-team[data-open='true'] { border-color: var(--ui-primary); }
+.coach-team-identity { display: flex; flex-direction: column; min-width: 0; }
+.coach-team-identity small { color: var(--ui-muted); }
+.coach-team-idle { color: var(--ui-muted); white-space: nowrap; }
 </style>

@@ -1,7 +1,7 @@
 {
   "name": "@fumbbl40k/app",
   "private": true,
-  "version": "1.0.20",
+  "version": "1.0.21",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
@@ -23,6 +23,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
     "@vitejs/plugin-vue": "^5.0.0",
+    "fflate": "0.8.3",
     "typescript": "^5.5.0",
     "vite": "^6.0.0",
     "vue-tsc": "^2.1.0"

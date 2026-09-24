@@ -4,6 +4,7 @@
  */
 import { validateStadiumPack, type StadiumPackManifest } from './stadiumModel';
 
+import { artUrl } from './artPack';
 const manifests = import.meta.glob<{ default: unknown }>('../assets/stadium/*/stadium-pack.json', { eager: true });
 const modelUrls = import.meta.glob<string>('../assets/stadium/*/*.{glb,gltf}', { query: '?url', import: 'default', eager: true });
 
@@ -20,7 +21,7 @@ export function bundledStadiumPacks(): BundledStadiumPack[] {
       const manifest = validateStadiumPack((mod as { default?: unknown }).default ?? mod);
       const modelUrl = modelUrls[`${dir}/${manifest.model.path.replace(/^\.\//, '')}`];
       if (!modelUrl) { console.warn(`Stadium pack ${manifest.id}: model ${manifest.model.path} not bundled`); continue; }
-      packs.push({ manifest, modelUrl, dir });
+      packs.push({ manifest, modelUrl: artUrl(modelUrl), dir }); // owner 09-23: the model may live in the art pack
     } catch (error) {
       console.warn(`Stadium pack at ${path} rejected`, error);
     }

@@ -92,6 +92,11 @@ export class GameSession {
   private currentState: SessionState = 'idle';
   private params: GameSessionParams | null = null;
   private oneTimeFumbblToken: string | null = null;
+  /** Owner 09-24: a FUMBBL lobby opened with the coach's PASSWORD instead of a JNLP token. The open-games list
+   *  needs no credential at all (upstream ServerCommandHandlerJoin lists `findOpenGamesForCoach` before any
+   *  auth when no gameId/gameName is given); the eventual JOIN runs the normal HMAC password challenge. */
+  private passwordLobby = false;
+  private pendingPasswordJoin: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null } | null = null;
   private versionReady = false;
   private autoJoinAfterVersion = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -146,6 +151,15 @@ export class GameSession {
     await this.prepare(params, false);
   }
 
+  /** Owner 09-24: the same prepared lobby, entered with the stored coach + password (no JNLP). */
+  async prepareFumbblLobbyWithPassword(params: GameSessionParams): Promise<void> {
+    if (params.mode !== 'player' || !(params.password || isMd5Hex(params.passwordMd5))) {
+      throw new Error('A coach password is required to open the FUMBBL lobby');
+    }
+    await this.prepare(params, false);
+    this.passwordLobby = true;
+  }
+
   private async prepare(params: GameSessionParams, autoJoinAfterVersion: boolean): Promise<void> {
     this.scrubCredentials();
     const { fumbblAuthToken, ...safeParams } = params;
@@ -168,7 +182,8 @@ export class GameSession {
   /** Ask upstream for the unfinished games belonging to this coach. */
   requestPreparedGameList(): void {
     this.requirePreparedFumbblLobby();
-    this.sendJoinCommand(this.oneTimeFumbblToken!, {
+    // password lobby: the list branch ignores the password; never put the real one on the wire here
+    this.sendJoinCommand(this.oneTimeFumbblToken ?? '', {
       gameId: 0,
       gameName: null,
       teamId: null,
@@ -189,15 +204,17 @@ export class GameSession {
     if (!(Number.isInteger(gameId) && gameId > 0) && !gameName) {
       throw new Error('A positive gameId or non-empty gameName is required');
     }
+    const joinTarget = { gameId: gameId > 0 ? gameId : 0, gameName, teamId: target.teamId ?? null, teamName: target.teamName ?? null };
+    if (this.passwordLobby) {
+      // the real join authenticates like any password join: challenge → HMAC response → CLIENT_JOIN
+      this.pendingPasswordJoin = joinTarget;
+      this.setState('authenticating');
+      this.connection.send({ netCommandId: NetCommandId.CLIENT_PASSWORD_CHALLENGE, coach: this.params!.coach });
+      return;
+    }
     const token = this.oneTimeFumbblToken!;
     try {
-      this.sendJoinCommand(token, {
-        gameId: gameId > 0 ? gameId : 0,
-        gameName,
-        teamId: target.teamId ?? null,
-        teamName: target.teamName ?? null,
-        joining: true,
-      });
+      this.sendJoinCommand(token, { ...joinTarget, joining: true });
     } catch (error) {
       // A failed write cannot make a one-time JNLP credential safe to retry.
       this.oneTimeFumbblToken = null;
@@ -206,7 +223,7 @@ export class GameSession {
   }
 
   private requirePreparedFumbblLobby(): void {
-    if (this.currentState !== 'ready' || !this.versionReady || !this.params || !this.oneTimeFumbblToken || !this.connection.isOpen) {
+    if (this.currentState !== 'ready' || !this.versionReady || !this.params || !(this.oneTimeFumbblToken || this.passwordLobby) || !this.connection.isOpen) {
       throw new Error('FUMBBL lobby socket is not ready');
     }
   }
@@ -297,11 +314,12 @@ export class GameSession {
         // Both branches run upstream's PasswordChallenge.createResponse; they differ only in
         // where md5(pw) came from. A pre-hashed credential means the clear text never had to
         // exist on this side of the launch at all.
-        this.sendJoinCommand(
-          isMd5Hex(params.passwordMd5)
-            ? createChallengeResponse(challenge, fromHexString(params.passwordMd5!.toLowerCase()))
-            : respondToChallenge(challenge, params.password),
-        );
+        const response = isMd5Hex(params.passwordMd5)
+          ? createChallengeResponse(challenge, fromHexString(params.passwordMd5!.toLowerCase()))
+          : respondToChallenge(challenge, params.password);
+        const pending = this.pendingPasswordJoin;
+        this.pendingPasswordJoin = null;
+        this.sendJoinCommand(response, pending ? { ...pending, joining: true } : undefined);
         break;
       }
       case NetCommandId.SERVER_JOIN:
@@ -321,7 +339,7 @@ export class GameSession {
         {
           const status = command as ServerCommandStatus;
           this.emit('status', status);
-          if (isRecoverableFumbblLobbyStatus(status.serverStatus) && this.oneTimeFumbblToken) {
+          if (isRecoverableFumbblLobbyStatus(status.serverStatus) && (this.oneTimeFumbblToken || this.passwordLobby)) {
             this.setState('ready');
           } else {
             this.close();
@@ -360,6 +378,8 @@ export class GameSession {
 
   private scrubCredentials(): void {
     this.oneTimeFumbblToken = null;
+    this.passwordLobby = false;
+    this.pendingPasswordJoin = null;
     this.params = null;
     this.autoJoinAfterVersion = false;
     this.versionReady = false;

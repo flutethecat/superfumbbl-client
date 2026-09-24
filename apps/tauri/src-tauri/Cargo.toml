@@ -1,6 +1,6 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.20"
+version = "1.0.21"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 
@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", features = ["devtools", "protocol-asset"] }
 tauri-plugin-single-instance = "2"
 # Used for authenticated Config-Web and FUMBBL API calls. Media references are
 # resolved only through an explicitly selected local asset pack.
@@ -24,12 +24,16 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+hex = "0.4"
+# Owner 09-23: the art pack - zipped parts downloaded from the public release (via tauri-plugin-http reqwest).
+zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 png = "0.17"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "ogg", "pcm", "vorbis", "wav"] }
 uuid = { version = "1", features = ["v4"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+discord-presence = "3"
 
 [target.'cfg(windows)'.dependencies]
 # Per-user HKCU .jnlp file-association writer (Settings > General button).

@@ -14,7 +14,8 @@
         { "url": "https://fumbbl.com/*" },
         { "url": "http://*:4310/*" },
         { "url": "https://*:4310/*" },
-        { "url": "https://superfumbbltest.duckdns.org/*" }
+        { "url": "https://superfumbbltest.duckdns.org/*" },
+        { "url": "https://api.github.com/*" }
       ]
     },
     "opener:default",

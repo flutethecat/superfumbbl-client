@@ -1,3 +1,4 @@
+import { artPackPlugin } from './vite-plugin-art-pack';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { readFileSync } from 'node:fs';
@@ -30,6 +31,14 @@ try { gitSha = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).tri
 export default defineConfig({
   plugins: [
     vue(),
+    // Owner 09-23: the art pack (FUMBBL_ASSET_PACK=split moves packages/ffb-pitch/assets out of the installer).
+    artPackPlugin({
+      split: process.env.FUMBBL_ASSET_PACK === 'split',
+      version: pkg.version,
+      publicRepo: 'flutethecat/superfumbbl-client',
+      lockFile: fileURLToPath(new URL('./art-pack.lock.json', import.meta.url)),
+      outDir: fileURLToPath(new URL('./dist-pack', import.meta.url)),
+    }),
     ...(assetPackBuilder ? [{
       name: 'f40kmod-builder-entry',
       transformIndexHtml(html: string) {

@@ -11559,7 +11559,7 @@ function sendChat() {
             <div v-if="panelTab === 'log'" class="log-holder">
               <!-- #157: player names tinted by seat (colours = renderer.seatColors(), the pitch-token source).
                    An untinted segment renders exactly as before; ambiguous same-name-both-teams stays untinted. -->
-              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+              <pre ref="logEl" class="log" :style="logTextStyle" @scroll="onLogScroll('log', $event)"><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" aria-label="armour"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
 </span></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 New events ↓
@@ -11602,7 +11602,7 @@ function sendChat() {
             <div v-else class="log-holder">
               <!-- Owner 08-19: chat — muted HH:MM stamp, coach NAME seat-coloured (logNameColor),
                    spectator LINES pale green, names in Nuffle over sans-serif message text. -->
-              <pre ref="chatEl" class="log chat-log" :style="logTextStyle" @scroll="onLogScroll('chat', $event)"><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else>{{ entry.text }}</template>
+              <pre ref="chatEl" class="log chat-log" :style="logTextStyle" @scroll="onLogScroll('chat', $event)"><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' + chatParts(entry).rest }}</template><template v-else>{{ entry.text }}</template>
 </span></pre>
               <button v-if="chatNewEvents" class="new-events" @click="jumpToBottom('chat')">
                 New messages ↓
@@ -13099,7 +13099,7 @@ function sendChat() {
         <!-- Turn-boundary occupancy stack. The banner row is always reserved while the notifier is live,
              so the simultaneous turnover/turn-start + incoming-coach toast cannot cover each other. -->
         <div v-if="gameStore.state.turnover || gameStore.state.turnStart || gameStore.state.turnToast"
-          class="turn-boundary-stack">
+          class="turn-boundary-stack" @wheel.prevent="renderer?.wheelFromOverlay($event)">
           <div class="turn-boundary-banner-slot">
             <!-- Owner 2026-07-03: turnover splash — the team that lost its turn to a
                  failed action. Raised after the other animations settle; the incoming
@@ -16100,9 +16100,9 @@ function sendChat() {
 }
 /* Owner 09-09: dice in the log are larger (d6 2.1em, block die 2em) and no longer pulled into the neighbouring
    lines by negative margins — a line that carries dice gets a taller line box instead, so icons never collide. */
-.log-d6 { --d6-size: 2.1em; margin: -0.1em 0.1em; }
-.log-block-die { --block-die-size: 2em; margin: -0.1em 0.08em; }
-.log span:has(.log-d6, .log-block-die) { line-height: 2.3; }
+/* JLeav 09-23: dice sit within the text line — no taller rows for dice lines. */
+.log-d6 { --d6-size: 1.45em; margin: -0.15em 0.1em; vertical-align: middle; }
+.log-block-die { --block-die-size: 1.4em; margin: -0.15em 0.08em; vertical-align: middle; }
 /* #161: the eligible-square VISUAL is now Voss's renderer push-arrows (setQuickSnapArrows); this element survives
    only as an INVISIBLE click hit-target over each eligible square, so the marker itself paints nothing. */
 .quicksnap-target {

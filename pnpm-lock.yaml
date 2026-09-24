@@ -53,6 +53,9 @@ importers:
       '@vitejs/plugin-vue':
         specifier: ^5.0.0
         version: 5.2.4(vite@6.4.3(@types/node@22.20.0)(tsx@4.22.4))(vue@3.5.39(typescript@5.9.3))
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
