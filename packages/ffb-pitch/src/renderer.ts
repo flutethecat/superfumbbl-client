@@ -1,3 +1,4 @@
+import { textureParserFor } from './artPack';
 import { Application, Assets, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
@@ -9543,7 +9544,7 @@ export class PitchRenderer {
         // Installed asset URLs end in an opaque integrity token rather than a
         // filename. Select the image parser explicitly: Pixi cannot infer it
         // from an extensionless f40kmod URL and otherwise resolves no texture.
-        const tex = await Assets.load<Texture>({ src: url, parser: 'loadTextures' });
+        const tex = await Assets.load<Texture>({ src: url, parser: textureParserFor(url) });
         if (!(tex instanceof Texture) || !tex.source) {
           throw new Error('Installed pitch texture could not be decoded');
         }
@@ -13352,7 +13353,7 @@ export class PitchRenderer {
       && this.sweetSpotLogoRequestGeneration === requestGeneration;
     const load = async (url: string | null): Promise<Texture | null> => {
       if (!url || !this.showFieldLogos) return null;
-      try { return await Assets.load<Texture>({ src: url, parser: 'loadTextures' }); }
+      try { return await Assets.load<Texture>({ src: url, parser: textureParserFor(url) }); }
       catch { return null; }
     };
     const [homeTexture, awayTexture] = await Promise.all([load(homeUrl), load(awayUrl)]);

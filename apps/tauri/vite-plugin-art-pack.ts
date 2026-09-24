@@ -44,7 +44,10 @@ export function artPackPartUrl(publicRepo: string, version: string, group: strin
  *  d6 faces, small badge sets — the pitch's baseline before (or without) the pack. */
 export const MIN_PART_BYTES = 1_000_000;
 
-export function artPackPlugin(opts: { split: boolean; version: string; publicRepo: string; lockFile: string; outDir: string; minPartBytes?: number }): Plugin {
+/** Owner 09-24: only the walk sprite sheets travel in the pack; stadium, weather, decorations, badges, dice stay bundled. */
+export const PACK_GROUPS = /^walk\//;
+
+export function artPackPlugin(opts: { split: boolean; version: string; publicRepo: string; lockFile: string; outDir: string; minPartBytes?: number; packGroups?: RegExp }): Plugin {
   return {
     name: 'super-fumbbl-art-pack',
     apply: 'build',
@@ -55,7 +58,7 @@ export function artPackPlugin(opts: { split: boolean; version: string; publicRep
         if (out.type !== 'asset') continue;
         const origin = (out as { originalFileNames?: string[] }).originalFileNames?.[0] ?? '';
         const group = artPackGroup(origin);
-        if (!group) continue;
+        if (!group || !(opts.packGroups ?? PACK_GROUPS).test(group)) continue;
         const bytes = typeof out.source === 'string' ? new TextEncoder().encode(out.source) : out.source;
         (groups.get(group) ?? groups.set(group, []).get(group)!).push({ name: out.fileName.replace(/^assets\//, ''), bytes });
         owned.set(key, group);
