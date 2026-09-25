@@ -46,6 +46,9 @@ export interface DiceTally {
   d6Seq: number[];
   blockSeq: number[];
   tests: { target: number; ok: boolean; face: number }[];
+  /** Owner 09-25 (fun facts): one entry per completed team turn — how many players were activated before the
+   *  turn ended, and whether it ended in a turnover. */
+  turns: { half: number; turn: number; activations: number; turnover: boolean }[];
 }
 
 export interface DiceStats {
@@ -58,16 +61,18 @@ export interface DiceStats {
   lastFailedDodge: { playerId: string; teamId: string } | null;
   lastFailedPickup: { playerId: string; teamId: string } | null;
   lastFailedRush: { playerId: string; teamId: string } | null;
+  /** Owner 09-25: the turn in progress per team — the distinct players activated so far (not serialised). */
+  activeTurn: Record<string, { half: number; turn: number; players: Set<string> }>;
 }
 
 export function emptyTally(): DiceTally {
   return { d6: [0, 0, 0, 0, 0, 0, 0], block: [0, 0, 0, 0, 0, 0, 0], armour: [], injury: [],
     dodgeFaces: [0, 0, 0, 0, 0, 0, 0], armourFaces: [0, 0, 0, 0, 0, 0, 0], injuryFaces: [0, 0, 0, 0, 0, 0, 0], oneNinth: 0, oneThirtySixth: 0,
-    blocks: 0, failedBlocks: 0, dodges: 0, failedDodges: 0, pickups: 0, failedPickups: 0, rushes: 0, failedRushes: 0, d6Seq: [], blockSeq: [], tests: [] };
+    blocks: 0, failedBlocks: 0, dodges: 0, failedDodges: 0, pickups: 0, failedPickups: 0, rushes: 0, failedRushes: 0, d6Seq: [], blockSeq: [], tests: [], turns: [] };
 }
 
 export function emptyDiceStats(gameId: string | null = null): DiceStats {
-  return { gameId, seen: new Set(), teams: {}, players: {}, lastBlockAttacker: null, lastFailedDodge: null, lastFailedPickup: null, lastFailedRush: null };
+  return { gameId, seen: new Set(), teams: {}, players: {}, lastBlockAttacker: null, lastFailedDodge: null, lastFailedPickup: null, lastFailedRush: null, activeTurn: {} };
 }
 
 /** The live tally the end screen reads. Reset whenever a different game's frames start arriving. */
@@ -149,6 +154,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     const fresh = emptyDiceStats(gameId);
     stats.gameId = fresh.gameId; stats.seen = fresh.seen; stats.teams = fresh.teams; stats.players = fresh.players;
     stats.lastBlockAttacker = null; stats.lastFailedDodge = null; stats.lastFailedPickup = null; stats.lastFailedRush = null;
+    stats.activeTurn = {};
   }
   if (commandNr != null) {
     if (stats.seen.has(commandNr)) return;
@@ -318,6 +324,50 @@ export function oneInGames(like: Likelihood): { n: number; capped: boolean } {
 }
 export function d6Total(t: DiceTally): number { return t.d6.reduce((a, b) => a + b, 0); }
 
+// ---- activations per turn (owner 09-25) ----
+function turnKeyFor(game: GameJson, team: TeamLike): { half: number; turn: number } {
+  const home = (game.teamHome as unknown as TeamLike).teamId === team.teamId;
+  const td = (home ? game.turnDataHome : game.turnDataAway) as { turnNr?: number } | undefined;
+  return { half: Number(game.half ?? 0) || 0, turn: Number(td?.turnNr ?? 0) || 0 };
+}
+/** The server activated `playerId` (actingPlayerSetPlayerId, non-null): count it once for its team's current turn. */
+export function noteActivation(stats: DiceStats, game: GameJson | null, playerId: string | null): void {
+  const team = teamOf(game, playerId);
+  if (!game || !team || !playerId) return;
+  if (String(game.turnMode ?? '') !== 'regular') return;
+  const key = turnKeyFor(game, team);
+  const cur = stats.activeTurn[team.teamId];
+  if (cur && (cur.half !== key.half || cur.turn !== key.turn)) {
+    // a turn we never saw end (seek / missed frame): close it as a plain turn so the ledger stays honest
+    (stats.teams[team.teamId] ??= emptyTally()).turns.push({ half: cur.half, turn: cur.turn, activations: cur.players.size, turnover: false });
+    delete stats.activeTurn[team.teamId];
+  }
+  const track = stats.activeTurn[team.teamId] ??= { ...key, players: new Set<string>() };
+  track.players.add(playerId);
+}
+/** The side's turn ended (turnEnd report): record the activation count and whether it was a turnover. */
+export function noteTurnEnd(stats: DiceStats, game: GameJson | null, side: 'home' | 'away', turnover: boolean): void {
+  if (!game) return;
+  const team = (side === 'home' ? game.teamHome : game.teamAway) as unknown as TeamLike;
+  if (!team?.teamId) return;
+  const cur = stats.activeTurn[team.teamId];
+  const key = cur ? { half: cur.half, turn: cur.turn } : turnKeyFor(game, team);
+  (stats.teams[team.teamId] ??= emptyTally()).turns.push({ ...key, activations: cur?.players.size ?? 0, turnover });
+  delete stats.activeTurn[team.teamId];
+}
+export function activationFacts(t: DiceTally): DiceFact[] {
+  if (!t.turns.length) return [];
+  const facts: DiceFact[] = [];
+  const avg = t.turns.reduce((a, x) => a + x.activations, 0) / t.turns.length;
+  const turnovers = t.turns.filter((x) => x.turnover);
+  facts.push({ label: 'Activations per turn', value: avg.toFixed(1), detail: `${t.turns.length} turns · ${turnovers.length} turnover${turnovers.length === 1 ? '' : 's'}` });
+  if (turnovers.length) {
+    const worst = turnovers.reduce((a, x) => (x.activations < a.activations ? x : a));
+    facts.push({ label: 'Fewest activations before a turnover', value: `${worst.activations}`, detail: `${worst.half}HT${worst.turn}` });
+  }
+  return facts;
+}
+
 // ---- fun facts (owner 09-17) ----
 export interface DiceFact { label: string; value: string; detail: string }
 
@@ -367,6 +417,7 @@ export function diceFacts(t: DiceTally): DiceFact[] {
   const failedSixes = t.tests.filter((x) => x.target === 6).length;
   const madeSixes = t.tests.filter((x) => x.target === 6 && x.ok).length;
   if (failedSixes) facts.push({ label: 'Needed a 6', value: `${madeSixes} of ${failedSixes}`, detail: madeSixes ? 'made it' : 'never landed' });
+  facts.push(...activationFacts(t)); // owner 09-25
   return facts;
 }
 export function blockTotal(t: DiceTally): number { return t.block.reduce((a, b) => a + b, 0); }

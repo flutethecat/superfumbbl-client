@@ -110,6 +110,8 @@ export interface AppSettings {
   fpsCap: number;
   /** Owner 08-19: stadium bowl on/off (Modern; Classic forces off via its preset). */
   showStadium: boolean;
+  /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles (new), 'classic' = seat atlas + fan sprites. */
+  stadiumStands: 'crowd' | 'classic';
   /** Owner 2026-07-04e: UI-CUSTOMIZE mode — when on, the corner panels grow a
    *  drag grip (top-left) + a resizer (bottom-right) so they can be moved/scaled. */
   uiCustomize: boolean;
@@ -477,6 +479,7 @@ const DEFAULTS: AppSettings = {
   uiLayout: {},
   fpsCap: 60,
   showStadium: true,
+  stadiumStands: 'crowd',
   brightness: 100,
   soundVolume: 20,
   soundStyles: {},
@@ -868,6 +871,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // fail-closed: a non-boolean/corrupted stored value resolves to the default (chat enabled).
     merged.chatDisabled = raw.chatDisabled === true;
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
+    merged.stadiumStands = raw.stadiumStands === 'classic' ? 'classic' : 'crowd';
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
     merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;

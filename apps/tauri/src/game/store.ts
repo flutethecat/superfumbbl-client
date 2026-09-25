@@ -19,7 +19,7 @@ import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngre
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
 import { passDestinationFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
-import { diceStats, ingestDiceReports } from './diceStats';
+import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
 import { buildBlockDecision, createBlockContext, reduceBlockContext } from './blockDecisionProjection';
@@ -59,7 +59,7 @@ import type { InjuryResultName } from './skillUseCardPresentation';
 import { chatAuthorSide, type ChatAuthorSide } from './chatAuthor';
 import { sequencingCategory } from './logVisibility';
 import { kickoffArcNeedsDecisionDwell } from './kickoffArcDwell';
-import { kickoffBannerPalette, type KickoffBannerPalette } from './kickoffMiniPhases';
+import { kickoffBannerPalette, kickoffOutcome, type KickoffBannerPalette, type KickoffOutcome } from './kickoffMiniPhases';
 import { joinLogLine } from './joinLog';
 import { captureSppBreakdown, collectSppGainParts, type SppGainOccurrence, type SppGainPart } from './sppGainPresentation';
 import type { LogTagToken } from './logTags';
@@ -932,7 +932,7 @@ const legacyState = reactive({
   /** #132 (07-22): NEGATRAIT confusion-roll cue — one `confusionRoll` report serves all 6 negatraits (`trait` = wire confusionSkill); effect is server-model-carried (⚖). Over-token toast per #83 "a failed gated-roll must not vanish". `hasTarget` (Animal Savagery only, owner 08-17): set ONLY when a same-batch `animalSavagery` report names the attacker — server-sent, never client-derived; absent means the batch didn't carry the distinction (e.g. multi-target choice dialog interrupts the message). */
   negatraitCue: null as { playerId: string; trait: string; successful: boolean; roll?: number; needed?: number; hasTarget?: boolean; seq: number } | null,
   /** Kick-off EVENT splash — banner + name + 2d6 (img null for Weather Change, which the weather dice follow). */
-  kickoffCine: null as { result: string; roll: number[]; img: string | null } | null,
+  kickoffCine: null as { result: string; roll: number[]; img: string | null; outcome?: KickoffOutcome | null } | null,
   /** The authoritative kick-off result opens a coach mini-phase, so its KICK may dwell at the apex. */
   kickoffArcNeedsDecisionDwell: false,
   /** B8-3: fan-factor dice cinematic — a d3 per side + the difference splash. */
@@ -1874,8 +1874,8 @@ function kickoffSplashUrl(name: string, palette: KickoffBannerPalette = null): s
  *  frame's playing side is the kicker); the seat-aware kickoff banners key off it in every mode. */
 let kickingSideLatch: 'home' | 'away' | null = null;
 let kickoffTimer: ReturnType<typeof setTimeout> | null = null;
-function showKickoff(result: string, roll: number[], img: string | null) {
-  state.kickoffCine = { result, roll, img };
+function showKickoff(result: string, roll: number[], img: string | null, outcome: KickoffOutcome | null = null) {
+  state.kickoffCine = { result, roll, img, outcome };
   if (kickoffTimer) cancelGameTimeout(kickoffTimer);
   kickoffTimer = settings.clickDismissCinematics ? null : scheduleGameTimeout(() => (state.kickoffCine = null), presentationMs(KICKOFF_CINE_MS));
 }
@@ -2650,15 +2650,16 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
     // collapseStalePregameCine for the 12.9s-vs-11.95s math + the collapse/compress shape).
     collapseStalePregameCine();
     const kName = kickoff.name, kRoll = kickoff.roll;
+    const kOutcome = kickoffOutcome(kName, kickoffPalette, reports, g); // owner 09-24: "<Team> wins" under the banner
     if (settings.order66 && !playback.catchingUp) {
       // Slice 2: PLAY mode — the kickoff event card OWNS its dwell on the #67 FIFO (ahead of the kickArc barrier
       // enqueued later this frame), so the apex-hold card and the descent gate are ONE serialized transaction. It
       // sets state.kickoffCine (unchanged apex-hold trigger: SpectateView watcher) and clears it on completion; no
       // pregame kickoffTimer. holdPlayback is a no-op in play, so it is dropped here. Spectate/replay/demo keep the
       // pregameCineQueue path below (the #67 FIFO is play-mode only, mirroring Slice 1's guard).
-      enqueueFifoCine('kickoff', () => { state.kickoffCine = { result: kName, roll: kRoll, img }; }, () => { state.kickoffCine = null; }, presentationMs(KICKOFF_CINE_MS));
+      enqueueFifoCine('kickoff', () => { state.kickoffCine = { result: kName, roll: kRoll, img, outcome: kOutcome }; }, () => { state.kickoffCine = null; }, presentationMs(KICKOFF_CINE_MS));
     } else {
-      enqueuePregameCine(() => showKickoff(kName, kRoll, img), presentationMs(KICKOFF_CINE_MS), 'kickoff');
+      enqueuePregameCine(() => showKickoff(kName, kRoll, img, kOutcome), presentationMs(KICKOFF_CINE_MS), 'kickoff');
       // Owner 07-06 (pacing 2): hold the spectator drain so the KICK-OFF EVENT reads before the ball-down/bounce/catch frames apply.
       holdPlayback(presentationMs(KICKOFF_CINE_MS));
     }
@@ -3619,7 +3620,7 @@ async function pauseSpectatorView(): Promise<void> {
         state.kickoffArcNeedsDecisionDwell = kickoff.decisionDwell;
         if (!await holdSurface(KICKOFF_CINE_MS,
           () => { state.kickoffCine = { result: kickoff.result, roll: kickoff.roll,
-            img: kickoffSplashUrl(kickoff.result, kickoff.palette) }; },
+            img: kickoffSplashUrl(kickoff.result, kickoff.palette), outcome: kickoff.outcome }; },
           () => { state.kickoffCine = null; }, PREGAME_CINE_GAP_MS)) return;
       }
       if (kickoffWeather.weatherMageUse) {
@@ -6181,6 +6182,11 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 09-17: the per-game dice tally (end screen Dice tab + failed blocks / dodges) reads the same
   // de-duplicated reports; commandNr keys out frames a replay seek re-applies.
   ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
+  // Owner 09-25 (fun facts): every server activation of a player counts toward its team's turn (applied frame, so
+  // half/turn read current); the turnEnd branch below closes the turn with its turnover verdict.
+  for (const ch of ((cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [])) {
+    if (ch.modelChangeId === 'actingPlayerSetPlayerId' && typeof ch.modelChangeValue === 'string') noteActivation(diceStats, game.value, ch.modelChangeValue);
+  }
   if (game.value) skillDecisionCardData(game.value, String(game.value.dialogParameter?.playerId ?? ''), String(game.value.dialogParameter?.skill ?? ''), reports);
   // Passive block-choice reveal (live non-choosing seat + spectator): apply the server-reported choice to
   // the already-visible dice, hold for the live viewer's 450 ms reveal (spectator x1.1), then permit teardown/next state.
@@ -7620,6 +7626,9 @@ function applyFrameContents(frame: QueuedFrame) {
         turnoverArmed = false;
         turnoverArmedAfterInjury = false;
       }
+      // Owner 09-25 (fun facts): close the ending side's turn in the activation ledger with the turnover verdict
+      // the branches below reach (a score or a voluntary end is not a turnover).
+      noteTurnEnd(diceStats, game.value, wasHomePlaying ? 'home' : 'away', !turnEnd.playerIdTouchdown && turnoverArmed && String(game.value.turnMode ?? '') === 'regular');
       if (turnEnd.playerIdTouchdown) {
         turnoverArmed = false; // a score consumed the drive — not a turnover
         turnoverArmedAfterInjury = false;
@@ -9276,6 +9285,13 @@ function plannerStart(input: {
     if (cur === 'passMove' || cur === 'foulMove' || cur === 'handOverMove' || cur === 'gazeMove'
         || cur === 'throwTeamMateMove' || cur === 'kickTeamMateMove' || cur === 'puntMove'
         || cur === 'kickEmBlitz') declare = cur;
+    // Owner 09-25 (live g1946577 seq 2124-2127, "Secure the Ball takes two clicks"): the coach declared Secure the
+    // Ball, then clicked a square — the plan re-declared plain Move, declareAction's 09-09 guard refused it (a
+    // re-declare would REPLACE the action server-side), and the plan sat in 'declaring' until the 8 s watchdog
+    // ("Plan cancelled — the server did not respond"); the second click walked through playerMove's declared-action
+    // branch. Same rule here: ANY walk-capable declared action on this player (Secure the Ball, Stand Up, …) is the
+    // action the plan walks under — upstream declares once and MoveLogicModule just sends clientMove.
+    else if (cur && cur !== 'move' && playerActionClientState(cur) === 'MOVE') declare = cur;
     // Item 866-TTM (row27): once the acting player's *Move variant resolves its target-select click, the server
     // demotes playerAction to the BASE form (throwTeamMate/kickTeamMate/pass/foul/handOver/gaze[Select]) and
     // clears every offered move square — PlayerAction.isMoving() (PlayerAction.java:68-71) is false for every one

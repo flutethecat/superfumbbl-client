@@ -1,12 +1,13 @@
 import { reactive } from 'vue';
-import { installArtPack } from '@fumbbl40k/ffb-pitch';
+import { installArtPack, type ArtPackFileRef } from '@fumbbl40k/ffb-pitch';
 
 /**
- * Owner 09-23: ART PACK sync. A split build (public installer) ships no bundled art; `asset-pack.json` lists the
- * PARTS (walk/<race>, status, decorations, …) with their content hashes and release-asset URLs. On startup the
- * client compares that with what is installed under app-data and downloads only the parts that changed, then
- * aliases every bundled art URL to its on-disk copy (ffb-pitch installArtPack). The pitch views mount once the
- * pack is ready; the menus stay usable throughout. A bundled build (dev server, fork edition) is ready at once.
+ * Owner 09-23/24: ART PACK sync. A split build (public installer) ships no walk sprite sheets; `asset-pack.json`
+ * lists the PARTS (walk/<race>) with their content hashes and release-asset URLs. On startup the client
+ * registers the pack with the renderer's loader FIRST (so any early sheet load waits instead of failing), then
+ * compares the manifest with app-data/art-pack/installed.json and downloads only the parts that changed. Pack
+ * bytes reach Pixi over Tauri IPC (no asset protocol). The pitch views mount once the pack is ready; the menus
+ * stay usable throughout. A bundled build (dev server, fork edition) is ready at once.
  */
 export interface ArtPackPart { group: string; hash: string; size: number; sha256: string; url: string; files: { name: string; size: number }[] }
 export interface ArtPackManifest { split: boolean; version: string; parts: ArtPackPart[] }
@@ -29,14 +30,10 @@ export function partsToInstall(manifest: ArtPackManifest, installed: Record<stri
   return manifest.parts.filter((p) => installed[p.group] !== p.hash);
 }
 
-/** basename → on-disk file path for every file of every part (the alias table's input). */
-export function packFilePaths(manifest: ArtPackManifest, root: string): Record<string, string> {
-  const sep = root.includes('\\') ? '\\' : '/';
-  const out: Record<string, string> = {};
-  for (const part of manifest.parts) {
-    const dir = root + sep + part.group.replace('/', sep);
-    for (const f of part.files) out[f.name] = dir + sep + f.name;
-  }
+/** basename → {group, name} for every file of every part (the loader's index). */
+export function packFileRefs(manifest: ArtPackManifest): Record<string, ArtPackFileRef> {
+  const out: Record<string, ArtPackFileRef> = {};
+  for (const part of manifest.parts) for (const f of part.files) out[f.name] = { group: part.group, name: f.name };
   return out;
 }
 
@@ -44,8 +41,7 @@ export interface ArtPackHost {
   fetchManifest(): Promise<ArtPackManifest | null>;
   installed(): Promise<Record<string, string>>;
   installPart(part: ArtPackPart): Promise<void>;
-  packDir(): Promise<string>;
-  toSrc(path: string): string;
+  read(ref: ArtPackFileRef): Promise<Uint8Array>;
 }
 
 /** The sync itself, host-agnostic (tests drive it with a fake host). Resolves when the pack is ready or failed. */
@@ -54,6 +50,10 @@ export async function syncArtPack(host: ArtPackHost): Promise<void> {
   const manifest = await host.fetchManifest();
   if (!manifest || !manifest.split) { artPack.split = false; artPack.ready = true; return; }
   artPack.split = true;
+  let markReady!: () => void;
+  const ready = new Promise<void>((resolve) => { markReady = resolve; });
+  // Register before downloading: a sheet load that starts early waits on `ready` instead of 404-ing.
+  installArtPack({ files: packFileRefs(manifest), ready, read: (ref) => host.read(ref) });
   try {
     const installed = await host.installed();
     const todo = partsToInstall(manifest, installed);
@@ -65,20 +65,16 @@ export async function syncArtPack(host: ArtPackHost): Promise<void> {
       artPack.done += 1; artPack.downloadedBytes += part.size;
     }
     artPack.current = '';
-    const root = await host.packDir();
-    const files = packFilePaths(manifest, root);
-    const srcs: Record<string, string> = {};
-    for (const [name, path] of Object.entries(files)) srcs[name] = host.toSrc(path);
-    installArtPack(srcs);
+    markReady();
     artPack.ready = true;
   } catch (e) {
     artPack.error = e instanceof Error ? e.message : String(e);
   }
 }
 
-/** The Tauri host: manifest from the bundle, parts through the Rust installer, files via the asset protocol. */
+/** The Tauri host: manifest from the bundle, parts through the Rust installer, bytes over IPC. */
 export async function tauriArtPackHost(): Promise<ArtPackHost> {
-  const { invoke, convertFileSrc } = await import('@tauri-apps/api/core');
+  const { invoke } = await import('@tauri-apps/api/core');
   return {
     async fetchManifest() {
       try {
@@ -93,15 +89,17 @@ export async function tauriArtPackHost(): Promise<ArtPackHost> {
     async installPart(part) {
       await invoke('art_pack_install_part', { url: part.url, group: part.group, hash: part.hash, size: part.size, sha256: part.sha256 });
     },
-    packDir: () => invoke<string>('art_pack_dir'),
-    toSrc: (path) => convertFileSrc(path),
+    async read(ref) {
+      const bytes = await invoke<ArrayBuffer | Uint8Array>('art_pack_read', { group: ref.group, name: ref.name });
+      return bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    },
   };
 }
 
 export function formatMb(bytes: number): string { return `${(bytes / 1048576).toFixed(0)} MB`; }
 
-/** A WEB host (vite preview / hosted web build / the rig): the pack is already served as static files under
- *  `<baseUrl>/<group>/<name>`; nothing is downloaded, every part counts as installed. */
+/** A WEB host (vite preview / the rig): the pack is served as static files under `<baseUrl>/<group>/<name>`;
+ *  nothing is downloaded, every part counts as installed, bytes come from a plain fetch. */
 export function webArtPackHost(baseUrl: string): ArtPackHost {
   const base = baseUrl.replace(/\/$/, '');
   return {
@@ -116,7 +114,10 @@ export function webArtPackHost(baseUrl: string): ArtPackHost {
       return Object.fromEntries((manifest?.parts ?? []).map((p) => [p.group, p.hash]));
     },
     async installPart() { /* static hosting: nothing to fetch */ },
-    packDir: async () => base,
-    toSrc: (path) => path,
+    async read(ref) {
+      const res = await fetch(`${base}/${ref.group}/${ref.name}`);
+      if (!res.ok) throw new Error(`art pack: HTTP ${res.status} for ${ref.group}/${ref.name}`);
+      return new Uint8Array(await res.arrayBuffer());
+    },
   };
 }

@@ -1,3 +1,4 @@
+import { textureParserFor } from './artPack';
 import { Assets, Rectangle, Texture } from 'pixi.js';
 import { rosterRaceKey } from './bundledWalk';
 import skillIconAliases from './skillIconAliases.json';
@@ -466,7 +467,7 @@ async function loadInstalledTexture(url: string): Promise<Texture> {
   // Native asset URLs deliberately end in an opaque integrity token rather than a
   // filename. Pixi selects its default image loader by URL extension, so a bare
   // Assets.load(url) resolves null without ever fetching these validated PNGs.
-  const texture = await Assets.load<Texture>({ src: url, parser: 'loadTextures' });
+  const texture = await Assets.load<Texture>({ src: url, parser: textureParserFor(url) });
   if (!(texture instanceof Texture) || !texture.source) {
     throw new Error('Installed presentation texture could not be decoded');
   }

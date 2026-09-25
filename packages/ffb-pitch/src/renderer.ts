@@ -1,3 +1,4 @@
+import { textureParserFor } from './artPack';
 import { Application, Assets, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
@@ -101,11 +102,12 @@ import { presentationMs, setPresentationMode as configurePresentationMode, type 
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { rushTargetForPlayer } from './rushTarget';
-import { stadiumRiserEdge, stadiumStandTileColumn, stadiumStandTileTransform, type StadiumStandSide } from './stadiumTiles';
+import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
 
 
 /** O4/O5: declared-action modes gating what clicks do for the selected player. */
+export type StadiumStandStyle = 'crowd' | 'classic';
 export type ActionMode = 'auto' | 'move' | 'blitz' | 'foul' | 'pass' | 'handoff' | 'bomb';
 
 function isMovingPlayerAction(action: string | null | undefined): boolean {
@@ -1757,8 +1759,8 @@ export class PitchRenderer {
       m ? [this.stadiumModelGeneration, m.texture.uid, m.dugoutsProvided, m.footprint.x0, m.footprint.x1, m.footprint.y0, m.footprint.y1,
         m.corners.tl.u, m.corners.tl.v, m.corners.tr.u, m.corners.tr.v, m.corners.bl.u, m.corners.bl.v] : null,
       geometryStateKey(),
-      this.stadiumAssetRevision, this.standTextures.size, this.crowdTextures.length, this.signFanTextures.length,
-      this.dressingTextures.size, !!this.stoneTexture, !!this.cameraTexture, !!this.lightTexture,
+      this.stadiumAssetRevision, this.standStyle, this.standTextures.size, this.crowdTextures.length, this.signFanTextures.length,
+      this.dressingTextures.size, !!this.stoneTexture, !!this.cameraTexture,
       this.turfTheme, this.pitchTextures.size, pitchWeatherKey(g?.fieldModel.weather), // drawStadiumProps' pitch underlay
       this.pregameSignNames.map((e) => (typeof e === 'string' ? e : `${e.top}\u0000${e.bottom}`)),
     ]);
@@ -1938,7 +1940,18 @@ export class PitchRenderer {
   /** Owner 2026-07-04: a broadcast CAMERA (sheet 17) + a stadium LIGHT tower (sheet
    *  16), sliced from their sprite sheets — cameras flank the LOS, lights the corners. */
   private cameraTexture: Texture | null = null;
-  private lightTexture: Texture | null = null;
+  /** Owner 09-24: baked-crowd stand tiles — colour -> facing ('front' | 'back' | 'side') -> atlas of 128 px cells
+   *  (column 0 empty seats, the rest crowd variants). Replaces the seat atlas + fan sprinkle where a set is shipped. */
+  private standSets = new Map<string, Map<'front' | 'back' | 'side', Texture>>();
+  /** Owner 09-25: which stand art dresses the bowl — 'crowd' = the baked-crowd PixelLab tiles (default),
+   *  'classic' = the legacy seat atlas + sprinkled fan sprites. A Settings choice; redraws the stadium. */
+  private standStyle: StadiumStandStyle = 'crowd';
+  setStandStyle(style: StadiumStandStyle): void {
+    if (style === this.standStyle) return;
+    this.standStyle = style;
+    this.stadiumAssetRevision++;
+    if (this.app) this.drawStadium();
+  }
   /** Corner pennants + bunting (owner 2026-07-02 arena dressing). */
   private dressingTextures = new Map<string, Texture>();
   private turfTheme = 'grass1';
@@ -4362,11 +4375,32 @@ export class PitchRenderer {
         if (!this.initActive(generation, app)) return;
         texture.source.scaleMode = 'nearest';
         texture.source.addressMode = 'repeat';
+        // Owner 09-24: the far tiers draw the 128 px-tall seat atlas at ~10-20 px — NEAREST decimates the seat rows into
+        // noise; linear + mipmaps keep them as rows (the fan sprites stay nearest, they are small already).
+        texture.source.scaleMode = 'linear';
+        texture.source.autoGenerateMipmaps = true;
         this.standTextures.set(name, texture);
         this.stadiumAssetRevision++;
       }
+      // Owner 09-24: baked-crowd stand sets (PixelLab originals, art repo pitch/stadium/pieces) — one atlas per colour
+      // and facing; a missing atlas just leaves that colour on the legacy seat atlas + fan sprinkle.
+      for (const colour of ['blue', 'red', 'yellow', 'green']) {
+        for (const facing of ['front', 'back', 'side'] as const) {
+          try {
+            const tex = await Assets.load<Texture>(new URL(`../assets/stadium/stand_${colour}_${facing}.png`, import.meta.url).href);
+            if (!this.initActive(generation, app)) return;
+            tex.source.scaleMode = 'linear';
+            tex.source.autoGenerateMipmaps = true;
+            let set = this.standSets.get(colour);
+            if (!set) { set = new Map(); this.standSets.set(colour, set); }
+            set.set(facing, tex);
+            this.stadiumAssetRevision++;
+          } catch { /* set not shipped for this colour/facing */ }
+          if (!this.initActive(generation, app)) return;
+        }
+      }
       // Owner 2026-07-04: a broadcast CAMERA + a stadium LIGHT tower. Owner 09-10: the two cells are now their own
-      // files (camera.png 196x197, light_tower.png 153x361) — the full SakPix pack sheets no longer ship.
+      // files (camera.png 196x197) — the full SakPix pack sheets no longer ship.
       try {
         const bc = await Assets.load<Texture>(new URL(`../assets/stadium/camera.png`, import.meta.url).href);
         if (!this.initActive(generation, app)) return;
@@ -4375,13 +4409,7 @@ export class PitchRenderer {
         this.stadiumAssetRevision++;
       } catch { this.cameraTexture = null; this.stadiumAssetRevision++; }
       if (!this.initActive(generation, app)) return;
-      try {
-        const lt = await Assets.load<Texture>(new URL(`../assets/stadium/light_tower.png`, import.meta.url).href);
-        if (!this.initActive(generation, app)) return;
-        lt.source.scaleMode = 'nearest';
-        this.lightTexture = lt;
-        this.stadiumAssetRevision++;
-      } catch { this.lightTexture = null; this.stadiumAssetRevision++; }
+      if (!this.initActive(generation, app)) return;
       if (!this.initActive(generation, app)) return;
       // fan pool: humans + fantasy creatures (owner 2026-07-02) — all
       // height-normalized at render time so every fan reads the same size.
@@ -9543,7 +9571,7 @@ export class PitchRenderer {
         // Installed asset URLs end in an opaque integrity token rather than a
         // filename. Select the image parser explicitly: Pixi cannot infer it
         // from an extensionless f40kmod URL and otherwise resolves no texture.
-        const tex = await Assets.load<Texture>({ src: url, parser: 'loadTextures' });
+        const tex = await Assets.load<Texture>({ src: url, parser: textureParserFor(url) });
         if (!(tex instanceof Texture) || !tex.source) {
           throw new Error('Installed pitch texture could not be decoded');
         }
@@ -13352,7 +13380,7 @@ export class PitchRenderer {
       && this.sweetSpotLogoRequestGeneration === requestGeneration;
     const load = async (url: string | null): Promise<Texture | null> => {
       if (!url || !this.showFieldLogos) return null;
-      try { return await Assets.load<Texture>({ src: url, parser: 'loadTextures' }); }
+      try { return await Assets.load<Texture>({ src: url, parser: textureParserFor(url) }); }
       catch { return null; }
     };
     const [homeTexture, awayTexture] = await Promise.all([load(homeUrl), load(awayUrl)]);
@@ -13574,6 +13602,32 @@ export class PitchRenderer {
     return { homeForward, awayForward: { dx: -homeForward.dx, dy: -homeForward.dy } };
   }
 
+  /** Owner 09-24: the default (reset) zoom — the 2x device-pixel rung (never below the stadium fit). */
+  static readonly DEFAULT_VIEW_RUNG = 2;
+  static readonly MIN_VIEW_W = 1280;
+  static readonly MIN_VIEW_H = 720;
+  private defaultViewScale(): number {
+    const res = globalThis.devicePixelRatio ?? 1;
+    const rung = PitchRenderer.DEFAULT_VIEW_RUNG / res;
+    return Math.max(this.cameraFitScale, this.pixelZoom ? this.quantizeZoom(rung, 'nearest') : rung);
+  }
+  /** World-space centre of the 26x15 pitch (between columns 12 and 13, row 7). */
+  private pitchCentreWorld(): { x: number; y: number } {
+    const a = squareAnchor(Math.floor((PITCH_COLS - 1) / 2), Math.floor(PITCH_ROWS / 2));
+    const b = squareAnchor(Math.ceil((PITCH_COLS - 1) / 2), Math.floor(PITCH_ROWS / 2));
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+  /** Owner 09-24: the world rect the DEFAULT view shows — sign-holding fans are seated inside it so every
+   *  placard can be read without leaving the default zoom. Null before the app exists. */
+  private defaultViewRect(): { x0: number; y0: number; x1: number; y1: number } | null {
+    if (!this.app) return null;
+    const s = this.defaultViewScale();
+    const c = this.pitchCentreWorld();
+    // The stadium is drawn before the host has laid the canvas out (a few px) — assume at least a small window.
+    const w = Math.max(this.app.screen.width, PitchRenderer.MIN_VIEW_W), h = Math.max(this.app.screen.height, PitchRenderer.MIN_VIEW_H);
+    const hw = w / s / 2, hh = h / s / 2;
+    return { x0: c.x - hw, y0: c.y - hh, x1: c.x + hw, y1: c.y + hh };
+  }
   /** The scale at which the playing squares alone (26x15) fill the viewport; null before the app exists. */
   private pitchOnlyFitScale(): number | null {
     if (!this.app) return null;
@@ -13633,13 +13687,15 @@ export class PitchRenderer {
     const worldW = worldWidth() + padW;
     const worldH = worldHeight() + padH;
     const scale = this.fitScaleFor(worldW, worldH, margin);
-    this.world.scale.set(scale);
-    this.cameraFitScale = scale; // 100% reference for badge zoom scaling
+    this.cameraFitScale = scale; // 100% reference for badge zoom scaling + the wheel-out floor
+    // Owner 09-24: the DEFAULT view is the ladder's 2x rung (the third step in from the stadium fit), centred on
+    // the pitch — not the whole-stadium fit (the fit stays the wheel-out floor). offX/offY only shape the fit.
+    void offX; void offY;
+    const startScale = this.defaultViewScale();
+    this.world.scale.set(startScale);
     this.updateOverlayScales();
-    this.world.position.set(
-      (this.app.screen.width - worldW * scale) / 2 + offX * scale,
-      (this.app.screen.height - worldH * scale) / 2 + offY * scale,
-    );
+    const c = this.pitchCentreWorld();
+    this.world.position.set(this.app.screen.width / 2 - c.x * startScale, this.app.screen.height / 2 - c.y * startScale);
     // Refresh the clamp bounds to the freshly-laid-out content (keep the last good
     // box if the content isn't drawn yet, e.g. resetCamera during init).
     this.contentBounds = this.readContentBounds() ?? this.contentBounds;
@@ -13964,6 +14020,8 @@ export class PitchRenderer {
     ) => {
       const texture = this.standTextures.get(textureName);
       if (!texture) return;
+      const standSet = this.standStyle === 'crowd' ? this.standSets.get(textureName.replace('stand_', '')) : undefined;
+      const pitchCentre = extPoint(13, 7.5);
       const cells: { x: number; y: number; ring: number }[] = [];
       for (let x = x0; x <= x1; x++) {
         for (let y = y0; y <= y1; y++) cells.push({ x, y, ring: ringOf(x, y) });
@@ -13997,6 +14055,21 @@ export class PitchRenderer {
               graphics.poly(riser).fill({ color: 0x2a2d36 });
             }
           }
+        }
+        // Owner 09-24: baked-crowd tiles when the colour's set is shipped — screen-upright art, facing chosen per cell
+        // from where the pitch lies, variant from the same noise as the old sprinkle. The sprinkle is skipped here.
+        const facing = stadiumStandFacing(
+          { x: (raisedCorners[0].x + raisedCorners[2].x) / 2, y: (raisedCorners[0].y + raisedCorners[2].y) / 2 }, pitchCentre);
+        const setTexture = standSet?.get(facing === 'sideL' || facing === 'sideR' ? 'side' : facing);
+        if (setTexture) {
+          const columns = Math.max(1, Math.round(setTexture.width / STADIUM_STAND_TILE));
+          const column = stadiumStandVariant(x, y, density, columns, turfNoise);
+          const up = stadiumStandTileUpright({ corners: raisedCorners, textureHeight: setTexture.height, tileSize: STADIUM_STAND_TILE, column, mirror: facing === 'sideL' });
+          // textureSpace 'global': Pixi's default ('local') stretches the WHOLE atlas to the polygon's bounds, which is why
+          // an unadjusted fill drew every cell as a four-column smear; global maps texture pixels through the matrix.
+          graphics.poly(points).fill({ texture: setTexture, textureSpace: 'global', matrix: new Matrix(up.a, up.b, up.c, up.d, up.translateX, up.translateY) });
+          graphics.poly(points).fill({ color: 0x0a0c10, alpha: Math.min(0.55, 0.12 + ring * 0.07) });
+          continue;
         }
         // The stand PNG is a four-cell atlas (three seat modules plus an aisle),
         // not one icon to restart from pixel zero in every square. Select one
@@ -14108,10 +14181,16 @@ export class PitchRenderer {
     // each end line are covered — the stone apron only reaches y=-4..18, so
     // without this those two columns (x=-1, x=26) inside the stand y-bands fell
     // through to the black backdrop, leaving dark slivers at the pitch corners.
+    // Owner 09-24 ("the marked areas are a bit gross"): the end bands own the four CORNER blocks, but their ring was
+    // the x-depth alone — so in a corner the seats stepped DOWN to ground level and the side stand shot back up five
+    // tiers beside them (a sawtooth at every corner, sky in the notch). The corner ring is now the LARGER of the two
+    // depths, so the tiers wrap the corner continuously and the outer silhouette is one clean rake.
+    const sideDepth = (y: number): number => (y < 0 ? -5 - y : y - 19);
+    const cornerRing = (endDepth: number, y: number): number => (y < -5 || y > 19 ? Math.max(endDepth, sideDepth(y)) : endDepth);
     drawBand(-1, 26, -10, -5, 'stand_blue', (_x, y) => -5 - y, fanDensity('home'), 'home');
     drawBand(-1, 26, 19, 24, 'stand_red', (_x, y) => y - 19, fanDensity('away'), 'away');
-    drawBand(-7, -2, -10, 24, 'stand_yellow', (x) => -2 - x, fanDensity('mixed'), 'nearEnd');
-    drawBand(27, 32, -10, 24, 'stand_green', (x) => x - 27, fanDensity('mixed'), 'farEnd');
+    drawBand(-7, -2, -10, 24, 'stand_yellow', (x, y) => cornerRing(-2 - x, y), fanDensity('mixed'), 'nearEnd');
+    drawBand(27, 32, -10, 24, 'stand_green', (x, y) => cornerRing(x - 27, y), fanDensity('mixed'), 'farEnd');
 
     // B9-V3: the stadium graphics are built directly in the active orientation's
     // native frame (per-corner extPoint), so no post-transform is needed.
@@ -14134,7 +14213,13 @@ export class PitchRenderer {
     // record each blank placard's world rect so an "I ♥ name" shout-out (crowdSign)
     // can be written on one that is on-camera.
     this.signFanSlots = [];
-    const endCrowd = crowd.filter((p) => p.stand === 'end');
+    const endCrowdAll = crowd.filter((p) => p.stand === 'end');
+    // Owner 09-24: the end stands sit beyond the default view's height, but its WIDTH (the centre band behind the
+    // end zones) is the part a coach can pan to and read at the default zoom — the outer wings are not (rig 09-24:
+    // slots at x=-499 / 1088 for a 10..650 band). Seat the sign-holders inside that band only.
+    const view = this.defaultViewRect();
+    const inBand = view ? endCrowdAll.filter((p) => p.x >= view.x0 && p.x <= view.x1) : endCrowdAll;
+    const endCrowd = inBand.length > 0 ? inBand : endCrowdAll;
     if (this.signFanTextures.length > 0 && endCrowd.length > 0) {
       const frontFirst = [...endCrowd].sort((a, b) => b.h - a.h); // largest = nearest = most visible
       const wanted = Math.min(4, frontFirst.length); // owner 2026-07-08: 4 sign-holders
@@ -14246,6 +14331,7 @@ export class PitchRenderer {
    * pitch corner (near A1/A26/O1/O26). Sprites sliced from the stadium sheets; if
    * a sheet is missing the pitch just renders bare (no procedural fallback).
    */
+  /** World rects of the two light towers as drawStadiumProps places them (N-S only; none in E-W or without art). */
   private drawStadiumProps(): void {
     if (!this.game) return;
     // Owner 09-09: the broadcast cameras and the light towers are placed for the N-S apron; in EAST-WEST mode they
@@ -14279,29 +14365,7 @@ export class PitchRenderer {
         place(camera.x, camera.y, camera.flip);
       }
     }
-    // Owner 2026-07-07 (queue #3): stadium LIGHT TOWERS moved IN to the far-N pitch
-    // corners — up in the stone apron just outside the corner flags (extPoint(COLS,0)/
-    // (COLS,ROWS)), not way out in the crowd. Nudged one row north (x=26, into the end
-    // apron) and pulled toward the sidelines (y=-1 west / y=16 east).
-    if (this.lightTexture) {
-      const light = (x: number, y: number) => {
-        const a = squareAnchor(x, y);
-        const s = depthScale(x, y);
-        const sp = new Sprite(this.lightTexture!);
-        sp.anchor.set(0.5, 0.94); // base of the tower
-        sp.scale.set((TILE_W * 1.5 * s) / sp.texture.width);
-        sp.position.set(a.x, a.y);
-        this.stadiumLayer.addChild(sp);
-      };
-      // Owner 2026-07-08: the AWAY-side (north-end) light towers must ALWAYS render at the
-      // VISUAL north, even during the away drive when the whole field mirrors 180° (isFieldFlip).
-      // Placed at the logical MIRROR of their north-apron squares when flipped ((26,15)→(-1,-1),
-      // (26,-1)→(-1,15)) so they stay put at the top of the arena instead of flipping south.
-      const ff = isFieldFlip();
-      const lx = ff ? -1 : 26; // north-apron long-axis square, mirrored under the flip
-      light(lx, ff ? -1 : 15); // NE corner — one square outside the east sideline
-      light(lx, ff ? 15 : -1); // NW corner — one square outside the west sideline
-    }
+    // Owner 09-24/25: the stadium light towers and the corner turrets are gone ("they don't look good").
   }
 
   // --- static pitch ---
@@ -15588,8 +15652,10 @@ export class PitchRenderer {
   private buildPlotStepNumber(sx: number, sy: number, n: number): Text {
     const a = this.tokenPos(sx, sy);
     const ds = depthScale(sx, sy);
+    // Owner 09-25: 4x raster + linear filtering + mipmaps (the marking-text rule) — the planner digits read low-res
+    // next to the trail numbers, which already raster this way (addTrailNumber).
     const label = new Text({
-      text: String(n),
+      text: String(n), resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
       style: { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 13, fontWeight: 'bold', fill: this.plannerColors.base, stroke: { color: 0x08233a, width: 3 } },
     });
     label.anchor.set(0.5, 0.5);

@@ -57,12 +57,13 @@ export function teamDiceTally(game: GameJson, side: Side): DiceTally {
 
 /** The Statistics rows: Touchdowns, Casualties, Completions, Passing/Rushing yards, Interceptions, Blocks / Dodges /
  *  Pickups as "attempts / failed", Fouls, Sent off, SPP earned. */
-export function gameStatRows(game: GameJson | null | undefined): PgStatRow[] {
+export function gameStatRows(game: GameJson | null | undefined, tallies?: { home: DiceTally; away: DiceTally }): PgStatRow[] {
   if (!game) return [];
   const home = teamStatTotals(game, 'home');
   const away = teamStatTotals(game, 'away');
-  const th = teamDiceTally(game, 'home');
-  const ta = teamDiceTally(game, 'away');
+  // Owner 09-25: a cached end-game snapshot carries its own tallies (the live accumulator belongs to the current game).
+  const th = tallies?.home ?? teamDiceTally(game, 'home');
+  const ta = tallies?.away ?? teamDiceTally(game, 'away');
   const rows: PgStatRow[] = [];
   const plain = (key: string, label: string) => {
     const h = home[key] ?? 0; const a = away[key] ?? 0;

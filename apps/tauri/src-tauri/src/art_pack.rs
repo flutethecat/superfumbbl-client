@@ -137,6 +137,19 @@ pub async fn art_pack_install_part(
     Ok(names)
 }
 
+/// Live-verified 09-24: Pixi loaded pack files through the asset protocol from a worker and the sprites fell back
+/// to defaults. The client now pulls the bytes over IPC instead and decodes them itself; this is that read.
+#[tauri::command]
+pub fn art_pack_read(app: AppHandle, group: String, name: String) -> Result<tauri::ipc::Response, String> {
+    if !valid_group(&group) {
+        return Err(format!("invalid part group {group:?}"));
+    }
+    let name = safe_entry_name(&name).ok_or_else(|| format!("invalid file name {name:?}"))?;
+    let path = pack_root(&app)?.join(group.replace('/', std::path::MAIN_SEPARATOR_STR)).join(name);
+    let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Replace the group directory with the zip's files (plain basenames only), atomically via a staging dir.
 fn extract_flat(bytes: &[u8], group_dir: &Path) -> Result<Vec<String>, String> {
     let staging = group_dir.with_extension("staging");

@@ -1,5 +1,5 @@
 import { reactive } from 'vue';
-import { artUrl } from '@fumbbl40k/ffb-pitch';
+import { artBlobUrl, artPackHas } from '@fumbbl40k/ffb-pitch';
 import { bundledWalkManifest, resolveBundledWalkRole, rosterRaceKey, type WalkSheetBindingTransport } from '@fumbbl40k/ffb-pitch';
 import { assetMods } from './assetMods';
 import { reactivePlayerSpriteUrl } from './assetModUi';
@@ -100,7 +100,9 @@ function renderIdleFrame(key: string, sheet: SheetFrame): void {
     }
   };
   img.onerror = () => { portraits.set(key, null); inflight.delete(key); };
-  img.src = artUrl(sheet.url); // owner 09-23: the sheet may live in the art pack
+  // owner 09-23/24: a pack sheet arrives as a blob: URL (bytes over IPC); bundled sheets keep the synchronous path.
+  if (artPackHas(sheet.url)) void artBlobUrl(sheet.url).then((src) => { img.src = src; });
+  else img.src = sheet.url;
 }
 
 /** What the portrait would be drawn from (test/inspection seam; no rendering). */

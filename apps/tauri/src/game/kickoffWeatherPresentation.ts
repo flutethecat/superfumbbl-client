@@ -2,7 +2,7 @@ import type { TeamSide } from './teamSide';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { projectKickScatterPreview, type KickScatterPreview } from './kickElection';
 import { kickoffArcNeedsDecisionDwell } from './kickoffArcDwell';
-import { kickoffBannerPalette, type KickoffBannerPalette } from './kickoffMiniPhases';
+import { kickoffBannerPalette, kickoffOutcome, type KickoffBannerPalette, type KickoffOutcome } from './kickoffMiniPhases';
 import { playerName } from './reportFormatter';
 import { PRAYER_TABLE, prayerForPlayerEventMessage } from './prayerCatalog';
 
@@ -34,7 +34,7 @@ export type PregamePresentationCue =
 export interface KickoffWeatherPresentation {
   context: KickoffWeatherContext;
   scatterPreview: KickScatterPreview | null;
-  kickoff: { result: string; roll: number[]; palette: KickoffBannerPalette; decisionDwell: boolean } | null;
+  kickoff: { result: string; roll: number[]; palette: KickoffBannerPalette; outcome: KickoffOutcome | null; decisionDwell: boolean } | null;
   weather: { roll: number[]; weather: string; source: 'weather' | 'weatherMage' }[];
   weatherMageUse: { side: 'home' | 'away'; coach: string; logo: string | null } | null;
   dodgySnack: { rollHome: number; rollAway: number; players: string[]; sentOff: string[] } | null;
@@ -218,10 +218,12 @@ export function kickoffWeatherPresentation(
     }
   }
 
+  const kickoffPalette = kickoffReport ? kickoffBannerPalette(kickoffReport.result, [...reports], game, context.kickingSide) : null;
   const kickoff = kickoffReport ? {
     result: kickoffReport.result,
     roll: [...kickoffReport.roll],
-    palette: kickoffBannerPalette(kickoffReport.result, [...reports], game, context.kickingSide),
+    palette: kickoffPalette,
+    outcome: kickoffOutcome(kickoffReport.result, kickoffPalette, [...reports], game),
     decisionDwell: kickoffArcNeedsDecisionDwell(kickoffReport.result),
   } : null;
   const victims = officiousRef?.length ? { kind: 'officiousRef' as const, victimIds: officiousRef }

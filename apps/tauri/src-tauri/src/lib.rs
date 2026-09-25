@@ -630,6 +630,7 @@ pub fn run() {
             art_pack::art_pack_dir,
             art_pack::art_pack_installed,
             art_pack::art_pack_install_part,
+            art_pack::art_pack_read,
             discord_presence::discord_presence_available,
             discord_presence::discord_presence_set,
             discord_presence::discord_presence_clear,

@@ -1,3 +1,4 @@
+import { textureParserFor } from './artPack';
 import { Assets, Container, Graphics, Rectangle, Sprite, Texture, type TextureSource } from 'pixi.js';
 import { getOrientation, PITCH_COLS, PITCH_ROWS, squareAnchor, TILE_H, TILE_W } from './geometry';
 import type { PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
@@ -558,7 +559,7 @@ export async function prepareWalkSheets(
   }
 
   const loadResults = await Promise.allSettled(validated.map(({ entry }) =>
-    Assets.load<Texture>({ src: entry.url, parser: 'loadTextures' })));
+    Assets.load<Texture>({ src: entry.url, parser: textureParserFor(entry.url) })));
   const assets = new Map<string, WalkerAsset>();
   const prepared: PreparedInternal = {
     generation,
@@ -635,7 +636,7 @@ export function loadBundledWalkSheets(entries: BundledWalkEntry[]): Promise<void
   const todo = validated.filter(({ key }) => !bundledAssets.has(key) && !bundledPending.has(key));
   const waits = validated.map(({ key }) => bundledPending.get(key)).filter((p): p is Promise<void> => !!p);
   const batch = todo.length === 0 ? Promise.resolve() : Promise.allSettled(
-    todo.map(({ entry }) => Assets.load<Texture>({ src: entry.url, parser: 'loadTextures' })),
+    todo.map(({ entry }) => Assets.load<Texture>({ src: entry.url, parser: textureParserFor(entry.url) })),
   ).then((loadResults) => {
     for (let index = 0; index < todo.length; index++) {
       const { entry, spec, key } = todo[index]!;

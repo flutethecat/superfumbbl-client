@@ -96,3 +96,70 @@ export function stadiumRiserEdge(
   const dy = Math.abs(edge[1].y - edge[0].y);
   return { edge, visible: dx >= dy };
 }
+
+/** Owner 09-24: the baked-crowd stand tiles are square cells of this many texture pixels, packed side by side into
+ *  one atlas per colour and facing (column 0 = empty seats, the rest = crowd variants). */
+export const STADIUM_STAND_TILE = 128;
+
+export type StadiumStandFacing = 'front' | 'back' | 'sideL' | 'sideR';
+
+/** Which baked-crowd tile a stand cell needs, from where the PITCH lies on screen relative to the cell: below it =
+ *  the far stand (the crowd faces the camera, 'front'); above it = the near stand (backs to the camera, 'back'); to
+ *  the right / left = a side stand (the crowd in profile, facing the pitch). Pure screen geometry, so it is right in
+ *  both orientations, under the field flip, and for the wrapped corner blocks (the dominant axis wins). */
+export function stadiumStandFacing(cell: { x: number; y: number }, pitch: { x: number; y: number }): StadiumStandFacing {
+  const dx = pitch.x - cell.x;
+  const dy = pitch.y - cell.y;
+  if (Math.abs(dy) >= Math.abs(dx)) return dy > 0 ? 'front' : 'back';
+  return dx > 0 ? 'sideR' : 'sideL';
+}
+
+/** Deterministic crowd variant for a cell: 0 (empty) when the cell's noise sits above the fan density, else one of the
+ *  crowd columns. Same noise seeds as the old sprite sprinkle so a roster's fan factor fills the stands the same way. */
+export function stadiumStandVariant(
+  x: number,
+  y: number,
+  density: number,
+  columns: number,
+  noise: (a: number, b: number) => number,
+): number {
+  if (columns <= 1) return 0;
+  const n = noise(x * 13 + y * 7 + 3, x * 5 - y * 11 + 1);
+  if (n >= density) return 0;
+  return 1 + (Math.floor((n / Math.max(density, 1e-6)) * (columns - 1)) % (columns - 1));
+}
+
+/** Map one atlas cell into a projected stadium square keeping the art SCREEN-UPRIGHT: the cell's more horizontal grid
+ *  axis carries the tile's width (pointing screen-right), the other its height (pointing screen-up). Unlike
+ *  stadiumStandTileTransform this never rotates the art, so baked spectators stay on their feet on every stand; the
+ *  facing (front / back / side) is chosen per cell instead. `mirror` flips the tile left-right (a side stand whose
+ *  crowd must face the other way). */
+export function stadiumStandTileUpright(input: {
+  corners: StadiumCellCorners;
+  textureHeight: number;
+  tileSize: number;
+  column: number;
+  mirror: boolean;
+}): StadiumStandTileTransform {
+  const [xy, xy1, x1y1, x1y] = input.corners;
+  const ax = { x: x1y.x - xy.x, y: x1y.y - xy.y };
+  const ay = { x: xy1.x - xy.x, y: xy1.y - xy.y };
+  const axHorizontal = Math.abs(ax.x) >= Math.abs(ax.y);
+  let right = axHorizontal ? ax : ay;
+  let up = axHorizontal ? ay : ax;
+  if (right.x < 0) right = { x: -right.x, y: -right.y };
+  if (up.y > 0) up = { x: -up.x, y: -up.y };
+  const down = { x: -up.x, y: -up.y };
+  const cx = (xy.x + xy1.x + x1y1.x + x1y.x) / 4;
+  const cy = (xy.y + xy1.y + x1y1.y + x1y.y) / 4;
+  const u = input.mirror ? { x: -right.x, y: -right.y } : right;
+  // texture origin (u = column start, v = 0) lands on the quad's top-left corner, or top-right when mirrored
+  const ox = cx - u.x / 2 - down.x / 2;
+  const oy = cy - u.y / 2 - down.y / 2;
+  const a = u.x / input.tileSize;
+  const b = u.y / input.tileSize;
+  const c = down.x / input.textureHeight;
+  const d = down.y / input.textureHeight;
+  const offset = input.column * input.tileSize;
+  return { a, b, c, d, translateX: ox - offset * a, translateY: oy - offset * b };
+}

@@ -78,7 +78,10 @@ import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducem
 import { activeInducementSprite } from '../game/inducementPortrait';
 import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
-import { GENERIC_TEAM_LOGO, POSTGAME_STATS, gameStatRows, teamDiceTally, teamLogo, type PgStatRow } from '../game/gameStatRows';
+import { teamDiceTally, teamLogo } from '../game/gameStatRows';
+import PostGamePanel from '../components/PostGamePanel.vue';
+import { mvpCardFor, mvpConcededSides, postGameKey, postGamePublic, type PgMvpCard, type PostGameSnapshot } from '../game/postGameProjection';
+import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
@@ -121,13 +124,11 @@ import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { allowsFumblerooskieAction } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
 import { decidingCoachSide, reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
-import { TWO_D6_SHARE, actionFaces, armourLikelihood, blockLikelihood, blockTotal, d6Likelihood, diceFacts, diceStats, emptyTally, injuryLikelihood, oneInGames, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from '../game/diceStats';
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeTargetClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
-import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from '../game/postGameAdvancement';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
 import { spectatorExitActionsVisible, spectatorMvpPending, type EndGameExit } from '../game/spectatorEndGame';
 import { spectatorConcedeOccurrenceKey, spectatorPenaltyShootoutOccurrenceKey } from '../game/spectatorLocalDismissal';
@@ -1835,6 +1836,7 @@ watch(
   () => settings.d6FaceVariant,
   (variant) => renderer?.setD6FaceVariant(variant),
 );
+watch(() => settings.stadiumStands, (style) => renderer?.setStandStyle(style)); // owner 09-25
 watch(
   () => settings.tackleZoneMode,
   (mode) => renderer?.setTackleZoneMode(mode),
@@ -8264,6 +8266,7 @@ onMounted(async () => {
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
   renderer.setAutoDirectorEnabled(settings.autoDirector && !spectatorDirectorSuspended.value); // owner 2026-07-03: Auto Director
   renderer.setAutoDirectorSuspended(gameStore.playbackCatchingUp.value);
+  renderer.setStandStyle(settings.stadiumStands); // owner 09-25: stand art choice
   renderer.setPitchOrientation(settings.pitchOrientation); // B8-8
   renderer.setFlatMode(settings.flatRender); // owner 2026-07-04f: flat (non-iso) mode
   renderer.setUniformFigures(uniformFiguresEffective.value); // owner 09-09: one figure scale + softer far edge (per orientation 09-10)
@@ -10086,173 +10089,8 @@ watch(gameOver, (over) => {
 });
 watch(finalPresentationReady, (ready) => renderer?.setBoardCleared(ready));
 
-// B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
-type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
-type PostGamePlayer = { playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[] }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills, 09-15 player number)
-interface PostGameSide {
-  which: 'home' | 'away';
-  team: string;
-  coach: string;
-  logo: string | null;
-  score: number;
-  mvps: PostGameMvp[];
-  // #25-v2: the roulette cycle pool (all team player names) — presentation only.
-  players: string[];
-  // #25-v2: per-player roster/SPP summary (name·position·SPP-gained this game), SPP-desc.
-  roster: PostGamePlayer[];
-  totals: Record<string, number>;
-}
-// Owner 09-17: the Statistics table rows. Blocks and Dodges read "<attempts> / <failed>" (failed = the attacker went
-// down / the dodge ended failed, from the dice tally); Sent off counts the roster's send-offs from the server's
-// PlayerResult (sendToBoxReason). The lead highlight compares the first number only.
-function pgTeamTally(side: 'home' | 'away'): DiceTally { return gameStore.game.value ? teamDiceTally(gameStore.game.value, side) : emptyTally(); }
-const pgStatRows = computed<PgStatRow[]>(() => gameStatRows(gameStore.game.value)); // owner 09-22: shared with Esc > Game statistics
-
-// ---- Dice tab: distributions, expected counts and likelihood plots ----
-const BLOCK_FACE_LABELS = ['AD', 'BD', 'Push', 'Push', 'Stumble', 'Pow'];
-interface PgBar { label: string; count: number; expected: number; x: number; y: number; w: number; h: number; ey: number }
-interface PgChart { bars: PgBar[]; expectedPath: string; total: number }
-const PG_CHART_W = 240; const PG_CHART_H = 96; const PG_CHART_BASE = 84; const PG_CHART_TOP = 8;
-function pgBarChart(counts: number[], expectedShare: number[], labels: string[]): PgChart {
-  const total = counts.reduce((a, b) => a + b, 0);
-  const expected = expectedShare.map((share) => total * share);
-  const peak = Math.max(1, ...counts, ...expected);
-  const slot = PG_CHART_W / counts.length;
-  const scale = (PG_CHART_BASE - PG_CHART_TOP) / peak;
-  const bars = counts.map((count, i) => {
-    const w = slot * 0.62; const x = i * slot + (slot - w) / 2; const h = count * scale;
-    return { label: labels[i] ?? String(i + 1), count, expected: expected[i]!, x, y: PG_CHART_BASE - h, w, h, ey: PG_CHART_BASE - expected[i]! * scale };
-  });
-  // the expected count as a dotted step line across each bar (a horizontal line when every share is equal)
-  const expectedPath = bars.map((b, i) => `${i === 0 ? 'M' : 'L'}${(i * slot).toFixed(1)} ${b.ey.toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${b.ey.toFixed(1)}`).join(' ');
-  return { bars, expectedPath, total };
-}
-/** Standard normal curve for the likelihood gauges (viewBox 0 0 200 44, z from -3.2 to 3.2). */
-const PG_GAUGE_CURVE = (() => {
-  const pts: string[] = [];
-  for (let i = 0; i <= 64; i++) {
-    const z = -3.2 + (6.4 * i) / 64;
-    const y = 40 - 34 * Math.exp(-0.5 * z * z);
-    pts.push(`${i === 0 ? 'M' : 'L'}${(100 + z * (90 / 3.2)).toFixed(1)} ${y.toFixed(1)}`);
-  }
-  return pts.join(' ');
-})();
-function pgGaugeX(z: number): number { return 100 + Math.max(-3.2, Math.min(3.2, z)) * (90 / 3.2); }
-function pgZ(like: Likelihood): string { return like.n === 0 ? '—' : `${like.z >= 0 ? '+' : ''}${like.z.toFixed(2)}σ`; }
-// Owner 09-17: the headline reads "1 in N" games — the chance of dice at least this far from fair, in this direction.
-function pgOdds(like: Likelihood): string {
-  if (like.n === 0) return '—';
-  const { n, capped } = oneInGames(like);
-  return `1 in ${n.toLocaleString()}${capped ? '+' : ''}`;
-}
-function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rolls' : Math.abs(like.z) < 0.05 ? 'dead average' : like.z > 0 ? 'this lucky' : 'this unlucky'; }
-interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
-interface PgDiceSide {
-  team: string; logo: string; charts: PgDiceChartRow[]; oneNinth: number; oneThirtySixth: number;
-  /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. */
-  likelihoods: { label: string; like: Likelihood }[];
-  facts: DiceFact[];
-}
-function pgDiceSide(side: 'home' | 'away'): PgDiceSide {
-  const game = gameStore.game.value;
-  const team = side === 'home' ? game?.teamHome : game?.teamAway;
-  const t = pgTeamTally(side);
-  const surface = side === 'home' ? pgSurface.value?.home : pgSurface.value?.away;
-  const even = [1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6, 1 / 6];
-  const faces = ['1', '2', '3', '4', '5', '6'];
-  const totals = ['2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
-  // Owner 09-17: every D6 first, then the block dice, then armour / injury as 2D6 TOTALS (fair share is the
-  // 1-2-3-4-5-6-5-4-3-2-1 / 36 triangle), then dodge D6 by face.
-  // Owner 09-23: "D6 distribution" leads and the "action" (every other) D6 sits right under it.
-  const charts: PgDiceChartRow[] = [
-    { key: 'd6', title: 'D6 distribution', chart: pgBarChart(t.d6.slice(1), even, faces) },
-    { key: 'action', title: 'Action dice', chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
-    { key: 'block', title: 'Block dice', chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
-    { key: 'armour', title: 'Armour dice', chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
-    { key: 'injury', title: 'Injury dice', chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
-    { key: 'dodge', title: 'Dodge dice', chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
-  ];
-  return {
-    team: surface?.team ?? (team?.teamName ?? side), logo: surface?.logo ?? '', charts,
-    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth,
-    likelihoods: [
-      { label: 'All dice', like: d6Likelihood(t) }, { label: 'Armour', like: armourLikelihood(t) },
-      { label: 'Injury', like: injuryLikelihood(t) }, { label: 'Block dice', like: blockLikelihood(t) },
-    ],
-    facts: diceFacts(t),
-  };
-}
-const pgDice = computed(() => ({ home: pgDiceSide('home'), away: pgDiceSide('away'), blocksHome: blockTotal(pgTeamTally('home')), blocksAway: blockTotal(pgTeamTally('away')) }));
-
-function postGameSide(side: 'home' | 'away'): PostGameSide | null {
-  const game = gameStore.game.value;
-  if (!game) return null;
-  const team = side === 'home' ? game.teamHome : game.teamAway;
-  const tr = side === 'home' ? game.gameResult.teamResultHome : game.gameResult.teamResultAway;
-  const roster = team.roster as {
-    positionArray?: { positionId: string; positionName?: string }[];
-    logoUrl?: string;
-    baseIconPath?: string;
-  };
-  const num = (r: Record<string, unknown>, k: string) => Number(r[k] ?? 0);
-  // Derive game-earned SPP from serialized achievement fields, not lifetime currentSpps.
-  const sppEarned = (r: Record<string, unknown>) =>
-    num(r, 'playerAwards') * 4 + num(r, 'touchdowns') * 3 + num(r, 'casualties') * 2 +
-    num(r, 'interceptions') * 2 + num(r, 'completions') + num(r, 'deflections') +
-    num(r, 'completionsWithAdditionalSpp') + num(r, 'casualtiesWithAdditionalSpp') + num(r, 'catchesWithAdditionalSpp');
-  const results = tr.playerResults as unknown as Record<string, unknown>[];
-  const totals: Record<string, number> = {};
-  for (const { key } of POSTGAME_STATS) {
-    if (key === 'spp') totals.spp = results.reduce((a, r) => a + sppEarned(r), 0);
-    else totals[key] = results.reduce((a, r) => a + num(r, key), 0);
-  }
-  const mvps: PostGameMvp[] = results
-    .filter((r) => num(r, 'playerAwards') > 0)
-    .map((r) => {
-      const p = team.playerArray.find((pl) => pl.playerId === r.playerId);
-      const position =
-        roster.positionArray?.find((x) => x.positionId === p?.positionId)?.positionName ??
-        p?.positionId?.split('.').pop() ??
-        '';
-      return { name: p?.playerName ?? '(unknown)', position, awards: num(r, 'playerAwards'), playerId: String(r.playerId ?? '') };
-    });
-  // #25-v2: per-player roster — name · position · SPP-gained (same server-authoritative sppEarned as the
-  // team total), sorted SPP-desc so the game's standouts head the list.
-  const posName = (pid: string | undefined) =>
-    roster.positionArray?.find((x) => x.positionId === pid)?.positionName ?? pid?.split('.').pop() ?? '';
-  const rosterRows: PostGamePlayer[] = results
-    .map((r) => {
-      const p = team.playerArray.find((pl) => pl.playerId === r.playerId);
-      // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
-      // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
-      const posSkills = new Set((team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] })
-        .positionArray?.find((q) => q.positionId === p?.positionId)?.skillArray ?? []);
-      const addedSkillList = p ? playerDetailSkills(p, posSkills).filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label })) : [];
-      const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
-      return { playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r), addedSkills, addedSkillList };
-    })
-    .sort((a, b) => b.spp - a.spp);
-  return {
-    which: side,
-    team: team.teamName,
-    coach: team.coach,
-    logo: teamLogo(team, side),
-    score: tr.score,
-    mvps,
-    players: team.playerArray.map((pl) => pl.playerName).filter((n): n is string => !!n),
-    roster: rosterRows,
-    totals,
-  };
-}
-const endGamePublic = computed(() => {
-  if (!gameOver.value) return null;
-  const home = postGameSide('home');
-  const away = postGameSide('away');
-  if (!home || !away) return null;
-  const draw = home.score === away.score;
-  const winner = draw ? null : home.score > away.score ? home : away;
-  return { home, away, winner, draw };
-});
+// Owner 09-25: the end-game projections live in game/postGameProjection.ts (shared with the cached Details popup).
+const endGamePublic = computed(() => (gameOver.value ? postGamePublic(gameStore.game.value) : null));
 const postGame = computed(() => finalPresentationReady.value ? endGamePublic.value : null);
 // Owner 08-19 (spectate-seat endgame): pure gates in game/spectatorEndGame.ts — MVP-pending
 // placeholder ("Players are selecting MVP") while the server hasn't sent the Statistics & MVP
@@ -10382,19 +10220,11 @@ function mvpRosterFor(side: 'home' | 'away'): MvpRosterRow[] {
 }
 const mvpRoster = computed(() => mvpRosterFor(gameStore.myTeamIsHome.value ? 'home' : 'away'));
 const postGamePhase = ref<'mvp' | 'stats' | 'roster'>('mvp');
-// Owner 09-17: the Dice tab opens its own PANE (an overlay with an X): distributions left, the likelihood graphs
-// top right, fun facts bottom right. A header selector picks whose distributions fill the left column.
-const diceModalOpen = ref(false);
-const diceSide = ref<'home' | 'away'>('home');
-const pgDiceSelected = computed(() => (diceSide.value === 'home' ? pgDice.value.home : pgDice.value.away));
-// #235 (owner-fg 07-29): roster is a one-team view, defaulted to the viewer's own side.
-const selectedRosterTeam = ref<'home' | 'away'>(gameStore.myTeamIsHome.value ? 'home' : 'away');
 const postGameDismissed = ref(false);
 watch(gameOver, (over) => {
   postGameDismissed.value = false;
   if (over) {
     postGamePhase.value = 'mvp';
-    selectedRosterTeam.value = gameStore.myTeamIsHome.value ? 'home' : 'away';
   }
 });
 
@@ -10409,13 +10239,6 @@ const mvpRoll = ref<{ home: MvpRoll; away: MvpRoll }>({
 // existing surfaced asset, NO new fetch/CDN, C-44) when a side's server award first appears; null if the
 // MVP is off-pitch (KO/cas → no sprite) → the chip just shows the name. Shown only at phase 'landed'.
 const mvpPortrait = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
-// Owner 09-14: the MVP tab lifts the in-game portrait card for the SELECTED award winner (first winner by default) —
-// sprite, full skill rail in the user's icon/markings mode, SPP tag (pre-game + this game, upstream
-// PlayerDetailComponent:390-395) and, only here, whether the banked SPP already buys the next advancement.
-interface PgMvpCard {
-  playerId: string; nr: number; name: string; position: string; positionId: string; portrait: string | null;
-  spp: number; sppGain: number; advancement: AdvancementReadiness; skills: PlayerDetailSkill[];
-}
 /** Owner 09-14: INDUCEMENT-PHASE roster viewer — coaches want the opponent's roster in front of them while buying
  *  inducements. Both teams (toggle), defaulting to the OPPONENT of the local seat; a row click pops the same
  *  portrait card the end-game MVP screen uses. Presentation only: reads the loaded game, sends nothing. */
@@ -10464,7 +10287,7 @@ const induceRosterCard = computed<PgMvpCard | null>(() => {
   const game = gameStore.game.value;
   const id = induceRosterCardId.value;
   void rendererReady.value;
-  return game && id ? pgMvpCardFor(game, induceRosterSide.value, id) : null;
+  return game && id ? mvpCardFor(game, induceRosterSide.value, id, renderer?.playerPortrait(id) ?? null) : null;
 });
 watch(inducePhaseOpen, (open) => { if (!open) closeInduceRosters(); }); // the phase closing takes the viewer with it
 /** Owner 09-15: end-game roster portraits — the renderer's player portrait, memoised per player for the game. */
@@ -10479,71 +10302,8 @@ function pgRosterPortrait(playerId: string): string | null {
   if (renderer) pgRosterPortraitCache.set(playerId, portrait);
   return portrait;
 }
-const pgMvpSelected = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
-function selectPgMvp(side: 'home' | 'away', playerId: string) { pgMvpSelected.value[side] = playerId; }
-function pgMvpCardFor(game: NonNullable<typeof gameStore.game.value>, side: 'home' | 'away', playerId: string): PgMvpCard | null {
-  {
-    const team = side === 'home' ? game.teamHome : game.teamAway;
-    const player = team.playerArray.find((pl) => pl.playerId === playerId);
-    if (!player) return null;
-    const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
-    const r = results.find((x) => x.playerId === playerId);
-    const spp = (r?.currentSpps as number | undefined) ?? 0;
-    const sppGain = r ? sppEarnedThisGame(r as unknown as Record<string, unknown>, (team as { specialRules?: string[] }).specialRules) : 0;
-    const pos = (team.roster as { positionArray?: Array<{ positionId: string; skillArray?: string[] }> })
-      .positionArray?.find((x) => x.positionId === player.positionId);
-    const baseline = new Set(pos?.skillArray ?? []);
-    // Advancements already taken: skillArray is the LEARNED list (upstream RosterPlayer.java:680-683; a characteristic
-    // improvement rides it as "+MA"/"+ST"/...), counted the BB2025 way (advancementsTaken mirrors bb2025
-    // SkillMechanic.countAdvancements). Temporary grants live in temporarySkillsMap, so they never count.
-    const taken = advancementsTaken((player.skillArray ?? []).filter((n) => !baseline.has(n)));
-    return {
-      playerId, nr: player.playerNr, name: player.playerName, position: positionNameFor({ player, side }), positionId: player.positionId,
-      portrait: renderer?.playerPortrait(playerId) ?? null, spp, sppGain,
-      advancement: advancementReadiness(spp + sppGain, taken),
-      skills: playerDetailSkills(player, baseline), // every skill the player has (owner 09-14), base + acquired
-    };
-  }
-}
-const pgMvpCards = computed<Record<'home' | 'away', PgMvpCard | null>>(() => {
-  const out: Record<'home' | 'away', PgMvpCard | null> = { home: null, away: null };
-  const game = gameStore.game.value;
-  const pg = endGamePublic.value;
-  void rendererReady.value; // the portrait comes from the renderer once it is up
-  if (!game || !pg) return out;
-  for (const side of ['home', 'away'] as const) {
-    const playerId = pgMvpSelected.value[side] ?? pg[side].mvps[0]?.playerId;
-    if (playerId) out[side] = pgMvpCardFor(game, side, playerId);
-  }
-  return out;
-});
-/** Owner 09-14: a CONCESSION hands the winner two MVPs — both cards show, not one selected; a single MVP shows the
- *  selected card as before. */
-const pgMvpCardList = computed<Record<'home' | 'away', PgMvpCard[]>>(() => {
-  const out: Record<'home' | 'away', PgMvpCard[]> = { home: [], away: [] };
-  const game = gameStore.game.value;
-  const pg = endGamePublic.value;
-  void rendererReady.value;
-  if (!game || !pg) return out;
-  for (const side of ['home', 'away'] as const) {
-    if (pg[side].mvps.length > 1) {
-      out[side] = pg[side].mvps.map((m) => pgMvpCardFor(game, side, m.playerId)).filter((c): c is PgMvpCard => !!c);
-    } else {
-      const selected = pgMvpCards.value[side];
-      out[side] = selected ? [selected] : [];
-    }
-  }
-  return out;
-});
 /** The side that conceded (server dedicated-fans stats carry it): it forfeits its MVP, so no "Awaiting result". */
-const pgMvpConceded = computed<Record<'home' | 'away', boolean>>(() => {
-  const game = gameStore.game.value;
-  const conceded = gameStore.state.endGameStats?.dedFans?.concededTeamId ?? null;
-  return {
-    home: !!game && !!conceded && conceded === game.teamHome.teamId,
-    away: !!game && !!conceded && conceded === game.teamAway.teamId,
-  };
-});
+const pgMvpConceded = computed(() => mvpConcededSides(gameStore.game.value, gameStore.state.endGameStats));
 const mvpFlashSide = ref<'home' | 'away' | null>(null);
 let mvpRollTimers: ReturnType<typeof setInterval>[] = [];
 let mvpFlashTimer = 0;
@@ -10586,7 +10346,6 @@ watch([() => gameStore.state.endGame.phase, endGamePublic, () => gameStore.state
     clearMvpRollTimers();
     mvpRoll.value = { home: { phase: 'awaiting', display: '' }, away: { phase: 'awaiting', display: '' } };
     mvpPortrait.value = { home: null, away: null };
-    pgMvpSelected.value = { home: null, away: null };
     return;
   }
   const settled = !!gameStore.state.endGameSettled;
@@ -10628,6 +10387,36 @@ const finalPostGameVisible = computed(() => !!postGame.value && !postGameDismiss
   && !gameStore.state.playerPick && !mvpScreenActive.value && !!gameStore.state.endGameSettled);
 const pgSurface = computed(() => finalPostGameVisible.value ? postGame.value
   : spectatorMvpPendingActive.value ? endGamePublic.value : null);
+// Owner 09-25: the pane's input — the settled game JSON + both sides' dice tallies + the end-report feed. The
+// same shape the Details cache stores (portraits are captured at settle time; live ones come from the renderer).
+const liveSnapshot = computed<PostGameSnapshot | null>(() => {
+  const game = gameStore.game.value;
+  if (!game) return null;
+  const server = settings.activeServerTarget;
+  return {
+    version: 1, key: postGameKey(server, game.gameId), server, gameId: String(game.gameId), seat: props.mode, savedAt: 0,
+    game, tallies: { home: teamDiceTally(game, 'home'), away: teamDiceTally(game, 'away') },
+    endGameStats: gameStore.state.endGameStats, defectors: gameStore.state.defectors?.names ?? null, portraits: {},
+  };
+});
+/** Owner 09-25: DETAILS cache — once the final pane is up, store what the coach sees (7-day retention). */
+function capturePostGame(): void {
+  const snap = liveSnapshot.value;
+  if (!snap) return;
+  const portraits: Record<string, string> = {};
+  for (const team of [snap.game.teamHome, snap.game.teamAway]) {
+    for (const p of team.playerArray) { const url = pgRosterPortrait(p.playerId); if (url) portraits[p.playerId] = url; }
+  }
+  const es = snap.endGameStats;
+  void savePostGameSnapshot({
+    ...snap, savedAt: Date.now(), portraits,
+    game: JSON.parse(JSON.stringify(snap.game)) as typeof snap.game,
+    tallies: JSON.parse(JSON.stringify(snap.tallies)) as typeof snap.tallies,
+    endGameStats: es ? { winningsHome: es.winningsHome, winningsAway: es.winningsAway, dedFans: es.dedFans ? { ...es.dedFans } : null } : null,
+    defectors: snap.defectors ? [...snap.defectors] : null,
+  }).catch((error: unknown) => console.warn('[postGame] cache write failed', error));
+}
+watch(finalPostGameVisible, (on) => { if (on) capturePostGame(); });
 // Owner 09-06: while ANY end-game surface is up (result window / MVP nominate), the log panel and the chat toasts
 // ride ABOVE it (z 57) and stay interactive in every mode — they sat under the full-screen overlay before.
 const endGameFront = computed(() => !!pgSurface.value || mvpScreenActive.value);
@@ -10692,7 +10481,6 @@ watch(endTurnWarnCount, () => { reactivePromptDragPos.endTurnWarn = null; });
 const endTurnUnavailableDuringReaction = computed(() =>
   gameStore.isPlaying.value && !gameStore.canPlayerEndTurn(gameStore.game.value?.turnMode),
 );
-watch(finalPostGameVisible, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
 /** Owner 09-08: the idle own players behind the End-Turn guard, as ids (the cue arrows + count both read this). */
 function unactivatedOwnIds(): string[] {
   const g = gameStore.game.value;
@@ -10923,76 +10711,6 @@ function sendChat() {
         <p class="hint" v-if="gameStore.state.waitingForMatch.teamName">Playing as {{ gameStore.state.waitingForMatch.coach }} with {{ gameStore.state.waitingForMatch.teamName }}.</p>
         <div class="conn-closed-actions">
           <button type="button" @click="gameStore.disconnect()">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Owner 09-17: DICE pane — distributions left, likelihood graphs top right, fun facts bottom right. -->
-    <div v-if="diceModalOpen && finalPostGameVisible" class="pg-dice-modal" role="dialog" aria-modal="true" aria-label="Dice statistics" @click.self="diceModalOpen = false">
-      <div class="pg-dice-card pg-bevel">
-        <header class="pg-dice-head">
-          <span class="pg-title pg-title-sub">Dice</span>
-          <!-- Owner 09-17 (r3): a coach selector in the header picks whose distributions fill the left column;
-               three side-by-side columns squeezed the charts to sparklines, so the pane stays two columns. -->
-          <div class="pg-dice-switch" role="tablist" aria-label="Dice distribution coach">
-            <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'">
-              <img v-if="side.logo" :src="side.logo" alt="" /><span>{{ side.team }}</span>
-            </button>
-          </div>
-          <button type="button" class="pg-dice-close" aria-label="Close dice statistics" @click="diceModalOpen = false">✕</button>
-        </header>
-        <div class="pg-dice-grid">
-          <section class="pg-dice-left">
-            <h3>Dice distribution</h3>
-            <div class="pg-dice-cols pg-dice-cols-charts">
-              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col" :data-side="diceSide">
-                <div v-for="row in side.charts" :key="row.key" class="pg-dice-block">
-                  <h4>{{ row.title }} <span class="pg-dice-n">{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? 'rolls' : 'dice' }}<template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
-                  <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
-                    <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
-                    <path :d="row.chart.expectedPath" class="pg-dice-expected" />
-                    <text v-for="(b, i) in row.chart.bars" :key="'l' + i" :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
-                    <text v-for="(b, i) in row.chart.bars" :key="'c' + i" :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 8, b.y - 3)" class="pg-dice-count">{{ b.count }}</text>
-                  </svg>
-                </div>
-              </div>
-            </div>
-          </section>
-          <div class="pg-dice-right">
-          <section class="pg-dice-right-top">
-            <h3>Likelihood</h3>
-            <div class="pg-dice-cols pg-dice-cols-single">
-              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
-                <div class="pg-dice-block">
-                  <div v-for="row in side.likelihoods" :key="row.label" class="pg-dice-gauge-row">
-                    <span class="pg-dice-gauge-label">{{ row.label }}</span>
-                    <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${pgOdds(row.like)} games ${pgLuck(row.like)} (${pgZ(row.like)})`">
-                      <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
-                      <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
-                      <line v-if="row.like.n > 0" :x1="pgGaugeX(row.like.z)" y1="4" :x2="pgGaugeX(row.like.z)" y2="42" class="pg-dice-marker" />
-                    </svg>
-                    <span class="pg-dice-gauge-value" :title="row.like.n > 0 ? `games ${pgLuck(row.like)} · ${row.like.n} rolls · avg ${row.like.mean.toFixed(2)} · ${pgZ(row.like)}` : 'no rolls'"><b>{{ pgOdds(row.like) }}</b></span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-          <section class="pg-dice-right-bottom">
-            <h3>Fun facts</h3>
-            <div class="pg-dice-cols pg-dice-cols-single">
-              <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
-                <div class="pg-dice-block">
-                  <div v-if="side.facts.length === 0" class="pg-dice-empty">No dice rolled yet.</div>
-                  <div v-for="fact in side.facts" :key="fact.label" class="pg-dice-fact">
-                    <span class="pg-dice-fact-label">{{ fact.label }}</span>
-                    <span class="pg-dice-fact-value">{{ fact.value }}</span>
-                    <span class="pg-dice-fact-detail">{{ fact.detail }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-          </div>
         </div>
       </div>
     </div>
@@ -11779,210 +11497,26 @@ function sendChat() {
         </div>
 
 
-        <!-- B9-12 G7: full post-game panel. Owner 2026-07-06: SPLIT into two stacked
-             windows — the RESULT on top (always shown), Stats/MVP in a separate
-             tabbed window below. -->
-        <!-- Owner 2026-07-08 (queue 1): endGame is EVENT-PACED — the panel waits for
-             gameStore.state.endGameSettled (all pending rolls/animations rendered).
-             The demo reaches endGame outside applyFrame, so it stays instant. -->
-        <!-- Defer postgame results while playerPick is armed so MVP nomination remains usable. -->
-        <!-- Owner 2026-07-15: for the PLAYING coach the unified MVP screen owns the MVP phase; this legacy
-             postgame panel defers to it (!mvpScreenActive) and shows once the coach hits Continue. Spectators
-             (mvpScreenActive false) see it as before, with its own mvpRoll reveal. -->
-        <!-- Owner 08-19: pgSurface also raises this surface EARLY for the spectate seat (MVP-pending) —
-             result card up top, "Players are selecting MVP" where Statistics & MVP will land, and the
-             persistent Return to Menu / Spectate Another Game pair below. -->
-        <div v-if="pgSurface" class="postgame">
-          <!-- Window 1: RESULT (always shown, on top) -->
-          <div class="pg-window pg-window-result">
-            <header class="pg-head">
-              <span class="pg-title">End of Game</span>
-              <!-- Owner 2026-07-15: no manual close — the end-game panel persists over the cleared board until a
-                   NEW game starts (gameOver→false resets postGameDismissed + postGame becomes null). -->
-              <!-- Owner 09-23: Return to Menu moved OFF the header to the exit bar under the tab card (see pg-exit below). -->
-            </header>
-            <section class="pg-result">
-              <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.home }">
-                <img v-if="pgSurface.home.logo" :src="pgSurface.home.logo" alt="" />
-                <div class="pg-team-name">{{ pgSurface.home.team }}</div>
-                <div class="pg-team-coach">{{ pgSurface.home.coach }}</div>
-                <!-- Owner 09-14: winnings + dedicated fans live in a lifted box under the team card; no team name repeated. -->
-                <div v-if="gameStore.state.endGameStats" class="pg-team-box pg-bevel">
-                  <span v-if="gameStore.state.endGameStats.winningsHome != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsHome.toLocaleString() }}g winnings</span>
-                  <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamHome.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollHome" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollHome}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollHome }}</span> → {{ gameStore.state.endGameStats.dedFans.modHome > 0 ? '+' + gameStore.state.endGameStats.dedFans.modHome : gameStore.state.endGameStats.dedFans.modHome }}</span>
-                  <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
-                </div>
-              </div>
-              <!-- Owner 09-15: no verdict line under the score — the winner card's highlight already says it. -->
-              <div class="pg-scoreline pg-bevel" :title="pgSurface.draw ? 'Draw' : `${pgSurface.winner?.team} wins!`">
-                <div class="pg-score">{{ pgSurface.home.score }}<span>–</span>{{ pgSurface.away.score }}</div>
-              </div>
-              <div class="pg-team pg-bevel" :class="{ winner: pgSurface.winner === pgSurface.away }">
-                <img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" alt="" />
-                <div class="pg-team-name">{{ pgSurface.away.team }}</div>
-                <div class="pg-team-coach">{{ pgSurface.away.coach }}</div>
-                <!-- Owner 09-14: winnings + dedicated fans live in a lifted box under the team card; no team name repeated. -->
-                <div v-if="gameStore.state.endGameStats" class="pg-team-box pg-bevel">
-                  <span v-if="gameStore.state.endGameStats.winningsAway != null" class="pg-endstat-gold">{{ gameStore.state.endGameStats.winningsAway.toLocaleString() }}g winnings</span>
-                  <span v-if="gameStore.state.endGameStats.dedFans" class="pg-endstat-fans">Dedicated fans: rolled <D6Face v-if="gameStore.state.endGameStats.dedFans.concededTeamId !== gameStore.game.value?.teamAway.teamId" class="pg-endstat-d6" :value="gameStore.state.endGameStats.dedFans.rollAway" :label="`Rolled ${gameStore.state.endGameStats.dedFans.rollAway}`" /><span v-else>{{ gameStore.state.endGameStats.dedFans.rollAway }}</span> → {{ gameStore.state.endGameStats.dedFans.modAway > 0 ? '+' + gameStore.state.endGameStats.dedFans.modAway : gameStore.state.endGameStats.dedFans.modAway }}</span>
-                  <span v-else class="pg-endstat-fans muted">Dedicated fans unchanged</span>
-                </div>
-              </div>
-            </section>
-            <!-- #169 (owner, last v0.3.9 payload): end-of-match RESULT rows on the persistent end-screen — gold
-                 winnings + the BB2025 dedicated-fans roll per team. state.endGameStats MERGES winnings + dedFans
-                 across separate end reports (Tarkin 131c82a9) and persists here until game-change (like
-                 state.defectors). dedFans is NULL on a DRAW (empty dedicated-fans report) → a "fans unchanged" note. -->
-
-            <!-- #140 (owner concede consequence): the DEFECTORS reveal on the PERSISTENT end-screen (Meero SR-67 DF-1
-                 relocate — ReportDefectingPlayers fires at game-END, after the concede notice can be dismissed, so the
-                 end-screen is the correct surface; state.defectors survives here until game-change). Only when someone
-                 actually defected. Names WHICH players walked (the concede notice named WHO conceded). -->
-            <div v-if="gameStore.state.defectors && gameStore.state.defectors.names.length" class="pg-defectors">
-              <b>{{ gameStore.state.defectors.names.length }}</b> player{{ gameStore.state.defectors.names.length === 1 ? '' : 's' }} defected after the concession:
-              <span class="pg-defector-names">{{ gameStore.state.defectors.names.join(', ') }}</span>
+        <!-- Owner 09-25: the END-OF-GAME pane is components/PostGamePanel.vue (Result window + MVP/Stats/Roster tabs + the
+             Dice overlay), rendered from a PostGameSnapshot: live here, cached on the Play blade's Details popup. The
+             seat-specific exit bar rides in its slot. Gates unchanged: pgSurface raises the surface (spectate seat early,
+             MVP-pending), finalPostGameVisible opens the Stats/MVP window once the server's data settles. -->
+        <PostGamePanel v-if="pgSurface && liveSnapshot" :snapshot="liveSnapshot" :show-stats="finalPostGameVisible" :mvp-roll="mvpRoll"
+          v-model:phase="postGamePhase" :default-roster-side="gameStore.myTeamIsHome.value ? 'home' : 'away'" :portrait-for="pgRosterPortrait"
+          :skill-mode="skillMode" :icon-style="effectiveIconStyle">
+          <template #exit>
+            <!-- Owner 08-19: the spectate seat's exit pair — appears with the MVP stage and REMAINS once the final panel
+                 lands. Routes via the blade shell (never the deprecated legacy browser overlay). -->
+            <div v-if="spectatorExitVisible" class="pg-window pg-exit">
+              <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
+              <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">Spectate Another Game</button>
             </div>
-            <!-- Owner 08-19: #234's Play Game / Spectate Game pair DEPRECATED (it re-opened the legacy
-                 in-game browser overlay OVER the end screen). Non-spectate seats get the confirm-free
-                 Return to Menu here; the spectate seat's pair lives in the persistent exit bar below. -->
-          </div>
-
-          <!-- Window 2: STATS / MVP (tabbed, below) — only once the server's data has landed + settled. -->
-          <div v-if="finalPostGameVisible" class="pg-window pg-window-stats">
-            <!-- Owner 09-15 (3rd): no "Statistics & MVP" title — the tab blades sit centred in the header. -->
-            <header class="pg-head pg-head-tabs">
-              <nav class="pg-tabs">
-                <button :data-active="postGamePhase === 'mvp'" @click="postGamePhase = 'mvp'">MVP</button>
-                <button :data-active="postGamePhase === 'stats'" @click="postGamePhase = 'stats'">Statistics</button>
-                <button :data-active="postGamePhase === 'roster'" @click="postGamePhase = 'roster'">Roster</button>
-                <button :data-active="diceModalOpen" @click="diceModalOpen = true">Dice</button>
-              </nav>
-            </header>
-
-            <!-- Phase: MVP (server-decided award, see postGameSide's `mvps`) -->
-            <section v-if="postGamePhase === 'mvp'" class="pg-mvp">
-              <div v-for="side in [pgSurface.home, pgSurface.away]" :key="side.team" class="pg-mvp-team">
-                <div class="pg-mvp-head">
-                  <img v-if="side.logo" :src="side.logo" alt="" />
-                  <span>{{ side.team }}</span>
-                </div>
-                <!-- #25-v2 (owner 2026-07-14): active reveal. ⚖ the roulette lands on
-                     side.mvps (the SERVER award), never a local pick; §3a fail-open. -->
-                <div v-if="mvpRoll[side.which].phase === 'cycling'" class="pg-mvp-roulette" aria-live="polite">
-                  <span class="pg-star">★</span>
-                  <span class="pg-mvp-name pg-mvp-spin">{{ mvpRoll[side.which].display }}</span>
-                </div>
-                <div v-else-if="side.mvps.length" class="pg-mvp-body">
-                  <ul>
-                    <li v-for="m in side.mvps" :key="m.playerId" class="pg-mvp-row"
-                      :class="{ selected: pgMvpCardList[side.which].some((c) => c.playerId === m.playerId) }" @click="selectPgMvp(side.which, m.playerId)">
-                      <span class="pg-star">★</span>
-                      <span class="pg-mvp-name">{{ m.name }}</span>
-                      <span class="pg-mvp-pos">{{ m.position }}</span>
-                      <span v-if="m.awards > 1" class="pg-mvp-x">×{{ m.awards }}</span>
-                    </li>
-                  </ul>
-                  <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
-                       hands the winner two MVPs and BOTH cards show. -->
-                  <template v-for="card in pgMvpCardList[side.which]" :key="card.playerId">
-                    <div class="pg-mvp-card pg-bevel">
-                      <div class="pg-mvp-portrait card-portrait">
-                        <img v-if="card.portrait" :src="card.portrait" alt="" />
-                        <span v-else class="portrait-missing">no portrait</span>
-                      </div>
-                      <div class="pg-mvp-card-info">
-                        <div class="pg-mvp-card-name" :data-side="side.which">#{{ card.nr }} {{ card.name }}</div>
-                        <div class="pg-mvp-card-pos">{{ card.position }}</div>
-                        <!-- Owner 09-14: SPP on its own line under the position (the one-liner wrapped mid-tag). -->
-                        <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span></div>
-                        <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
-                        <PlayerDetailSkillList v-if="card.skills.length" :skills="card.skills" :mode="skillMode" :icon-style="effectiveIconStyle"
-                          :position-id="card.positionId" :side="side.which" />
-                      </div>
-                    </div>
-                  </template>
-                </div>
-                <p v-else-if="mvpRoll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
-                <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
-              </div>
-            </section>
-
-            <!-- Phase 3: statistics -->
-            <section v-else-if="postGamePhase === 'stats'" class="pg-stats">
-              <!-- Owner 09-14: three lifted columns; the side is read from the header bevel (crest + side edge), not a name. -->
-              <div class="pg-stats-cols">
-                <div class="pg-stat-col pg-bevel" data-side="home">
-                  <div class="pg-stat-col-head"><img v-if="pgSurface.home.logo" :src="pgSurface.home.logo" :alt="pgSurface.home.team" /><span v-else class="pg-stat-col-side">Home</span></div>
-                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-h" :data-lead="row.homeLead">{{ row.home }}</div>
-                </div>
-                <div class="pg-stat-col pg-bevel" data-side="label">
-                  <div class="pg-stat-col-head"></div>
-                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-stat-label">{{ row.label }}</div>
-                </div>
-                <div class="pg-stat-col pg-bevel" data-side="away">
-                  <div class="pg-stat-col-head"><img v-if="pgSurface.away.logo" :src="pgSurface.away.logo" :alt="pgSurface.away.team" /><span v-else class="pg-stat-col-side">Away</span></div>
-                  <div v-for="row in pgStatRows" :key="row.key" class="pg-stat-cell pg-a" :data-lead="row.awayLead">{{ row.away }}</div>
-                </div>
-              </div>
-            </section>
-
-            <!-- Owner 09-17: the DICE pane lives in an overlay (see .pg-dice-modal below the post-game windows). -->
-
-            <!-- #25-v2 (owner 2026-07-14): per-player roster/SPP summary — name · position · SPP-gained this game -->
-            <section v-else class="pg-roster">
-              <!-- #235 (owner-fg 07-29): both team names remain visible as the one-roster-at-a-time selector. -->
-              <div class="pg-roster-team-toggle" role="group" aria-label="Select roster team">
-                <button
-                  v-for="w in (['home', 'away'] as const)"
-                  :key="w"
-                  type="button"
-                  :data-active="selectedRosterTeam === w"
-                  @click="selectedRosterTeam = w"
-                >
-                  <img v-if="pgSurface[w].logo" :src="pgSurface[w].logo" alt="" />
-                  <span>{{ pgSurface[w].team }}</span>
-                </button>
-              </div>
-              <div class="pg-roster-team">
-                <ul v-if="pgSurface[selectedRosterTeam].roster.length" class="pg-roster-list">
-                  <li v-for="pl in pgSurface[selectedRosterTeam].roster" :key="pl.playerId || pl.name">
-                    <!-- Owner 09-15: the player's portrait (the same renderer portrait the MVP card lifts), far left. -->
-                    <span class="pg-roster-nr">#{{ pl.nr }}</span>
-                    <span class="pg-roster-portrait-slot"><img v-if="pgRosterPortrait(pl.playerId)" class="pg-roster-portrait" :src="pgRosterPortrait(pl.playerId)!" alt="" /></span>
-                    <span class="pg-roster-name">{{ pl.name }}</span>
-                    <span class="pg-roster-pos">{{ pl.position }}</span>
-                    <!-- Owner 09-15: added skills in their category colour, no "+" prefix, a step under the name size. -->
-                    <span v-if="pl.addedSkillList.length" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">
-                      <span v-for="skill in pl.addedSkillList" :key="skill.name" class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)">{{ skill.label }}</span>
-                    </span>
-                    <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
-                  </li>
-                </ul>
-                <p v-else class="pg-mvp-none">No player records</p>
-              </div>
-            </section>
-          </div>
-
-          <!-- Owner 08-19: spectate-seat MVP-PENDING placeholder — sits exactly where the
-               Statistics & MVP window will land; swaps for it when the server's data arrives
-               (finalPresentationReady + settle beat — model-keyed, no timers). -->
-          <div v-else class="pg-window pg-mvp-pending" role="status" aria-live="polite">
-            <span class="pg-mvp-pending-dot" aria-hidden="true"></span>
-            <span>Players are selecting MVP</span>
-          </div>
-
-          <!-- Owner 08-19: the spectate seat's exit pair — appears with the MVP stage and
-               REMAINS once the final panel lands. Routes via the blade shell (never the
-               deprecated legacy browser overlay). -->
-          <div v-if="spectatorExitVisible" class="pg-window pg-exit">
-            <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
-            <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">Spectate Another Game</button>
-          </div>
-          <!-- Owner 09-23: the play seat's Return to Menu sits centred under the tab card (was header-right since 09-15). -->
-          <div v-else-if="mode !== 'spectate'" class="pg-window pg-exit">
-            <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
-          </div>
-        </div>
+            <!-- Owner 09-23: the play seat's Return to Menu sits centred under the tab card (was header-right since 09-15). -->
+            <div v-else-if="mode !== 'spectate'" class="pg-window pg-exit">
+              <button type="button" class="pg-action" @click="onEndGameExit('menu')">Return to Menu</button>
+            </div>
+          </template>
+        </PostGamePanel>
 
         <!-- Owner 2026-07-06: DODGY SNACK — each coach's d6 thrown from a side
              (home north / away south); the lower-rolling team's
@@ -12036,6 +11570,10 @@ function sendChat() {
           <!-- Event name only when there is NO FUMBBL banner (it would otherwise
                duplicate the banner text). Rendered large for Weather Change. -->
           <div v-else class="ko-name-big">{{ gameStore.state.kickoffCine.result }}</div>
+          <!-- Owner 09-24: the result under the banner — "<Team> wins" / the acting team — in that side's colour. -->
+          <div v-if="gameStore.state.kickoffCine.outcome" class="ko-outcome" :data-side="gameStore.state.kickoffCine.outcome.side">
+            {{ gameStore.state.kickoffCine.outcome.text }}
+          </div>
         </div>
 
         <!-- Owner 2026-07-08: click-to-SKIP the pregame splashes (coin/weather/fans/kickoff)
@@ -12800,7 +12338,6 @@ function sendChat() {
             <div v-if="mvpPick" :key="'mvp-round-' + mvpRoundKey" class="mvp-nominate-round">
               <div class="mvp-nominate-head">
                 <span class="mvp-nominate-title">{{ mvpPick.prompt }}</span>
-                <span class="mvp-nominate-count">{{ mvpPick.picked.length }}/{{ mvpPick.maxPicks }}</span>
               </div>
               <ul class="mvp-nominate-list">
                 <li v-for="row in mvpRoster" :key="row.id" class="mvp-nominate-row"
@@ -12818,6 +12355,8 @@ function sendChat() {
                 </li>
               </ul>
               <div class="mvp-nominate-foot">
+                <!-- Owner 09-25: the picked/needed counter sits beside the Nominate button at twice its old size. -->
+                <span class="mvp-nominate-count" aria-live="polite" :data-complete="mvpPick.picked.length >= mvpPick.maxPicks">{{ mvpPick.picked.length }}/{{ mvpPick.maxPicks }}</span>
                 <button class="mvp-nominate-confirm"
                   :disabled="mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
                   @click="gameStore.confirmPlayerPick()">Nominate MVP's</button>
@@ -14925,7 +14464,8 @@ function sendChat() {
 }
 .mvp-nominate-logo { width: 24px; height: 24px; object-fit: contain; }
 .mvp-nominate-title { font-weight: 700; color: var(--ui-heading); }
-.mvp-nominate-count { margin-left: auto; font-weight: 700; color: var(--ui-accent); font-variant-numeric: tabular-nums; }
+.mvp-nominate-count { font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); line-height: 1; color: var(--ui-accent); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; text-shadow: 2px 2px 0 #000; } /* owner 09-25: 2x, in the footer beside Nominate */
+.mvp-nominate-count[data-complete='true'] { color: var(--ui-success); }
 /* Roster scrolls INSIDE its own box (wide-content-scrolls-in-place discipline) — flex:1/min-height:0 lets it
    shrink to the round's available space, max-height is a relative-unit backstop for small windows; the
    confirm button in .mvp-nominate-foot (below, flex:0 0 auto) stays pinned and always reachable. */
@@ -14950,7 +14490,7 @@ function sendChat() {
 .mvp-nominate-spp { justify-self: end; color: var(--ui-text); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .mvp-nominate-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
 .mvp-nominate-spp-gain { color: var(--ui-success); font-size: max(var(--ui-min-text-size, 12px), 0.85em); }
-.mvp-nominate-foot { padding: 12px 18px; border-top: 1px solid var(--ui-border); display: flex; justify-content: flex-end; flex: 0 0 auto; }
+.mvp-nominate-foot { padding: 12px 18px; border-top: 1px solid var(--ui-border); display: flex; align-items: center; justify-content: flex-end; gap: 18px; flex: 0 0 auto; }
 .mvp-nominate-confirm {
   padding: 8px 18px; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;
   background: var(--ui-accent); color: var(--ui-text-on-accent);
@@ -15253,6 +14793,21 @@ function sendChat() {
   0% { transform: scale(0.8) translateY(18px); opacity: 0; }
   100% { transform: scale(1) translateY(0); opacity: 1; }
 }
+/* Owner 09-24: the kick-off result line — same rise as the banner, a beat later, in the side's colour. */
+.ko-outcome {
+  margin-top: -6px;
+  font-size: max(var(--ui-min-primary-text-size, 16px), 1.7rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ui-heading);
+  text-shadow: 0 3px 14px #000f, 0 0 22px #0009;
+  transform: scale(0.85);
+  opacity: 0;
+  animation: ko-splash-in var(--p-550) cubic-bezier(0.2, 0.9, 0.3, 1.2) var(--p-300) forwards;
+}
+.ko-outcome[data-side='home'] { color: #6d9bff; text-shadow: 0 3px 14px #000f, 0 0 22px #3d7cff66; }
+.ko-outcome[data-side='away'] { color: #ff7a7e; text-shadow: 0 3px 14px #000f, 0 0 22px #f2363c66; }
 /* Weather Change (no FUMBBL banner) — the event name rendered large. */
 .ko-name-big {
   font-size: max(var(--ui-min-primary-text-size, 16px), 3.4rem);

@@ -22,6 +22,14 @@ const iconContext = computed(() => ({ positionId: props.positionId, side: props.
 function iconUrl(skill: string): string {
   return reactiveSkillIconUrl(skill, props.iconStyle, iconContext.value);
 }
+/** Owner 09-24: the chip draws from the 128 px MASTER at 1/3 (≈43 px) — the whole divisor nearest to +30% over the
+ *  old ~31 px chip; a 48 px pack/bundled fallback keeps its pixel look. */
+function chipIcon(skill: string): { url: string; size: 48 | 128 } | null {
+  const url = iconUrl(skill);
+  if (!url) return null;
+  if (props.iconStyle !== 'bb3') return { url, size: 48 }; // the bb2 family has no 128 px masters — keep its own art
+  return reactiveSkillIconLarge(skill, iconContext.value);
+}
 
 // Owner 09-09: the tooltip draws the family's 128 px master 1:1 ("scale from source"); a pack icon or status icon
 // (48 px only) falls back to an exact 2x so nothing is resampled at a fraction.
@@ -77,7 +85,7 @@ function hideTip(): void { tip.skill = null; }
       @pointerenter="showTip(skill, $event)" @focus="showTip(skill, $event)"
       @pointerleave="hideTip" @blur="hideTip">
       <template v-if="mode === 'icons'">
-        <img v-if="iconUrl(skill.name)" :src="iconUrl(skill.name)" :alt="skill.label" />
+        <img v-if="chipIcon(skill.name)" :src="chipIcon(skill.name)!.url" :class="{ 'chip-master': chipIcon(skill.name)!.size === 128 }" :alt="skill.label" />
         <span v-else class="skill-initials">{{ initials(skill.name) }}</span>
       </template>
       <span v-else class="skill-text">{{ skill.label }}</span>
@@ -110,8 +118,8 @@ function hideTip(): void { tip.skill = null; }
 .skill-chip {
   position: relative;
   box-sizing: border-box;
-  width: 2.4em; /* owner 09-09: chips read small on the tightened card */
-  height: 2.4em;
+  width: 48px; /* owner 09-24: sized to the 128 px master at 1/3 (43 px) + frame; was 2.4em (~36 px) */
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -121,7 +129,8 @@ function hideTip(): void { tip.skill = null; }
   cursor: help;
 }
 .skill-chip:hover, .skill-chip:focus-visible { border-color: var(--ui-accent); outline: none; }
-.skill-chip img { width: 2.05em; height: 2.05em; image-rendering: pixelated; }
+.skill-chip img { width: 42.67px; height: 42.67px; image-rendering: pixelated; }
+.skill-chip img.chip-master { image-rendering: auto; } /* a minified illustration: smooth, not decimated */
 .skill-initials { font-size: max(var(--ui-min-text-size, 12px), 0.87em); font-weight: bold; color: var(--ui-text); }
 .skill-chip[data-display='markings'] {
   width: auto;

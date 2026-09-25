@@ -55,3 +55,34 @@ export function kickoffBannerPalette(
 
   return null;
 }
+
+/** Owner 09-24: the result line under the kick-off banner — "<Team> wins" for the winner events, the acting team's
+ *  verb for the seat-aware ones, coloured by side. `neutral` covers a Brilliant Coaching / Cheering Fans tie. */
+export interface KickoffOutcome { side: 'home' | 'away' | 'neutral'; text: string }
+
+const SEAT_VERBS: Record<string, string> = {
+  blitz: 'blitzes!', charge: 'charges!', quicksnap: 'quick snaps', soliddefence: 'sets a solid defence', highkick: 'takes the high kick',
+};
+
+export function kickoffOutcome(
+  name: string,
+  palette: KickoffBannerPalette,
+  reports: Record<string, unknown>[],
+  game: Pick<GameJson, 'teamHome' | 'teamAway'>,
+): KickoffOutcome | null {
+  if (!palette) return null;
+  const key = normalizeKickoffName(name);
+  const teamName = (side: 'home' | 'away') => String((side === 'home' ? game.teamHome : game.teamAway)?.teamName ?? '').trim() || (side === 'home' ? 'Home' : 'Away');
+  if (key === 'brilliantcoaching' || key === 'cheeringfans') {
+    if (palette === 'neutral') {
+      const both = key === 'brilliantcoaching'
+        ? reports.some((r) => String(r.reportId ?? '') === 'extraReRoll' && r.homeGainsReRoll === true && r.awayGainsReRoll === true)
+        : reports.some((r) => String(r.reportId ?? '') === 'cheeringFans' && Array.isArray(r.teamIdsAdditionalAssist) && r.teamIdsAdditionalAssist.length >= 2);
+      return { side: 'neutral', text: both ? 'Both teams win' : 'No winner' };
+    }
+    return { side: palette, text: `${teamName(palette)} wins` };
+  }
+  const verb = SEAT_VERBS[key];
+  if (!verb || palette === 'neutral') return null;
+  return { side: palette, text: `${teamName(palette)} ${verb}` };
+}

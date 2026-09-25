@@ -19,6 +19,11 @@ export interface FumbblRecentMatch {
   opponentCoach: string;
   opponentScore: number;
   division?: string;
+  /** Owner 09-25: races (FUMBBL `roster`) + team values for the Play blade's crests and coach·TV lines. */
+  myRace?: string;
+  opponentRace?: string;
+  myTv?: number;
+  opponentTv?: number;
 }
 
 type FetchLike = (input: string) => Promise<Response>;
@@ -48,6 +53,10 @@ export function parseTeamMatches(payload: unknown, teamId: number): FumbblRecent
       opponentCoach: String(coach?.name ?? ''),
       opponentScore: Number(theirs.score ?? 0) || 0,
       division: typeof m.division === 'string' ? m.division : undefined,
+      myRace: typeof mine.roster === 'string' ? mine.roster : undefined,
+      opponentRace: typeof theirs.roster === 'string' ? theirs.roster : undefined,
+      myTv: Number(mine.teamValue) > 0 ? Number(mine.teamValue) : undefined,
+      opponentTv: Number(theirs.teamValue) > 0 ? Number(theirs.teamValue) : undefined,
     });
   }
   return rows;

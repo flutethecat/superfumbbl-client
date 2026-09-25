@@ -90,6 +90,9 @@ declare const __APP_VERSION__: string;
 declare const __GIT_SHA__: string;
 const appVersion = __APP_VERSION__;
 const gitSha = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'nogit';
+// Owner 09-25: declared BEFORE the immediate watchers below — the Discord presence watcher ran at setup, hit the
+// const in its temporal dead zone (ReferenceError) and presence never pushed (live 09-25 on the dev rig).
+const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 // ORDER 66 (A.2): a port-branch build (0.2.8-o66a…) — surfaces the order66 toggle without needing -dev.
 const isO66Build = appVersion.includes('o66');
 // Owner 09-23: version check — at startup ask GitHub for the latest public release; when it is newer than this
@@ -532,8 +535,8 @@ const twitchChannelUrl = 'https://twitch.tv/flutethecat';
 // Owner 2026-07-03: in the packaged build the webview origin is `tauri.localhost`,
 // which Twitch REJECTS as an embed `parent` — so the player iframe is broken there.
 // Show the live embed only on the web/dev origin; the desktop build gets a clickable
-// "Watch on Twitch" card that opens the channel in the system browser instead.
-const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+// "Watch on Twitch" card that opens the channel in the system browser instead. (inTauri itself is declared
+// at the top of the script — owner 09-25: the presence watcher reads it during setup.)
 /** Open an external URL in the system browser (Tauri opener plugin; window.open on
  *  the web). External links don't navigate/embed inside the packaged webview. */
 async function openExternal(url: string): Promise<void> {
@@ -2002,6 +2005,13 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <input v-model="settings.showStadium" type="checkbox" />
               <span>Stadium</span>
+            </label>
+            <label class="row">
+              <span>Stadium stands</span>
+              <select v-model="settings.stadiumStands" :disabled="!settings.showStadium">
+                <option value="crowd">Baked crowd tiles (new)</option>
+                <option value="classic">Classic seats + fans</option>
+              </select>
             </label>
             <label class="row">
               <span>Tileset (turf)</span>
