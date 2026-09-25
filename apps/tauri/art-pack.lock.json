@@ -1,43 +1,189 @@
 {
-  "acasas-weather@e55cf175e76c35cd": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/acasas-weather-e55cf175.zip",
-  "acasas-weather-fx@4a101210e80a418d": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/acasas-weather-fx-4a101210.zip",
-  "blockdice@fcb327d34d1d3370": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/blockdice-fcb327d3.zip",
-  "d6@87c1ac7bac7ac725": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/d6-87c1ac7b.zip",
-  "decorations@d3de1dece87f479b": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/decorations-d3de1dec.zip",
-  "default-weather@416b4b51eb1a5f19": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/default-weather-416b4b51.zip",
-  "skill-badges-illustrated@0b3b4814dcfedd39": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/skill-badges-illustrated-0b3b4814.zip",
-  "status@700475790c99aee9": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/status-70047579.zip",
-  "walk/amazon@e62773269c306b35": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-amazon-e6277326.zip",
-  "walk/blackorc@eb5dbc4929bff9ca": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-blackorc-eb5dbc49.zip",
-  "walk/bretonnian@04c09f3a30d49730": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-bretonnian-04c09f3a.zip",
-  "walk/chaoschosen@062554d533c859cc": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaoschosen-062554d5.zip",
-  "walk/chaosdwarf@6ac06ef4fdf68e5e": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaosdwarf-6ac06ef4.zip",
-  "walk/chaosrenegade@70b112ca8c85ca85": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaosrenegade-70b112ca.zip",
-  "walk/darkelf@08e0fd09e79bed1b": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-darkelf-08e0fd09.zip",
-  "walk/dwarf@3b6c4919efabb91b": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-dwarf-3b6c4919.zip",
-  "walk/elvenunion@61ab3ed252d095d6": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-elvenunion-61ab3ed2.zip",
-  "walk/gnome@93be58c7697871a7": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-gnome-93be58c7.zip",
-  "walk/goblin@dd71e380e5a5dce1": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-goblin-dd71e380.zip",
-  "walk/halfling@cf2567fdf53b3ce3": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-halfling-cf2567fd.zip",
-  "walk/highelf@27921518a851c348": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-highelf-27921518.zip",
-  "walk/human@3d0c884773ea5999": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-human-3d0c8847.zip",
-  "walk/imperialnobility@dbb1deadde878a10": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-imperialnobility-dbb1dead.zip",
-  "walk/khorne@bc9247ec33a4cc96": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-khorne-bc9247ec.zip",
-  "walk/lizardmen@b24ea2f804685161": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-lizardmen-b24ea2f8.zip",
-  "walk/necromantichorror@991d333c3902b9e9": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-necromantichorror-991d333c.zip",
-  "walk/norse@3840af2255c9f440": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-norse-3840af22.zip",
-  "walk/nurgle@e0c78e925b6c81c2": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-nurgle-e0c78e92.zip",
-  "walk/ogre@2a7d8bfcf33138a6": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-ogre-2a7d8bfc.zip",
-  "walk/oldworldalliance@76476b2d2f2b7358": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-oldworldalliance-76476b2d.zip",
-  "walk/orc@1aa13d9292151611": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-orc-1aa13d92.zip",
-  "walk/shamblingundead@4817dacbfb643951": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-shamblingundead-4817dacb.zip",
-  "walk/skaven@123b4731fee7f0ce": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-skaven-123b4731.zip",
-  "walk/slann@9a907fabfc6bc814": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-slann-9a907fab.zip",
-  "walk/snotling@adceff5bad5ee61b": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-snotling-adceff5b.zip",
-  "walk/stars@4ef92539d35d44e2": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-stars-4ef92539.zip",
-  "walk/tombkings@6af072f01cd5c41c": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-tombkings-6af072f0.zip",
-  "walk/underworlddenizens@c421d7162eb1554e": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-underworlddenizens-c421d716.zip",
-  "walk/vampire@92e235f7145510dc": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-vampire-92e235f7.zip",
-  "walk/woodelf@ebce604eba1ba88d": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-woodelf-ebce604e.zip",
-  "walk/tombkings@29740fb814ec79ba": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-tombkings-29740fb8.zip"
+  "acasas-weather@e55cf175e76c35cd": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/acasas-weather-e55cf175.zip"
+  },
+  "acasas-weather-fx@4a101210e80a418d": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/acasas-weather-fx-4a101210.zip"
+  },
+  "blockdice@fcb327d34d1d3370": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/blockdice-fcb327d3.zip"
+  },
+  "d6@87c1ac7bac7ac725": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/d6-87c1ac7b.zip"
+  },
+  "decorations@d3de1dece87f479b": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/decorations-d3de1dec.zip"
+  },
+  "default-weather@416b4b51eb1a5f19": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/default-weather-416b4b51.zip"
+  },
+  "skill-badges-illustrated@0b3b4814dcfedd39": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/skill-badges-illustrated-0b3b4814.zip"
+  },
+  "status@700475790c99aee9": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/status-70047579.zip"
+  },
+  "walk/amazon@e62773269c306b35": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-amazon-e6277326.zip",
+    "size": 2893056,
+    "sha256": "9ec4dc92c404fee6fb2eb70b3d30a473fb5559c7c85acd533d2ea86e6df62712"
+  },
+  "walk/blackorc@eb5dbc4929bff9ca": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-blackorc-eb5dbc49.zip",
+    "size": 3009236,
+    "sha256": "3b7400f6b4173e655ed697bea5decc9c6e844cf7c95f8d145e9a1fcb9a36e366"
+  },
+  "walk/bretonnian@04c09f3a30d49730": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-bretonnian-04c09f3a.zip",
+    "size": 2755602,
+    "sha256": "c2578d1dffa21289b2733bbab6c906a8fcb1ed0fe985f2e18a635f47dafff9a7"
+  },
+  "walk/chaoschosen@062554d533c859cc": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaoschosen-062554d5.zip",
+    "size": 6025990,
+    "sha256": "2d4c9ee3da37842c93bc54e709cd63c653909f3875d1d000ddbfc856b2bfd52c"
+  },
+  "walk/chaosdwarf@6ac06ef4fdf68e5e": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaosdwarf-6ac06ef4.zip",
+    "size": 4796561,
+    "sha256": "7894f4d972d4f70c7a97c5b84cb68bc4258b8451c6a75f04c29e35d5decdcfe8"
+  },
+  "walk/chaosrenegade@70b112ca8c85ca85": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-chaosrenegade-70b112ca.zip",
+    "size": 6887270,
+    "sha256": "890dc1d952df15a0b93076a1bd48446b666b4c732185e0e9befaf2597d456846"
+  },
+  "walk/darkelf@08e0fd09e79bed1b": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-darkelf-08e0fd09.zip",
+    "size": 3422653,
+    "sha256": "4aa81311498c83c823733e5c73bf1e155050f6e25e3595d432c6f578be577ec6"
+  },
+  "walk/dwarf@3b6c4919efabb91b": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-dwarf-3b6c4919.zip",
+    "size": 3719427,
+    "sha256": "2f940d3ec35916314d1f2c37e6f6440c2d9f5d735a7430fcf6127aefc5a007c3"
+  },
+  "walk/elvenunion@61ab3ed252d095d6": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-elvenunion-61ab3ed2.zip",
+    "size": 3326163,
+    "sha256": "4cb109ef401ca787ba660a5a5eabd7c9406b117ca4f547f57d7eec771d861d0b"
+  },
+  "walk/gnome@93be58c7697871a7": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-gnome-93be58c7.zip",
+    "size": 3736018,
+    "sha256": "03345b8ef3606bda4bb54aeebac0f3386840fa209bd16dfc7c3339de33de27c8"
+  },
+  "walk/goblin@dd71e380e5a5dce1": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-goblin-dd71e380.zip",
+    "size": 5809288,
+    "sha256": "150019c73ba9e749c6c041ae9c2b16775fb3e8efd74e424db5d4a98141b94758"
+  },
+  "walk/halfling@cf2567fdf53b3ce3": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-halfling-cf2567fd.zip",
+    "size": 1665899,
+    "sha256": "3d71144c0da8cf4e3e230752a5359ab908cc19fb6221103ab5b22fea8c1585fa"
+  },
+  "walk/highelf@27921518a851c348": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-highelf-27921518.zip",
+    "size": 2889889,
+    "sha256": "c5953e8fe053cf830b2606dcac6f177aa39caff50806af41561e149f7ef1fed6"
+  },
+  "walk/human@3d0c884773ea5999": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-human-3d0c8847.zip",
+    "size": 4485538,
+    "sha256": "949e17d2eead574c0ec6fe428d0fed70125c5d573bff68ed644b18f04657a111"
+  },
+  "walk/imperialnobility@dbb1deadde878a10": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-imperialnobility-dbb1dead.zip",
+    "size": 4898875,
+    "sha256": "5b61dee0ca25258b6b98ad4288abc3e28199d540bf9b6a8e7227aeeb9f5320b1"
+  },
+  "walk/khorne@bc9247ec33a4cc96": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-khorne-bc9247ec.zip",
+    "size": 4313274,
+    "sha256": "c2d80b2cf4343f7c8b91712a6d6a46834b5fd1e70d0cefaf64c64be9958c87ce"
+  },
+  "walk/lizardmen@b24ea2f804685161": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-lizardmen-b24ea2f8.zip",
+    "size": 4053917,
+    "sha256": "50256e85daa67ebe566c02080c007a5aba6ab342977bef5b323e8e0d7332402f"
+  },
+  "walk/necromantichorror@991d333c3902b9e9": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-necromantichorror-991d333c.zip",
+    "size": 4007666,
+    "sha256": "ca3261e680a788990140e0a0ff42a4e51ad62bafd40cd70f332b1c031249fdc7"
+  },
+  "walk/norse@3840af2255c9f440": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-norse-3840af22.zip",
+    "size": 4980107,
+    "sha256": "b7eea708bf26bf29f0358ac6f6e2d92fe95e5dfc302246993d6da2530fe635f3"
+  },
+  "walk/nurgle@e0c78e925b6c81c2": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-nurgle-e0c78e92.zip",
+    "size": 4462475,
+    "sha256": "244cae306d3741f11f3c336f0a279dfc6c94cfd7e5b8341177201438644ee9c3"
+  },
+  "walk/ogre@2a7d8bfcf33138a6": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-ogre-2a7d8bfc.zip",
+    "size": 1860727,
+    "sha256": "6ab41813e944c879ac79ada6eeb8440ebaf6aacd29790ea5bffe48c58dfefd53"
+  },
+  "walk/oldworldalliance@76476b2d2f2b7358": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-oldworldalliance-76476b2d.zip",
+    "size": 4698529,
+    "sha256": "6ff13478bb1d3d48b3272e9741eabc2602c3c9ca6976eab13fdc5c238a05649e"
+  },
+  "walk/orc@1aa13d9292151611": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-orc-1aa13d92.zip",
+    "size": 4671741,
+    "sha256": "80e6176af6d23956d040ed3a920be8cffcfdcdc4fa8ac701125f7eae02163e8a"
+  },
+  "walk/shamblingundead@4817dacbfb643951": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-shamblingundead-4817dacb.zip",
+    "size": 3746332,
+    "sha256": "29d5a280ee5cde7534b8ac852b779611ca29274757176285c3e869a5e5f36fd6"
+  },
+  "walk/skaven@123b4731fee7f0ce": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-skaven-123b4731.zip",
+    "size": 4048966,
+    "sha256": "5eba12a15ec39e4e96723185a3f98a2cdba187c010093667b2e109d134066701"
+  },
+  "walk/slann@9a907fabfc6bc814": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-slann-9a907fab.zip",
+    "size": 3680051,
+    "sha256": "5ab4705eef5480086c97c0ef1ba1a261cb55bd8f8fcb9edd2b3364c2a1688c7a"
+  },
+  "walk/snotling@adceff5bad5ee61b": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-snotling-adceff5b.zip",
+    "size": 3505322,
+    "sha256": "be00096bd0b74441e0f61a67e97237b2ed51b1e266e7e1910e52db2ce12e07ea"
+  },
+  "walk/stars@4ef92539d35d44e2": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-stars-4ef92539.zip",
+    "size": 64586778,
+    "sha256": "0b341db53b8271324d0ea434ed28fac8ec6e2d3fce3ba416dde3fe06150a9ac2"
+  },
+  "walk/tombkings@6af072f01cd5c41c": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-tombkings-6af072f0.zip"
+  },
+  "walk/underworlddenizens@c421d7162eb1554e": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-underworlddenizens-c421d716.zip",
+    "size": 3826807,
+    "sha256": "949a868e31905432a1340e0359e08020eee92a2e62bdd6a405364720888bfe15"
+  },
+  "walk/vampire@92e235f7145510dc": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-vampire-92e235f7.zip",
+    "size": 4289413,
+    "sha256": "a17d866721fa312a7c738823ee906ea8b1bfe345d6e82b76bc3613db5a64d1ea"
+  },
+  "walk/woodelf@ebce604eba1ba88d": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-woodelf-ebce604e.zip",
+    "size": 4671521,
+    "sha256": "27b616aeed967e001be12c716b2e59cfa0f1c17e437cc800d3ae672ef8b591d2"
+  },
+  "walk/tombkings@29740fb814ec79ba": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-tombkings-29740fb8.zip",
+    "size": 3507803,
+    "sha256": "34b01a7c4980d585aac7cca8a0e2aef5584a1c0027a8791e9aacff5202004d3f"
+  }
 }

@@ -47,6 +47,25 @@ export const MIN_PART_BYTES = 1_000_000;
 /** Owner 09-24: only the walk sprite sheets travel in the pack; stadium, weather, decorations, badges, dice stay bundled. */
 export const PACK_GROUPS = /^walk\//;
 
+/** Owner 09-25 (live, first public 1.0.21 install: "part walk/amazon: sha256 mismatch"): the part zips carried the
+ *  BUILD TIME in their entries, so re-zipping identical art gave a different sha256 with the same name and size —
+ *  the publisher's size check called the hosted zip "already on the release" while the installer's manifest
+ *  expected the new bytes. Parts are now zipped deterministically (fixed mtime, name-sorted entries, stored) and
+ *  the lock pins the published size + sha256 so every later build (local or hosted) describes the hosted bytes. */
+export const ART_PACK_ZIP_MTIME = new Date(Date.UTC(2020, 0, 1));
+export function zipPart(files: { name: string; bytes: Uint8Array }[]): Uint8Array {
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  return zipSync(Object.fromEntries(sorted.map((f) => [f.name, f.bytes])), { level: 0, mtime: ART_PACK_ZIP_MTIME }); // PNGs are already compressed
+}
+export interface ArtPackLockEntry { url: string; size?: number; sha256?: string }
+/** The lock: `group@hash` → where the part is published (+ the published bytes' size/sha256 once known). Older locks
+ *  stored the bare URL string. */
+export function readArtPackLock(file: string): Record<string, ArtPackLockEntry> {
+  if (!existsSync(file)) return {};
+  const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, string | ArtPackLockEntry>;
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? { url: v } : v]));
+}
+
 export function artPackPlugin(opts: { split: boolean; version: string; publicRepo: string; lockFile: string; outDir: string; minPartBytes?: number; packGroups?: RegExp }): Plugin {
   return {
     name: 'super-fumbbl-art-pack',
@@ -63,7 +82,7 @@ export function artPackPlugin(opts: { split: boolean; version: string; publicRep
         (groups.get(group) ?? groups.set(group, []).get(group)!).push({ name: out.fileName.replace(/^assets\//, ''), bytes });
         owned.set(key, group);
       }
-      const lock: Record<string, string> = existsSync(opts.lockFile) ? JSON.parse(readFileSync(opts.lockFile, 'utf8')) : {};
+      const lock = readArtPackLock(opts.lockFile);
       const parts: ArtPackPart[] = [];
       if (opts.split) mkdirSync(opts.outDir, { recursive: true });
       const minBytes = opts.minPartBytes ?? MIN_PART_BYTES;
@@ -71,14 +90,25 @@ export function artPackPlugin(opts: { split: boolean; version: string; publicRep
         const bytes = files.reduce((n, f) => n + f.bytes.byteLength, 0);
         if (bytes < minBytes) { for (const [key, g] of owned) if (g === group) owned.delete(key); continue; } // stays bundled
         const hash = partHash(files);
-        const url = lock[`${group}@${hash}`] ?? artPackPartUrl(opts.publicRepo, opts.version, group, hash);
-        lock[`${group}@${hash}`] = url;
+        const key = `${group}@${hash}`;
+        const entry = lock[key] ?? { url: artPackPartUrl(opts.publicRepo, opts.version, group, hash) };
+        const url = entry.url;
         let size = 0, sha256 = '';
         if (opts.split) {
-          const zip = zipSync(Object.fromEntries(files.map((f) => [f.name, f.bytes])), { level: 0 }); // PNGs are already compressed
-          size = zip.byteLength; sha256 = createHash('sha256').update(zip).digest('hex');
+          const zip = zipPart(files);
+          const zipSha = createHash('sha256').update(zip).digest('hex');
           writeFileSync(resolve(opts.outDir, `${group.replace('/', '-')}-${hash.slice(0, 8)}.zip`), zip);
+          if (entry.sha256 && entry.size) {
+            // the published bytes are the truth the client verifies against; a differing local zip is only a warning
+            // (the publisher re-checks the hosted sha256 and re-uploads when the lock is what changed)
+            size = entry.size; sha256 = entry.sha256;
+            if (zipSha !== entry.sha256) console.warn(`[art-pack] ${key}: local zip sha256 ${zipSha.slice(0, 8)} differs from the lock's published ${entry.sha256.slice(0, 8)} — manifest keeps the published bytes`);
+          } else {
+            size = zip.byteLength; sha256 = zipSha;
+            lock[key] = { url, size, sha256 };
+          }
         }
+        if (!lock[key]) lock[key] = entry;
         parts.push({ group, hash, size, sha256, url, files: files.map((f) => ({ name: f.name, size: f.bytes.byteLength })).sort((a, b) => a.name.localeCompare(b.name)) });
       }
       if (opts.split) {
