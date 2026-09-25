@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
@@ -65,13 +65,11 @@ let previewLoad = 0;
 const activeGames = ref<FumbblActiveGame[]>([]);
 const activeError = ref('');
 const activeLoading = ref(false);
-const ACTIVE_POLL_MS = 45_000;
-let activePoll: ReturnType<typeof setInterval> | null = null;
 async function refreshActive(): Promise<void> {
   if (!coach.value) { activeGames.value = []; return; }
   activeLoading.value = true;
   try {
-    const res = await fetch(`${FUMBBL_SITE}/api/match/current`);
+    const res = await (inTauri ? (tauriFetch as typeof fetch) : fetch)(`${FUMBBL_SITE}/api/match/current`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     activeGames.value = parseActiveGames(await res.json(), coach.value);
     activeError.value = '';
@@ -101,11 +99,6 @@ watch(fumbblLobbyState, (state) => {
     fumbblJoinLoaded(game.id, toBrowserMatch(game));
   } else if (state === 'idle' || state === 'closed') pendingResume.value = null;
 });
-function openLobby(): void {
-  if (!canResume.value) return;
-  applyServerTarget('fumbbl');
-  stageFumbblPasswordLobby(coach.value, settings.password);
-}
 
 // ---- My Recent Games ----
 const recent = ref<FumbblRecentMatch[]>([]);
@@ -146,11 +139,8 @@ async function openDetails(row: FumbblRecentMatch): Promise<void> {
 function closeDetails(): void { detailsRow.value = null; detailsSnapshot.value = null; }
 function onDetailsKey(event: KeyboardEvent): void { if (event.key === 'Escape') closeDetails(); }
 
-onMounted(() => {
-  void refreshActive(); void refreshRecent(); void refreshDetailsKeys();
-  activePoll = setInterval(() => void refreshActive(), ACTIVE_POLL_MS);
-});
-onUnmounted(() => { if (activePoll) clearInterval(activePoll); activePoll = null; });
+// Owner 09-25: no auto-refresh — the Refresh button re-queries on demand.
+onMounted(() => { void refreshActive(); void refreshRecent(); void refreshDetailsKeys(); });
 watch(coach, () => { void refreshActive(); void refreshRecent(); });
 
 // ---- Loaded JNLP card ----
@@ -329,7 +319,11 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
 
     <div class="play-body">
       <section class="card list-card active-card" aria-labelledby="active-title">
-        <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
+        <div class="card-head">
+          <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
+          <!-- Owner 09-25: Refresh sits top-right of the card, in line with the title. -->
+          <button v-if="coach" class="bevel small" type="button" :disabled="activeLoading" @click="refreshActive">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
+        </div>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings to see your games here.</p>
 
         <template v-if="fumbblLobby">
@@ -417,7 +411,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
             <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.home.name) }}</span>
             <span class="row-text">
               <strong class="row-name">{{ game.home.name }}</strong>
-              <small class="row-meta">{{ game.home.coach }}</small>
+              <small class="row-meta row-coach">{{ game.home.coach }}</small>
               <small v-if="formatTeamValue(game.home.tv)" class="row-meta">{{ formatTeamValue(game.home.tv) }}</small>
             </span>
           </div>
@@ -430,7 +424,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
             <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.away.name) }}</span>
             <span class="row-text">
               <strong class="row-name">{{ game.away.name }}</strong>
-              <small class="row-meta">{{ game.away.coach }}</small>
+              <small class="row-meta row-coach">{{ game.away.coach }}</small>
               <small v-if="formatTeamValue(game.away.tv)" class="row-meta">{{ formatTeamValue(game.away.tv) }}</small>
             </span>
           </div>
@@ -445,10 +439,8 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
 
         <p v-if="activeError" class="load-error" role="alert">{{ activeError }}</p>
         <p v-if="coach && !activeCount && !activeLoading" class="empty">No active games</p>
-        <div v-if="coach" class="card-foot">
-          <button class="link" type="button" :disabled="activeLoading" @click="refreshActive">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
-          <button v-if="canResume && !fumbblLobby" class="link" type="button" data-testid="my-fumbbl-games" @click="openLobby">Check the FUMBBL lobby for waiting games</button>
-          <small v-else-if="!settings.password" class="lobby-note">Save your FUMBBL password in Settings to resume games from here.</small>
+        <div v-if="coach && !settings.password" class="card-foot">
+          <small class="lobby-note">Save your FUMBBL password in Settings to resume games from here.</small>
         </div>
       </section>
 
@@ -467,20 +459,22 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
               <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.myTeam) }}</span>
               <span class="row-text">
                 <strong class="row-name">{{ row.myTeam }}</strong>
-                <small class="row-meta">{{ coach }}</small>
+                <small class="row-meta row-coach">{{ coach }}</small>
                 <small v-if="formatTeamValue(row.myTv)" class="row-meta">{{ formatTeamValue(row.myTv) }}</small>
               </span>
             </div>
             <div class="row-centre">
+              <!-- Owner 09-25: W/L/D above the score, the relative time under it (no separator dot). -->
+              <b class="row-result" :data-result="myRecent(row)">{{ myRecent(row) }}</b>
               <span class="row-score">{{ row.myScore }} &ndash; {{ row.opponentScore }}</span>
-              <span class="row-phase"><b class="row-result" :data-result="myRecent(row)">{{ myRecent(row) }}</b> &middot; {{ relativeTime(row.when) }}</span>
+              <span class="row-phase">{{ relativeTime(row.when) }}</span>
             </div>
             <div class="row-team away">
               <img v-if="recentCrest(row, 'opponent')" class="row-logo" :src="recentCrest(row, 'opponent')!" alt="" />
               <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.opponentTeam) }}</span>
               <span class="row-text">
                 <strong class="row-name">{{ row.opponentTeam }}</strong>
-                <small class="row-meta">{{ row.opponentCoach }}</small>
+                <small class="row-meta row-coach">{{ row.opponentCoach }}</small>
                 <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
               </span>
             </div>
@@ -571,9 +565,10 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
 .list-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; }
 h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
 .count { padding: 2px 10px; border-radius: 999px; color: var(--pb-text); background: color-mix(in srgb, var(--ui-forest, #1A401C) 14%, transparent); font-size: 14px; text-shadow: none; }
-.empty { padding: 18px 0; color: var(--pb-muted); font-size: 18px; text-align: center; }
+.empty { width: 100%; padding: 22px 0; color: var(--pb-muted); font-family: 'Nuffle', system-ui, sans-serif; font-size: 26px; letter-spacing: .04em; text-align: center; } /* owner 09-25: larger */
 .load-error { color: #8f111b; font-size: 14px; }
 .card-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 .lobby-note { color: var(--pb-muted); }
 
 /* Loaded-JNLP card */
@@ -635,10 +630,11 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-text { display: grid; gap: 2px; min-width: 0; }
 .row-name { color: var(--pb-text); font-size: 24px; font-weight: 500; line-height: 1.15; overflow-wrap: break-word; }
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
+.row-coach { color: var(--pb-text); } /* owner 09-25: coach names in the darker green */
 .row-centre { display: grid; justify-items: center; gap: 4px; }
 .row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 27px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
-.row-result { font-weight: 800; }
+.row-result { font-family: 'Nuffle', system-ui, sans-serif; font-size: 22px; font-weight: 800; line-height: 1; letter-spacing: .08em; }
 .row-result[data-result="W"] { color: #2f8f46; }
 .row-result[data-result="L"] { color: #8f111b; }
 .row-result[data-result="D"] { color: #b5741a; }
@@ -647,7 +643,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
 .recent-list { display: grid; gap: 10px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
-.details-button[data-cached='false'] { background: color-mix(in srgb, var(--ui-forest, #1A401C) 55%, #3a3a3a); border-color: color-mix(in srgb, var(--ui-forest, #1A401C) 40%, #777); }
+/* owner 09-25: every Details is the carmine bevel (the green "no stored details" variant read as a different action); the popup says when nothing is stored */
 
 /* Owner 09-25: Details popup — large, centred; the pane inside keeps its own look (PostGamePanel embedded). */
 .details-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
