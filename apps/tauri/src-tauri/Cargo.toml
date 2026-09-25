@@ -1,6 +1,6 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.22"
+version = "1.0.23"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 
@@ -21,6 +21,9 @@ tauri-plugin-dialog = "2"
 # Open external URLs (Twitch/Discord promo links) in the system browser — the
 # webview can't embed/navigate them itself in the packaged build.
 tauri-plugin-opener = "2"
+# Owner 09-25: in-app auto-updater (signed GitHub release artifacts) + relaunch after install.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

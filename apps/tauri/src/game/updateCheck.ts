@@ -36,3 +36,11 @@ export async function fetchLatestRelease(fetchFn: (url: string, init?: RequestIn
     return parseVersion(tag) && url ? { version: tag.replace(/^v/, ''), url } : null;
   } catch { return null; }
 }
+
+/** Owner 09-25: the IN-APP updater (tauri-plugin-updater, signed release artifacts) runs only in the packaged PUBLIC
+ *  edition on a bare version: dev cuts are ahead of the line, the fork edition is a tester build whose updates
+ *  never come from the public repo, and the web preview has no installer to replace. Everything else keeps the
+ *  "open the release page" prompt. */
+export function inAppUpdaterEnabled(input: { appVersion: string; inTauri: boolean; forkEdition: boolean }): boolean {
+  return input.inTauri && !input.forkEdition && !isDevCut(input.appVersion) && parseVersion(input.appVersion) !== null;
+}

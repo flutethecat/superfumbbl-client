@@ -18,6 +18,8 @@
         { "url": "https://api.github.com/*" }
       ]
     },
+    "updater:default",
+    "process:allow-restart",
     "opener:default",
     {
       "identifier": "opener:allow-open-url",

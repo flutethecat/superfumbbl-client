@@ -626,6 +626,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Opener: open external promo links (Twitch/Discord) in the system browser.
         .plugin(tauri_plugin_opener::init())
+        // Owner 09-25: auto-updater — checks the public release's latest.json, verifies the minisign signature against
+        // the pubkey in tauri.conf.json, installs, and the JS side relaunches (process plugin).
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             art_pack::art_pack_dir,
             art_pack::art_pack_installed,

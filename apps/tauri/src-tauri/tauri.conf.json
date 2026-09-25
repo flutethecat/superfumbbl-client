@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Super FUMBBL",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "identifier": "com.fumbbl40k.app",
   "build": {
     "beforeDevCommand": "pnpm dev:vite",
@@ -24,13 +24,17 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/art-pack/**"]
+        "scope": [
+          "$APPDATA/art-pack/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "TABBL / flutethecat",
     "category": "Game",
     "shortDescription": "Spectate live FUMBBL Blood Bowl matches",
@@ -42,6 +46,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxOUUzRTRBNTJEQzQ2NzEKUldSeFJ0eFNTajZlMFlrTmMyaXk4RUVXMDhXZFpiaENMZWNRM09JWEN5aTd5eUp1MS9uUzh3cXkK",
+      "endpoints": [
+        "https://github.com/flutethecat/superfumbbl-client/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

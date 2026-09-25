@@ -26,7 +26,7 @@ import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchLatestRelease, updateAvailable } from './game/updateCheck';
+import { fetchLatestRelease, inAppUpdaterEnabled, PUBLIC_RELEASES_REPO, updateAvailable } from './game/updateCheck';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
@@ -97,11 +97,52 @@ const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in windo
 const isO66Build = appVersion.includes('o66');
 // Owner 09-23: version check — at startup ask GitHub for the latest public release; when it is newer than this
 // build, prompt with a button that opens the release page in the system browser. Dev cuts never prompt.
-const updatePrompt = ref<{ version: string; url: string } | null>(null);
+const updatePrompt = ref<{ version: string; url: string; inApp: boolean; notes?: string } | null>(null);
+// Owner 09-25: IN-APP updater — the packaged public edition asks tauri-plugin-updater (latest.json on the public
+// release, minisign-verified against the pubkey in tauri.conf.json), downloads with progress, installs and
+// relaunches. Other builds keep the release-page prompt. `pendingUpdate` holds the plugin's Update handle.
+type UpdaterUpdate = { version: string; body?: string | null; downloadAndInstall: (onEvent?: (e: { event: string; data?: { contentLength?: number; chunkLength?: number } }) => void) => Promise<void> };
+let pendingUpdate: UpdaterUpdate | null = null;
+const updateProgress = ref<{ downloaded: number; total: number | null; phase: 'downloading' | 'installing' } | null>(null);
+const updateError = ref('');
 async function checkForUpdate(): Promise<void> {
+  if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check({ timeout: 15_000 });
+      if (update && updateAvailable(appVersion, update.version)) {
+        pendingUpdate = update as unknown as UpdaterUpdate;
+        updatePrompt.value = { version: update.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases/tag/v${update.version}`, inApp: true, notes: update.body ?? undefined };
+      }
+      return;
+    } catch (error) {
+      console.warn('[update] in-app check failed, falling back to the release page', error);
+    }
+  }
   const latest = await fetchLatestRelease((url, init) => (inTauri ? tauriFetch(url, init) : fetch(url, init)));
-  if (latest && updateAvailable(appVersion, latest.version)) updatePrompt.value = latest;
+  if (latest && updateAvailable(appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false };
 }
+async function installUpdateNow(): Promise<void> {
+  const update = pendingUpdate;
+  if (!update) { openUpdateRelease(); return; }
+  updateError.value = '';
+  updateProgress.value = { downloaded: 0, total: null, phase: 'downloading' };
+  try {
+    await update.downloadAndInstall((e) => {
+      const p = updateProgress.value; if (!p) return;
+      if (e.event === 'Started') p.total = e.data?.contentLength ?? null;
+      else if (e.event === 'Progress') p.downloaded += e.data?.chunkLength ?? 0;
+      else if (e.event === 'Finished') p.phase = 'installing';
+    });
+    const { relaunch } = await import('@tauri-apps/plugin-process');
+    await relaunch();
+  } catch (error) {
+    updateProgress.value = null;
+    updateError.value = `The update could not be installed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; }
+function updatePercent(): number | null { const p = updateProgress.value; return p && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null; }
 onMounted(() => { setTimeout(() => { void checkForUpdate(); }, 1500); });
 // Owner 09-23: ART PACK — a split (public) build downloads its art into app-data on first run and only the
 // changed parts after an update; the pitch views wait for it (menus stay usable). Bundled builds are ready at once.
@@ -1593,12 +1634,19 @@ function captureKey(event: KeyboardEvent) {
       <template v-else>Downloading the art pack… {{ artPack.done }} / {{ artPack.total }} parts · {{ formatMb(artPack.downloadedBytes) }} of {{ formatMb(artPack.pendingBytes) }}</template>
     </div>
     <!-- Owner 09-23: a newer public release exists — one button opens its GitHub page. -->
-    <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" data-testid="update-prompt" @click.self="updatePrompt = null">
+    <div v-if="updatePrompt" class="modal-backdrop save-prompt-backdrop" data-testid="update-prompt" @click.self="!updateProgress && dismissUpdate()">
       <div class="save-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-title">
         <h3 id="update-prompt-title">Super FUMBBL {{ updatePrompt.version }} is available</h3>
-        <div class="save-prompt-actions">
-          <button class="primary" @click="openUpdateRelease()">Download now</button>
-          <button @click="updatePrompt = null">Download later</button>
+        <!-- Owner 09-25: the in-app path downloads + installs here and relaunches; the fallback opens the release page. -->
+        <div v-if="updateProgress" class="update-progress" role="status" aria-live="polite">
+          <div class="update-progress-track"><div class="update-progress-fill" :style="{ width: (updatePercent() ?? 100) + '%' }" :data-indeterminate="updatePercent() === null"></div></div>
+          <small>{{ updateProgress.phase === 'installing' ? 'Installing… the client restarts when it is done.' : updatePercent() === null ? 'Downloading…' : `Downloading… ${updatePercent()}%` }}</small>
+        </div>
+        <p v-if="updateError" class="update-error" role="alert">{{ updateError }}</p>
+        <div v-if="!updateProgress" class="save-prompt-actions">
+          <button v-if="updatePrompt.inApp && !updateError" class="primary" @click="installUpdateNow()">Update now</button>
+          <button v-else class="primary" @click="openUpdateRelease()">Download now</button>
+          <button @click="dismissUpdate()">{{ updatePrompt.inApp ? 'Later' : 'Download later' }}</button>
         </div>
       </div>
     </div>
@@ -3562,6 +3610,13 @@ input, textarea, [contenteditable="true"], .log-panel {
 }
 .save-prompt h3 { margin: 0; font-size: max(var(--ui-min-primary-text-size, 16px), 0.98rem); letter-spacing: 0.03em; }
 .save-prompt .hint { margin: 0; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.74rem); line-height: 1.35; }
+/* Owner 09-25: in-app update progress */
+.update-progress { display: grid; gap: 6px; margin: 4px 0 10px; }
+.update-progress-track { height: 10px; border-radius: 5px; overflow: hidden; background: color-mix(in srgb, var(--ui-text) 12%, transparent); }
+.update-progress-fill { height: 100%; background: var(--ui-primary); transition: width .2s linear; }
+.update-progress-fill[data-indeterminate='true'] { animation: update-indeterminate 1.2s ease-in-out infinite; }
+@keyframes update-indeterminate { 0% { opacity: .35; } 50% { opacity: 1; } 100% { opacity: .35; } }
+.update-error { margin: 0 0 10px; color: var(--ui-danger, #ff8d8d); }
 .save-prompt-actions { display: flex; justify-content: center; gap: 0.6rem; margin-top: 0.2rem; }
 .save-prompt-actions button {
   flex: 1;
