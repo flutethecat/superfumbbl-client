@@ -143,6 +143,8 @@ async function installUpdateNow(): Promise<void> {
 }
 function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; }
 function updatePercent(): number | null { const p = updateProgress.value; return p && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null; }
+// Owner 09-25: an invisible marker for the first in-app update test (1.0.23 → 1.0.24) — the console shows the build.
+console.info(`[super-fumbbl] build ${appVersion} (${gitSha})`);
 onMounted(() => { setTimeout(() => { void checkForUpdate(); }, 1500); });
 // Owner 09-23: ART PACK — a split (public) build downloads its art into app-data on first run and only the
 // changed parts after an update; the pitch views wait for it (menus stay usable). Bundled builds are ready at once.

@@ -4478,8 +4478,18 @@ function acknowledgePresetInducements(): void {
   }
 }
 
-/** Mount whenever the purchase phase is live for either seat, or presets await local review. */
-const inducePhaseOpen = computed(() => presetInducementsOpen.value
+// Owner 09-25: REPLAY review — the Turns list's "Inducements" chapter seeks to where both sets are final; while the
+// cursor sits there the phase pane shows the model's two inducement sets read-only (the preset surface), until the
+// viewer acknowledges or moves the cursor.
+const replayChapterAtCursor = computed(() => (props.mode === 'replay'
+  ? (gameStore.replay.status.chapters ?? []).find((chapter) => chapter.cursor === gameStore.replay.status.cursor) ?? null
+  : null));
+const replayInducementsAcknowledgedCursor = ref<number | null>(null);
+const replayInducementsOpen = computed(() => replayChapterAtCursor.value?.id === 'inducements'
+  && replayInducementsAcknowledgedCursor.value !== gameStore.replay.status.cursor);
+const inducementsReadOnlyReview = computed(() => presetInducementsOpen.value || replayInducementsOpen.value);
+/** Mount whenever the purchase phase is live for either seat, or presets / a replay chapter await local review. */
+const inducePhaseOpen = computed(() => inducementsReadOnlyReview.value
   || !!(gameStore.state.inducementBuy || gameStore.state.inducementReveal)
   || !!induceRevealHoldSnapshot.value);
 /** True only while I hold the live dialog — the only state in which I may send. */
@@ -4799,7 +4809,14 @@ function presetChoiceFor(seat: 'home' | 'away') {
       ? [{ key, label: induceLabel(key), count }]
       : [];
   });
-  return { items, stars: [] };
+  // Owner 09-25: star players bought in the phase sit on the roster as playerType 'Star' — list them (replay review).
+  const team = seat === 'home' ? g.teamHome : g.teamAway;
+  const positions = (team.roster as { positionArray?: { positionId: string; positionName?: string }[] }).positionArray ?? [];
+  const stars = (team.playerArray ?? []).filter((player) => player.playerType === 'Star').map((player) => ({
+    positionId: player.positionId, playerId: player.playerId,
+    name: player.playerName || positions.find((position) => position.positionId === player.positionId)?.positionName || 'Star Player',
+  }));
+  return { items, stars };
 }
 
 function presetPanel(seat: 'home' | 'away', role: InducementRole): PanelView {
@@ -4814,24 +4831,28 @@ function presetPanel(seat: 'home' | 'away', role: InducementRole): PanelView {
     cards: induceRevealCards(presetChoiceFor(seat), team),
     editable: false,
     dimmed: false,
-    emptyNote: 'No predefined inducements.',
+    emptyNote: replayInducementsOpen.value ? 'Nothing bought.' : 'No predefined inducements.',
   };
 }
 const presetHomePanel = computed(() => presetPanel('home', 'overdog'));
 const presetAwayPanel = computed(() => presetPanel('away', 'underdog'));
 const induceDisplayPhase = computed<InducementPhase>(() => (
-  presetInducementsOpen.value || induceRevealHoldSnapshot.value ? 'done' : inducePhase.value
+  inducementsReadOnlyReview.value || induceRevealHoldSnapshot.value ? 'done' : inducePhase.value
 ));
 const induceDisplayOverdogPanel = computed(() => (
-  presetInducementsOpen.value
+  inducementsReadOnlyReview.value
     ? presetHomePanel.value
     : induceRevealHoldSnapshot.value?.overdog ?? induceOverdogPanel.value
 ));
 const induceDisplayUnderdogPanel = computed(() => (
-  presetInducementsOpen.value
+  inducementsReadOnlyReview.value
     ? presetAwayPanel.value
     : induceRevealHoldSnapshot.value?.underdog ?? induceUnderdogPanel.value
 ));
+function acknowledgeInducementsReview(): void {
+  if (replayInducementsOpen.value) { replayInducementsAcknowledgedCursor.value = gameStore.replay.status.cursor; return; }
+  acknowledgePresetInducements();
+}
 const presetMySide = computed<InducementRole | null>(() => {
   if (props.mode !== 'play') return null;
   return gameStore.myTeamIsHome.value ? 'overdog' : 'underdog';
@@ -11436,14 +11457,18 @@ function sendChat() {
           :phase="induceDisplayPhase"
           :overdog="induceDisplayOverdogPanel"
           :underdog="induceDisplayUnderdogPanel"
-          :my-side="presetInducementsOpen ? presetMySide : (induceRevealHoldSnapshot?.myRole ?? (props.mode === 'play' ? induceMyRole : null))"
-          :viewer-mode="props.mode" :can-act="presetInducementsOpen || induceRevealHoldSnapshot ? false : induceCanAct"
+          :my-side="inducementsReadOnlyReview ? presetMySide : (induceRevealHoldSnapshot?.myRole ?? (props.mode === 'play' ? induceMyRole : null))"
+          :viewer-mode="props.mode" :can-act="inducementsReadOnlyReview || induceRevealHoldSnapshot ? false : induceCanAct"
           :picks="inducePicks" :options="induceOptions" :cap="gameStore.state.inducementBuy?.availableGold ?? 0"
           :blade="induceBlade" :cards="induceCards" :selector-limits="induceLimits"
-          :confirm-pending="induceConfirmPending" :preset-mode="presetInducementsOpen"
+          :confirm-pending="induceConfirmPending" :preset-mode="inducementsReadOnlyReview"
+          :preset-label="replayInducementsOpen ? 'INDUCEMENTS' : 'PRESET ROSTERS'" :preset-status="replayInducementsOpen ? '✔ Bought' : '✔ Assigned'"
+          :preset-banner="replayInducementsOpen ? 'Replay Review' : 'Tournament Mode'" :preset-heading="replayInducementsOpen ? 'Inducements Bought' : 'Predefined Inducements'"
+          :preset-note="replayInducementsOpen ? 'What each coach bought before kick-off. Close to keep watching, or pick a turn from the Turns list.' : 'These inducements were assigned by the tournament or league. Review both teams before kick-off.'"
+          :preset-action="replayInducementsOpen ? 'Close' : 'Acknowledge'"
           :opp-cards="induceOppCards" :opp-cap="induceOppMoney?.cap ?? 0"
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
-          @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgePresetInducements"
+          @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgeInducementsReview"
           @rosters="openInduceRosters" />
         <!-- Owner 09-14: inducement-phase ROSTER viewer — both teams, opponent first; a row pops the MVP-style card. -->
         <div v-if="inducePhaseOpen && induceRosterOpen" class="mvp-nominate-overlay induce-roster-overlay" data-testid="induce-rosters"

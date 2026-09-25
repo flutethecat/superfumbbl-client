@@ -107,7 +107,19 @@ const props = withDefaults(defineProps<{
   confirmPending: boolean;
   /** Read-only, server-authored predefined allocations. No purchase wire exists in this mode. */
   presetMode?: boolean;
-}>(), { viewerMode: 'play', presetMode: false });
+  /** Owner 09-25: the read-only surface's heading / per-panel status — presets say "PRESET ROSTERS / Assigned",
+   *  a replay's inducement review says "INDUCEMENTS / Bought". */
+  presetLabel?: string;
+  presetStatus?: string;
+  /** the full-width banner ('Tournament Mode'), the centre heading and the note under it */
+  presetBanner?: string;
+  presetHeading?: string;
+  presetNote?: string;
+  /** the acknowledge button's word ('Acknowledge' / 'Close') */
+  presetAction?: string;
+}>(), { viewerMode: 'play', presetMode: false, presetLabel: 'PRESET ROSTERS', presetStatus: '✔ Assigned',
+  presetBanner: 'Tournament Mode', presetHeading: 'Predefined Inducements',
+  presetNote: 'These inducements were assigned by the tournament or league. Review both teams before kick-off.', presetAction: 'Acknowledge' });
 
 const emit = defineEmits<{
   (e: 'blade', blade: Blade): void;
@@ -132,7 +144,7 @@ function words(text: string): { head: string; rest: string; space: boolean }[] {
 }
 
 const roleLabel = computed(() => props.presetMode
-  ? 'PRESET ROSTERS'
+  ? props.presetLabel
   : (props.phase === 'overdog' ? 'OVERDOG is selecting…' : 'UNDERDOG is selecting…'));
 const isDone = computed(() => props.phase === 'done' && !props.presetMode);
 
@@ -161,7 +173,7 @@ function onCard(card: PickerCard): void {
 }
 
 const statusText = (s: PanelView['status']) => props.presetMode
-  ? '✔ Assigned'
+  ? props.presetStatus
   : (s === 'selecting' ? 'Selecting…' : s === 'confirmed' ? '✔ Confirmed' : '⧗ Waiting…');
 
 /** Underdog-only waiting strip, spec footer #2. */
@@ -198,14 +210,14 @@ function panelColor(panel: PanelView): SeatColor {
   <div id="indgrid" class="ind-grid" data-testid="inducements-phase" :data-phase="phase" :data-preset="presetMode">
     <!-- Preset (tournament/league) allocations: full-width banner over the whole phase. -->
     <div v-if="presetMode" class="ind-tournament-banner" data-testid="tournament-banner">
-      <template v-for="(w, i) in words('Tournament Mode')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
+      <template v-for="(w, i) in words(presetBanner)" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
     </div>
     <!-- ── Centre: picker, or the full-width lock banner once both coaches confirm ── -->
     <section v-if="!isDone" class="ind-picker" data-testid="ind-picker">
       <!-- Header: title left, blinking phase stencil right-justified on the SAME line. -->
       <div class="ind-picker-head">
         <div class="ind-title">
-          <template v-for="(w, i) in words(presetMode ? 'Predefined Inducements' : 'Inducements')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
+          <template v-for="(w, i) in words(presetMode ? presetHeading : 'Inducements')" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>
         </div>
         <span class="ind-spacer" />
         <button type="button" class="ind-btn ind-btn-neutral ind-rosters-btn" data-testid="rosters-btn" title="View both team rosters"
@@ -226,10 +238,10 @@ function panelColor(panel: PanelView): SeatColor {
       <!-- Watching seat: the phase is visible, the controls are not. -->
       <div v-if="presetMode" class="ind-preset" data-testid="preset-inducements">
         <div class="ind-preset-copy">
-          These inducements were assigned by the tournament or league. Review both teams before kick-off.
+          {{ presetNote }}
         </div>
         <button type="button" class="ind-btn ind-btn-primary" data-testid="acknowledge-btn" @click="emit('acknowledge')">
-          ✔ <span class="cap">A</span>cknowledge
+          ✔ <span class="cap">{{ presetAction.slice(0, 1) }}</span>{{ presetAction.slice(1) }}
         </button>
       </div>
 

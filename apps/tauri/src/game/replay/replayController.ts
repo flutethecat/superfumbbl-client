@@ -352,6 +352,36 @@ export interface PreparedReplay<State> {
   readonly current: State;
 }
 
+/** Owner 09-25: named jump points beyond the turn list — the inducement phase (first inducement dialog the
+ *  replay carries) and the end of the game (the last command; the end-game pane settles there). */
+export interface ReplayChapter { id: 'inducements' | 'end'; label: string; cursor: number }
+const INDUCEMENT_DIALOGS = new Set(['buyInducements', 'buyPrayersAndInducements', 'pettyCash', 'buyCards', 'buyCardsAndInducements']);
+/** The cursor (index + 1) where the inducement purchases are FINAL: the first turn-mode change after the last
+ *  inducement dialog the replay raised (both teams' sets are in the model there), or null without such a dialog. */
+export function inducementChapterCursor(commands: readonly ReplayCommand[]): number | null {
+  const changes = (command: ReplayCommand) => (command.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [];
+  let lastDialog = -1;
+  commands.forEach((command, index) => {
+    for (const change of changes(command)) {
+      if (change.modelChangeId !== 'gameSetDialogParameter') continue;
+      const dialogId = String((change.modelChangeValue as { dialogId?: unknown } | null)?.dialogId ?? '');
+      if (INDUCEMENT_DIALOGS.has(dialogId)) lastDialog = index;
+    }
+  });
+  if (lastDialog < 0) return null;
+  for (let index = lastDialog + 1; index < commands.length; index++) {
+    if (changes(commands[index]!).some((change) => change.modelChangeId === 'gameSetTurnMode')) return index + 1;
+  }
+  return lastDialog + 1;
+}
+export function replayChapters(commands: readonly ReplayCommand[]): ReplayChapter[] {
+  const chapters: ReplayChapter[] = [];
+  const inducements = inducementChapterCursor(commands);
+  if (inducements != null) chapters.push({ id: 'inducements', label: 'Inducements', cursor: inducements });
+  if (commands.length > 0) chapters.push({ id: 'end', label: 'End of game', cursor: commands.length });
+  return chapters;
+}
+
 export interface ReplayStatus {
   phase: 'empty' | 'indexing' | 'ready' | 'presenting' | 'seeking' | 'failed';
   cursor: number;
@@ -360,6 +390,8 @@ export interface ReplayStatus {
   epoch: number;
   turnBoundaries: readonly number[];
   turnMarkers: readonly ReplayTurnMarker[];
+  /** owner 09-25: jump points (file / FUMBBL replays only) */
+  chapters?: readonly ReplayChapter[];
   failure: ReplayFailure | null;
 }
 
@@ -460,7 +492,7 @@ export class ReplayController<State> {
     this.adapter.renderOnce(this.current, 0);
     this.replaceStatus({
       phase: 'ready', cursor: 0, total: this.commands.length, commandNr: null,
-      epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, failure: null,
+      epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands), failure: null,
     });
   }
 
@@ -526,7 +558,7 @@ export class ReplayController<State> {
       this.adapter.renderOnce(this.current, 0);
       this.replaceStatus({
         phase: 'ready', cursor: 0, total: this.commands.length, commandNr: null,
-        epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, failure: null,
+        epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands), failure: null,
       });
     } catch (error) {
       this.fail(error);

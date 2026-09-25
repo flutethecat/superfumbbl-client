@@ -21,6 +21,8 @@ const canPlay = computed(() => ready.value && status.value.cursor < status.value
 const canTurnBack = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(-1) : status.value.cursor > minimum.value));
 const canTurnForward = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(1) : status.value.cursor < status.value.total));
 const turnMarkers = computed(() => props.review?.turnMarkers ?? gameStore.replay.status.turnMarkers);
+// Owner 09-25: file / FUMBBL replays offer "Inducements" and "End of game" above the turns (live review has no chapters).
+const chapters = computed(() => (props.review ? [] : (gameStore.replay.status.chapters ?? [])));
 function turnMarkerKey(marker: (typeof turnMarkers.value)[number]): string {
   return `${marker.segmentId ?? ''}:${marker.cursor}:${marker.boundary}:${marker.side}:${marker.turn}:${marker.half}`;
 }
@@ -220,6 +222,11 @@ function seek(sequence: number): void {
 }
 function selectTurn(event: Event): void {
   const key = (event.target as HTMLSelectElement).value;
+  if (key.startsWith('chapter:')) {
+    const chapter = chapters.value.find((c) => c.id === key.slice(8));
+    if (chapter) seek(chapter.cursor);
+    return;
+  }
   const marker = turnMarkers.value.find((candidate) => turnMarkerKey(candidate) === key);
   if (!marker) return;
   if (props.review?.seekTurn) void props.review.seekTurn(marker); else seek(marker.cursor);
@@ -295,6 +302,8 @@ function openRecentHistory(): void {
         <select :disabled="!ready || turnMarkers.length === 0" :value="selectedTurnMarker ? turnMarkerKey(selectedTurnMarker) : ''"
           aria-label="Jump to recorded turn boundary" @change="selectTurn">
           <option value="" disabled>Turns</option>
+          <!-- Owner 09-25: jump points beyond the turns — the inducement phase and the end-game pane. -->
+          <option v-for="chapter in chapters" :key="chapter.id" :value="`chapter:${chapter.id}`" class="chapter-option">{{ chapter.label }}</option>
           <option v-for="marker in turnMarkers" :key="turnMarkerKey(marker)" :value="turnMarkerKey(marker)">{{ marker.label }}</option>
         </select>
       </label>
