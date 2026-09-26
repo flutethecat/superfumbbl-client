@@ -445,6 +445,9 @@ export interface SkillConfigEntry {
   markerOpp?: SkillBehaviour;
   /** The exact marker glyph shown at the feet (overrides the FUMBBL JSON pre-fill). */
   markerText?: string;
+  /** Owner 09-25: the marker fields came from "Import markings from fumbbl.com" — a re-import replaces them and
+   *  retires entries whose rule no longer exists; hand-set entries are never touched by the retire pass. */
+  markerImported?: boolean;
 }
 
 const DEFAULTS: AppSettings = {

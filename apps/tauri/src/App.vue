@@ -105,7 +105,9 @@ type UpdaterUpdate = { version: string; body?: string | null; downloadAndInstall
 let pendingUpdate: UpdaterUpdate | null = null;
 const updateProgress = ref<{ downloaded: number; total: number | null; phase: 'downloading' | 'installing' } | null>(null);
 const updateError = ref('');
+// Owner 09-25: the prompt NAGS — every launch and every hourly poll re-offers an available update, "Later" or not.
 async function checkForUpdate(): Promise<void> {
+  if (updatePrompt.value || updateProgress.value) return;
   if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
@@ -145,7 +147,15 @@ function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value
 function updatePercent(): number | null { const p = updateProgress.value; return p && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null; }
 // Owner 09-25: an invisible marker for the first in-app update test (1.0.23 → 1.0.24) — the console shows the build.
 console.info(`[super-fumbbl] build ${appVersion} (${gitSha})`);
-onMounted(() => { setTimeout(() => { void checkForUpdate(); }, 1500); });
+// Owner 09-25: besides the launch check, poll every 60 minutes — held back while a game is on screen so the
+// prompt never lands mid-turn; it fires on the next tick after the board is left, and re-offers after "Later".
+const UPDATE_POLL_MS = 60 * 60 * 1000;
+let updatePollTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  setTimeout(() => { void checkForUpdate(); }, 1500);
+  updatePollTimer = setInterval(() => { if (gameStore.game.value) return; void checkForUpdate(); }, UPDATE_POLL_MS);
+});
+onBeforeUnmount(() => { if (updatePollTimer) clearInterval(updatePollTimer); updatePollTimer = null; });
 // Owner 09-23: ART PACK — a split (public) build downloads its art into app-data on first run and only the
 // changed parts after an update; the pitch views wait for it (menus stay usable). Bundled builds are ready at once.
 async function startArtPackSync(): Promise<void> {
@@ -348,7 +358,7 @@ function openTournamentNotification() {
   dismissTournamentNotification(notification.id);
 }
 import { SOUND_CATALOG, previewSound, invalidateSoundCache } from './game/sounds';
-import { prefillMarkerTextFromJson } from './game/skillDisplay';
+import { applyImportedMarkings, prefillMarkerTextFromJson } from './game/skillDisplay';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
@@ -614,8 +624,11 @@ function openTournamentTeamBuilder(rulesetPackName: string): void {
   tournamentBuilderLaunchRevision.value += 1;
   view.value = 'team';
 }
+/** Owner 09-25: the public edition has no Replay blade — a replay route lands on Play; the loaded game takes over. */
+const replayHomeView: AppView = FORK_EDITION ? 'replay' : 'play';
+if (!FORK_EDITION) watch(view, (v) => { if (v === 'replay') view.value = 'play'; }); // a restored/stale 'replay' view never strands the shell
 function applyJnlpResultView(result: JnlpRouteResult): void {
-  if (result === 'replay') view.value = 'replay';
+  if (result === 'replay') view.value = replayHomeView;
   else if (result === 'spectate') view.value = 'spectate';
   else if (result === 'fork-player' || result === 'fumbbl-player' || result === 'fumbbl-staged') view.value = 'play';
 }
@@ -754,7 +767,7 @@ async function loadReplayFileFromMenu(event: Event): Promise<void> {
     commit: async (text, byteLength) => {
       if (classifyReplayFileContent(text) === 'json') {
         gameStore.loadReplayFile(text, byteLength);
-        view.value = 'replay';
+        view.value = replayHomeView;
         return;
       }
       const request = await readJnlpFile({ text: async () => text });
@@ -1046,24 +1059,12 @@ async function importMarkings() {
     const parsed = JSON.parse(text) as { autoMarkingRecords?: { skillArray?: string[]; marking?: string }[] };
     if (!Array.isArray(parsed.autoMarkingRecords)) throw new Error('this coach has no markings configured');
     settings.markingsConfig = JSON.stringify(parsed);
-    // #16 ③: AUTO-FILL the per-skill table — glyph AND behaviour — so imported markings actually show (composes with
-    // the #15 glyph column). A user's own glyph/behaviour is kept (never overwritten). Multi-skill / blank rows skip.
-    const nextConfig = { ...settings.skillConfig };
-    let imported = 0, skipped = 0;
-    for (const rec of parsed.autoMarkingRecords) {
-      if (rec.skillArray?.length === 1 && rec.marking) {
-        const skill = rec.skillArray[0]!;
-        const entry = { ...(nextConfig[skill] ?? {}) };
-        if (!entry.markerText?.trim()) entry.markerText = rec.marking; // glyph
-        if (entry.markerMine == null) entry.markerMine = 'always';     // behaviour — show it
-        if (entry.markerOpp == null) entry.markerOpp = 'always';
-        nextConfig[skill] = entry;
-        imported++;
-      } else skipped++;
-    }
-    settings.skillConfig = nextConfig; // one reassign → persist + re-render
+    // Owner 09-25: the import REPLACES what an earlier import wrote (glyph AND behaviour, gainedOnly/applyTo honoured)
+    // and retires rules deleted on fumbbl.com; combo / injury rules stay in the JSON and draw from there.
+    const { next, imported, combos } = applyImportedMarkings(parsed.autoMarkingRecords, settings.skillConfig);
+    settings.skillConfig = next; // one reassign → persist + re-render
     markingsStatus.value = `Imported ${imported} skill marking${imported === 1 ? '' : 's'} from ${coach}`
-      + (skipped ? ` (${skipped} multi-skill/blank rule${skipped === 1 ? '' : 's'} skipped)` : '') + '.';
+      + (combos ? ` (+${combos} combo/injury rule${combos === 1 ? '' : 's'} from the JSON)` : '') + '.';
   } catch (error) {
     markingsStatus.value = `Import failed for ${coach}: ${error instanceof Error ? error.message : String(error)}`;
   }
@@ -1480,7 +1481,9 @@ function captureKey(event: KeyboardEvent) {
       <template v-else>
         <button class="blade" type="button" :data-active="view === 'play'" @click="selectBlade('play')">Play</button>
         <button class="blade" type="button" :data-active="view === 'spectate'" @click="selectBlade('spectate')">Spectate</button>
-        <button class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
+        <!-- Owner 09-25: the Replay blade is deprecated from the PUBLIC edition — the Play blade's recent games carry
+             Details/Replay and Open JNLP routes replay JNLPs; the fork keeps the launcher (local files, fork replays). -->
+        <button v-if="FORK_EDITION" class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
         <template v-if="FORK_EDITION">
         <span class="blade-ribbon-sep" aria-hidden="true"></span>
         <button class="blade" type="button" :data-active="view === 'team'" @click="selectBlade('team')">Team</button>
@@ -1545,7 +1548,7 @@ function captureKey(event: KeyboardEvent) {
     <KeepAlive v-else include="TeamBuilderView">
       <PlayView v-if="view === 'play'" />
       <SpectateBrowserView v-else-if="view === 'spectate'" @spectate="openSpectateGame" />
-      <ReplayLauncherView v-else-if="view === 'replay'" />
+      <ReplayLauncherView v-else-if="FORK_EDITION && view === 'replay'" />
       <TeamBuilderView v-else-if="FORK_EDITION && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
       <TournamentsView v-else-if="FORK_EDITION && view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
       <StatisticsView v-else-if="FORK_EDITION && view === 'statistics'" />

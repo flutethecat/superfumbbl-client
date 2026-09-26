@@ -1,7 +1,7 @@
 {
   "name": "@fumbbl40k/app",
   "private": true,
-  "version": "1.0.24",
+  "version": "1.0.25",
   "type": "module",
   "scripts": {
     "dev": "tauri dev",

@@ -83,6 +83,20 @@ const listedGames = computed(() => fumbblLobbyListRequested.value
   : []);
 const activeCount = computed(() => activeGames.value.length + listedGames.value.length + (fumbblLobby.value && !fumbblLobby.value.password ? 1 : 0));
 
+// Owner 09-25 (a scheduled game never showed): Refresh ALSO opens the FFB lobby list with the stored credentials —
+// /api/match/current only carries games in progress; a scheduled game waiting for its opponent is listed by the
+// FFB server's own game list. Its rows render below the live ones with a Join.
+function openLobby(): void {
+  if (!canResume.value) return;
+  if (fumbblLobby.value?.password) { fumbblListGames(); return; } // already open — relist
+  if (fumbblLobby.value) return; // a JNLP lobby is staged — leave it alone
+  applyServerTarget('fumbbl');
+  stageFumbblPasswordLobby(coach.value, settings.password);
+}
+async function refreshAll(): Promise<void> {
+  openLobby();
+  await refreshActive();
+}
 // Resume: open the password lobby, then spend the join on that game once the socket is ready.
 const pendingResume = ref<FumbblActiveGame | null>(null);
 function resumeGame(game: FumbblActiveGame): void {
@@ -322,7 +336,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
         <div class="card-head">
           <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
           <!-- Owner 09-25: Refresh sits top-right of the card, in line with the title. -->
-          <button v-if="coach" class="bevel small" type="button" :disabled="activeLoading" @click="refreshActive">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
+          <button v-if="coach" class="bevel small" type="button" :disabled="activeLoading" @click="refreshAll">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
         </div>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings to see your games here.</p>
 
@@ -400,7 +414,8 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
                   <strong>{{ opponentFor(entry).name }}</strong>
                 </span>
               </span>
-              <span class="game-entry-action">Game {{ entry.gameId }} &middot; Join</span>
+              <span class="game-entry-action">Waiting &middot; game {{ entry.gameId }}</span>
+              <span class="bevel small" aria-hidden="true">Join</span>
             </button>
           </div>
         </template>

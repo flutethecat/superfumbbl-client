@@ -2955,6 +2955,14 @@ export class PitchRenderer {
   clickFrozenByCinematic(): boolean {
     return !!this.cinematic && !this.order66;
   }
+  /** Owner 09-25: a user camera gesture ends the running cinematic zoom where it stands (no ease back) so the
+   *  gesture takes effect; the log-focus ease is dropped too. No-op when nothing is running. */
+  releaseCinematicForUser(): void {
+    if (!this.cinematic && !this.cameraFocus) return;
+    this.cinematic = null;
+    this.cameraFocus = null;
+    this.updateOverlayScales();
+  }
 
   /** Owner o66 automove PREVIEW: the pending route (server squares) shown as a trail + a highlighted
    *  destination while the coach confirms (2nd click). Drawn OUTSIDE the legacy plannerEnabled gate (that
@@ -6354,8 +6362,12 @@ export class PitchRenderer {
    *  turn it is (home iff homePlaying). Only an actor can arm a block/foul/pass/
    *  move plan; selecting an OPPOSITION player is view-only (its stats card), so
    *  clicking opp→own no longer arms a "reverse" block preview. */
+  /** Owner 09-25: the VIEWER's side in play (null for spectate/replay). An opposition player is never "the actor"
+   *  for the viewer even during its own turn — clicking one is an inspection: full reach + ITS team's tackle zones. */
+  viewerIsHome: boolean | null = null;
   private selectedIsActor(): boolean {
-    return !!this.game && !!this.selectedPlayerId && this.selectedIsHome() === !!this.game.homePlaying;
+    return !!this.game && !!this.selectedPlayerId && this.selectedIsHome() === !!this.game.homePlaying
+      && (this.viewerIsHome === null || this.selectedIsHome() === this.viewerIsHome);
   }
   /** Owner 09-08: spectate/replay are INSPECTION-ONLY surfaces (no planner, no o66 play): every selection is a
    *  read-only reach/tackle-zone inspect, and any click away — empty square or right-click — must clear it.
@@ -17460,11 +17472,16 @@ export class PitchRenderer {
   private attachCamera(canvas: HTMLCanvasElement): void {
     this.listenCanvas(canvas, 'wheel', (event) => {
       event.preventDefault();
-      if (this.cinematic) return;
+      // Owner 09-25 (akindsir: "at 2x/4x it won't let me move the camera"): the director's cinematic zooms are
+      // timed in wall-clock, so under a sped-up review they run back to back and the old bail here swallowed every
+      // wheel/drag for as long as they lasted. A user gesture now RELEASES the cinematic (the camera stays where the
+      // cine left it — no snap-back) and the gesture goes through; the director resumes on its next event.
+      this.releaseCinematicForUser();
       const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
       this.zoomAt(event.offsetX, event.offsetY, factor);
     });
     this.listenCanvas(canvas, 'pointerdown', (event) => {
+      this.releaseCinematicForUser(); // owner 09-25: see the wheel handler — a press releases the cinematic too
       // B5-5: cinematic owns the camera. #125/g469: the pointerUP dispatch consults
       // clickFrozenByCinematic() (= !!this.cinematic && !this.order66 — see its definition and the
       // pointerup consult of the same name); this

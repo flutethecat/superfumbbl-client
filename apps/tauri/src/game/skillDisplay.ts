@@ -1,11 +1,12 @@
 import type { GameJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { playerSkillDisplayEntries, playerSkillNames } from '@fumbbl40k/ffb-protocol';
-import type { AutoMarkingConfig } from './markings';
+import type { AutoMarkingConfig, AutoMarkingRecord } from './markings';
 import {
   settings,
   iconBehaviourDefault,
   MARKER_BEHAVIOUR_DEFAULT,
   type SkillBehaviour,
+  type SkillConfigEntry,
   type AppSettings,
 } from './settings';
 
@@ -199,6 +200,84 @@ export function jumpUpMenuPresentation(
   if (!icon) return { label, useIcon: false };
   if (skillDisplay === 'markings') return { label: `${icon} ${label}`, useIcon: false };
   return { label, useIcon: true };
+}
+
+/**
+ * Owner 09-25 (import review): the on-pitch markings come from ONE effective FUMBBL-style config, so the upstream
+ * precedence rules (a combo rule suppresses its single-skill subsets, applyTo, gainedOnly, injuries) apply to
+ * everything at once:
+ *  - every multi-skill / injury record of the imported JSON as-is;
+ *  - one record per skill from the per-skill MARKER table (glyph = markerText, behaviour → gainedOnly/applyTo);
+ *  - the JSON's single-skill records only for skills the table does not cover.
+ * Before this, the moment a marker was configured (which the import itself did) the JSON was ignored entirely,
+ * so combo rules never drew, and the import mapped every rule to "always" (gainedOnly lost).
+ */
+function singleSkillRecord(record: AutoMarkingRecord): string | null {
+  return (record.skillArray?.length ?? 0) === 1 && (record.injuryAttributes?.length ?? 0) === 0 ? record.skillArray[0]! : null;
+}
+export function perSkillMarkingRecords(config: Record<string, SkillConfigEntry> = settings.skillConfig): AutoMarkingRecord[] {
+  const out: AutoMarkingRecord[] = [];
+  for (const [skill, entry] of Object.entries(config)) {
+    const mine = entry.markerMine ?? 'never';
+    const opp = entry.markerOpp ?? 'never';
+    if (mine === 'never' && opp === 'never') continue;
+    const marking = markerGlyphFor(skill, config);
+    const rec = (applyTo: AutoMarkingRecord['applyTo'], behaviour: SkillBehaviour): AutoMarkingRecord =>
+      ({ skillArray: [skill], injuryAttributes: [], marking, gainedOnly: behaviour === 'added', applyTo, applyRepeatedly: false });
+    if (mine === opp) out.push(rec('BOTH', mine));
+    else {
+      if (mine !== 'never') out.push(rec('OWN', mine));
+      if (opp !== 'never') out.push(rec('OPPONENT', opp));
+    }
+  }
+  return out;
+}
+function markerGlyphFor(skill: string, config: Record<string, SkillConfigEntry>): string {
+  const text = config[skill]?.markerText;
+  if (text && text.trim()) return text.trim();
+  return skill.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? '').join('').slice(0, 3);
+}
+export function effectiveMarkingConfig(rawJson: string, config: Record<string, SkillConfigEntry> = settings.skillConfig): AutoMarkingConfig | null {
+  let json: AutoMarkingConfig | null = null;
+  const raw = rawJson.trim();
+  if (raw) { try { json = JSON.parse(raw) as AutoMarkingConfig; } catch { json = null; } }
+  const covered = new Set(Object.entries(config).filter(([, e]) => (e.markerMine && e.markerMine !== 'never') || (e.markerOpp && e.markerOpp !== 'never')).map(([skill]) => skill));
+  const fromJson = (json?.autoMarkingRecords ?? []).filter((record) => { const single = singleSkillRecord(record); return single === null || !covered.has(single); });
+  const records = [...fromJson, ...perSkillMarkingRecords(config)];
+  if (!records.length) return null;
+  return { autoMarkingRecords: records, separator: json?.separator, sortMode: json?.sortMode };
+}
+
+/** Owner 09-25: "Import markings from fumbbl.com" projects the coach's single-skill rules onto the per-skill MARKER
+ *  table (glyph + behaviour: gainedOnly → only-if-added, applyTo → which side) and REPLACES what an earlier import
+ *  wrote; rules removed on fumbbl.com retire their imported entry. Hand-set entries for other skills are kept; a
+ *  hand-set entry for an imported skill is overwritten (the coach asked for FUMBBL's version). Multi-skill and
+ *  injury rules stay in the JSON and draw through effectiveMarkingConfig. */
+export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecord>[], prev: Record<string, SkillConfigEntry>): { next: Record<string, SkillConfigEntry>; imported: number; combos: number } {
+  const next: Record<string, SkillConfigEntry> = {};
+  for (const [skill, entry] of Object.entries(prev)) {
+    if (!entry.markerImported) { next[skill] = { ...entry }; continue; }
+    const kept: SkillConfigEntry = { ...entry };
+    delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
+    if (Object.keys(kept).length) next[skill] = kept; // icon settings survive a retired import
+  }
+  let imported = 0, combos = 0;
+  for (const record of records) {
+    const single = singleSkillRecord(record as AutoMarkingRecord);
+    if (single === null) { combos++; continue; }
+    if (!record.marking) continue;
+    const applyTo = record.applyTo ?? 'BOTH';
+    const behaviour: SkillBehaviour = record.gainedOnly ? 'added' : 'always';
+    next[single] = {
+      ...(next[single] ?? {}),
+      markerText: record.marking,
+      markerMine: applyTo === 'OPPONENT' ? 'never' : behaviour,
+      markerOpp: applyTo === 'OWN' ? 'never' : behaviour,
+      markerImported: true,
+    };
+    imported++;
+  }
+  return { next, imported, combos };
 }
 
 /** Pre-fill the per-skill `markerText` defaults from a FUMBBL auto-marking config:

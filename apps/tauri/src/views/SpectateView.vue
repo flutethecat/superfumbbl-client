@@ -288,8 +288,8 @@ import {
   stageFumbblPlayerLobby,
   type BrowserMatch,
 } from '../game/jnlpRouting';
-import { generateAllMarkings, type AutoMarkingConfig } from '../game/markings';
-import { computeIconSkills, computeConfigMarkings, anyMarkerConfigured, markerGlyph, jumpUpMenuPresentation, playerDetailSkills } from '../game/skillDisplay';
+import { generateAllMarkings } from '../game/markings';
+import { computeIconSkills, effectiveMarkingConfig, markerGlyph, jumpUpMenuPresentation, playerDetailSkills } from '../game/skillDisplay';
 import type { PlayerDetailSkill } from '../game/skillDisplay';
 import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
@@ -333,7 +333,7 @@ const SIGN_SAYINGS: { top: string; bottom: string }[] = signSayingsRaw
   .map((line) => { const [top = '', bottom = ''] = line.split(',').map((part) => part.trim()); return { top, bottom }; })
   .filter((entry) => entry.top && entry.bottom);
 /** Owner 2026-07-06: crowd QUIPS keyed by the FFB skill name the fans react to. */
-const CROWD_QUIPS: Record<string, string> = { fend: 'Get fended, nerd!', 'stand firm': 'Like a rock!' };
+const CROWD_QUIPS: Record<string, string> = { fend: 'Get fended, nerd!', 'stand firm': 'Like a rock!', taunt: 'Get taunted, nerd!' }; // owner 09-25: Taunt joins the blue crowd quips
 
 // Upstream artwork is neither bundled nor fetched. A FUMBBL URL is only a stable
 // lookup key for an installed local pack (or an existing pre-policy cache hit).
@@ -2765,6 +2765,16 @@ watch(() => gameStore.state.negatraitCue?.seq, () => {
       default: return `${label}!`;
     }
   })();
+  // Owner 09-25: the OPPOSING stand heckles a failed activation ("Maybe not what I would have done."); a Rat Ogre
+  // failing Animal Savagery earns its own line ("Best big guy in the game!"). Pro is a skill roll, not an activation.
+  if (renderer && namedPlayer && label !== 'Pro') {
+    const g = gameStore.game.value;
+    const side = playerSide(cue.playerId);
+    const player = g ? [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === cue.playerId) : null;
+    const position = player ? positionNameFor({ player, side }) : '';
+    const ratOgre = label === 'Animal Savagery' && /rat\s*ogre/i.test(position);
+    renderer.crowdQuip(ratOgre ? 'Best big guy in the game!' : 'Maybe not what I would have done.', otherSide(side));
+  }
   const step = () => {
     const g = gameStore.game.value;
     const sq = g && renderer ? playerSquareById(cue.playerId) : null;
@@ -5052,6 +5062,7 @@ watch(plannerAllowed, (allowed) => {
 // block-preview interceptors) ONLY in o66 PLAY mode. Spectate/ClassicView never flip it (byte-valid passes).
 const o66RendererActive = computed(() => settings.order66 && gameStore.isPlaying.value);
 watch(o66RendererActive, (on) => { if (renderer) renderer.order66 = on; });
+watch(() => [props.mode, gameStore.myTeamIsHome.value] as const, ([mode, mine]) => { if (renderer) renderer.viewerIsHome = mode === 'play' ? mine : null; });
 
 // Jump availability uses an explicit upstream-checked whitelist; reaction/kickoff states remain omitted and the whitelist is drift-prone.
 /** Putrid walk availability depends on the raw action: only putridRegurgitationBlitz may walk; derived state is insufficient. */
@@ -6320,17 +6331,14 @@ function applyMarkings() {
     renderer.setPlayerMarkings(new Map());
     return;
   }
-  if (anyMarkerConfigured()) {
-    renderer.setPlayerMarkings(computeConfigMarkings(game));
-    return;
-  }
-  const raw = settings.markingsConfig.trim();
-  if (!raw) {
+  // Owner 09-25: ONE effective config (imported JSON combos/injuries + the per-skill table) through the upstream
+  // precedence rules — a configured marker no longer switches the JSON off (combo rules never drew before).
+  const config = effectiveMarkingConfig(settings.markingsConfig);
+  if (!config) {
     renderer.setPlayerMarkings(new Map());
     return;
   }
   try {
-    const config = JSON.parse(raw) as AutoMarkingConfig;
     renderer.setPlayerMarkings(generateAllMarkings(game, config));
   } catch (err) {
     // Don't silently blank all markings — surface WHY (a malformed JSON or a bad
@@ -8285,6 +8293,7 @@ onMounted(async () => {
   renderer.trailMarkStyle = settings.trailMarks; // owner 2026-07-08: echo | numbers
   renderer.plannerEnabled = plannerAllowed.value;
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
+  renderer.viewerIsHome = props.mode === 'play' ? gameStore.myTeamIsHome.value : null; // owner 09-25: enemy clicks inspect
   renderer.setAutoDirectorEnabled(settings.autoDirector && !spectatorDirectorSuspended.value); // owner 2026-07-03: Auto Director
   renderer.setAutoDirectorSuspended(gameStore.playbackCatchingUp.value);
   renderer.setStandStyle(settings.stadiumStands); // owner 09-25: stand art choice
@@ -8757,6 +8766,14 @@ onMounted(async () => {
           }
         }
       }
+    }
+    // Owner 09-25: an OPPOSITION player clicked during THEIR turn is inspected on the pitch too — the renderer
+    // selects it (viewerIsHome makes that a view-only inspection) and draws its reach and ITS team's tackle
+    // zones. During MY turn the actor and plan stay authoritative (the o66 `inspect` intent above), as before.
+    if (props.mode === 'play' && !gameStore.myTurn.value && renderer && gameStore.myTeamIsHome.value !== null) {
+      const g = gameStore.game.value;
+      const clickedIsHome = !!g?.teamHome.playerArray.some((p) => p.playerId === playerId);
+      if (g && clickedIsHome !== gameStore.myTeamIsHome.value) renderer.selectPlayer(playerId);
     }
     showPopup(playerId);
   };
