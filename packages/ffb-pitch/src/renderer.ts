@@ -2720,6 +2720,11 @@ export class PitchRenderer {
   }
   /** Previous ball square — feeds the ball-flight tween (F-5). */
   private lastBallSquare: [number, number] | null = null;
+  /** Owner 09-27: who carried the ball on the previous refresh. A ball whose square changes while the SAME player
+   *  still carries it is that player walking — the carried-ball group is glued to the token (carrierFollow), so
+   *  the generic "ball slides to its new square" tween must not also drive the sprite (it ran ahead of the
+   *  carrier on its own clock, then snapped back). */
+  private lastCarrierId: string | null = null;
   /** Ball on-pitch last render + whether we've rendered a ball at all — an
    *  off→on transition (kickoff / touchback / throw-in) triggers the kick arc,
    *  but never on the first render (initial spectate mid-game). */
@@ -3229,6 +3234,37 @@ export class PitchRenderer {
    *  the server-derived offer: Tarkin feeds the eligible playerIds off the pickMeUp playerChoice, Fives
    *  wires setPickMeUpCue on the offer's seq. INERT (null) until wired. Distinct from the generic
    *  player-pick arrow so the labelled cue reads on its own. */
+  /** Owner 09-27: PERSISTENT selection rings — the gold aura that used to flash once when a player was picked
+   *  now stays on every selected player (Pick Me Up: from the pick until that player's roll is made). Drawn with
+   *  the pick layer on every refresh so the ring follows the token; the ticker breathes it. */
+  private persistentPickRingIds: Set<string> | null = null;
+  private persistentPickRings: Graphics[] = [];
+  setPersistentPickRings(playerIds: string[] | null): void {
+    const next = playerIds && playerIds.length > 0 ? new Set(playerIds) : null;
+    const same = (next?.size ?? 0) === (this.persistentPickRingIds?.size ?? 0)
+      && [...(next ?? [])].every((id) => this.persistentPickRingIds?.has(id));
+    if (same) return;
+    this.persistentPickRingIds = next;
+    this.refresh();
+  }
+  private drawPersistentPickRings(): void {
+    this.persistentPickRings = [];
+    if (!this.game || !this.persistentPickRingIds) return;
+    for (const d of this.game.fieldModel.playerDataArray) {
+      const coordinate = this.effectiveCoordinate(d);
+      if (!this.persistentPickRingIds.has(d.playerId) || !coordinate || !isOnPitch(coordinate)) continue;
+      const anchor = squareAnchor(coordinate[0], coordinate[1]);
+      const ring = new Graphics();
+      ring.ellipse(0, 0, TILE_W * 0.5, TILE_H * 0.4).stroke({ color: 0xffd166, width: 4, alpha: 0.95 });
+      ring.ellipse(0, 0, TILE_W * 0.34, TILE_H * 0.26).fill({ color: 0xffd166, alpha: 0.18 });
+      ring.position.set(anchor.x, anchor.y);
+      ring.scale.set(depthScale(coordinate[0], coordinate[1]));
+      ring.zIndex = this.depthZ(coordinate[0], coordinate[1]) - 1; // under the token, over the turf
+      this.tokenLayer.addChild(ring);
+      this.persistentPickRings.push(ring);
+    }
+  }
+
   private pickMeUpCueIds: Set<string> | null = null;
   setPickMeUpCue(eligibleIds: string[] | null): void {
     this.pickMeUpCueIds = eligibleIds && eligibleIds.length > 0 ? new Set(eligibleIds) : null;
@@ -4233,6 +4269,9 @@ export class PitchRenderer {
         }
       }
       // Owner o66 #20: the over-head pick arrows bob down toward the player (a gentle 350ms hop, scaled by depth).
+      for (const ring of this.persistentPickRings) { // owner 09-27: a slow breath so the held selection reads as live
+        if (!ring.destroyed) ring.alpha = 0.72 + 0.28 * Math.sin(performance.now() / 420);
+      }
       for (const a of this.pickArrows) {
         if (a.node.destroyed) continue;
         a.node.position.y = a.baseY + Math.abs(Math.sin(performance.now() / 350)) * 6 * a.scale;
@@ -5449,6 +5488,7 @@ export class PitchRenderer {
     this.projectFailedMovementDestination();
     this.drawPushOptions();
     this.drawPlayerPick();
+    this.drawPersistentPickRings();
     this.drawPersistentPlayerArrows();
     this.drawPickMeUpCue();
     this.drawQuickSnapArrows();
@@ -5660,6 +5700,9 @@ export class PitchRenderer {
         const p = squareAnchor(prevBall[0], prevBall[1]);
         g.position.set(p.x, p.y - 3);
         heldBounce = true;
+      } else if (carrier && this.lastCarrierId === carrier.playerId && prevBall && (prevBall[0] !== ball[0] || prevBall[1] !== ball[1])) {
+        // Owner 09-27: the carrier is walking with the ball — no independent ball tween; the glue owns the sprite.
+        this.moveTweens.delete('__ball__');
       } else if (!this.suppressGenericBallInThisRefresh && !arcActive && prevBall && (prevBall[0] !== ball[0] || prevBall[1] !== ball[1])) {
         // #185 F-1a: the ground-slide branch must NOT capture '__ball__' while the kickoff arc is in flight —
         // this is THE branch that stole the arc in play (the immediate-apply post-landing frame matched here
@@ -5748,6 +5791,7 @@ export class PitchRenderer {
       if (!heldBounce && !arcActive) this.lastBallSquare = [ball[0], ball[1]];
       if (!heldKickIn && !arcActive) this.lastBallOnPitch = true;
       this.ballEverRendered = true;
+      this.lastCarrierId = carrier?.playerId ?? null;
 
       // Ball-carrier marker (owner 2026-07-02, queue item 9): halo under the
       // carrier + bobbing down-arrow with "BALL" above the head, KO-marker
@@ -5843,6 +5887,7 @@ export class PitchRenderer {
     } else {
       this.lastBallSquare = null; // off pitch — don't tween the throw-in
       this.lastBallOnPitch = false;
+      this.lastCarrierId = null;
       this.ballEverRendered = true;
     }
 
@@ -6724,6 +6769,15 @@ export class PitchRenderer {
     return this.presentationStep?.playerId === playerId
       || this.movementPresentationCursor?.playerId === playerId
       || this.movementIntent?.playerId === playerId;
+  }
+
+  /** Owner 09-27: host-facing form of the 09-23 probe. Live play runs the order-66 tile route (the legacy planner
+   *  below is off there), so the view asks before it plots, extends or commits a walk. `progress` is the token's
+   *  rendered position — a host holding clicks on this can fail open once nothing on screen is advancing. */
+  movementOnScreen(playerId: string): { inFlight: boolean; progress: string } {
+    const token = this.tokensById.get(playerId);
+    const progress = token && !token.destroyed ? `${Math.round(token.position.x)},${Math.round(token.position.y)}` : '';
+    return { inFlight: this.movementInFlight(playerId), progress };
   }
 
   private handleSquareClick(square: Square): void {

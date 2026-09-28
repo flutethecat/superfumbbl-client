@@ -100,7 +100,7 @@ import { canConfirmGazeAtCurrentPosition, canNominateGazeVictim, gazeConfirmRefu
 import { dialogDescriptor, dialogRuntimeHandler, resolveDialogIntent, resolveDialogSurface } from './dialogRegistry';
 import { playerActionClientState, playerActionDescriptor, playerActionFallbackState, resolvePlayerActionSelection } from './playerActionRegistry';
 import type { RailDiagnosticSink } from './railDiagnostics';
-import { railDiagnosticWireRecord } from './wireLogRecord';
+import { connectionLogFileName, connectionWireRecord, pongOverdueStage, railDiagnosticWireRecord, type ConnectionWireEvent } from './wireLogRecord';
 import {
   actionStateShadowInScope,
   createRefusalDivergenceCounts,
@@ -807,6 +807,9 @@ const legacyState = reactive({
   } | null,
   /** #146 (g759): PICK-ME-UP eligibility cue — the prone ids the SERVER is offering (⚖ pure server-offer, no local re-derivation); cleared on resolve/dialog-change/game-change. */
   pickMeUpEligible: null as { playerIds: string[]; seq: number } | null,
+  /** Owner 09-27: the players the coach CONFIRMED for Pick Me Up whose roll has not arrived yet — presentation
+   *  only (the selection ring holds on them); a player leaves on its ReportPickMeUp, all leave on turn end / game change. */
+  pickMeUpPending: null as { playerIds: string[]; seq: number } | null,
   /** Owner 07-06: SELECT-KEYWORD prompt (BB2025 `selectKeyword`, e.g. Getting Even/Hatred) — pick min..max of the offered names; answered clientKeywordSelection. */
   keywordChoice: null as
     | { playerId: string; playerName: string; keywords: string[]; mode: string; min: number; max: number; seq: number }
@@ -6182,6 +6185,15 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 09-17: the per-game dice tally (end screen Dice tab + failed blocks / dodges) reads the same
   // de-duplicated reports; commandNr keys out frames a replay seek re-applies.
   ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
+  // Owner 09-27: a Pick Me Up roll retires that player's held selection ring; a turn end retires the rest.
+  if (state.pickMeUpPending) {
+    const rolled = new Set(reports.filter((r) => String(r.reportId ?? '') === 'pickMeUp').map((r) => String(r.playerId ?? '')));
+    const turnEnded = reports.some((r) => String(r.reportId ?? '') === 'turnEnd');
+    const left = turnEnded ? [] : state.pickMeUpPending.playerIds.filter((id) => !rolled.has(id));
+    if (left.length !== state.pickMeUpPending.playerIds.length) {
+      state.pickMeUpPending = left.length ? { playerIds: left, seq: state.pickMeUpPending.seq + 1 } : null;
+    }
+  }
   // Owner 09-25 (fun facts): every server activation of a player counts toward its team's turn (applied frame, so
   // half/turn read current); the turnEnd branch below closes the turn with its turnover verdict.
   for (const ch of ((cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [])) {
@@ -7967,6 +7979,56 @@ const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '
 declare const __GIT_SHA__: string;
 const GIT_SHA = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'nogit';
 
+// Owner 09-27: CONNECTION records in the wire log — session state, close/error, every pong (round-trip + gap) and a
+// pong-overdue ladder. Logging only: nothing here reconnects or changes play (the watchdog was declined for now).
+let connectionLogSession: GameSession | null = null;
+let connectionLastPongAt = 0;
+let connectionOverdueStage = 0;
+let connectionOverdueTimer: ReturnType<typeof setInterval> | null = null;
+let connectionLogSeq = 0;
+function wireConnection(event: ConnectionWireEvent, detail: Record<string, string | number | boolean | null> = {}): void {
+  if (!settings.wireLog) return;
+  if (wireLog.file) { void writeWireLine(JSON.stringify(connectionWireRecord(wireLog.seq++, Date.now(), event, detail))); return; }
+  // Owner 09-27: no game yet (a join in flight, or one that failed) — the dated connection log keeps the trail.
+  void writeConnectionLogLine(JSON.stringify(connectionWireRecord(connectionLogSeq++, Date.now(), event, { ...detail, appVersion: APP_VERSION })));
+}
+async function writeConnectionLogLine(line: string): Promise<void> {
+  const invoke = await getTauriInvoke();
+  if (!invoke) return;
+  try { await invoke('verbose_log_append', { fileName: connectionLogFileName(new Date()), line }); } catch { /* logging must never break the game */ }
+}
+function hostForLog(url: string): string { try { return new URL(url).host; } catch { return ''; } }
+// A join failure (timeout, refusal, close before the game) lands in state.joinError — record it with the trail.
+watch(() => state.joinError, (message) => { if (message) wireConnection('join-error', { message: String(message) }); });
+function attachConnectionWireLog(target: GameSession): void {
+  connectionLogSession = target;
+  connectionLastPongAt = Date.now();
+  connectionOverdueStage = 0;
+  if (connectionOverdueTimer) clearInterval(connectionOverdueTimer);
+  connectionOverdueTimer = setInterval(() => {
+    if (connectionLogSession !== target) return;
+    const silenceMs = Date.now() - connectionLastPongAt;
+    const stage = pongOverdueStage(silenceMs);
+    if (stage > connectionOverdueStage) { connectionOverdueStage = stage; wireConnection('pong-overdue', { silenceMs }); }
+  }, 5_000);
+  target.on('state', (next) => { if (connectionLogSession === target) wireConnection('state', { state: String(next) }); });
+  target.on('error', (error) => { if (connectionLogSession === target) wireConnection('error', { message: error instanceof Error ? error.message : String((error as { type?: string })?.type ?? error) }); });
+  target.on('close', (code, reason) => {
+    if (connectionLogSession !== target) return;
+    wireConnection('close', { code: Number(code), reason: String(reason ?? ''), sinceLastPongMs: Date.now() - connectionLastPongAt });
+    if (connectionOverdueTimer) { clearInterval(connectionOverdueTimer); connectionOverdueTimer = null; }
+    connectionLogSession = null;
+  });
+  target.on('command', (cmd) => {
+    if (connectionLogSession !== target || (cmd as { netCommandId?: string }).netCommandId !== NetCommandId.SERVER_PONG) return;
+    const now = Date.now();
+    const sent = Number((cmd as { timestamp?: unknown }).timestamp);
+    wireConnection('pong', { rttMs: Number.isFinite(sent) && sent > 0 ? now - sent : null, gapMs: now - connectionLastPongAt });
+    connectionLastPongAt = now;
+    connectionOverdueStage = 0;
+  });
+}
+
 function verboseTee(dir: 'in' | 'out', cmd: Record<string, unknown>) {
   // Owner 2026-07-10: feed the Developer panel FIRST — independent of the wire-log FILE toggle, so the owner sees the live server-side/client-side stream even with file logging off.
   // Owner 08-18: capture ALWAYS (bug reports attach this ring for every tester); devMode gates only the panel.
@@ -8385,6 +8447,7 @@ function clearLeaveGameResidualState(): void {
   state.blockPartial = null;
   state.activePlayerId = null;
   state.pickMeUpEligible = null;
+  state.pickMeUpPending = null;
   state.adminMessage = null;
   state.injuryPuff = null;
   state.apothecaryD16 = null;
@@ -18854,6 +18917,7 @@ export const gameStore = {
     // immediate mode: the first click answers (interception-style)
     if (!p.confirm && p.maxPicks === 1) {
       const fn = playerPickResolver;
+      if (p.key.startsWith('pchoice:pickMeUp')) state.pickMeUpPending = { playerIds: [playerId], seq: (state.pickMeUpPending?.seq ?? 0) + 1 }; // owner 09-27
       clearPlayerPick();
       log('system', `play: player pick ${playerName(game.value, playerId)} (${p.key})`);
       fn?.([playerId]);
@@ -18879,6 +18943,9 @@ export const gameStore = {
     if (!p || !p.confirm || p.picked.length < p.minPicks) return;
     const picked = [...p.picked];
     const fn = playerPickResolver;
+    if (p.key.startsWith('pchoice:pickMeUp') && picked.length) {
+      state.pickMeUpPending = { playerIds: picked, seq: (state.pickMeUpPending?.seq ?? 0) + 1 };
+    }
     clearPlayerPick();
     log('system', `play: player pick confirmed — ${picked.map((id) => playerName(game.value, id)).join(', ') || 'none'} (${p.key})`);
     fn?.(picked);
@@ -19279,6 +19346,8 @@ export const gameStore = {
     if (!retainedHistory) { game.value = null; triggerRef(game); }
     expectingGame = true;
     session = new GameSession({ url: params.url, compression: params.compression ?? true });
+    attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
+    wireConnection('join-start', { mode: 'spectator', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0) });
     // Ignore late events from a prior session that this connect just replaced (a stale async close was otherwise setting a bogus joinError over the new game — seen on rapid reconnects).
     const thisSession = session;
     let spectatorStatusTerminal = false;
@@ -19626,6 +19695,8 @@ export const gameStore = {
     interactiveSetup = settings.uiMode !== 'classic';
     pregameHandled.clear();
     session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true });
+    attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
+    wireConnection('join-start', { mode: 'player', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0), byName: !!params.gameName, official: officialFumbbl });
     // A prior session closes asynchronously AFTER this connect starts; its late
     // events must not mutate the new session's state (a stale close was leaving a
     // bogus joinError banner up over a live game). Ignore events from any session

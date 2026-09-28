@@ -120,6 +120,7 @@ import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEn
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
 import { wideRailAvailabilityNotice } from '../game/logic/wideRailAvailabilityNotice';
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
+import { createMoveClickGate } from '../game/logic/moveClickGate';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { allowsFumblerooskieAction } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
@@ -132,7 +133,7 @@ import { sppEarnedThisGame } from '../game/logic/sppEarned';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
 import { spectatorExitActionsVisible, spectatorMvpPending, type EndGameExit } from '../game/spectatorEndGame';
 import { spectatorConcedeOccurrenceKey, spectatorPenaltyShootoutOccurrenceKey } from '../game/spectatorLocalDismissal';
-import { shouldShowRejoinBrowser } from '../game/rejoinFlow';
+import { shouldShowRejoinBrowser, startRejoin } from '../game/rejoinFlow';
 // Fives lane 08-19: project only the fresh auto-Move shell back through the menu's server-derived offer set.
 function quickClickBlitzAction(game: GameJson, ctx: ClientStateContext, actingId: string, targetId: string): CoachAction | null {
   const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; currentMove?: number } | undefined;
@@ -150,6 +151,8 @@ const o66ExplicitBlockChoice = ref<{ kind: BlockKind | null } | null>(null);
 // Owner o66 automove CONFIRM: first click on a move square previews the route (crosshair + path trail); a
 // second click on the SAME square confirms + sends. Cleared on confirm / re-plan / a fresh reach.
 const o66PendingMove = ref<{ dest: [number, number]; route: [number, number][] } | null>(null);
+// Owner 09-27: tile clicks hold while the actor's confirmed move is still on screen (fails open on a stalled token).
+const o66MoveClickGate = createMoveClickGate();
 // Fives lane 08-19: target waits for the server's SELECT_BLITZ_TARGET echo; no speculative target wire.
 const o66PendingBlitzTarget = ref<string | null>(null);
 // A confirmed left-click target owns its previewed route while the server acknowledges Blitz, target selection,
@@ -4142,6 +4145,22 @@ watch(
     gameStore.game.value?.gameId ?? '',
   ] as const,
   syncShadedPick,
+);
+
+// Owner 09-27: Pick Me Up — the selection ring is PERSISTENT: on every player picked while the choice is open, and
+// after Confirm on each one until its roll is made (store pickMeUpPending).
+watch(
+  () => [
+    gameStore.state.playerPick?.key ?? '',
+    gameStore.state.playerPick?.picked.join('|') ?? '',
+    gameStore.state.pickMeUpPending?.seq ?? 0,
+  ] as const,
+  () => {
+    const pick = gameStore.state.playerPick;
+    const picking = pick?.key.startsWith('pchoice:pickMeUp') ? pick.picked : [];
+    const pending = gameStore.state.pickMeUpPending?.playerIds ?? [];
+    renderer?.setPersistentPickRings([...new Set([...picking, ...pending])]);
+  },
 );
 
 // Confirm-mode selections read as chosen: a gold aura pulses on each newly
@@ -8918,10 +8937,19 @@ onMounted(async () => {
         // First click previews a move-family route; the second commits it. Pass targets outside reach are throws.
         const handleMoveFamilyClick = () => {
           if (isGazeMovementState(st) && !gameStore.hasLiveGazeIntent()) return;
+          // Owner 09-27 (live g1947538, plain move on 1.0.25): the 09-23 swallow guarded the legacy planner only, so
+          // this route still plotted and committed walks mid-animation. Movement clicks now hold until the token has
+          // landed; throw targeting below is not movement and stays live.
+          const walkStillOnScreen = () => {
+            if (!renderer) return false;
+            const seen = renderer.movementOnScreen(actingId);
+            return o66MoveClickGate.swallow(actingId, { inFlight: seen.inFlight || gameStore.isPlanWalking(actingId), progress: seen.progress }, performance.now());
+          };
           const fumblerooskieBlitzWalk = fumblerooskieActive.value
             && String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'kickEmBlitz';
           // Ball & Chain tile clicks send one aim step; the server owns random scatter and final placement.
           if (st === 'MOVE' && movesRandomly(g, actingId)) {
+            if (walkStillOnScreen()) return;
             gameStore.stepMove(actingId, c);
             return;
           }
@@ -8930,6 +8958,7 @@ onMounted(async () => {
           //   o66Reach auto-path/preview below (that's for MA walks + would route through intermediate squares).
           //   Gate on serverMoveSquares (the flipped jump set) → a non-jump tile is a no-op. Mirrors Ball & Chain.
           if (JUMP_MOVE_STATES.has(st) && (g.actingPlayer as { leaping?: boolean } | undefined)?.leaping) {
+            if (walkStillOnScreen()) return;
             if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) gameStore.stepMove(actingId, c);
             return;
           }
@@ -8953,6 +8982,7 @@ onMounted(async () => {
           // Owner ruling: while the end-activation dialog is open, pitch clicks cannot create, extend, or commit a
           // movement route. Non-planner tile interactions above remain available and the dialog owns resolution.
           if (endActConfirm.value) return;
+          if (walkStillOnScreen()) return;
           // Same waypoint-anchored reach the overlay paints (owner 08-18) — the click gate can never admit a square
           //   the tint says is out of budget, and the plotted squares stay clickable (confirm / truncate).
           const inReach = (renderer?.o66Reach(actingId, o66PendingMove.value?.route ?? [])?.squares ?? []).some((s) => s[0] === c[0] && s[1] === c[1]);
@@ -9293,12 +9323,10 @@ function rejoinByGameId() {
   const id = Number(rejoinGameId.value.trim());
   if (!Number.isInteger(id) || id <= 0) return;
   ui.browserOpen = false; // Option A: starting a rejoin closes the browser, same as connect()/joinPlay()
-  void gameStore.rejoinById({
-    url: settings.url,
-    compression: settings.compression,
-    ...resolveJoinCreds(),
-    gameId: id,
-  });
+  // Owner 09-27: tracked (app-shell RejoinProgressModal) — the rejoin disconnects first, which unmounts this view,
+  // so a failure had nowhere to show ("kicked back to the play blade with no error message").
+  const target = activeServerTarget();
+  startRejoin({ url: target.url, compression: target.compression, ...resolveJoinCreds(), gameId: id });
 }
 
 // #210 (owner-endorsed): YOUR GAMES IN PROGRESS — server-derived one-click rejoin rows above the #211
@@ -9350,12 +9378,13 @@ async function loadMyGames(force = false) {
  *  gameId is the only handle; the server matches the seat by coach name). */
 function rejoinMyGame(row: CoachGameRow) {
   ui.browserOpen = false;
-  void gameStore.rejoinById({
-    url: settings.url,
-    compression: settings.compression,
-    ...resolveJoinCreds(),
-    gameId: row.gameId,
-  });
+  // Owner 09-27 (row Rejoin "kicks us back to the play blade with no error"): these rows are the FORK server's
+  // games (config-web my-games), but the join used whatever target was active — with FUMBBL active it asked
+  // fumbbl.com for a fork game id, failed, and the failure had no surface (this view unmounts when the rejoin
+  // disconnects). Same shape as the Play blade's modal now: switch to the fork, join through the TRACKED flow.
+  applyServerTarget('fork');
+  const target = activeServerTarget();
+  startRejoin({ url: target.url, compression: target.compression, ...resolveJoinCreds(), gameId: row.gameId, opponent: row.opponentCoach });
 }
 
 // Fetch the coach's games when the lobby opens in fork Play mode (and refetch if the coach changed).
@@ -12377,6 +12406,9 @@ function sendChat() {
             </div>
             <!-- #63 re-present mirror: :key bumps per MVP round → this block re-mounts + replays the pop-in so a
                  2nd (or Nth) nominate round visibly re-pops (fresh checkboxes ride Tarkin's store re-arm). -->
+            <!-- Owner 09-27: "Waiting for opponent" sits in the card's flow — under the result + team chips, above the
+                 nomination list — instead of floating at the screen's top-right corner over the coach panel. -->
+            <div v-if="mvpWaiting" class="mvp-waiting" role="status" aria-live="polite"><span class="mvp-waiting-dots"><i>.</i><i>.</i><i>.</i></span> Waiting for opponent</div>
             <div v-if="mvpPick" :key="'mvp-round-' + mvpRoundKey" class="mvp-nominate-round">
               <div class="mvp-nominate-head">
                 <span class="mvp-nominate-title">{{ mvpPick.prompt }}</span>
@@ -12409,7 +12441,6 @@ function sendChat() {
               <button v-else class="mvp-nominate-confirm" disabled>Nominate MVP's</button>
             </div>
           </div>
-          <div v-if="mvpWaiting" class="mvp-waiting"><span class="mvp-waiting-dots"><i>.</i><i>.</i><i>.</i></span> Waiting for opponent</div>
         </div>
 
         <!-- g478 #1 (owner live g487) + Yularen audit rule: kickoff MINI-PHASE confirm bar (High Kick / Quick
@@ -14571,7 +14602,7 @@ function sendChat() {
 .mvp-screen-star::before { content: '\2605'; color: var(--ui-accent); margin-right: 4px; }
 @keyframes mvpChipFlash { 0% { box-shadow: 0 0 0 0 var(--ui-accent); } 30% { box-shadow: 0 0 16px 1px var(--ui-accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .mvp-screen-chip.mvp-flash { animation: mvpChipFlash var(--p-1000) ease-out; }
-.mvp-waiting { position: absolute; top: 14px; right: 14px; z-index: 2; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 8px; padding: 8px 12px; font-size: max(var(--ui-min-text-size, 12px), 0.78rem); color: var(--ui-text-dim); }
+.mvp-waiting { flex: 0 0 auto; align-self: center; margin: 0 16px 10px; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 8px; padding: 8px 16px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); color: var(--ui-text-dim); text-align: center; } /* owner 09-27: in flow, between the chips and the nominations */
 .mvp-waiting-dots i { animation: mvp-wait-dot 1.2s infinite; opacity: 0; }
 .mvp-waiting-dots i:nth-child(2) { animation-delay: 0.2s; }
 .mvp-waiting-dots i:nth-child(3) { animation-delay: 0.4s; }
