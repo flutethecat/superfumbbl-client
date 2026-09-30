@@ -15737,8 +15737,8 @@ export class PitchRenderer {
     token.addChild(node);
   }
 
-  /** Owner 09-30: the DISTRACTED word art at the FEET of a standing player, where ROOTED / CHOMPED sit and the same
-   *  perceived size (512x205 art). Label 'distractedMarker'; above the state row. */
+  /** Owner 09-30: the DISTRACTED word art over the CHEST of a standing player, at ROOTED / CHOMPED's perceived size
+   *  (512x205 art, the figure's own width). Label 'distractedMarker'; above the state row. */
   private addDistractedMarker(token: Container): void {
     const tex = this.distractedDecoTexture;
     if (!tex) return;
@@ -15749,15 +15749,12 @@ export class PitchRenderer {
     const node = new Sprite(tex);
     node.anchor.set(0.5, 0.5);
     node.label = 'distractedMarker';
-    const scale = DISTRACTED_H / tex.height;
-    if (isWalkerToken(token)) {
-      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + FEET_ART_DY, scale);
-    } else {
-      const bounds = token.getLocalBounds();
-      node.position.set(0, bounds.maxY + FEET_ART_DY);
-      node.scale.set(scale);
-    }
-    node.zIndex = 52;
+    // Owner 09-30 r5/r6: over the centre of the CHEST (the Dodgy Snack mount: y=-4 for the reference lineman, feet at
+    // WALKER_FEET_Y_PX), and the size follows the FIGURE (walkerFigureRatio: 1 = lineman, ~0.6 snotling, 1.3+ big
+    // guys) - a minotaur's banner is a minotaur's width, its chest proportionally higher.
+    const ratio = isWalkerToken(token) ? (walkerFigureRatio(token) ?? 1) : 1;
+    const scale = (DISTRACTED_H * ratio) / tex.height;
+    this.placeChestMarker(token, node, 52, scale); // the gaze eye's chest mount: feet - 0.55 x figure height
     token.sortableChildren = true;
     token.addChild(node);
   }
