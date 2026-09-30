@@ -15737,23 +15737,25 @@ export class PitchRenderer {
     token.addChild(node);
   }
 
-  /** Owner 09-30: the DISTRACTED banner centred on the torso of a standing player, a tile wide like the STUNNED
-   *  banner (512x205 art). Label 'distractedMarker'; above the state row. */
+  /** Owner 09-30: the DISTRACTED word art at the FEET of a standing player, where ROOTED / CHOMPED sit and the same
+   *  perceived size (512x205 art). Label 'distractedMarker'; above the state row. */
   private addDistractedMarker(token: Container): void {
     const tex = this.distractedDecoTexture;
     if (!tex) return;
+    // Owner 09-30 (r2: "much too large, that should be the size of the player's feet and reduced"): the word art sits
+    // at the FEET exactly like ROOTED / CHOMPED, sized by HEIGHT to DISTRACTED_H (decor-1 units, halved at the fit
+    // zoom; owner r3: "the visual width of the player token" -> 18 tall = ~45 units wide, the figure's own width).
+    const DISTRACTED_H = 18;
     const node = new Sprite(tex);
     node.anchor.set(0.5, 0.5);
     node.label = 'distractedMarker';
-    // Token-local placement exactly like the STUNNED banner (addDownDecoration): a tile wide, centred on the figure
-    // (a standing walker's torso centre is y=-4 in token units: feet at WALKER_FEET_Y_PX, body ~30 tall).
-    node.width = TILE_W * 0.98;
-    node.height = node.width * (tex.height / tex.width);
+    const scale = DISTRACTED_H / tex.height;
     if (isWalkerToken(token)) {
-      node.position.set(0, -4);
+      placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX + FEET_ART_DY, scale);
     } else {
       const bounds = token.getLocalBounds();
-      node.position.set(0, (bounds.minY + bounds.maxY) / 2);
+      node.position.set(0, bounds.maxY + FEET_ART_DY);
+      node.scale.set(scale);
     }
     node.zIndex = 52;
     token.sortableChildren = true;
