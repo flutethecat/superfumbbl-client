@@ -17734,11 +17734,9 @@ export class PitchRenderer {
       if (badge) badge.alpha = Math.min(1, kk) / alpha;
       // Owner 09-07: the Hypnotic Gaze eye stays FULLY LIT on a shaded (inactive / gazed) player — compensate the
       // token alpha on the marker itself (the eye is a Text child, never tinted; only the alpha reached it).
-      const eye = token.getChildByLabel?.('gazeVictimMarker', false);
-      if (eye) eye.alpha = Math.min(1, 1 / alpha);
-      const gouge = token.getChildByLabel?.('eyeGougeMarker', false); // 09-07: same treatment
-      if (gouge) gouge.alpha = Math.min(1, 1 / alpha);
-      for (const label of litMarkers) { // 09-30: the banners cancel the token alpha exactly like the activated ✓ (unclamped)
+      // Owner 09-30: the gaze eye, the eye-gouge mark and the STUNNED / DISTRACTED banners cancel the token alpha
+      // exactly like the activated ✓ (UNCLAMPED 1/alpha; the old Math.min(1, …) still left them at the body's dim).
+      for (const label of ['gazeVictimMarker', 'eyeGougeMarker', ...litMarkers]) {
         const marker = token.getChildByLabel?.(label, false);
         if (marker) marker.alpha = 1 / alpha;
       }
