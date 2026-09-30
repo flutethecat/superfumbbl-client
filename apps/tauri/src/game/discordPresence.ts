@@ -1,4 +1,5 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { turnSideIsHome } from './blastinSecondBeat';
 
 /**
  * Owner 09-24: Discord Rich Presence — what the local Discord shows for this coach. Pure text-shaping here; the
@@ -44,7 +45,7 @@ export function pluralRace(race: string): string {
 const coachRace = (coach: string | undefined, race: string | undefined) => `${possessive(coach ?? '?')} ${pluralRace(race ?? '?')}`;
 
 export function turnLabel(game: GameJson): string {
-  const turn = game.homePlaying ? game.turnDataHome?.turnNr : game.turnDataAway?.turnNr;
+  const turn = turnSideIsHome(game) ? game.turnDataHome?.turnNr : game.turnDataAway?.turnNr; // S46
   const half = Number(game.half ?? 0);
   const t = Number(turn ?? 0);
   if (game.finished) return 'Final';

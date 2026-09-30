@@ -5,6 +5,8 @@ import type { PassReRollResult, ServerPassRollTruth } from './actionRollProjecti
 import { actionRollFor, type ActionRollProjection } from './actionRollProjection';
 import { d6RerollNeeded, d6RerollRoll } from './d6Log';
 import { playerName } from './reportFormatter';
+import { adjacentSavageryTargetIds, dodgeSkillCancelledAt, normSquare, skillMarkedUsed } from './logic/availableActions';
+import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -17,14 +19,16 @@ export interface ReRollDecisionProjection extends ReRollPromptPresentation {
 }
 
 /** Complete card content, independent of sequence counters, send authority and presentation timers. */
-export function buildReRollDecision(game: GameJson, dialog: Record<string, unknown>, rolls: ActionRollProjection, mine = false, suppliedOptions?: ReRollPromptOption[]): ReRollDecisionProjection | null {
+export function buildReRollDecision(game: GameJson, dialog: Record<string, unknown>, rolls: ActionRollProjection, mine = false, suppliedOptions?: ReRollPromptOption[], movement?: ObservedMovementOccurrence | null): ReRollDecisionProjection | null {
   const playerId = String(dialog.playerId ?? '');
   const player = playerById(game, playerId);
-  const options = suppliedOptions ?? offeredReRollOptions(dialog, player?.skillDisplayValuesMap);
-  if (!suppliedOptions && primalSavageryAvailable(dialog, player, game.actingPlayer as unknown as Record<string, unknown>)) {
+  const offered = suppliedOptions ?? offeredReRollOptions(dialog, player?.skillDisplayValuesMap);
+  const options = withoutCancelledDodgeSkill(offered, dialog, game, movement);
+  const clientWithheld = options.length < offered.length; // S18: the client emptied a card the server did offer
+  if (!suppliedOptions && primalSavageryAvailable(dialog, player, game.actingPlayer as unknown as Record<string, unknown>, game)) {
     options.push({ label: PRIMAL_SAVAGERY_SKILL, source: PRIMAL_SAVAGERY_SKILL, response: 'primal-savagery', role: 'modifier' });
   }
-  if (!options.length) return null;
+  if (!options.length && !clientWithheld) return null; // a client-withheld card stays up (empty) for the coach's own decline
   const prior = actionRollFor(rolls, playerId);
   const passTruth = prior?.pass ?? undefined;
   const presentation = reRollPromptPresentation(dialog, passTruth);
@@ -95,6 +99,7 @@ export function primalSavageryAvailable(
   dp: Record<string, unknown>,
   player: ReturnType<typeof playerById>,
   actingPlayer?: Record<string, unknown> | null,
+  game?: GameJson | null,
 ): boolean {
   // Live fork wire (game 889 command 381) uses the FQ class id
   // `com.fumbbl.ffb.skill.mixed.AnimalSavagery`; older fixtures/forks use the
@@ -102,7 +107,38 @@ export function primalSavageryAvailable(
   // server-authored forms identify the same prompt without suffix guessing.
   if (normSkill(reRollActionName(dp.reRolledAction)) !== 'animalsavagery') return false;
   const explicit = explicitLashOutCapability(dp, player, actingPlayer);
-  return explicit ?? playerHasSkill(player, PRIMAL_SAVAGERY_SKILL);
+  if (!(explicit ?? playerHasSkill(player, PRIMAL_SAVAGERY_SKILL))) return false;
+  // Owner 09-28 (S12): the server (bb2025 AnimalSavageryBehaviour ~140-153) offers Primal Savagery only when the
+  // skill is UNUSED and an opponent target is adjacent. No game state = nothing to derive it from = not offered.
+  if (!game || !player) return false;
+  return !skillMarkedUsed(game, player.playerId, PRIMAL_SAVAGERY_SKILL)
+    && adjacentSavageryTargetIds(game, player.playerId).length > 0;
+}
+
+/** The square the dodging player left for this step, from RECEIVED frames only: the observed-movement occurrence for
+ *  that player whose destination is where the model holds him now. Anything else (reconnect into the open dialog, a
+ *  non-adjacent jump, a stale occurrence) is unknown - null. */
+export function dodgeOriginSquare(game: GameJson, playerId: string, movement: ObservedMovementOccurrence | null | undefined): [number, number] | null {
+  if (!movement || movement.playerId !== playerId) return null;
+  const now = normSquare(game.fieldModel.playerDataArray.find((data) => data.playerId === playerId)?.playerCoordinate);
+  return now && now[0] === movement.to[0] && now[1] === movement.to[1] ? [movement.from[0], movement.from[1]] : null;
+}
+
+/** Owner 09-28 (S18, game 992): drop the Dodge SKILL option from a Dodge re-roll when the server's own rule withholds
+ *  it (an adjacent-at-origin opposing Tackle player, see `dodgeSkillCancelledAt`) though its dialog still lists it.
+ *  Every other option, skill and rolled action passes through; an unknown origin leaves the card as the server sent it. */
+export function withoutCancelledDodgeSkill(
+  options: ReRollPromptOption[],
+  dialog: Record<string, unknown>,
+  game: GameJson | null | undefined,
+  movement: ObservedMovementOccurrence | null | undefined,
+): ReRollPromptOption[] {
+  if (!game || normSkill(reRollActionName(dialog.reRolledAction)) !== 'dodge') return options;
+  const isDodgeSkill = (option: ReRollPromptOption) => option.response === 'skill' && option.role === 'reroll-skill' && normSkill(option.source) === 'dodge';
+  if (!options.some(isDodgeSkill)) return options;
+  const playerId = String(dialog.playerId ?? '');
+  const origin = dodgeOriginSquare(game, playerId, movement);
+  return origin && dodgeSkillCancelledAt(game, playerId, origin) ? options.filter((option) => !isDodgeSkill(option)) : options;
 }
 
 export function valuedSkillLabel(rawSkill: string, displayValues: Record<string, unknown> | undefined): string {

@@ -12,8 +12,26 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
 import { availableActions, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
+import { isBlastinSecondBeat } from '../blastinSecondBeat';
 
 export type EndActivationConfirmKind = 'blitz' | 'punt' | 'generic';
+
+/** Spec S15B: how an end-activation confirm was opened. An explicit End gesture (End row, click on self) may roll a held
+ *  Big Guy Activate intent; Esc and every other cancel gesture never does. */
+export type EndActivationOrigin = 'explicit' | 'cancel';
+/** `label` is bigGuyRollEndLabel (Spec S23), so the card names the same negatrait as the menu row. */
+export function rollEndConfirmCopy(label: string) {
+  return { title: label, text: 'Roll the negatrait and end this activation? The player has not moved yet.', confirmLabel: label };
+}
+/** Pure decision for the generic end-activation confirm: whether confirming rolls, and the copy that says so (null =
+ *  keep the ordinary copy). Rolls only for an explicit origin, a generic confirm, and the live intent's own player. */
+export function endActivationConfirmDecision(input: {
+  origin: EndActivationOrigin; kind: EndActivationConfirmKind; rollPlayerId: string | null; actingId: string; rollLabel?: string;
+}): { roll: boolean; copy: ReturnType<typeof rollEndConfirmCopy> | null } {
+  const roll = input.origin === 'explicit' && input.kind === 'generic'
+    && !!input.rollPlayerId && input.rollPlayerId === input.actingId;
+  return { roll, copy: roll ? rollEndConfirmCopy(input.rollLabel ?? 'Roll & End Activation') : null };
+}
 export type FriendlyActivationSwitchDisposition = 'refund' | 'end';
 
 // R2: the view projects its richer menu rows through this pure acting-player right-click seam.
@@ -24,7 +42,10 @@ export const TARGET_PENDING_STATES: ReadonlySet<ClientStateId> = new Set<ClientS
   'BLOCK', 'SELECT_BLITZ_TARGET', 'KICK_EM_BLOCK', 'SYNCHRONOUS_MULTI_BLOCK', 'FOUL', 'BOMB', 'THROW_KEG',
   'THROW_TEAM_MATE', 'KICK_TEAM_MATE', 'GAZE', 'HAND_OVER', 'PASS',
 ]);
-export function selectedActingRightClick(rows: ReadonlyArray<RightClickRow>, state?: ClientStateId | '' | null): 'menu' | 'cancel' {
+/** `rollIntentLive` (Spec S23): a live Big Guy Activate intent on the acting player always surfaces the menu, so the
+ *  roll row is a deliberate pick and a right-click alone never ends (or rolls) the activation. */
+export function selectedActingRightClick(rows: ReadonlyArray<RightClickRow>, state?: ClientStateId | '' | null, rollIntentLive = false): 'menu' | 'cancel' {
+  if (rollIntentLive) return 'menu';
   if (rows.some((row) => !row.disabled && !row.endActivation)) return 'menu';
   return state && TARGET_PENDING_STATES.has(state) ? 'menu' : 'cancel';
 }
@@ -39,6 +60,101 @@ export function isBlitzMovementState(state: ClientStateId | '' | null | undefine
 export function requiresBlitzEndConfirmation(state: ClientStateId | '' | null | undefined): boolean {
   return state === 'SELECT_BLITZ_TARGET' || state === 'BLITZ'
     || state === 'KICK_EM_BLITZ' || state === 'PUTRID_REGURGITATION_BLITZ';
+}
+
+// Owner 09-28 (S6): the manual walk-by-tile-clicks Blitz path reaches its adjacent terminal through
+// confirmAggroStage() with no menu-picked flavor, same as the planner's act leg — it must try the SAME
+// blitz-commit hold before sending a plain block, or a Gored/Chainsaw offer never surfaces (g987 #6).
+// An explicit flavor the coach already picked from the rail/menu must keep bypassing the chooser as today.
+export function blitzTerminalShouldTryHold(pendingBlitzBlockKind: string | null, hasExplicitBlockChoice: boolean): boolean {
+  return pendingBlitzBlockKind == null && !hasExplicitBlockChoice;
+}
+
+// Owner 09-28 (S6 follow-up, Sol review): the WHOLE adjacent-terminal decision, so confirmAggroStage's blitz
+// branch is a thin call. `holdArmed` is the caller's already-observed result of actually attempting the hold
+// (gameStore.tryHoldBlitzBlockChoice) when blitzTerminalShouldTryHold said to try it — this function cannot
+// attempt the hold itself (that's a store side-effect), only decide what follows from the outcome. `send:false`
+// means the chooser card is now up: the view clears its local arm (commitBlitzBlock/dismissBlitzBlockChoice own
+// the terminal next); `send:true` means send now with the remembered flavor, exactly as before this fix existed.
+export interface BlitzAdjacentTerminalOutcome { send: boolean; blockKind: string | null }
+export function blitzAdjacentTerminalDecision(
+  pendingBlitzBlockKind: string | null,
+  hasExplicitBlockChoice: boolean,
+  holdArmed: boolean,
+): BlitzAdjacentTerminalOutcome {
+  if (blitzTerminalShouldTryHold(pendingBlitzBlockKind, hasExplicitBlockChoice) && holdArmed) {
+    return { send: false, blockKind: null };
+  }
+  return { send: true, blockKind: pendingBlitzBlockKind };
+}
+
+// Owner 09-28 (S6 follow-up, Sol BLOCKER 1): a NO-PLAN blitz-commit hold has no planner fail-safe to retire it —
+// plannerFlush/plannerRetireQuietly both no-op with no plan (store.ts ~9198/~9205), so it needs the SAME
+// staleness triggers the planner's own plannerAdvance() checks against the live model, evaluated every applied
+// frame. All server-derived: never a client prediction of the block/skill outcome, only whether the frozen hold
+// still names something legal to resume.
+export interface BlitzBlockChoiceLifecycleInput {
+  actingPlayerId: string | null;
+  blitzerId: string;
+  turnMode: string | null;
+  /** Owner 09-28 (Sol review round 3, item 2): the acting player's `playerAction` RECORDED when the hold armed
+   *  (`state.blitzBlockChoice.armedAction`) — null when absent (the standalone-Block chooser never reaches this
+   *  predicate at all, since blitzBlockChoiceOnModelApplied only processes `origin: 'blitz'`, but null still means
+   *  "do not apply the action-changed check" here, defensively). A FIXED whitelist ('blitz'/'blitzMove' only) is
+   *  wrong: Classic's identical hold-arming call site (ClassicView.vue ~805) also arms this hold under Putrid
+   *  Regurgitation's `putridRegurgitationBlitz`/`putridRegurgitationBlock` and The Flashing Blade's
+   *  `theFlashingBlade` (their router `block` intent, order66Interaction.ts ~1017-1037 above) — comparing against
+   *  the RECORDED action instead covers every action a hold can legitimately arm under, not just ordinary blitz. */
+  armedAction: string | null;
+  /** `game.actingPlayer.playerAction` right now. */
+  currentAction: string | null;
+  /** Caller-computed: the held target is still an on-pitch STANDING enemy adjacent to the blitzer
+   *  (`adjacentStandingEnemyIds(game, blitzerId).includes(targetId)` — false covers both "no longer adjacent"
+   *  and "left the pitch/no longer standing"). */
+  targetAdjacent: boolean;
+  /** Caller-computed: `fieldModel.targetSelectionState` still SELECTS this exact target. Owner 09-28 (Sol review
+   *  round 3, item 2): IGNORED unless `armedAction` is a classic blitz action (`blitz`/`blitzMove`) — Putrid
+   *  Regurgitation / The Flashing Blade gate their target purely off dice decorations / adjacency
+   *  (`blockTargetDecorated`, order66Interaction.ts ~1150 in availableActions.ts) and never populate
+   *  `fieldModel.targetSelectionState`, so this would read false there even on a fully live card. */
+  targetSelected: boolean;
+  /** Owner 09-28 (Sol review round 2, item 2b): caller-computed — every offer kind in the FROZEN held choice is
+   *  still present in a fresh `blitzBlockCommitOffers(game, blitzerId, targetId)` re-evaluation (covers the
+   *  Gored decoration disappearing, the skill being marked used elsewhere, or the offer set going empty). */
+  offersStillLive: boolean;
+}
+export function blitzBlockChoiceStale(input: BlitzBlockChoiceLifecycleInput): boolean {
+  const armedAsBlitz = input.armedAction === 'blitz' || input.armedAction === 'blitzMove';
+  return input.actingPlayerId == null
+    || input.actingPlayerId !== input.blitzerId
+    || (input.turnMode !== 'regular' && input.turnMode !== 'blitz')
+    || (input.armedAction != null && input.currentAction !== input.armedAction)
+    || !input.targetAdjacent
+    || (armedAsBlitz && !input.targetSelected)
+    || !input.offersStillLive;
+}
+
+// Owner 09-28 (Sol review round 2, item 3/5): the two pitch-click precedence rules while a block-commit chooser
+// (plan-owned or not) is held, pulled out of onPlayerClick/onTilePick so the ORDERING itself is unit-tested —
+// the bug this fixes was exactly a wrong position for a guard, so a textual/source check alone would not have
+// caught it. Both are exhaustive small state machines; the .vue call sites become thin calls to them, and a
+// source-guard test remains only as a secondary confirmation that the call sites use the result.
+export type TileClickChooserGate = 'serverOwnedPick' | 'swallowed' | 'normal';
+/** A SERVER-owned pick (squarePick / an unknown-coordinate resolution) always keeps precedence — the coach is
+ *  mid-dialog with the server, not free-clicking the pitch. Only once neither is active does a held chooser
+ *  swallow the click ahead of any client-owned movement/targeting branch. */
+export function tileClickDuringChooserHold(input: { serverOwnedPickActive: boolean; blitzBlockChoiceHeld: boolean }): TileClickChooserGate {
+  if (input.serverOwnedPickActive) return 'serverOwnedPick';
+  if (input.blitzBlockChoiceHeld) return 'swallowed';
+  return 'normal';
+}
+export type PlayerClickChooserGate = 'commitPlain' | 'swallowed' | 'normal';
+/** A click on the EXACT held target commits the plain block (pre-existing behaviour, unchanged) and must keep
+ *  precedence over the generic "no other click may start or extend anything" swallow this fix adds. */
+export function playerClickDuringChooserHold(input: { blitzBlockChoiceHeld: boolean; isHeldTarget: boolean }): PlayerClickChooserGate {
+  if (input.isHeldTarget) return 'commitPlain';
+  if (input.blitzBlockChoiceHeld) return 'swallowed';
+  return 'normal';
 }
 
 export type PassActionIdentity = 'pass' | 'hailMaryPass';
@@ -144,6 +260,11 @@ export type EscCascadePrompt =
 
 export interface EscCascadeInput {
   blitzBlockChoiceHeld: boolean;
+  /** Owner 09-28 (S6 follow-up): a held choice with no plan owning it (gameStore.blitzBlockChoiceDismissible()) —
+   *  Esc may close the card locally, sending nothing, instead of the plan-owned #111 hold-keep. */
+  blitzBlockChoiceDismissible: boolean;
+  /** S42: the Foul / Chainsaw chooser (the same card) is up; Esc closes it, no wire. Optional so older callers compile. */
+  foulChoiceHeld?: boolean;
   /** #310: the target-click blitz-window election card (Frenzied Rush + siblings) — armed LAST relative to
    *  Wisdom (SR-235 newest-armed-wins), so it takes Esc priority when both could theoretically be visible. */
   blitzSpecialPromptVisible: boolean;
@@ -161,6 +282,15 @@ export interface EscCascadeInput {
   pendingGaze: boolean;
   thrownMatePending: boolean;
   pendingBlock: boolean;
+  /** Owner 09-28 (Spec S3 v2 #3, Sol round-3 fix): the Kick 'em Blitz Yes/No commit card (state.yesNo keyed
+   *  'kickEmConfirm:') is up — holds exactly like the other prompts above (no dismiss wired for it today; Esc
+   *  must not race past it into the nomination-cancel/route/menu cascade below). */
+  kickEmConfirmationCardOpen: boolean;
+  /** A live Kick 'em Blitz nomination (state.kickEmBlitzTarget) for the CURRENT acting player. Only consulted
+   *  when clientState === 'KICK_EM_BLITZ' and neither the card above nor a plotted route (pendingMove) took
+   *  precedence first — a plotted route's Esc semantics are already exactly `pendingMove` below (Kick 'em rides
+   *  the same o66PendingMove preview as every other movement declare; no separate input needed for it). */
+  kickEmNominated: boolean;
   aggroStage: 1 | 2 | null;
   contextMenuVisible: boolean;
   gameMenuOpen: boolean;
@@ -174,7 +304,10 @@ export interface EscCascadeInput {
 
 export type EscCascadeDecision =
   | { level: 1; kind: 'hold-keep'; closeContextMenu: boolean; wire: 'none' }
+  | { level: 1; kind: 'dismiss-blitz-hold'; wire: 'none' }
+  | { level: 1; kind: 'dismiss-foul-choice'; wire: 'none' }
   | { level: 1; kind: 'dismiss-prompt'; prompt: EscCascadePrompt; wire: 'none' }
+  | { level: 1; kind: 'cancel-kick-em-nomination'; wire: 'none' }
   | { level: 1; kind: 'abort-preview'; wire: 'none' }
   | { level: 1; kind: 'undeclare'; wire: 'end-activation' }
   | { level: 2; kind: 'close-menu'; target: 'context' | 'game-settings' | 'popup'; wire: 'none' }
@@ -184,10 +317,15 @@ export type EscCascadeDecision =
 
 /** Pure #48 Escape cascade classification. Effects (including the one legal undeclare wire) stay in the view. */
 export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
-  // #111: a held Blitz block-flavor choice is committed and cannot be safely aborted with Escape.
+  // #111: a PLAN-OWNED Blitz block-flavor hold is committed and cannot be safely aborted with Escape. Owner
+  // 09-28 (S6 follow-up): a NO-PLAN hold (the manual walk-then-click path) has nothing mid-flight to strand —
+  // Esc closes the card locally and restores the armed confirm stage, sending nothing (spec S6 item 4).
   if (input.blitzBlockChoiceHeld) {
+    if (input.blitzBlockChoiceDismissible) return { level: 1, kind: 'dismiss-blitz-hold', wire: 'none' };
     return { level: 1, kind: 'hold-keep', closeContextMenu: input.contextMenuVisible, wire: 'none' };
   }
+  // S42: the Foul / Chainsaw chooser sits at the block-kind chooser's rank, ahead of every other surface.
+  if (input.foulChoiceHeld) return { level: 1, kind: 'dismiss-foul-choice', wire: 'none' };
 
   if (input.blitzSpecialPromptVisible) return { level: 1, kind: 'dismiss-prompt', prompt: 'blitzSpecial', wire: 'none' };
   if (input.wisdomPromptVisible) return { level: 1, kind: 'dismiss-prompt', prompt: 'wisdom', wire: 'none' };
@@ -196,6 +334,20 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
   if (input.followupChoiceVisible) return { level: 1, kind: 'dismiss-prompt', prompt: 'followup', wire: 'none' };
   if (input.ownSkillChoiceVisible) return { level: 1, kind: 'dismiss-prompt', prompt: 'skillChoice', wire: 'none' };
   if (input.ownRerollPromptVisible) return { level: 1, kind: 'dismiss-prompt', prompt: 'reroll', wire: 'none' };
+
+  // Owner 09-28 (Spec S3 v2 #3, Sol round-3 fix): the Kick 'em Blitz Yes/No card is another level-1 hold, at
+  // the same priority as the confirmation/follow-up/skill/reroll surfaces just above — Esc must not race past
+  // it. No dismiss exists for it today (unchanged), so this simply refuses to advance the cascade underneath it.
+  if (input.kickEmConfirmationCardOpen) return { level: 1, kind: 'hold-keep', closeContextMenu: input.contextMenuVisible, wire: 'none' };
+  // Kick 'em Blitz precedence (route clear, THEN nomination cancel) runs ahead of the generic abort-preview
+  // bucket below: a plotted route (pendingMove — Kick 'em rides the same o66PendingMove preview as any other
+  // movement declare, so no separate input is needed) always wins over a held nomination, and a held
+  // nomination always wins over falling through to End Activation. Every OTHER client state is untouched —
+  // this branch is a no-op for them.
+  if (input.clientState === 'KICK_EM_BLITZ') {
+    if (input.pendingMove) return { level: 1, kind: 'abort-preview', wire: 'none' };
+    if (input.kickEmNominated) return { level: 1, kind: 'cancel-kick-em-nomination', wire: 'none' };
+  }
 
   if (input.aggroStage === 2) return { level: 1, kind: 'undeclare', wire: 'end-activation' };
   // A nominated foul target belongs to an already server-declared FOUL activation. Backing out must send the
@@ -219,7 +371,13 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
   }
 
   if (input.myTurn && input.actingPlayerId && input.clientState && isActiveActivation(input.clientState)) {
-    const confirmKind: EndActivationConfirmKind = input.clientState === 'BLITZ' ? 'blitz'
+    // Owner 09-28 (Sol round-3 item 3): was `clientState === 'BLITZ'` only, so Esc offered "End Activation" in
+    // KICK_EM_BLITZ (and SELECT_BLITZ_TARGET / PUTRID_REGURGITATION_BLITZ) generically-classified — confirming
+    // it then sent blitzConfirmed:false and the store's blitzEndConfirmationRequired gate refused the wire
+    // ("Blitz end blocked"), so Esc could offer End Activation but never actually end it. Every state
+    // requiresBlitzEndConfirmation covers must classify 'blitz' here, matching the right-click path
+    // (SpectateView.vue's requestEndActivation) exactly.
+    const confirmKind: EndActivationConfirmKind = requiresBlitzEndConfirmation(input.clientState) ? 'blitz'
       : input.clientState === 'PUNT' ? 'punt' : 'generic';
     return { level: 3, kind: 'ask-end-activation', confirmKind, wire: 'none' };
   }
@@ -835,7 +993,13 @@ export function onPlayerClick(
   // deliberately requiring a declare here is the benign UX divergence (no wire difference) requested by RG-1.
   if (NON_WALK_DECLARED_ACTION_STATES.has(state) && clickedPlayerId === actingPlayerId(game)) {
     const actions = availableActions(game, ctx, clickedPlayerId);
-    const hasDeclare = actions.some((a) => a.kind === 'declare');
+    // Owner 09-28 (Spec S5 audit): a disabled "<rule> - Not Available" row must never count as a declare here —
+    // without the `.enabled` guard its mere presence would force this self-click into the menu instead of the
+    // direct end/target-pending shortcut below, even with zero real actions to take. Currently unreachable in
+    // practice (a plain enabled `move` row always survives alongside any disabled row for BLOCK/BLITZ/
+    // SELECT_BLITZ_TARGET, and no other NON_WALK state can carry a disabled row at all) — kept as the correct
+    // invariant regardless (see starRuleNotAvailable.test.ts's ordering test for the fixture that proves the point).
+    const hasDeclare = actions.some((a) => a.kind === 'declare' && a.enabled);
     // Blitz self-interaction must remain a menu surface. Returning the direct endMove intent here lets a caller
     // accidentally bypass the mandatory confirmation card; the store backstop also refuses that wire.
     if (!hasDeclare && !requiresBlitzEndConfirmation(state)) {
@@ -909,12 +1073,15 @@ export function onPlayerClick(
   // a valid target (standing opponent within 3, blastinTargetIds) sends CLIENT_TARGET_SELECTED; the acting player's
   // self-click is the END_MOVE menu (endMove here → the store's endActivation routes this turnMode → CLIENT_END_TURN).
   if (state === 'THEN_I_STARTED_BLASTIN') {
-    if (clickedPlayerId === actingPlayerId(game)) return { kind: 'endMove' };
+    // S46: the second beat is the OPPOSING coach's pick (the shooter is not mine, either team's standing player within 3 of the
+    // original target); that coach has no decline, so the shooter's self-click is inert here.
+    const secondBeat = isBlastinSecondBeat(game);
+    if (clickedPlayerId === actingPlayerId(game)) return secondBeat ? { kind: 'ignore', reason: "blastin': choose who is hit (no decline)" } : { kind: 'endMove' };
     const acting = actingPlayerId(game);
-    if (acting && blastinTargetIds(game, acting).includes(clickedPlayerId)) {
+    if (acting && blastinTargetIds(game, acting, ctx.blastinReportedTargetId).includes(clickedPlayerId)) {
       return { kind: 'blastinTarget', targetId: clickedPlayerId };
     }
-    return { kind: 'ignore', reason: "blastin': click a STANDING opponent within 3 squares, or your own player to decline" };
+    return { kind: 'ignore', reason: secondBeat ? "blastin': click a STANDING player within 3 squares of the first target" : "blastin': click a STANDING opponent within 3 squares, or your own player to decline" };
   }
 
   // Star S8: Furious Outburst teleport beats are SQUARE picks (fieldInteraction only). Self-click = END_MOVE
@@ -1081,7 +1248,9 @@ export function onPlayerClick(
   if (WALK_STATES.has(state)) {
     if (!isMine(clickedPlayerId)) return { kind: 'inspect', playerId: clickedPlayerId };
     const actions = availableActions(game, ctx, clickedPlayerId);
-    const hasDeclare = actions.some((a) => a.kind === 'declare');
+    // Owner 09-28 (Spec S5 audit): same `.enabled` guard as the NON_WALK branch above — a disabled
+    // "<rule> - Not Available" row must not turn this implicit deselect into a 1-item menu open.
+    const hasDeclare = actions.some((a) => a.kind === 'declare' && a.enabled);
     // Req #3: clicking the acting player with no declare available is an implicit deselect (End Move), not a
     // 1-item menu. Once later phases add in-move declares, the same click opens the menu instead.
     if (clickedPlayerId === actingPlayerId(game) && !hasDeclare) return { kind: 'ignore', reason: 'law 10e: own-player left-click is inert (End Activation = menu/Esc)' };

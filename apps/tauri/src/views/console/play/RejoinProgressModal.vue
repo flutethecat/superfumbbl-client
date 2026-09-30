@@ -5,7 +5,7 @@
 // rejoinFlow.ts over the store's reactive join signals; success (game arrived) maps to 'closed'
 // and the game view takes over. Visual idiom: the W30 save-prompt family (App.vue global styles).
 import { computed } from 'vue';
-import { deriveRejoinModal, dismissRejoin, rejoinFlow, storeRejoinSnapshot } from '../../../game/rejoinFlow';
+import { deriveRejoinModal, dismissRejoin, rejoinFlow, retryOfficialJoin, storeRejoinSnapshot } from '../../../game/rejoinFlow';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
 
@@ -16,9 +16,7 @@ const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' 
   <div v-if="modal.kind !== 'closed'" class="modal-backdrop save-prompt-backdrop rejoin-progress-backdrop"
     role="alertdialog" aria-modal="true" aria-labelledby="rejoin-progress-title">
     <div class="save-prompt rejoin-progress">
-      <h3 id="rejoin-progress-title">
-        {{ modal.kind === 'failed' ? 'Rejoin failed' : modal.kind === 'waiting' ? 'Rejoined — waiting' : 'Rejoining your game' }}
-      </h3>
+      <h3 id="rejoin-progress-title">{{ modal.title }}</h3>
       <ul class="rejoin-steps">
         <li v-for="step in modal.steps" :key="step.key" :data-status="step.status">
           <span class="glyph" aria-hidden="true">{{ STATUS_GLYPH[step.status] }}</span>
@@ -30,8 +28,10 @@ const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' 
         <p class="hint rejoin-fail-message">{{ modal.message }}</p>
         <p v-if="modal.detail" class="hint rejoin-fail-detail">{{ modal.detail }}</p>
       </template>
+      <p v-for="note in modal.notes" :key="note" class="hint rejoin-note">{{ note }}</p>
       <div class="save-prompt-actions">
-        <button v-if="modal.kind === 'failed'" class="primary" @click="dismissRejoin()">Close</button>
+        <button v-if="modal.kind === 'failed' && modal.canRetry" class="primary" @click="retryOfficialJoin()">Try again</button>
+        <button v-if="modal.kind === 'failed'" :class="{ primary: !modal.canRetry }" @click="dismissRejoin()">Close</button>
         <button v-else @click="dismissRejoin({ cancel: true })">
           {{ modal.kind === 'waiting' ? 'Stop waiting' : 'Cancel' }}
         </button>

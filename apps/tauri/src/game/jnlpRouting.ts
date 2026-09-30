@@ -21,6 +21,27 @@ import {
   type JnlpJoinRequest,
 } from './jnlpCompat';
 import { selectedLocalFumbblAssetUrl } from './fumbblAssetCache';
+import {
+  correctStoredCoachName,
+  correctStoredCoachNameWithNotice,
+  coachCorrectedNotice,
+  differsOnlyInCase,
+  equalsIgnoringAsciiCase,
+  listEntryCoaches,
+  resolveExactCoachName,
+  storedFumbblCoach,
+  storedFumbblPassword,
+  type CoachLookup,
+} from './officialCoachName';
+import {
+  clearOfficialRejoinTarget,
+  officialRejoinProblem,
+  peekOfficialRejoinTarget,
+  setOfficialRejoinTarget,
+  usableOfficialRejoinTarget,
+  type OfficialJoinTarget,
+} from './officialRejoinTarget';
+import { isNotYourTeamStatus, rejoinFlow, trackOfficialJoin, type RejoinLaunch } from './rejoinFlow';
 
 export interface BrowserTeam {
   side: string;
@@ -84,6 +105,40 @@ let preparedFumbblActiveParams: {
   officialFumbbl: true;
 } | null = null;
 
+/** S44 round 2: the one kept rejoin target lives in officialRejoinTarget.ts (account-bound, cleared on the events listed there). */
+export type { OfficialJoinTarget };
+let preparedFumbblServer: { url: string; compression: boolean } | null = null;
+/** the tracked attempt (rejoinFlow window) the lobby handlers report into; valid only while it is still the live window */
+let activeOfficialLaunch: RejoinLaunch | null = null;
+let officialStatusOff: (() => void) | null = null;
+/** test seam: the public coach lookup used as the second source of the exact spelling */
+let coachLookupOverride: CoachLookup | undefined;
+export function setOfficialCoachLookup(lookup: CoachLookup | undefined): void { coachLookupOverride = lookup; }
+
+function currentOfficialLaunch(): RejoinLaunch | null {
+  return activeOfficialLaunch && rejoinFlow.launch === activeOfficialLaunch ? activeOfficialLaunch : null;
+}
+
+/** A failure before the game arrived that the server did not announce as a refusal: show it in the window too. */
+function surfaceOfficialFailure(message: string): void {
+  const launch = currentOfficialLaunch();
+  if (launch && !launch.launchError && !launch.refusal) launch.launchError = message;
+}
+
+/** The rejoin target for the "Connection closed" prompt: only with a stored password and the account it was made for. */
+export function officialRejoinTarget(): OfficialJoinTarget | null {
+  return usableOfficialRejoinTarget();
+}
+
+/** Plain words for why a kept target cannot be used now (null when it can, or when none is kept). */
+export function officialRejoinBlocker(): string | null {
+  return officialRejoinProblem();
+}
+
+export function forgetOfficialRejoinTarget(): void {
+  clearOfficialRejoinTarget();
+}
+
 function clearPreparedFumbblConnectTimer(): void {
   if (preparedFumbblConnectTimer !== null) {
     clearTimeout(preparedFumbblConnectTimer);
@@ -130,12 +185,17 @@ export function stageFumbblPlayerLobby(lobby: FumbblLobby, auth: string): void {
 
 /** Owner 09-24: "My FUMBBL games" — open the lobby with the saved coach + password and list the coach's open
  *  games straight away. No JNLP, no website round-trip; the join authenticates with the password challenge. */
-export function stageFumbblPasswordLobby(coach: string, password: string): void {
+export function stageFumbblPasswordLobby(
+  coach: string,
+  password: string,
+  /** S44: a rejoin names its own server and skips the list request (the game id is already known) */
+  options: { server?: { url: string; compression: boolean }; list?: boolean } = {},
+): void {
   const lobby: FumbblLobby = { coach, teamId: '', teamName: '', sourceName: 'My FUMBBL games', password: true };
-  stageFumbblLobby(lobby, (prepared) => prepared.prepareFumbblLobbyWithPassword({ coach, password, gameId: 0, mode: 'player' }));
+  stageFumbblLobby(lobby, (prepared) => prepared.prepareFumbblLobbyWithPassword({ coach, password, gameId: 0, mode: 'player' }), options.server);
   const prepared = preparedFumbblSession;
   const generation = preparedFumbblGeneration;
-  if (!prepared) return;
+  if (!prepared || options.list === false) return;
   const off = prepared.on('state', (state) => {
     if (state !== 'ready') return;
     off();
@@ -143,10 +203,16 @@ export function stageFumbblPasswordLobby(coach: string, password: string): void 
   });
 }
 
-function stageFumbblLobby(lobby: FumbblLobby, prepareLobby: (prepared: GameSession) => Promise<void>): void {
+function stageFumbblLobby(
+  lobby: FumbblLobby,
+  prepareLobby: (prepared: GameSession) => Promise<void>,
+  server?: { url: string; compression: boolean },
+): void {
   closePreparedFumbblSession();
+  activeOfficialLaunch = null;
   const generation = preparedFumbblGeneration;
-  const target = activeServerTarget();
+  const target = server ?? activeServerTarget();
+  preparedFumbblServer = { url: target.url, compression: target.compression };
   const prepared = new GameSession({ url: target.url, compression: target.compression });
   preparedFumbblSession = prepared;
   preparedFumbblHandedOff = false;
@@ -163,6 +229,7 @@ function stageFumbblLobby(lobby: FumbblLobby, prepareLobby: (prepared: GameSessi
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     if (prepared.state !== 'connecting' && prepared.state !== 'versioning') return;
     fumbblLobbyError.value = lobby.password ? 'FUMBBL did not finish connecting. Try again in a moment.' : 'FUMBBL did not finish connecting. Cancel and load a fresh JNLP to try again.';
+    surfaceOfficialFailure(fumbblLobbyError.value);
     fumbblLobbyState.value = 'closed';
     closePreparedFumbblSession();
   }, FUMBBL_LOBBY_CONNECT_TIMEOUT_MS);
@@ -194,18 +261,21 @@ function stageFumbblLobby(lobby: FumbblLobby, prepareLobby: (prepared: GameSessi
   prepared.on('error', (error) => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     fumbblLobbyError.value = error instanceof Error ? error.message : String(error);
+    if (!preparedFumbblHandedOff) surfaceOfficialFailure(fumbblLobbyError.value);
   });
   prepared.on('close', (code, reason) => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     preparedFumbblSession = null;
     if (!fumbblLobbyError.value) {
       fumbblLobbyError.value = `FUMBBL lobby connection closed (${code}${reason ? `: ${reason}` : ''}). ${lobby.password ? 'Open My FUMBBL games again to retry.' : 'Reload the JNLP to try again.'}`;
+      if (!preparedFumbblHandedOff) surfaceOfficialFailure(fumbblLobbyError.value);
     }
   });
 
   void prepareLobby(prepared).catch((error) => {
     if (generation !== preparedFumbblGeneration || prepared !== preparedFumbblSession) return;
     fumbblLobbyError.value = error instanceof Error ? error.message : String(error);
+    surfaceOfficialFailure(fumbblLobbyError.value);
   });
 }
 
@@ -219,7 +289,115 @@ type FumbblJoinTarget = {
   opponentTeamId?: string;
   opponentCoach?: string;
   opponentLabel?: string;
+  /** S44: the lobby's coach name is already the account's exact spelling (a rejoin or a corrected retry): no lookup */
+  coachIsExact?: boolean;
 };
+
+function isForkHost(url: string): boolean {
+  try { return new URL(url).host === new URL(forkServerUrl()).host; } catch { return false; }
+}
+
+function officialGameLabel(target: FumbblJoinTarget): string | undefined {
+  return target.gameId ? undefined : target.gameName ? `“${target.gameName}”` : 'the game';
+}
+
+/** The tracked attempt for one official join: reuse the one a rejoin/retry already opened, else open it now. */
+function beginOfficialLaunch(lobby: FumbblLobby, target: FumbblJoinTarget, url: string): RejoinLaunch {
+  const opponent = target.opponentLabel || target.opponentCoach;
+  const existing = currentOfficialLaunch();
+  if (existing) {
+    existing.gameId = target.gameId ?? 0;
+    existing.gameLabel = officialGameLabel(target);
+    existing.coach = lobby.coach;
+    existing.opponent = opponent;
+    return existing;
+  }
+  // a new official join from the Play page: no earlier game's target may survive into it
+  clearOfficialRejoinTarget();
+  const launch = trackOfficialJoin({
+    action: 'join', gameId: target.gameId ?? 0, gameLabel: officialGameLabel(target),
+    coach: lobby.coach, url, opponent, launchError: null, tryAgain: officialTryAgain,
+  });
+  activeOfficialLaunch = launch;
+  return launch;
+}
+
+/** "Try again" of a failed official window: one click, a password join by id of the kept target. */
+function officialTryAgain(): (() => void) | null {
+  const kept = usableOfficialRejoinTarget();
+  if (!kept) return null;
+  return () => { const now = usableOfficialRejoinTarget(); if (now) startOfficialPasswordJoin(now, { action: 'rejoin' }); };
+}
+
+/** Keep THE rejoin target once the server accepted the join (and again with the served game id). Only for the stored
+ *  account, and only while a password is stored: no other login could rejoin it. Holds no token and no password. */
+function recordOfficialJoin(params: NonNullable<typeof preparedFumbblActiveParams>, viaJnlp: boolean, servedGameId?: number): void {
+  if (!storedFumbblPassword() || !equalsIgnoringAsciiCase(storedFumbblCoach(), params.coach)) {
+    clearOfficialRejoinTarget();
+    return;
+  }
+  const gameId = servedGameId && servedGameId > 0 ? servedGameId : params.gameId;
+  if (!(gameId && gameId > 0) && !params.gameName) { clearOfficialRejoinTarget(); return; }
+  setOfficialRejoinTarget({
+    url: params.url, compression: params.compression, coach: params.coach,
+    gameId: gameId && gameId > 0 ? gameId : undefined, gameName: params.gameName,
+    teamId: params.teamId, teamName: params.teamName,
+    opponentTeamId: params.opponentTeamId, opponentCoach: params.opponentCoach,
+    viaJnlp,
+  });
+}
+
+/**
+ * S44 point 8 (owner 09-29): a `Not Your Team` refusal means the server's letter-for-letter ownership check failed
+ * although the name was admitted ignoring case. Look for the account's exact spelling among what the server itself
+ * sent for THIS game (its list entry, any game state already received), else the public coach lookup. Only a
+ * case-only difference corrects anything: the stored name is updated, the window says so, and ONE "Try again"
+ * click repeats the join. Never retries by itself.
+ */
+async function correctNotYourTeam(launch: RejoinLaunch, sent: string, serverNames: () => string[], target: OfficialJoinTarget): Promise<void> {
+  // The handler works on the STORED name only. A refusal of some other name (a JNLP of another account) changes nothing.
+  const stored = storedFumbblCoach();
+  if (!equalsIgnoringAsciiCase(stored, sent)) return;
+  const exact = await resolveExactCoachName(stored, serverNames(), coachLookupOverride, 'server-game');
+  if (currentOfficialLaunch() !== launch || !differsOnlyInCase(stored, exact.name)) return;
+  if (!correctStoredCoachName(exact.name)) return; // the text below appears only when the stored name really changed
+  const retryable = !!storedFumbblPassword();
+  launch.correction = {
+    text: coachCorrectedNotice(stored, exact.name),
+    retry: retryable ? () => { startOfficialPasswordJoin({ ...target, coach: exact.name }, { action: 'join' }); } : null,
+  };
+  if (!retryable) launch.jnlpNeeded = true;
+}
+
+/** Report every server refusal of this attempt into its window (recoverable ones too), and run point 8 on Not Your Team. */
+function watchOfficialRefusal(
+  prepared: GameSession,
+  launch: RejoinLaunch,
+  target: OfficialJoinTarget,
+  entryNames: string[],
+): void {
+  officialStatusOff?.();
+  const gameNames: string[] = [];
+  // the furthest step the socket demonstrably reached (a close leaves no evidence of its own)
+  launch.reachedStep = Math.max(launch.reachedStep ?? 0, 1);
+  const offState = prepared.on('state', (state) => {
+    const step = state === 'joined' ? 2 : state === 'versioning' || state === 'ready' || state === 'authenticating' || state === 'joining' ? 1 : 0;
+    if (step > (launch.reachedStep ?? 0)) launch.reachedStep = step;
+  });
+  const offGame = prepared.on('gameState', (command) => {
+    const game = command.game as { teamHome?: { coach?: string }; teamAway?: { coach?: string } } | undefined;
+    for (const name of [game?.teamHome?.coach, game?.teamAway?.coach]) if (name) gameNames.push(name);
+  });
+  const offStatus = prepared.on('status', (command) => {
+    if (currentOfficialLaunch() !== launch) return;
+    const status = String(command.serverStatus ?? '');
+    launch.refusal = { status, message: command.message?.trim() || status.trim() || 'FUMBBL rejected the join.' };
+    if (isNotYourTeamStatus(status) && !isForkHost(target.url)) {
+      void correctNotYourTeam(launch, target.coach, () => [...entryNames, ...gameNames], target);
+    }
+  });
+  officialStatusOff = () => { offGame(); offStatus(); offState(); };
+}
 
 function connectFumbblPlayer(
   lobby: FumbblLobby,
@@ -230,8 +408,39 @@ function connectFumbblPlayer(
     if (!fumbblLobbyError.value) fumbblLobbyError.value = 'The FUMBBL lobby is not ready yet.';
     return;
   }
-  const fumbbl = activeServerTarget();
+  const fumbbl = preparedFumbblServer ?? activeServerTarget();
   ui.browserOpen = false;
+  const generation = preparedFumbblGeneration;
+  const launch = beginOfficialLaunch(lobby, target, fumbbl.url);
+  // S44: a password join puts the account's exact spelling on the wire (source order: the server's own list entry
+  // for this game, the public coach lookup, the name as typed). A JNLP join keeps the JNLP's own name and wire.
+  const entry = target.gameId ? fumbblLobbyGames.value.find((e) => Number(e.gameId) === target.gameId) : undefined;
+  if (!lobby.password || target.coachIsExact) {
+    proceedFumbblPlayer(prepared, generation, lobby, target, fumbbl, launch, listEntryCoaches(entry));
+    return;
+  }
+  void resolveExactCoachName(lobby.coach, listEntryCoaches(entry), coachLookupOverride).then((exact) => {
+    if (prepared !== preparedFumbblSession || generation !== preparedFumbblGeneration) return;
+    if (currentOfficialLaunch() !== launch) { closePreparedFumbblSession(); return; } // cancelled while looking up
+    if (exact.source !== 'typed') {
+      const notice = correctStoredCoachNameWithNotice(exact.name);
+      if (notice) launch.notice = notice;
+    }
+    lobby.coach = exact.name;
+    launch.coach = exact.name;
+    proceedFumbblPlayer(prepared, generation, lobby, target, fumbbl, launch, listEntryCoaches(entry));
+  });
+}
+
+function proceedFumbblPlayer(
+  prepared: GameSession,
+  generation: number,
+  lobby: FumbblLobby,
+  target: FumbblJoinTarget,
+  fumbbl: { url: string; compression: boolean },
+  launch: RejoinLaunch,
+  entryNames: string[],
+): void {
   const activeParams = preparedFumbblActiveParams ?? {
     url: fumbbl.url,
     compression: fumbbl.compression,
@@ -240,6 +449,7 @@ function connectFumbblPlayer(
     teamName: lobby.teamName || undefined,
     officialFumbbl: true as const,
   };
+  activeParams.coach = lobby.coach;
   activeParams.gameId = target.gameId;
   activeParams.gameName = target.gameName;
   activeParams.opponentTeamId = target.opponentTeamId;
@@ -256,33 +466,108 @@ function connectFumbblPlayer(
     coach: lobby.coach,
     opponentCoach: target.opponentCoach,
   };
+  watchOfficialRefusal(prepared, launch, {
+    url: activeParams.url, compression: activeParams.compression, coach: lobby.coach,
+    gameId: target.gameId, gameName: target.gameName,
+    teamId: lobby.teamId || undefined, teamName: lobby.teamName || undefined,
+    opponentTeamId: target.opponentTeamId, opponentCoach: target.opponentCoach,
+    viaJnlp: !lobby.password,
+  }, entryNames);
+
+  const joinNow = () => prepared.joinPreparedFumbblGame({
+    gameId: target.gameId,
+    gameName: target.gameName,
+    teamId: lobby.teamId || undefined,
+    teamName: lobby.teamName || undefined,
+    ...(lobby.password ? { coach: lobby.coach } : {}),
+  });
 
   if (preparedFumbblHandedOff) {
     try {
-      prepared.joinPreparedFumbblGame({
-        gameId: target.gameId,
-        gameName: target.gameName,
-        teamId: lobby.teamId || undefined,
-        teamName: lobby.teamName || undefined,
-      });
+      joinNow();
     } catch (error) {
       fumbblLobbyError.value = error instanceof Error ? error.message : String(error);
+      surfaceOfficialFailure(fumbblLobbyError.value);
     }
     return;
   }
 
   preparedFumbblHandedOff = true;
-  const generation = preparedFumbblGeneration;
   void gameStore.connectAsPlayer(activeParams, {
     session: prepared,
-    launch: () => prepared.joinPreparedFumbblGame({
-      gameId: target.gameId,
-      gameName: target.gameName,
-      teamId: lobby.teamId || undefined,
-      teamName: lobby.teamName || undefined,
-    }),
-    onAccepted: () => releaseAcceptedFumbblLobby(prepared, generation),
+    launch: joinNow,
+    // the server accepted the join (before any game state): from here a drop can be rejoined
+    onJoinAccepted: () => {
+      if (preparedFumbblActiveParams) recordOfficialJoin(preparedFumbblActiveParams, !lobby.password);
+    },
+    onAccepted: (servedGameId) => {
+      const params = preparedFumbblActiveParams;
+      releaseAcceptedFumbblLobby(prepared, generation);
+      officialStatusOff?.();
+      officialStatusOff = null;
+      if (params) recordOfficialJoin(params, !lobby.password, servedGameId);
+      // the correction is told once, in the join window; nothing about it goes to the game log
+    },
   });
+}
+
+/**
+ * S44: join (or rejoin) an official game by id/name with the stored coach + password: password lobby, then the join.
+ * The password is read from the credential holder here, at the moment of the attempt. Every call is one click;
+ * nothing schedules it. Returns false (with the reason in the window) when it cannot start.
+ */
+export function startOfficialPasswordJoin(target: OfficialJoinTarget, options: { action?: 'join' | 'rejoin'; opponent?: string } = {}): boolean {
+  const password = storedFumbblPassword();
+  const opponent = options.opponent ?? target.opponentCoach;
+  const sameAccount = equalsIgnoringAsciiCase(storedFumbblCoach(), target.coach);
+  const launch = trackOfficialJoin({
+    action: options.action ?? 'rejoin', gameId: target.gameId ?? 0, gameLabel: officialGameLabel(target),
+    coach: target.coach, url: target.url, opponent, launchError: null, jnlpNeeded: !password || !sameAccount,
+    tryAgain: officialTryAgain,
+  });
+  if (!password || !sameAccount) {
+    // never make a password response for another account's game
+    launch.launchError = !password
+      ? 'No FUMBBL password is saved.'
+      : 'The saved FUMBBL account is not the one this game was joined with.';
+    clearOfficialRejoinTarget();
+    return false;
+  }
+  if (!(target.gameId && target.gameId > 0) && !target.gameName) {
+    launch.launchError = 'This game cannot be found again without its number.';
+    return false;
+  }
+  setOfficialRejoinTarget(target); // the one target, held for this attempt so its failure window can offer Try again
+  stageFumbblPasswordLobby(target.coach, password, { server: { url: target.url, compression: target.compression }, list: false });
+  const lobby = fumbblLobby.value;
+  if (!lobby) return false;
+  activeOfficialLaunch = launch;
+  lobby.teamId = target.teamId ?? '';
+  lobby.teamName = target.teamName ?? '';
+  connectFumbblPlayerWhenReady(lobby, {
+    gameId: target.gameId, gameName: target.gameName,
+    opponentTeamId: target.opponentTeamId, opponentCoach: target.opponentCoach, opponentLabel: opponent,
+    coachIsExact: true,
+  });
+  return true;
+}
+
+/** The "Connection closed" prompt's Reconnect for an official game: one click, one attempt, for the account it was made for. */
+export function rejoinOfficialGame(): boolean {
+  const kept = peekOfficialRejoinTarget();
+  if (!kept) return false;
+  const problem = officialRejoinProblem();
+  gameStore.disconnect(); // clears the drop prompt (and the kept target; the attempt below holds it again)
+  gameStore.clearFrozenGame(); // and the frozen board, so the join window is what the coach sees
+  if (problem) {
+    const launch = trackOfficialJoin({
+      action: 'rejoin', gameId: kept.gameId ?? 0, gameLabel: officialGameLabel(kept), coach: kept.coach, url: kept.url,
+      launchError: problem, jnlpNeeded: true,
+    });
+    activeOfficialLaunch = launch;
+    return false;
+  }
+  return startOfficialPasswordJoin(kept, { action: 'rejoin' });
 }
 
 function connectFumbblPlayerWhenReady(

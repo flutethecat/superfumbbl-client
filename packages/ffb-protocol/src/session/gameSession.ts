@@ -193,7 +193,7 @@ export class GameSession {
   }
 
   /** Spend the prepared token on one exact server-listed game or an explicit game name. */
-  joinPreparedFumbblGame(target: { gameId?: number; gameName?: string; teamId?: string; teamName?: string }): void {
+  joinPreparedFumbblGame(target: { gameId?: number; gameName?: string; teamId?: string; teamName?: string; coach?: string }): void {
     this.requirePreparedFumbblLobby();
     const gameId = Number(target.gameId ?? 0);
     // FUMBBL game names are case-sensitive. Use trim only to reject an empty name;
@@ -206,6 +206,9 @@ export class GameSession {
     }
     const joinTarget = { gameId: gameId > 0 ? gameId : 0, gameName, teamId: target.teamId ?? null, teamName: target.teamName ?? null };
     if (this.passwordLobby) {
+      // S44: the server checks team ownership letter for letter, so a password join may carry the account's exact
+      // spelling (both the challenge and the join use params.coach). The list request above already went out as typed.
+      if (target.coach && target.coach.trim()) this.params = { ...this.params!, coach: target.coach };
       // the real join authenticates like any password join: challenge → HMAC response → CLIENT_JOIN
       this.pendingPasswordJoin = joinTarget;
       this.setState('authenticating');
@@ -309,7 +312,7 @@ export class GameSession {
       }
       case NetCommandId.SERVER_PASSWORD_CHALLENGE: {
         const params = this.params;
-        if (!params) break;
+        if (!params || this.currentState === 'joined') break; // already in: a stray challenge must not answer from a scrubbed password
         const challenge = (command as ServerCommandPasswordChallenge).challenge;
         // Both branches run upstream's PasswordChallenge.createResponse; they differ only in
         // where md5(pw) came from. A pre-hashed credential means the clear text never had to
@@ -326,6 +329,9 @@ export class GameSession {
         // Acceptance consumes the JNLP token. A named-game collision arrives as
         // SERVER_STATUS before this point and therefore retains it for correction.
         this.oneTimeFumbblToken = null;
+        // S44 round 2: nothing after acceptance re-authenticates on this socket (a fork reconnect opens a NEW session from
+        // the store's own params), so the clear-text password / md5 leave the session object the moment we are in.
+        this.scrubPasswordSecrets();
         this.setState('joined');
         this.emit('join', command as ServerCommandJoin);
         break;
@@ -374,6 +380,11 @@ export class GameSession {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+  }
+
+  /** Drop the password material but keep the rest of the join parameters. */
+  private scrubPasswordSecrets(): void {
+    if (this.params) this.params = { ...this.params, password: '', passwordMd5: undefined };
   }
 
   private scrubCredentials(): void {

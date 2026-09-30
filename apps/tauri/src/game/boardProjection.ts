@@ -1,4 +1,5 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { turnSideIsHome } from './blastinSecondBeat';
 
 /** Durable board/coach-panel facts. No receive trackers, effects or renderer sequence numbers. */
 export interface BoardProjection {
@@ -12,7 +13,7 @@ export function createBoardProjection(): BoardProjection {
   return { playingIsHome: null, sawActiveBit: false, turnKey: '', activePlayerId: null, actedPlayers: [] };
 }
 export function boardTurnKey(g: GameJson): string {
-  return `${g.turnMode}:${g.homePlaying}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`;
+  return `${g.turnMode}:${turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`; // S46: the Blastin' second-beat flip is not a turn change
 }
 export function reduceBoardProjection(previous: BoardProjection, game: GameJson, input: {
   recoveringPlayers: readonly string[];
@@ -21,7 +22,7 @@ export function reduceBoardProjection(previous: BoardProjection, game: GameJson,
   acknowledgedActingId: string | null;
   followupAttackerId: string | null;
 }): BoardProjection {
-  const rawHome = !!game.homePlaying;
+  const rawHome = turnSideIsHome(game);
   const playingIsHome = previous.playingIsHome === null || game.turnMode !== 'betweenTurns'
     ? rawHome : previous.playingIsHome;
   const players = game.fieldModel.playerDataArray;

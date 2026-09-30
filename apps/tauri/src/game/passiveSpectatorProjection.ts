@@ -1,3 +1,4 @@
+import { blastinChoosingText } from './blastinSecondBeat';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { interceptors } from '@fumbbl40k/ffb-pitch';
 import { actionRollFor, type ActionRollProjection } from './actionRollProjection';
@@ -6,6 +7,7 @@ import { dialogInstanceKey } from './logic/dialogDispatch';
 import { prettySkillName } from './logic/prettySkillName';
 import { projectOnTheBallWaiting } from './onTheBallController';
 import type { SpectatorCheckpoint } from './replay/spectatorCheckpoint';
+import { hmpScatterMarksFrom } from './hmpScatterTrail';
 const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const PRAYER_PLAYER_CHOICE_MODES = new Set(['ironman', 'knuckledusters']);
 const rulesVersionOf = (g: GameJson): string => normKey(String(
@@ -153,17 +155,20 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     ? [g.teamHome, g.teamAway].find((team) => team.playerArray.some((player) => player.playerId === g.actingPlayer?.playerId)) : null;
   const followupWaiting = offered && dialog?.dialogId === 'followupChoice'
     ? (followupTeam?.coach || followupTeam?.teamName || 'The blocking coach') + ' is deciding whether to follow up' : null;
+  // S46: the Blastin' second beat carries no dialog; the waiting line names the choosing coach and parks on the shooter.
+  const blastinWaiting = blastinChoosingText(g);
   return {
     passDestination: passDestinationFromGame(g),
+    hmpScatterMarks: hmpScatterMarksFrom(p.skillDecision.hmpTrail), // owner 09-28 (S16): Hail Mary scatter squares
     interceptWait: offered ? interceptionWaitFromGame(g, p.actionRolls) : null,
     prayerChoiceWait: prayer ? { coach: prayer.coach, instanceKey: prayer.instanceKey } : null,
     skillChoice: skill,
     opponentReviewingDice: !!(g as Record<string, unknown>).waitingForOpponent && !!p.blockCard && !!dialog?.choosingTeamId,
-    opponentChoicePending: shadowTeam ? (shadowTeam.coach || shadowTeam.teamName || 'Opponent') + ' is deciding to shadow' : followupWaiting,
+    opponentChoicePending: shadowTeam ? (shadowTeam.coach || shadowTeam.teamName || 'Opponent') + ' is deciding to shadow' : followupWaiting ?? blastinWaiting,
     // Owner 09-14: the pending pill parks at this player's token (the blocker for a follow-up decision, the named
     // shadower for Shadowing); without it the review-to-live HUD fell back to the top-centre band.
     opponentChoicePendingPlayerId: shadowTeam ? shadowingPlayerId(dialog)
-      : followupWaiting ? String(g.actingPlayer?.playerId ?? '') || null : null,
+      : followupWaiting || blastinWaiting ? String(g.actingPlayer?.playerId ?? '') || null : null,
     // Existing On-the-Ball copy is opponent-player-only; spectators have no owned reaction turn.
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,

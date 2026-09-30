@@ -51,6 +51,14 @@ import { APOTHECARY_STATION_LAYOUT, apoBoxState, apothecaryTokenScale, projected
 import { budgetAfterPlannedSteps, planPath, reachableSquares, squareKey, type Square } from './movement';
 
 export type PassDestinationKind = 'ball' | 'bomb' | 'stunty';
+/** Owner 09-28 (S16): Hail Mary Pass scatter squares, derived by the host from received frames only. `decision.square`
+ *  is null when the rolled direction leads off the pitch. */
+export interface HmpScatterMarksState {
+  aim: Square;
+  steps: readonly Square[];
+  decision: { ordinal: number; square: Square | null } | null;
+  final: boolean;
+}
 import { passRange, type PassRange } from './passing';
 import { blockDicePreview, type BlockPreview } from './blocks';
 import { preSetupPlacements } from './preSetupFormation';
@@ -833,6 +841,8 @@ interface ActionDieRecord {
   start: number;
   holdForOpponentReroll?: boolean;
   holdUntilTurnover?: boolean;
+  /** Owner 09-28 (S7 v3): accumulated ms this die's turnover-hold backstop was suspended while a splash was showing. */
+  splashSuspendMs?: number;
   square?: [number, number];
   /** Action dice only (skill-use / armour pops share the lifecycle but have no die): the 3D layer key. */
   id?: number;
@@ -925,6 +935,15 @@ const TOKEN_BASE_SHIFT_PX = 0;
 const STRENGTH_SCALE: Record<number, number> = { 1: 0.76, 2: 0.88, 3: 1, 4: 1.12, 5: 1.24, 6: 1.28 };
 function strengthScale(strength: number | undefined): number {
   return STRENGTH_SCALE[Math.max(1, Math.min(6, Math.round(strength ?? 3)))] ?? 1;
+}
+/** Owner 09-28 ("the star icons below ST 2 stars are much too small — same size as ST 3"): the gold star under a
+ *  Star Player followed the figure, so a goblin- or squirrel-sized star drew a tiny one. It now never draws under
+ *  the ST 3 size. Walkers size their ring from the feet (`rx`; an ST 3 lineman's is WALKER_ST3_RING_RX); icon
+ *  tokens are scaled as a whole by strengthScale, so the star's local radius is divided back up for ST 1-2. */
+export const WALKER_ST3_RING_RX = 15.2;
+export function starBaseRadius(kind: 'walker' | 'icon', radius: number, strength: number | undefined): number {
+  if (kind === 'walker') return Math.max(radius, WALKER_ST3_RING_RX * 1.1);
+  return radius / Math.min(1, strengthScale(strength));
 }
 /** JLeav 09-23 (Checkers/Chess): the FUMBBL convention is THREE disc sizes — ST 2 or less small, ST 3-4 normal,
  *  ST 5+ big. The six-step token table drew ST 4 visibly larger than ST 3. */
@@ -1444,6 +1463,7 @@ export interface SpectatorPitchState {
   blitzTokens: { blitzerId: string; targetId: string } | null;
   heldTeamMate: { thrownId: string; throwerId: string } | null;
   passDestination: { square: Square; kind: PassDestinationKind } | null;
+  hmpScatterMarks?: HmpScatterMarksState | null;
 }
 
 /** One in-flight move tween: the token, its waypoint path, style, clock and optional flight decorations. */
@@ -2734,6 +2754,8 @@ export class PitchRenderer {
   private pendingServerKickoffScatter: ServerKickoffScatterOccurrence | null = null;
   /** While present, the server model ball is intentionally masked: kickoffScatter revealed a destination, not flight. */
   private serverKickoffScatterReveal: [number, number] | null = null;
+  /** S45: where the reveal marker is drawn when it is not the scatter end (the kicker's nominated square). Null = the end, as before. */
+  private serverKickoffScatterMarker: [number, number] | null = null;
   private suppressGenericBallInThisRefresh = false;
   private kickoffScatterSeqSeen = -1;
   /** Owner 2026-07-12: track whether the kick has RESOLVED so the kick TRAVEL-ARC trail clears the
@@ -2757,6 +2779,12 @@ export class PitchRenderer {
   private actionDice3dGeneration = 0;
   private actionDieSeq = 0;
   private lastActionDiceTick = 0;
+  // Owner 09-28 (S7 v3): the turnover splash is on screen (state.turnover non-null, fed by SpectateView's turnover
+  // watcher). While it is, the turnover-hold backstop is suspended so a held die stays readable THROUGH the splash.
+  private turnoverSplashShowing = false;
+  // Owner 09-28 (S7 v3): previous tick timestamp used only to advance the suspended-backstop clock (kept separate
+  // from lastActionDiceTick, which the 3D layer consumes for its own frame delta).
+  private lastActionDiceHoldTick = 0;
   /** Owner 09-14 / Astra: reduced motion skips the tumble (2D face cycle and 3D clip alike) — the result shows at once. */
   private reducedMotion = false;
   /** Live skill surfaces that must change representation when a mod pack adds/removes a target. */
@@ -3117,6 +3145,14 @@ export class PitchRenderer {
   private playerPickFriendlyIds: Set<string> | null = null;
   private playerPickOppositionIds: Set<string> | null = null;
   private pickCrosshairs: { node: Graphics; base: number }[] = [];
+  /** S17: the Throw Keg target crosshairs. They live on pathLayer (redrawOverlays owns and rebuilds it every pass), not
+   *  with the tokens, so they need no full refresh() and cannot go stale on a token-reuse setGame frame. Pulsed by the
+   *  same ticker block as pickCrosshairs; emptied wherever pathLayer is cleared, so no destroyed node is kept. */
+  private kegCrosshairs: { node: Graphics; base: number }[] = [];
+  /** S28: the skill target marks (Putrid Regurgitation). Own channel beside the keg crosshairs: same pathLayer paint,
+   *  same pulse, but no token dimming and no range box. */
+  private skillTargetMarks: { node: Graphics; base: number }[] = [];
+  private skillTargetSet: Set<string> | null = null;
   /** Owner o66 #20 (generalized): a bobbing over-head arrow on friendly players in a server player-pick set
    *  (charge / feed / solidDefence / pickMeUp / mvp / tentacles / shadowing / …). Bobbed by the ticker;
    *  rebuilt in drawPlayerPick, cleared with the crosshairs. */
@@ -3215,15 +3251,16 @@ export class PitchRenderer {
     this.refresh();
   }
 
-  /** #161 → #216 QS-4/QS-5 (owner 07-23, AMENDED 08-04): Quick-Snap eligible-square markers. The owner's
-   *  08-04 capture replaces the push-arrow fan with SMALL crosshair reticles (the buildPushCrosshair idiom
-   *  at a reduced scale) at each server-sent destination, drawn in the UI PRIMARY colour — NOT the seat
-   *  colour. `color` is fed by the view as settings.uiPrimary as a number (⚖ #16 boundary — the renderer
-   *  never reads settings); no brighten (uiPrimary is already the chosen theme hue). `from` is retained for
-   *  call-site stability but is no longer drawn (reticles mark the destinations, no fan origin). Clear with
-   *  empty targets. Purely visual (⚖ renders the view's server-derived eligible set); the click surface is
+  /** #161 → #216 QS-4/QS-5 (owner 07-23, AMENDED 08-04, SUPERSEDED S20 owner 09-29): Quick-Snap eligible-square
+   *  markers. Each server-sent destination gets the standard pick crosshair (buildPushCrosshair defaults: gold, full
+   *  size) pulsed by the ticker like every other pick crosshair. `color` (the view's settings.uiPrimary as a number)
+   *  and `from` are retained for call-site stability but no longer drawn: the colour no longer tints the reticle
+   *  and there is no fan origin. Clear with empty targets. Purely visual (⚖ renders the view's server-derived eligible set); the click surface is
    *  the host's — Fives keeps his hit target. */
   private quickSnapArrows: { from: [number, number]; targets: [number, number][]; color: number } | null = null;
+  /** S20: the Quick Snap destination crosshairs, tracked for the ticker pulse. Separate from pickCrosshairs
+   *  (drawPlayerPick resets that); emptied wherever the tokenLayer nodes are destroyed. */
+  private quickSnapCrosshairs: { node: Graphics; base: number }[] = [];
   setQuickSnapArrows(from: [number, number] | null, targets: [number, number][], color: number): void {
     this.quickSnapArrows = from && targets.length > 0 ? { from, targets, color } : null;
     this.refresh();
@@ -3271,11 +3308,63 @@ export class PitchRenderer {
     this.refresh();
   }
 
+  /** Owner 09-28 (Spec S3 v2, revised per Sol's re-review): the Kick 'em Blitz NOMINATED target's badge — the
+   *  SAME 🎯 glyph the ordinary Blitz draws on its selected target (`buildBlockDecorationNode('blitzTarget')`,
+   *  the art `addStateMarkers`/`addGazeTargetMarker` already reuse for a second and third feature). Spec S3 v2
+   *  #1/#2: BEFORE nomination the existing pick crosshair (`setPlayerPick`/`drawPlayerPick`) is the ONLY mark —
+   *  every legal candidate, unchanged; this badge shows ONLY the ONE nominated target, at full strength, and
+   *  nothing on the other candidates. A gold RING was rejected in review (ambiguous with the Pick-Me-Up "selected
+   *  for a pick" ring). Deliberately NOT `this.blitzTokens` / `setBlitzTokens` — that field is server-echo-coupled
+   *  (the ordinary Blitz's per-turn badge) and must not be written from a view-local nomination.
+   *  A first pass (rejected) drew this as a `tokenLayer` SIBLING with its own scale/position math, to dodge the
+   *  down-state sprite's own 90° rotation. That math used `token.scale` where the real routine
+   *  (`placeWalkerDecor`/`buildBlockDecorationNode`, `addStateMarkers` ~15355-15366) uses the walker's OWN decor
+   *  scale (`walkerDecorScale`, `walkers.ts` ~1073-1076) — a SEPARATE per-token factor the walker container itself
+   *  does not carry (it sits at scale~1; the figure's visual size lives on the inner sprite instead) — so the
+   *  badge drew ~1.71x oversized on walker tokens, and never re-scaled on a static zoom (no tween running) since
+   *  it wasn't part of `applyDecorScale`'s per-tick sweep of the token's OWN children (`walkers.ts` ~1045-1069).
+   *  The 90° rotation turned out to be a non-issue: it is set on the INNER SPRITE only (`sprite.rotation`, this
+   *  file ~15051), never on the token container, so a plain SIBLING-of-the-sprite child (exactly what
+   *  `addGazeTargetMarker` already does for its own reused 'blitzTarget' art) stays upright regardless. This
+   *  badge is therefore a genuine TOKEN CHILD, placed via the exact same `placeWalkerDecor` call the ordinary
+   *  badge uses (walker path and classic-icon path both handled by that one routine) — which gets scale, the
+   *  down-row anchor, tween-following (`token.position` moves it for free, no separate hook), and per-zoom-tick
+   *  rescaling (`applyDecorScale`) all for free, identically to the ordinary Blitz's own badge. */
+  private kickEmTargetNominatedId: string | null = null;
+  private kickEmTargetMarkNode: Container | null = null;
+  setKickEmTargetMark(playerId: string | null): void {
+    if (this.kickEmTargetNominatedId === playerId) return;
+    this.kickEmTargetNominatedId = playerId;
+    this.refresh();
+  }
+  private drawKickEmTargetMark(): void {
+    if (this.kickEmTargetMarkNode) { this.kickEmTargetMarkNode.destroy(); this.kickEmTargetMarkNode = null; }
+    const id = this.kickEmTargetNominatedId;
+    if (!this.game || !id) return;
+    const d = this.game.fieldModel.playerDataArray.find((p) => p.playerId === id);
+    const coordinate = d ? this.effectiveCoordinate(d) : null;
+    if (!coordinate || !isOnPitch(coordinate)) return;
+    const token = this.tokensById.get(id);
+    if (!token || token.destroyed) return;
+    const badge = this.buildBlockDecorationNode('blitzTarget');
+    const node: Container = badge ? badge.node : this.buildStateMarkerNode({ text: '🎯', emoji: true, deco: 'kickEmTarget' });
+    node.label = 'kickEmTargetMark';
+    node.zIndex = 50; // the state-marker row, exactly like the ordinary Blitz target badge
+    placeWalkerDecor(token, node, 0, 0, badge?.scale ?? 1); // Kick 'em's target is always DOWN — row y=0
+    token.sortableChildren = true;
+    // Owner 09-28 (Sol round-3, item 5, waived — not built): being a token CHILD, this badge inherits the
+    // token's own alpha (e.g. activation shading dimming an off-turn player) — no independent alpha is set.
+    token.addChild(node);
+    this.kickEmTargetMarkNode = node;
+  }
+
   /** Owner 2026-07-04e (unknown-call handler): arm a raw TILE pick — any square
    *  click reports its coordinate via onTilePick. `eligible` (optional) draws
    *  gold crosshairs on those squares and restricts the pick to them; null =
    *  any on-pitch tile. Clear with setTilePick(false). */
   private tilePickActive = false;
+  /** True from a skill-pick crosshair change until the next refresh() paints it; blocks movement token reuse. */
+  private tilePickMarksStale = false;
   private tilePickEligible: Set<string> | null = null;
   /** Upstream Kick-after-scatter comparison: two server-sent landing candidates, presentation-only and inert. */
   private kickSkillCandidates: { ballCoordinate: [number, number]; ballCoordinateWithKick: [number, number] } | null = null;
@@ -3354,6 +3443,13 @@ export class PitchRenderer {
       && (this.tilePickSkill === 'order66-move' || !this.tilePickActive)
       && !nextExtra
       && (nextSkill === 'order66-move' || !active);
+    // The skill crosshairs/badges are tokenLayer children painted only by refresh(). setGame's movement token
+    // reuse (an offer-only frame in a moving action, e.g. Raiding Party's destinations) skips refresh() and
+    // absorbs the projection refresh queued below, so remember that the marks are owed a real paint.
+    if (!movementOverlayOnly
+      && ((this.tilePickEligible && this.tilePickSkill !== 'order66-move') || (nextEligible && nextSkill !== 'order66-move'))) {
+      this.tilePickMarksStale = true;
+    }
     this.tilePickActive = active;
     this.tilePickEligible = nextEligible;
     this.tilePickSkill = nextSkill;
@@ -3459,7 +3555,7 @@ export class PitchRenderer {
   /** #181/KG-6 (owner, Meero SR-158/SR-161): the Beer Barrel Bash! keg-throw affordance. Meero SR-161: this is
    *  TWO affordances, not one — (a) the RANGE box (chebyshev-3 around the thrower, drawn REGARDLESS of whether
    *  any target is legal, so an empty set reads as "throw is SHORT", not "keg is BROKEN" = the actual KG-6 fix),
-   *  and (b) per-target LEGALITY rings. `kegThrowerSquare` drives (a); `kegTargetSet` drives (b).
+   *  and (b) per-target LEGALITY crosshairs (S17: the pick crosshair, no rings/arrows). `kegThrowerSquare` drives (a); `kegTargetSet` drives (b).
    *  ⚖ SPLIT OF CONCERNS: (a) is PURE GEOMETRY the renderer computes (a chebyshev box, field-bounded — no rule,
    *  like drawPassTemplate's ruler); (b) is the RULE `availableActions.kegTargetIds` (Tarkin `2095e3dd`, ported
    *  from ThrowKegLogicModule.isValidTarget) which lives in the APP layer — ffb-pitch cannot import it (#16 /
@@ -3499,6 +3595,8 @@ export class PitchRenderer {
    *  Presentation-only: it owns no hit area and cannot emit a field command. */
   private passDestinationMarker: Square | null = null;
   private passDestinationKind: PassDestinationKind = 'ball';
+  /** Owner 09-28 (S16): read-only Hail Mary scatter marks (aim, numbered confirmed steps, the step under decision). */
+  private hmpScatterMarks: HmpScatterMarksState | null = null;
   /** PASS/BOMB use the full chart; a held Throw Team-Mate uses the same chart capped after Short. */
   setPassTemplateMaxRange(range: 'S' | null): void {
     if (this.passTemplateMaxRange === range) return;
@@ -3519,6 +3617,23 @@ export class PitchRenderer {
     this.passDestinationMarker = next;
     this.passDestinationKind = kind;
     this.redrawOverlays();
+  }
+  setHmpScatterMarks(marks: HmpScatterMarksState | null): void {
+    const next = this.sanitizeHmpScatterMarks(marks);
+    if (JSON.stringify(this.hmpScatterMarks) === JSON.stringify(next)) return;
+    this.hmpScatterMarks = next;
+    this.redrawOverlays();
+  }
+  private sanitizeHmpScatterMarks(marks: HmpScatterMarksState | null | undefined): HmpScatterMarksState | null {
+    if (!marks || !isOnPitch(marks.aim)) return null;
+    return {
+      aim: [marks.aim[0], marks.aim[1]],
+      steps: marks.steps.map((s) => [s[0], s[1]] as Square),
+      decision: marks.decision
+        ? { ordinal: marks.decision.ordinal, square: marks.decision.square && isOnPitch(marks.decision.square) ? [marks.decision.square[0], marks.decision.square[1]] : null }
+        : null,
+      final: marks.final,
+    };
   }
   /** A target was CLICKED (path auto-planned where needed) — the host shows the
    *  "Perform foul?/Hand off?/Pass?" modal. null = the arming was cancelled. */
@@ -4102,12 +4217,33 @@ export class PitchRenderer {
     const DIE_OUT = presentationMs(ACTION_DIE_OUT_MS);
     app.ticker.add(() => {
       const now = performance.now();
-      if (this.actionDice.length === 0) { this.lastActionDiceTick = 0; this.actionDice3d?.sync([], 0, now); return; }
+      if (this.actionDice.length === 0) { this.lastActionDiceTick = 0; this.lastActionDiceHoldTick = 0; this.actionDice3d?.sync([], 0, now); return; }
+      // Owner 09-28 (S7 v3): per-tick delta for the suspended-backstop clock (independent of the 3D layer's delta).
+      const holdDt = this.lastActionDiceHoldTick ? now - this.lastActionDiceHoldTick : 0;
+      this.lastActionDiceHoldTick = now;
       this.actionDice = this.actionDice.filter((die) => {
-        const rawElapsed = now - die.start;
         // Owner 09-06: a FAILED re-rolled die is held until the turnover tears it down (backstop 6 s so it can
         // never stick); the opponent-reroll hold ends when the reroll dialog closes.
-        if (die.holdUntilTurnover && rawElapsed > presentationMs(6000)) die.holdUntilTurnover = false;
+        // Owner 09-28 (S7 v3): a FAILED re-roll die always takes holdUntilTurnover; the splash END releases it. The 6 s
+        // backstop is measured from the die being shown, its clock SUSPENDED only while a turnover splash is on screen —
+        // so a die shown before a genuine splash stays readable THROUGH it (the splash-end release, not the backstop,
+        // tears it down). The suspension is CAPPED at 5 s (defence in depth: a store leak that strands state.turnover
+        // non-null cannot pin a die forever). ABSOLUTE MAXIMUM lifetime of a die with a turnover hold = 6 s backstop +
+        // 5 s capped suspension + 0.3 s fade ≈ 11.3 s from show; only an OPEN reroll DIALOG (holdForOpponentReroll, no
+        // backstop, cleared on dialog close / splash end) exceeds that.
+        // ACCEPTED (Owner 09-28, turn-key suppression removed): a die shown AFTER its own splash already ended is NOT
+        // suppressed — it takes the hold and, with no splash to end it, the backstop hands it to the normal fade after
+        // ~6 s (max ~6.3 s incl. fade). Documented and accepted rather than risk mis-correlating a legitimate new turn.
+        // Known limitation (Sol, live review only, INFERRED): a pre-splash presentation chain (armour / injury /
+        // apothecary / send-off) longer than ~6 s can fade the die before its splash; not addressed here.
+        if (die.holdUntilTurnover) {
+          if (this.turnoverSplashShowing) die.splashSuspendMs = Math.min(presentationMs(5000), (die.splashSuspendMs ?? 0) + holdDt);
+          if ((now - die.start) - (die.splashSuspendMs ?? 0) > presentationMs(6000)) {
+            die.holdUntilTurnover = false;
+            if (now - die.start > DIE_IN + DIE_HOLD) die.start = now - (DIE_IN + DIE_HOLD);
+          }
+        }
+        const rawElapsed = now - die.start;
         const e = die.holdForOpponentReroll || die.holdUntilTurnover
           ? Math.min(rawElapsed, DIE_IN + DIE_HOLD)
           : rawElapsed;
@@ -4259,15 +4395,7 @@ export class PitchRenderer {
       }
       // Owner 2026-07-03: the push-target crosshairs pulse (scale + alpha) to draw
       // the eye to where to click.
-      if (this.pushCrosshairs.length > 0 || this.pickCrosshairs.length > 0) {
-        const p = 0.5 + 0.5 * Math.sin(performance.now() / 200);
-        for (const ch of [...this.pushCrosshairs, ...this.pickCrosshairs]) {
-          if (ch.node.destroyed) continue;
-          // Owner 2026-07-08: a subtler pulse — a small 0.94→1.06 breathe (was 0.82→1.14, too big).
-          ch.node.scale.set(ch.base * (0.94 + 0.12 * p));
-          ch.node.alpha = 0.7 + 0.3 * p;
-        }
-      }
+      this.pulseTargetCrosshairs();
       // Owner o66 #20: the over-head pick arrows bob down toward the player (a gentle 350ms hop, scaled by depth).
       for (const ring of this.persistentPickRings) { // owner 09-27: a slow breath so the held selection reads as live
         if (!ring.destroyed) ring.alpha = 0.72 + 0.28 * Math.sin(performance.now() / 420);
@@ -4662,6 +4790,7 @@ export class PitchRenderer {
     if (!dialogId.includes('reroll')) this.releaseOpponentRerollDice();
     const nextMovementSignature = movementTokenGenerationSignature(game);
     const reuseMovementTokens = !!this.app && this.confirmedMovementPresentationEnabled
+      && !this.tilePickMarksStale
       && nextMovementSignature !== null && nextMovementSignature === this.lastMovementTokenGenerationSignature;
     this.lastMovementTokenGenerationSignature = nextMovementSignature;
     // Owner 2026-07-04: on a GAME CHANGE, flush the transient effect/animation
@@ -4693,7 +4822,7 @@ export class PitchRenderer {
         this.pendingServerKickoffScatter = seededKickoffScatter;
         this.serverKickoffScatterReveal = seededKickoffReveal;
         this.kickoffScatterSeqSeen = seededKickoffSeq;
-        this.showKickTargetPersistent(seededKickoffReveal, false);
+        this.showKickTargetPersistent(this.serverKickoffScatterMarker ?? seededKickoffReveal, false);
       }
       // Owner 2026-07-06: drop the previous game's icon LOAD-STATE caches so a
       // game→game switch starts fresh — clears any stale in-flight load / failure-
@@ -4734,6 +4863,7 @@ export class PitchRenderer {
       this.ttmHeld = spectatorState.heldTeamMate ? { ...spectatorState.heldTeamMate, start: 0, fromSquare: null } : null;
       this.passDestinationMarker = spectatorState.passDestination ? [...spectatorState.passDestination.square] : null;
       this.passDestinationKind = spectatorState.passDestination?.kind ?? 'ball';
+      this.hmpScatterMarks = this.sanitizeHmpScatterMarks(spectatorState.hmpScatterMarks);
       this.setFieldFlipMode(spectatorState.fieldFlip);
     }
     const modelBall = game?.fieldModel.ballCoordinate as [number, number] | null | undefined;
@@ -4855,8 +4985,7 @@ export class PitchRenderer {
     this.flashRings = [];
     for (const m of this.rollModals) { m.node.parent?.removeChild(m.node); m.node.destroy({ children: true }); }
     this.rollModals = [];
-    for (const d of this.actionDice) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
-    this.actionDice = [];
+    this.clearActionDice();
     this.liveSkillAssets.clear();
     for (const c of this.effectsLayer.removeChildren()) c.destroy({ children: true });
     this.signTextNodes = []; // the persistent pre-game sign texts live in effectsLayer
@@ -4864,7 +4993,7 @@ export class PitchRenderer {
     this.trailNumberNodes = []; // persistent trail numbers live in effectsLayer too
     this.moveTweens.clear();
     this.activationFades.clear(); this.activationFadePaint.clear(); // item3
-    this.pushOptionPulse = []; this.pushCrosshairs = []; this.pushOptionCoords = []; this.pickCrosshairs = []; this.pickArrows = [];
+    this.pushOptionPulse = []; this.pushCrosshairs = []; this.pushOptionCoords = []; this.pickCrosshairs = []; this.quickSnapCrosshairs = []; this.pickArrows = [];
     this.persistentPlayerArrowIds.clear(); this.persistentPlayerArrows = [];
     this.marks.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
     // reset movement/ball baselines so the new game doesn't tween from stale squares
@@ -4875,11 +5004,12 @@ export class PitchRenderer {
     this.kickDescendSnapshot = null; this.kickDescendSeqSeen = -1; // #124: a stale kickoff-descend snapshot must not leak games
     this.arcArmedAt = null; this.pendingKickDescendClear = false; // #185: a fresh game re-arms the arc-in-flight cap clock / clears any deferred snapshot-clear
     this.kickoffVictimSeqSeen = -1; // #131: a stale victim-splash dedup-seq must not leak games
-    this.kegThrowerSquare = null; this.kegTargetSet = null; this.jumpCrosshairSquares = []; // #181/KG-6: a stale keg range/target set must not leak games
+    this.kegThrowerSquare = null; this.kegTargetSet = null; this.destroyKegCrosshairs(); this.skillTargetSet = null; this.destroySkillTargetMarks(); this.jumpCrosshairSquares = []; // #181/KG-6: a stale keg range/target set must not leak games
     this.ballDirectionSeqSeen = -1; // #141: a stale ball-direction dedup-seq must not leak games
     if (this.kickInReleaseTimer != null) { this.cancelTimer(this.kickInReleaseTimer); this.kickInReleaseTimer = null; }
     this.clearKickTarget(); // B0: drop the persistent target crosshair on a game change
     this.clearBlockTargetCue(); // drop a pending block-target crosshair on a game change
+    this.kickEmTargetNominatedId = null; this.kickEmTargetMarkNode = null; // Owner 09-28 (Spec S3 v2): a stale kick-em nomination must not leak games
     this.clearFoulTargetCue(); // drop a pending foul-target boot on a game change
     this.clearRosterAttentionCue(); // drop a pending roster-panel attention arrow on a game change
     this.clearUnactivatedCues(); // owner 09-08: End-Turn idle-player cues never survive a game change
@@ -4924,6 +5054,7 @@ export class PitchRenderer {
   /** Snap one non-presented replay render without erasing persistent same-game projections. */
   snapReplayFrame(): void {
     this.resetAutoDirectorCamera(true);
+    this.clearActionDice(); // Owner 09-28 (S7 v3): a seek / live-review snap leaves no die behind, held or not.
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
     this.movementIntentTimer = null;
@@ -4997,6 +5128,7 @@ export class PitchRenderer {
     this.pushCrosshairs = [];
     this.pushOptionCoords = [];
     this.pickCrosshairs = [];
+    this.quickSnapCrosshairs = [];
     this.pickArrows = [];
     this.blockDiceSprites = [];
     this.blockPreviewSquares = [];
@@ -5489,6 +5621,7 @@ export class PitchRenderer {
     this.drawPushOptions();
     this.drawPlayerPick();
     this.drawPersistentPickRings();
+    this.drawKickEmTargetMark(); // Owner 09-28 (Spec S3 v2): the nominated Kick 'em Blitz target's badge only
     this.drawPersistentPlayerArrows();
     this.drawPickMeUpCue();
     this.drawQuickSnapArrows();
@@ -5852,7 +5985,7 @@ export class PitchRenderer {
           // Owner 09-05 (round 21): the word is sized to the MODEL — from its ring width (lineman = 1, gnome ~0.76,
           // snotling ~0.62, big guys capped at 1.3) — so it no longer swallows an ST 1-2 figure.
           const ringRx = carrierTokenForLabel && isWalkerToken(carrierTokenForLabel) ? walkerShadowRadii(carrierTokenForLabel)?.rx : undefined;
-          const modelK = ringRx ? Math.min(1.3, ringRx / 15.2) : 1;
+          const modelK = ringRx ? Math.min(1.3, ringRx / WALKER_ST3_RING_RX) : 1;
           marker.scale.set(tokenScale * BALL_TOKEN_SCALE * 0.7 * modelK);
         }
         marker.zIndex = this.depthZ(ball[0], ball[1]) + 0.5; // owner 09-07: over its own row's tokens, under the nearer row (and their skill icons)
@@ -5938,7 +6071,6 @@ export class PitchRenderer {
         halo.alpha = 0.4;
         this.tokenLayer.addChild(halo);
         this.activeHalo = halo;
-        const marker = new Container();
         // the marker depicts the acting player's DECLARED ACTION (task 4). Only
         // trust the action when actingPlayer IS this active player; else default.
         const raw = (this.game.actingPlayer as { playerId?: string; playerAction?: string | null } | undefined)?.playerId === this.activePlayerId
@@ -5968,8 +6100,11 @@ export class PitchRenderer {
         // SpectateView never sets this id for MY-side blitzers, leaving that render path byte-identical.
         // Owner 09-07: once the blitz is INITIATED the blitzer's ⚡ rests on the chest (state-marker row) — no over-head
         // ⚡ on top of it (was opposition-only via oppositionBlitzBadgePlayerId; now any blitzer carrying the badge).
+        // S17 (owner 09-28): Throw Keg (Beer Barrel Bash!) carries NO over-head marker (its target crosshairs are the
+        // affordance), so no marker node is built or mounted at all for it; every other action is unchanged.
+        const marker: Container | null = normalizedGlyphAction === 'throwkey' ? null : new Container();
         const blitzBadged = apid === this.oppositionBlitzBadgePlayerId || (!!apid && apid === this.blitzTokens?.blitzerId);
-        if (!(blitzBadged && normalizedGlyphAction.includes('blitz'))) {
+        if (marker && !(blitzBadged && normalizedGlyphAction.includes('blitz'))) {
           marker.addChild(this.buildActionMarker(glyphAction));
         }
         // Owner 08-18: the declared-action decoration family (MOVE 🏃, blitz ⚡, pass 🏈, … — every
@@ -5992,6 +6127,7 @@ export class PitchRenderer {
         const markerY = activeToken
           ? anchor.y + this.tokenOverheadTop(activeToken) * activeToken.scale.y - 6 * scale // owner 09-07: 13 -> 6, tighter to the body (all decorations)
           : anchor.y - 34 * scale;
+        if (marker) {
         marker.position.set(tp.x, markerY); // just over the head/icon row, on the token's column
         marker.scale.set(scale);
         marker.zIndex = this.depthZ(ax, ay) + 3;
@@ -6009,6 +6145,7 @@ export class PitchRenderer {
         this.effectsLayer.addChild(marker);
         this.activeMarker = { node: marker, baseY: marker.position.y, baseScale: scale };
         this.activeMarkerDecorKey = null;
+        }
         // #3 (owner tester): pin the gold halo + action badge to the active token's live tweened position so they
         // ride WITH the token instead of teleporting to its model square (the OPPONENT-move lag; mirror of the
         // carried-ball follow). Both nodes are position-static after draw (their tickers only SCALE-pulse — halo
@@ -6021,7 +6158,7 @@ export class PitchRenderer {
           restY: anchor.y,
           nodes: [
             { node: halo, baseX: halo.position.x, baseY: halo.position.y, kind: 'plain' },
-            { node: marker, baseX: marker.position.x, baseY: marker.position.y, kind: 'plain' },
+            ...(marker ? [{ node: marker, baseX: marker.position.x, baseY: marker.position.y, kind: 'plain' as const }] : []),
           ],
         };
       }
@@ -6034,6 +6171,7 @@ export class PitchRenderer {
       this.purgeFailedRefresh(error);
     } finally {
       if (refreshCompleted) this.refreshFailureLogged = false;
+      if (refreshCompleted) this.tilePickMarksStale = false; // a thrown refresh painted no marks: keep them owed
       if (refreshCompleted && this.game) {
         this.resumePostStepConvergenceAfterRefresh(suspendedPostStep);
       } else {
@@ -7023,14 +7161,21 @@ export class PitchRenderer {
     this.redrawOverlays();
   }
 
-  /** #181/KG-6 (owner, Meero SR-158) — (b) LEGALITY rings: `ids` = the legal targets the VIEW computed via
-   *  `availableActions.kegTargetIds(game, throwerId)`. The renderer stays rule-free — it rings exactly the ids
+  /** #181/KG-6 (owner, Meero SR-158) — (b) LEGALITY crosshairs: `ids` = the legal targets the VIEW computed via
+   *  `availableActions.kegTargetIds(game, throwerId)`. The renderer stays rule-free — it marks exactly the ids
    *  it's fed (⚖: no local distance/standing derivation, no app import — the #16/item-74 boundary; kegTargetIds
-   *  lives in the app layer). null / empty clears the rings only (the range box is setKegRange's, independent).
-   *  Rings, not squares — upstream reuses the walk-reach MoveSquare for keg range, which invites a stray
-   *  clientMove misclick (Fives' KG catch); rings can't. */
+   *  lives in the app layer). null / empty clears the crosshairs only (the range box is setKegRange's, independent).
+   *  Crosshairs, not squares — upstream reuses the walk-reach MoveSquare for keg range, which invites a stray
+   *  clientMove misclick (Fives' KG catch); crosshairs can't. */
   setKegTargets(ids: string[] | null): void {
     this.kegTargetSet = ids && ids.length ? new Set(ids) : null;
+    this.redrawOverlays();
+  }
+
+  /** S28: pick crosshairs over the view-fed skill targets (Putrid Regurgitation). Marks exactly the ids it is fed; null or
+   *  empty clears. Drawn on pathLayer in redrawOverlays, so a setGame token-reuse frame keeps them; never dims a token. */
+  setSkillTargetMarks(ids: string[] | null): void {
+    this.skillTargetSet = ids && ids.length ? new Set(ids) : null;
     this.redrawOverlays();
   }
 
@@ -7293,6 +7438,40 @@ export class PitchRenderer {
     }
   }
 
+  /** Owner 2026-07-03: the push / pick / keg target crosshairs pulse (scale + alpha) to draw the eye to where to click. */
+  private pulseTargetCrosshairs(): void {
+    if (this.pushCrosshairs.length === 0 && this.pickCrosshairs.length === 0 && this.kegCrosshairs.length === 0
+      && this.quickSnapCrosshairs.length === 0 && this.skillTargetMarks.length === 0) return;
+    const p = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+    for (const ch of [...this.pushCrosshairs, ...this.pickCrosshairs, ...this.kegCrosshairs, ...this.quickSnapCrosshairs, ...this.skillTargetMarks]) {
+      if (ch.node.destroyed) continue;
+      // Owner 2026-07-08: a subtler pulse — a small 0.94→1.06 breathe (was 0.82→1.14, too big).
+      ch.node.scale.set(ch.base * (0.94 + 0.12 * p));
+      ch.node.alpha = 0.7 + 0.3 * p;
+    }
+  }
+
+  /** S17: remove and destroy every tracked keg crosshair, then forget them (redrawOverlays does the same by clearing
+   *  pathLayer; clearEffects can run with no redraw after it). */
+  private destroyKegCrosshairs(): void {
+    for (const ch of this.kegCrosshairs) {
+      if (ch.node.destroyed) continue;
+      ch.node.parent?.removeChild(ch.node);
+      ch.node.destroy({ children: true });
+    }
+    this.kegCrosshairs = [];
+  }
+
+  /** S28: same as destroyKegCrosshairs, for the skill target marks. */
+  private destroySkillTargetMarks(): void {
+    for (const ch of this.skillTargetMarks) {
+      if (ch.node.destroyed) continue;
+      ch.node.parent?.removeChild(ch.node);
+      ch.node.destroy({ children: true });
+    }
+    this.skillTargetMarks = [];
+  }
+
   private redrawOverlays(): void {
     this.beginMovementOverlayFrame();
     try {
@@ -7305,6 +7484,8 @@ export class PitchRenderer {
     this.blockDiceSprites = []; // clear ticker-visible references before destruction
     this.blockPreviewSquares = [];
     this.blockPreviewDecorKey = null;
+    this.kegCrosshairs = []; // clear ticker-visible references before destruction
+    this.skillTargetMarks = [];
     for (const child of this.pathLayer.removeChildren()) child.destroy({ children: true });
     if (hoverSquareMarker && !hoverSquareMarker.destroyed) this.overlayLayer.addChild(hoverSquareMarker);
     if (this.movementReachLayer.children.length > 0) this.overlayLayer.addChild(this.movementReachLayer);
@@ -7326,6 +7507,7 @@ export class PitchRenderer {
     this.drawBncAim();
     this.drawJumpCrosshairs();
     this.drawPassDestinationMarker();
+    this.drawHmpScatterMarks();
     this.drawPassRuler();
     // #151: pass rolls-required cues (throw over passer / catch over target) — server-fed, cleared with the layer.
     this.drawPassRollCues();
@@ -7525,24 +7707,31 @@ export class PitchRenderer {
       }
       this.overlayLayer.addChild(box);
     }
-    // (b) LEGALITY RINGS — over the view-fed legal targets (kegTargetIds). INDEPENDENT of the box: present iff
-    // there are legal targets. Amber, distinct from foul (purple) / handoff (green). Drawn before the
-    // plannerEnabled gate so both show in o66 PLAY (the classic foul/handoff rings below the gate never run there).
-    if (this.kegTargetSet) {
+    // (b) LEGALITY CROSSHAIRS (S17, owner 09-28) — the current pick crosshair (buildPushCrosshair, default colour and
+    // size, pulsed by the ticker) over each view-fed legal target (kegTargetIds). INDEPENDENT of the box: present iff
+    // there are legal targets. No rings and no thrower->target arrows any more. Drawn before the plannerEnabled gate
+    // so it shows in o66 PLAY. On pathLayer (this pass rebuilds it) so it is above the tokens, and painted by every
+    // redrawOverlays, including a setGame token-reuse frame that skips refresh().
+    if (this.kegTargetSet && this.game) {
       const keg = this.kegTargetSet;
-      this.drawTargetRings((data) => keg.has(data.playerId), 0xffb020);
-      // #229 (owner): reuse the push-arrow primitive to point from the thrower to every legal keg target.
-      if (this.kegThrowerSquare) {
-        const kegThrower = this.kegThrowerSquare;
-        const eligibleTargets = new Map<string, [number, number]>();
-        for (const data of this.game!.fieldModel.playerDataArray) {
-          if (keg.has(data.playerId) && data.playerCoordinate) eligibleTargets.set(data.playerId, data.playerCoordinate);
-        }
-        for (const targetCoord of eligibleTargets.values()) {
-          const arrow = this.pushArrowGraphic(kegThrower, targetCoord, { color: 0xffb020 });
-          arrow.alpha = 0.9;
-          this.overlayLayer.addChild(arrow);
-        }
+      for (const data of this.game.fieldModel.playerDataArray) {
+        if (!keg.has(data.playerId)) continue;
+        const coordinate = this.effectiveCoordinate(data);
+        if (!coordinate) continue;
+        const cross = this.buildPushCrosshair(coordinate);
+        this.kegCrosshairs.push({ node: cross, base: cross.scale.x });
+        this.pathLayer.addChild(cross);
+      }
+    }
+    // S28: skill target marks (Putrid Regurgitation), same paint route as the keg crosshairs above.
+    if (this.skillTargetSet && this.game) {
+      for (const data of this.game.fieldModel.playerDataArray) {
+        if (!this.skillTargetSet.has(data.playerId)) continue;
+        const coordinate = this.effectiveCoordinate(data);
+        if (!coordinate) continue;
+        const cross = this.buildPushCrosshair(coordinate);
+        this.skillTargetMarks.push({ node: cross, base: cross.scale.x });
+        this.pathLayer.addChild(cross);
       }
     }
     // Owner 2026-07-04c: aura shading draws in 'always' mode even with nothing
@@ -8292,17 +8481,18 @@ export class PitchRenderer {
   private drawBlockTargets(): void {
     if (!this.game) return;
     const decorations = this.game.fieldModel.diceDecorationArray ?? [];
-    const drawModelDecorations = () => {
+    const drawModelDecorations = (only?: Square | null) => {
       for (const raw of decorations) {
         const decoration = raw as { coordinate?: unknown; nrOfDice?: unknown };
         const coordinate = decoration.coordinate;
         const signedDice = Number(decoration.nrOfDice);
         if (!Array.isArray(coordinate) || coordinate.length !== 2 || !Number.isFinite(signedDice) || signedDice === 0) continue;
+        if (only && (Number(coordinate[0]) !== only[0] || Number(coordinate[1]) !== only[1])) continue;
         this.drawBlockDotsAt([Number(coordinate[0]), Number(coordinate[1])], Math.abs(signedDice), signedDice < 0);
       }
     };
     const action = String((this.game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
-    if (action === 'block' && this.furySecondBlockTargeting) {
+    if ((action === 'block' || action === 'chainsaw') && this.furySecondBlockTargeting) { // S41: a chainsaw attack is declared as `chainsaw`
       drawModelDecorations();
       for (const raw of decorations) {
         const coordinate = (raw as { coordinate?: unknown }).coordinate;
@@ -8324,7 +8514,6 @@ export class PitchRenderer {
       }
       return;
     }
-
     // The passive coach has no local o66 arm of their own. A later local-arm clear used to erase the
     // path layer even though these server decorations remained in the model. For a remote attacker,
     // the model array is the entire render contract: a non-empty array draws verbatim; an empty array
@@ -8343,6 +8532,19 @@ export class PitchRenderer {
         drawModelDecorations();
         return;
       }
+    }
+
+    // S32 (owner 09-29): Vicious Vines targets stand two squares away, so the adjacent computation below never
+    // reaches them. My own vine attacker follows the ordinary block gating (the my-side arm, staged or declared) but
+    // the dice come from the server's decorations, narrowed to the armed target's square when the arm names one.
+    if (action === 'viciousVines') {
+      if (!this.blockTargetsAttacker) return;
+      const only = this.blockTargetsOnly
+        ? this.game.fieldModel.playerDataArray.find((d) => d.playerId === this.blockTargetsOnly)?.playerCoordinate
+        : null;
+      if (this.blockTargetsOnly && !only) return;
+      drawModelDecorations(only ? [only[0], only[1]] : null);
+      return;
     }
 
     const id = this.blockTargetsAttacker;
@@ -10168,18 +10370,21 @@ export class PitchRenderer {
     }
   }
 
-  /** #161: fan a brightened themed push-arrow from the selected Quick-Snap player to each eligible
-   *  destination square (replaces the old boxes). Drawn on tokenLayer inside refresh() so it survives
-   *  the per-sync rebuild and rides the camera, like the push-option arrows. */
+  /** #161 / S20: the standard pick crosshair on each eligible Quick-Snap destination square. Drawn on tokenLayer
+   *  inside refresh() so it survives the per-sync rebuild and rides the camera. The repaint is guaranteed by
+   *  setQuickSnapArrows calling refresh() itself (the view calls it on every quickSnapPhase.seq change); a setGame
+   *  token-reuse frame skips refresh() but keeps the already-mounted marks, it does not clear them. */
   private drawQuickSnapArrows(): void {
     const qs = this.quickSnapArrows;
     if (!qs || !this.game) return;
-    // #216 QS-4 (owner 08-04): mark each eligible destination with a SMALL crosshair reticle (buildPushCrosshair
-    // at 0.6 scale — visibly smaller than the push/jump reticles) in the UI-primary colour (QS-5, view-fed),
-    // replacing the former push-arrow fan. `from` is unused by the reticle.
+    // #216 QS-4 / S20 (owner 09-29): mark each eligible destination with the default pick crosshair (gold, full
+    // size), registered for the ticker pulse. `from` and `qs.color` are not used by the reticle.
+    this.quickSnapCrosshairs = [];
     for (const to of qs.targets) {
       if (!isOnPitch(to)) continue;
-      this.tokenLayer.addChild(this.buildPushCrosshair(to, qs.color, 0.6));
+      const cross = this.buildPushCrosshair(to);
+      this.quickSnapCrosshairs.push({ node: cross, base: cross.scale.x });
+      this.tokenLayer.addChild(cross);
     }
   }
 
@@ -10537,13 +10742,21 @@ export class PitchRenderer {
   /** Read-only destination projected directly from game.passCoordinate.
    *  Deliberately separate from tilePick: the marker cannot consume clicks or send a command. */
   private drawPassDestinationMarker(): void {
-    if (!this.passDestinationMarker) return;
-    const crosshair = this.buildPushCrosshair(this.passDestinationMarker, 0x22d3ee, 1.08);
+    // Owner 09-28 (S16): while a Blast It! prompt is live the full marker stands on the square the rolled direction
+    // leads to (none if that is off the pitch); the original aim keeps only the quiet aim mark.
+    const decision = this.hmpScatterMarks?.decision;
+    if (decision) return; // the pending step's marker is drawn with the scatter marks, above the tokens
+    if (this.passDestinationMarker) this.drawPassMarkerAt(this.passDestinationMarker, this.overlayLayer);
+  }
+
+  private drawPassMarkerAt(square: Square, layer: Container): void {
+    const crosshair = this.buildPushCrosshair(square, 0x22d3ee, 1.08);
     const marker = new Container();
     marker.position.copyFrom(crosshair.position);
     crosshair.position.set(0, 0);
     marker.alpha = 0.95;
     marker.label = 'pass-destination-marker';
+    marker.eventMode = 'none';
     const glyph = this.passDestinationKind === 'bomb' ? '💣' : this.passDestinationKind === 'stunty' ? '🤡' : '🏈';
     const icon = new Text({
       text: glyph,
@@ -10556,8 +10769,62 @@ export class PitchRenderer {
     });
     icon.anchor.set(0.5);
     icon.label = `pass-destination-kind-${this.passDestinationKind}`;
+    crosshair.eventMode = 'none';
+    icon.eventMode = 'none';
     marker.addChild(crosshair, icon);
-    this.overlayLayer.addChild(marker);
+    layer.addChild(marker);
+  }
+
+  /** Owner 09-28 (S16): the Hail Mary scatter trail — a quiet AIM tag on the original target, a numbered badge on the
+   *  square the server put the ball on after each confirmed step (thin arrow from the previous square), and the
+   *  ordinal on the step under decision. Overlay layer, no pointer events, same tokenPos/depthScale projection as the
+   *  destination marker so it holds in every orientation. */
+  private drawHmpScatterMarks(): void {
+    const marks = this.hmpScatterMarks;
+    if (!marks) return;
+    const color = 0x22d3ee;
+    const chain: Square[] = [marks.aim, ...marks.steps];
+    for (let i = 1; i < chain.length; i++) {
+      if (!isOnPitch(chain[i - 1]!) || !isOnPitch(chain[i]!)) continue;
+      const arrow = this.pushArrowGraphic(chain[i - 1]!, chain[i]!, { color });
+      arrow.alpha = 0.5;
+      arrow.label = `hmp-scatter-arrow-${i}`;
+      arrow.eventMode = 'none';
+      this.pathLayer.addChild(arrow);
+    }
+    this.pathLayer.addChild(this.buildHmpScatterBadge(marks.aim, 'AIM', false, 'hmp-scatter-aim'));
+    marks.steps.forEach((step, i) => {
+      if (isOnPitch(step)) this.pathLayer.addChild(this.buildHmpScatterBadge(step, String(i + 1), false, `hmp-scatter-step-${i + 1}`));
+    });
+    if (marks.decision?.square) {
+      this.drawPassMarkerAt(marks.decision.square, this.pathLayer);
+      this.pathLayer.addChild(this.buildHmpScatterBadge(marks.decision.square, String(marks.decision.ordinal), true, `hmp-scatter-decision-${marks.decision.ordinal}`));
+    }
+  }
+
+  private buildHmpScatterBadge(square: Square, text: string, active: boolean, label: string): Container {
+    const a = this.tokenPos(square[0], square[1]);
+    const depth = depthScale(square[0], square[1]);
+    const r = TILE_W * 0.12 * depth;
+    const wide = text.length > 1;
+    const badge = new Container();
+    badge.label = label;
+    badge.eventMode = 'none';
+    const plate = new Graphics();
+    if (wide) plate.roundRect(-r * 1.7, -r, r * 3.4, r * 2, r).fill({ color: 0x081218, alpha: 0.8 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.4 * depth), alpha: 0.85 });
+    else plate.circle(0, 0, r).fill({ color: active ? 0x22d3ee : 0x081218, alpha: active ? 0.95 : 0.85 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.4 * depth), alpha: 0.9 });
+    const caption = new Text({
+      text,
+      style: new TextStyle({
+        fontFamily: 'system-ui, sans-serif', fontWeight: '800', fontSize: Math.max(8, Math.round(TILE_W * 0.15 * depth)),
+        fill: active ? 0x081218 : 0xe6fbff, align: 'center',
+      }),
+    });
+    caption.anchor.set(0.5);
+    badge.addChild(plate, caption);
+    // top-left corner of the square, clear of the centred crosshair / token
+    badge.position.set(a.x - TILE_W * 0.3 * depth, a.y - TILE_H * 0.3 * depth);
+    return badge;
   }
 
   /** Owner o66 #20: a chunky gold arrow that hovers ABOVE a player's head, pointing down at them — the pick marker
@@ -11009,17 +11276,19 @@ export class PitchRenderer {
   }
   private pendingKickAim: [number, number] | null = null;
   /** Reveal the server's kickoffScatter result without arming motion. The matching setGame consumes it once. */
-  setServerKickoffScatter(snap: { commandNr: number; endpoint: [number, number]; seq: number } | null): void {
-    if (!snap) { this.pendingServerKickoffScatter = null; this.serverKickoffScatterReveal = null; return; }
+  setServerKickoffScatter(snap: { commandNr: number; endpoint: [number, number]; seq: number; marker?: [number, number] | null } | null): void {
+    if (!snap) { this.pendingServerKickoffScatter = null; this.serverKickoffScatterReveal = null; this.serverKickoffScatterMarker = null; return; }
     if (snap.seq === this.kickoffScatterSeqSeen) return;
     this.kickoffScatterSeqSeen = snap.seq;
+    // S45: `marker` (the nominated square) is drawn instead of the end; the end still keys the model-ball transition and the mask.
+    this.serverKickoffScatterMarker = snap.marker ? [snap.marker[0], snap.marker[1]] : null;
     this.pendingServerKickoffScatter = {
       kind: 'serverKickoffScatter',
       commandNr: snap.commandNr,
       endpoint: [snap.endpoint[0], snap.endpoint[1]],
     };
     this.serverKickoffScatterReveal = [snap.endpoint[0], snap.endpoint[1]];
-    this.showKickTargetPersistent(snap.endpoint, false);
+    this.showKickTargetPersistent(this.serverKickoffScatterMarker ?? snap.endpoint, false);
   }
   /** @internal Behavioral probe for the server kickoff occurrence; presentation-only state, never model state. */
   kickoffPresentationProbe(): { modelBallMasked: boolean; ballTweenActive: boolean; authoritativeFlightArmed: boolean } {
@@ -12300,6 +12569,7 @@ export class PitchRenderer {
       persisted.failed = !!failed;
       persisted.holdForOpponentReroll = opponentRerollPending;
       persisted.holdUntilTurnover = !!failed;
+      persisted.splashSuspendMs = 0;
       persisted.node.alpha = 1;
       persisted.node.scale.set(persisted.baseScale);
       this.decorateActionDie(persisted.node, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
@@ -12321,7 +12591,7 @@ export class PitchRenderer {
       baseScale: scale,
       start: now,
       holdForOpponentReroll: opponentRerollPending,
-      // owner 09-06: a failed RE-ROLL stays up until the turnover splash (releaseDiceAtTurnover), not one tick
+      // owner 09-06: a failed RE-ROLL stays up until the turnover splash (releaseDiceAtTurnover), not one tick.
       holdUntilTurnover: !!(rerollSkill && failed),
       square: [x, y],
       id: ++this.actionDieSeq,
@@ -12433,15 +12703,34 @@ export class PitchRenderer {
     if (die.causeTag && die.causeTagHome) die.causeTag.position.set(die.causeTagHome.x, die.causeTagHome.y);
   }
 
-  /** Owner 09-06: the turnover tears down the dice held for it (a failed re-roll's result). */
+  /** Owner 09-06 / 09-28 (S7 v3): the END of the turnover splash tears down EVERY action die still on the pitch —
+   *  whatever hold flag it carries (both the turnover hold and the opponent-reroll hold) — to its normal fade. Called
+   *  by SpectateView on the `state.turnover` non-null -> null transition (item 1). */
   releaseDiceAtTurnover(): void {
     const now = performance.now();
     const holdBoundary = presentationMs(ACTION_DIE_IN_MS + ACTION_DIE_HOLD_MS);
     for (const die of this.actionDice) {
-      if (!die.holdUntilTurnover) continue;
+      if (!die.holdUntilTurnover && !die.holdForOpponentReroll) continue;
       if (now - die.start > holdBoundary) die.start = now - holdBoundary;
       die.holdUntilTurnover = false;
+      die.holdForOpponentReroll = false;
     }
+  }
+
+  /** Owner 09-28 (S7 v3): SpectateView feeds the live splash-showing truth (state.turnover non-null), seeded on mount.
+   *  While a splash shows the turnover-hold backstop is suspended (the die must read through the splash). */
+  setTurnoverSplashShowing(showing: boolean): void {
+    this.turnoverSplashShowing = showing;
+  }
+
+  /** Owner 09-28 (S7 v3): tear down every on-pitch action die at once (2D nodes + their 3D cubes), no fade — the
+   *  seek / live-catch-up teardown, where a held die must never survive the boundary. */
+  clearActionDice(): void {
+    for (const d of this.actionDice) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
+    this.actionDice = [];
+    this.lastActionDiceTick = 0;
+    this.lastActionDiceHoldTick = 0;
+    this.actionDice3d?.sync([], 0, performance.now());
   }
 
   /** Keep the opponent's original failed die readable for as long as the server-owned
@@ -14734,6 +15023,9 @@ export class PitchRenderer {
         }
       }
     }
+    // Owner 09-28 (Spec S3 v2, revised): the Kick 'em nominated-target badge is now a genuine TOKEN CHILD
+    // (placeWalkerDecor / token.addChild in drawKickEmTargetMark) — it moves with the token automatically as
+    // part of the normal parent transform, exactly like the ordinary Blitz badge; no separate hook needed here.
   }
 
   private tokenPos(x: number, y: number): { x: number; y: number } {
@@ -14956,7 +15248,7 @@ export class PitchRenderer {
           ringNode.alpha = this.ringDimAlpha(ringK);
           if (isStarPlayer(player, team)) {
             // Star Player: gold star silhouette beneath the feet, not a ring.
-            ringNode.addChild(this.buildStarBase(TILE_H * 0.32, TILE_W * 0.34, Math.min(1, d)));
+            ringNode.addChild(this.buildStarBase(TILE_H * 0.32, starBaseRadius('icon', TILE_W * 0.34, player.strength), Math.min(1, d)));
           } else {
             const ringColor = this.ringColorOverride ?? positionRingColor(player, team);
             ringNode.addChild(this.buildRingGlow(TILE_H * 0.32, TILE_W * 0.3, TILE_H * 0.18, ringColor, Math.min(1, d), d));
@@ -15164,7 +15456,8 @@ export class PitchRenderer {
       ringNode.alpha = this.ringDimAlpha(ringK);
       if (isStarPlayer(player, team)) {
         // Star Player: gold star silhouette beneath the feet, not a ring.
-        ringNode.addChild(this.buildStarBase(cy, rx * 1.1, Math.min(1, d)));
+        // owner 09-28: never under the ST 3 size (walkers pass their own rx; the rest ride the token's Strength scale)
+        ringNode.addChild(this.buildStarBase(cy, starBaseRadius(opts.rx === undefined ? 'icon' : 'walker', rx * 1.1, player.strength), Math.min(1, d)));
       } else {
         const rc = this.ringColorOverride ?? positionRingColor(player, team);
         ringNode.addChild(this.buildRingGlow(cy, rx, ry, rc, Math.min(1, d), d));

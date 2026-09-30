@@ -48,6 +48,8 @@ import ChatDock from '../components/ChatDock.vue';
 import ChatToast from '../components/ChatToast.vue';
 import QuickBarButton from '../components/QuickBarButton.vue';
 import OnTheBallWaitingModal from '../components/OnTheBallWaitingModal.vue';
+import { placeCarriedPlayerNotice, placeCarriedPlayerInfoNoticeText, serverMessageForPlacement } from '../game/placeCarriedPlayerNotice';
+import { hailMaryPassNoticeStyle as hailMaryPassNoticeDockStyle, HMP_NOTICE_Z_INDEX } from '../game/hailMaryPassNoticeDock';
 import SendOffWaitingModal from '../components/SendOffWaitingModal.vue';
 import InducementsPhase, { type PanelView, type PickerCard, type Portrait, type SummaryCardView } from '../components/InducementsPhase.vue';
 import {
@@ -103,7 +105,7 @@ import { watchKickoffArcDecisionDwell } from '../game/kickoffArcDwell';
 import { quickSnapExhaustedText } from '../game/quickSnapController';
 import { currentBlockChoosingTeamId, currentMultiBlockChoosingTeamId, isCurrentBlockChoiceDialog, isCurrentMultiBlockChoiceDialog, projectBlockChooser, type BlockChooserSide } from '../game/blockChooser';
 import { savedSetupPreview, templatePreview } from '../game/setupTemplatePreview';
-import { hmpScatterSkillUseCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
+import { hmpScatterSkillUseCardCopy, modifyingSkillCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
 import { swoopChoiceCopy } from '../game/logic/swoopPresentation';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
@@ -113,17 +115,21 @@ import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
 gameStore.setInteractiveReRolls(true);
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
+import { isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
-import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, availableActions, hasWideRailActivationRule, furiousOutburstCoordinatePrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
+import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
-import { wideRailAvailabilityNotice } from '../game/logic/wideRailAvailabilityNotice';
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
+import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
-import { allowsFumblerooskieAction } from '../game/logic/availableActions';
+import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
+import { allowsFumblerooskieAction, bigGuyRollEndLabel } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
+import { prettySkillName } from '../game/logic/prettySkillName';
+import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
 import { decidingCoachSide, reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeTargetClick, isGazeMovementState } from '../game/logic/gazeMovementState';
@@ -131,9 +137,13 @@ import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
 import { stableCoachPanelWidth } from '../game/logic/hudGeometry';
+import { armedRerollHintText, rerollOptionLabelForKind } from '../game/logic/rerollOptionPresentation';
+import { clampPanelAnchor } from '../game/logic/panelViewportClamp';
 import { spectatorExitActionsVisible, spectatorMvpPending, type EndGameExit } from '../game/spectatorEndGame';
+import { isAssignTouchdownPickKey, isMvpPickKey, isPickKeptOffPitch } from '../game/endGamePick';
 import { spectatorConcedeOccurrenceKey, spectatorPenaltyShootoutOccurrenceKey } from '../game/spectatorLocalDismissal';
 import { shouldShowRejoinBrowser, startRejoin } from '../game/rejoinFlow';
+import { SHORTENED_NOTE, unknownPanelKeyDecision } from '../game/unknownDialogView';
 // Fives lane 08-19: project only the fresh auto-Move shell back through the menu's server-derived offer set.
 function quickClickBlitzAction(game: GameJson, ctx: ClientStateContext, actingId: string, targetId: string): CoachAction | null {
   const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; currentMove?: number } | undefined;
@@ -181,6 +191,12 @@ function chooseBlitzBlockAlternative(kind: BlockKind | null) {
   // SR-241: commitBlitzBlock sends the already-declared Blitz's clientBlock with this kind's existing USING_* flag.
   gameStore.commitBlitzBlock(kind);
 }
+// S42: the same card, opened by a Chainsaw carrier's victim click when no Foul / Chainsaw choice is held.
+const foulChoiceChainsawTarget = computed(() => {
+  const g = gameStore.game.value; const hold = gameStore.state.foulChoiceHold;
+  return g && hold ? foulArmourTargetAt(g, hold.actingId, hold.defenderId, true) : null;
+});
+function chooseFoulKind(usingChainsaw: boolean) { gameStore.commitFoulChoice(usingChainsaw); }
 function confirmChainsawBlitz() {
   chainsawBlitzConfirm.value = false;
   // Confirmation is still display-only UI; the store emits USING_CHAINSAW on clientBlock, never a new declare.
@@ -286,7 +302,10 @@ import {
   fumbblJoinByName,
   fumbblLobby,
   fumbblLobbyGameName,
+  officialRejoinBlocker,
+  officialRejoinTarget,
   readJnlpFile,
+  rejoinOfficialGame,
   routeJnlpRequest,
   stageFumbblPlayerLobby,
   type BrowserMatch,
@@ -1691,6 +1710,9 @@ async function submitReport() {
 // token (renderer.actionEmoji, from docs/action-icons.csv): move 🏃 / blitz ⚡ /
 // foul 🦶 / pass 🏈 / hand-over ✋. Auto isn't a game action (no token equivalent), so
 // it keeps a distinct 🤖 "let the app pick" glyph.
+// Owner 09-28: this legacy (order66-off) quick-bar hard-codes 'Foul' and is never fed by availableActions() —
+// the Sneakiest of the Lot-aware label (Spec S4) lives there. Unreachable in shipped builds (settings.ts pins
+// order66=true); left as-is on purpose, not touched by S4.
 const ACTION_BUTTONS: { mode: ActionMode; label: string; icon: string }[] = [
   { mode: 'move', label: 'Move', icon: '🏃' },
   { mode: 'blitz', label: 'Blitz', icon: '⚡' },
@@ -1880,7 +1902,8 @@ function updateBlockPreview() {
   const activeId = gameStore.state.activePlayerId;
   if (!settings.showBlockDice || !activeId || !g) { renderer.showBlockTargets(null); return; }
   const action = String((g.actingPlayer as { playerAction?: string } | undefined)?.playerAction ?? '');
-  const blockCapable = action === 'block' || action === 'blitz' || action === 'blitzMove';
+  // S41: a standalone chainsaw attack re-declares `block` as `chainsaw`; the block target marks must survive it.
+  const blockCapable = action === 'block' || action === 'chainsaw' || action === 'blitz' || action === 'blitzMove' || action === 'viciousVines';
   if (!blockCapable) { renderer.showBlockTargets(null); return; }
   const target = String((g as { defenderId?: unknown }).defenderId ?? '');
   const isBlitz = action === 'blitz' || action === 'blitzMove';
@@ -2301,6 +2324,15 @@ function commitMultiBlockDice() {
   if (!blockDialogMine.value || bpDieMode.value !== 'multiBlockDice' || bpSelectedDice.value.size < 1) return;
   gameStore.resolveBlockPartial('multiBlockDice', [...bpSelectedDice.value].sort((a, b) => a - b));
 }
+// Owner 09-28 (Spec S8): the armed die-select hint names the RULE (Lord of Chaos, Pro, Consummate…), never the
+// internal kind token (bpDieMode) it used to interpolate — see rerollOptionPresentation.ts.
+const bpArmedHintText = computed(() => armedRerollHintText(rerollOptionLabelForKind(bpDieMode.value, blockPartialOptions.value)));
+// Owner 09-28 (Spec S8 follow-up): the multi-dice select state sat on its own mutually-exclusive branch with a
+// generic "Select one or more dice." — it never named the source either (e.g. Savage Blow).
+const bpMultiSelectHintText = computed(() => armedRerollHintText(
+  rerollOptionLabelForKind('multiBlockDice', blockPartialOptions.value),
+  'select one or more dice to re-roll',
+));
 
 // Resolve synchronous multi-block per target; rerolls re-present before the coach makes the plain die choice.
 const mbrDieMode = ref<{ targetId: string; kind: 'pro' | 'consummate' } | null>(null);
@@ -2347,6 +2379,15 @@ const multiBlockRows = computed(() => {
   const all = [...(g.teamHome.playerArray as { playerId: string; name?: string }[]),
     ...(g.teamAway.playerArray as { playerId: string; name?: string }[])];
   return mb.rolls.map((r) => ({ ...r, name: all.find((p) => p.playerId === r.targetId)?.name ?? '' }));
+});
+// Owner 09-28 (Spec S8): same rule as the single-block hint — name the source (Pro / Consummate Professional…),
+// looked up on the armed row rather than a generic options array (multiBlockReroll only tracks target+kind).
+const mbrArmedHintText = computed(() => {
+  const dm = mbrDieMode.value;
+  if (!dm) return null;
+  const row = multiBlockRows.value.find((r) => r.targetId === dm.targetId);
+  const label = dm.kind === 'pro' ? 'Pro' : (row?.consummateLabel ?? 'Consummate Professional');
+  return armedRerollHintText(label);
 });
 
 // B9-14: push arrows — draw a BB-style arrow for each pushback this frame
@@ -2550,6 +2591,13 @@ watch(
   ),
   { flush: 'sync' },
 );
+// Owner 09-28 (S16): Hail Mary scatter marks (aim, numbered confirmed steps, the Blast It! step under decision).
+// Read-only projection of received frames; the destination marker above stays authoritative for the final square.
+watch(
+  () => gameStore.state.hmpScatterMarks?.seq ?? 0,
+  () => renderer?.setHmpScatterMarks(gameStore.state.hmpScatterMarks ?? null),
+  { flush: 'sync' },
+);
 
 // Follow/stay move ordering (owner 2026-07-07, queue #1): a batched follow/stay frame
 // carries the follow-up MOVE and the dialog together. The store defers the attacker's
@@ -2653,17 +2701,12 @@ watch(
 
 // #139 (owner): Master Chef PREGAME splash — a team-level flourish (no player victim) when the chef steals ≥1
 // re-roll (state.masterChefSplash, Tarkin d31d0f8d; fires at each half-start when stolen>0). It's a CENTER BANNER,
-// not a token/renderer sink, so it's a DOM splash here (like the turnstart splash) with a view-timed auto-hide —
-// the store sets it on the steal and only clears on a game change. Seq-triggered visibility (twin idea of #131).
+// not a token/renderer sink, so it's a DOM splash here (like the turnstart splash). S45: the store owns its lifetime (a blocking kick-off cine that
+// sets it after the nominated-square reveal and clears it when the cine ends or is click-dismissed) — no view timer.
 const masterChefSplashVisible = ref(false);
-let masterChefSplashTimer = 0;
 watch(() => gameStore.state.masterChefSplash?.seq, () => {
-  if (!gameStore.state.masterChefSplash) return;
-  masterChefSplashVisible.value = true;
-  clearTimeout(masterChefSplashTimer);
-  masterChefSplashTimer = window.setTimeout(() => (masterChefSplashVisible.value = false), presentationMs(4200));
+  masterChefSplashVisible.value = !!gameStore.state.masterChefSplash;
 });
-onBeforeUnmount(() => clearTimeout(masterChefSplashTimer));
 
 // owner ruling 08-17: Riotous Rookies hire splash — mirrors #139 Master Chef exactly (same timing hookup,
 // same view-timed auto-hide, same seq-triggered pattern). state.riotousRookiesSplash; the log line lands
@@ -2692,7 +2735,7 @@ watch(() => gameStore.state.opponentLeft?.seq, () => {
 });
 onBeforeUnmount(() => clearTimeout(opponentLeftTimer));
 
-// Feed keg rings and click gating from one upstream-equivalent legal-target set; the server still validates.
+// Feed keg target crosshairs and click gating from one upstream-equivalent legal-target set; the server still validates.
 watch(
   () => {
     const g = gameStore.game.value;
@@ -2704,6 +2747,41 @@ watch(
   (ids) => { if (renderer) renderer.setKegTargets(ids ? ids.split(',') : null); },
   { immediate: true },
 );
+// S28/S39: Putrid Regurgitation and Blastin' Solves Everything target marks (one renderer channel, one feed). Only my own activation, nothing open over the pitch, and
+// hidden from the moment the vomit block is sent until the received state changes (vomitMarkKey). Re-runs when the
+// renderer becomes ready, so a mount onto a live Putrid frame still marks.
+const vomitLatchedAt = ref<number | null>(null);
+const blastinPickSentKey = ref<string | null>(null); // S46: beat instance the second-beat pick was already sent for
+watch(
+  () => {
+    let ids: string[] = [];
+    const g = gameStore.game.value;
+    const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (g && settings.order66 && gameStore.isPlaying.value && actingId
+        && ((gameStore.myTurn.value && gameStore.iControl(actingId)) || gameStore.blastinPickIsMine.value) // S46: the Blastin' second beat is my pick on the shooter's (their) player
+        && (!g.dialogParameter || blastinStaleRerollDialog(g)) && !gameStore.state.reRollPrompt?.mine
+        && !vomitMarksHidden(vomitLatchedAt.value, gameStore.state.appliedFrameSeq)
+        && !blastinPickLatched(blastinPickSentKey.value, gameStore.state.blastinBeatKey)) ids = skillTargetMarkIds(g, deriveClientState(g, o66Ctx()), actingId, gameStore.state.blastinBeat?.targetPlayerId);
+    return vomitWatchSource(rendererReady.value, ids);
+  },
+  (src) => { if (renderer) renderer.setSkillTargetMarks(src.split('|')[1] ? src.split('|')[1]!.split(',') : null); },
+  { immediate: true },
+);
+/** S39: the one seam for the Blastin' target send: latches the marks off only if the send was accepted. */
+function o66SendBlastinTarget(targetId: string): boolean {
+  if (vomitMarksHidden(vomitLatchedAt.value, gameStore.state.appliedFrameSeq)) return false;
+  if (blastinPickLatched(blastinPickSentKey.value, gameStore.state.blastinBeatKey)) return false; // S46: one pick per beat instance, whatever frames arrive
+  const ok = gameStore.sendBlastinTarget(targetId);
+  if (ok) blastinPickSentKey.value = gameStore.state.blastinBeatKey;
+  vomitLatchedAt.value = vomitLatchAfterSend(ok, gameStore.state.appliedFrameSeq);
+  return ok;
+}
+/** S28: the one seam for a vomit-kind block send: sends, and latches the marks off only if the send was accepted. */
+function o66SendBlock(attackerId: string, defenderId: string, kind: BlockKind | null): boolean {
+  const ok = gameStore.sendBlock(attackerId, defenderId, o66BlockFlags(kind));
+  if (kind === 'vomit') vomitLatchedAt.value = vomitLatchAfterSend(ok, gameStore.state.appliedFrameSeq);
+  return ok;
+}
 // Drive the keg range box independently from legal target IDs so an empty target set still shows range.
 watch(
   () => {
@@ -2794,8 +2872,16 @@ watch(() => gameStore.state.negatraitCue?.seq, () => {
 });
 onBeforeUnmount(() => { cancelAnimationFrame(negatraitCueRaf); clearTimeout(negatraitCueTimer); });
 
-let viewPresentationEpoch = 0;
-const actionDieTimers = new Set<number>();
+// Owner 09-28 (S7 v3): the dice/turnover lifecycle (deferred-show timers, presentation epoch, opponent-hold
+// re-validation, splash-showing feed, occurrence-correlated teardown) lives in a pure controller so the store -> view ->
+// renderer contract is testable without mounting this view. The view only computes the camera/pickup wait and forwards
+// events; the controller owns the timers and the epoch.
+const actionDiceLifecycle = createActionDiceLifecycle({
+  renderer: () => renderer,
+  scheduler: { set: (fn, ms) => window.setTimeout(fn, ms), clear: (id) => window.clearTimeout(id) },
+  currentDialogId: () => (gameStore.game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId,
+  catchingUp: () => gameStore.playbackCatchingUp.value,
+});
 
 // On-pitch action d6 (owner 2026-07-03 r3) — pop a die with the rolled value
 // next to each acting player's square. Shown regardless of spectator-clean (it's
@@ -2804,7 +2890,10 @@ watch(
   () => gameStore.state.actionDice?.seq,
   () => {
     const a = gameStore.state.actionDice;
-    if (!a || !renderer) return;
+    // Owner 09-28 (S7 v3): a live catch-up / reset nulls state.actionDice — tear the renderer's dice down with it AND
+    // neuter any pending deferred show (advance the epoch), so no held die and no stale timer survives the boundary.
+    if (!a) { actionDiceLifecycle.onDiceCleared(); return; }
+    if (!renderer) return;
     // Owner 2026-07-06 (event pacing): if the roll is OFF camera in auto-director mode,
     // nudge the camera to it FIRST, then show the die once the pan has arrived — so an
     // off-screen dodge/GFI isn't rendered where the viewer can't see it.
@@ -2814,13 +2903,7 @@ watch(
     // ONLY pickups get the beat — dodge/GFI/block/catch keep their timing. ⚖ delays WHEN a
     // resolved report shows, never what's known; the beat scales with the movement-speed setting.
     const pickupBeat = a.rolls.some((r) => r.cause === 'pickup') ? presentationMs(settings.moveSpeedMs) : 0;
-    const epoch = viewPresentationEpoch;
-    const show = () => { if (epoch !== viewPresentationEpoch) return; for (const roll of a.rolls) renderer?.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed, roll.rerollSkill, roll.rerollTeam, roll.opponentRerollPending); };
-    const wait = delay + pickupBeat;
-    if (wait > 0) {
-      const timer = window.setTimeout(() => { actionDieTimers.delete(timer); show(); }, wait);
-      actionDieTimers.add(timer);
-    } else show();
+    actionDiceLifecycle.onDiceCue(a.rolls, delay + pickupBeat);
   },
 );
 
@@ -2872,6 +2955,7 @@ watch(
       commandNr: scatter.commandNr,
       endpoint: scatter.unreducedEndpoint,
       seq: scatter.seq,
+      marker: gameStore.state.kickTargetReveal?.square, // S45: the nominated square (assigned just before the preview)
     } : null);
   },
   { flush: 'sync' },
@@ -3195,12 +3279,19 @@ let rerollMenuRaf = 0;
 // reroll, auto-reroll, headless) ⇒ style helper below returns undefined ⇒ CSS default (top:76px) fallback.
 const rerollCardLastSeen = reactive({ x: 0, y: 0, h: 0, at: 0 }); // h = the card's height, so the splash lands BELOW it (owner 09-14)
 const REROLL_SPLASH_ANCHOR_WINDOW_MS = 2500;
-// Owner W25: an inducement-use message (Weather Mage etc. — carries its own `.text`, unlike the
-// plain team/skill reroll toast) is a match-level announcement, not a routine in-turn reroll cue —
-// it screen-centers on the .turnover-splash vertical band (top:40%, the fleet's established
-// full-screen-splash precedent) rather than anchoring near the reroll-prompt card. Horizontal
-// centering (left:50% + translateX(-50%)) is already the .reroll-toast CSS default, so only `top`
-// needs the override — the drop-in keyframe animates `transform`, not `top`.
+// Owner W25: an inducement-use message (Weather Mage, a failed Loner's team-reroll follow-up — both carry
+// `.text` but NO `playerId`, a match-level announcement rather than a specific player's action) screen-centers
+// on the .turnover-splash vertical band (top:40%, the fleet's established full-screen-splash precedent) rather
+// than anchoring near the reroll-prompt card. Horizontal centering (left:50% + translateX(-50%)) is already the
+// .reroll-toast CSS default, so only `top` needs the override — the drop-in keyframe animates `transform`, not
+// `top`.
+// Owner 09-28 (Spec S8 follow-up, Sol review of 3a6e0274): a SKILL/Leader re-roll splash ALSO carries `.text`
+// (the "<player> uses <source> to re-roll!" wording, store.ts ~1745) — it used to be swept into the SAME
+// top:40% branch as the match announcements above, which for a BLOCK reroll landed the toast right on top of
+// the still-open, higher z-index block dice panel (g987: Lord Borak's Lord of Chaos). `playerId` is present on
+// every one of these (never on the match-level announcements), so it is the correct discriminator: a splash
+// with a `playerId` anchors near the reroll card / block panel (or the player's token), exactly like the
+// non-text splashes below always have.
 // Owner 08-19 (action-reroll splash restored): seats with NO originating card on screen (opponent/
 // spectator action rerolls — the reroll menu only surfaces for the deciding coach) anchor over the
 // acting player's TOKEN instead, the same surface the reroll menu itself rides. RAF-follow like
@@ -3213,7 +3304,7 @@ watch(
     cancelAnimationFrame(rerollSplashTokenRaf);
     rerollSplashTokenPos.ready = false;
     const splash = gameStore.state.rerollSplash;
-    if (!splash || seq == null || splash.text || !splash.playerId) return;
+    if (!splash || seq == null || !splash.playerId) return;
     const pid = splash.playerId;
     const follow = () => {
       if (gameStore.state.rerollSplash?.seq !== seq) { rerollSplashTokenPos.ready = false; return; }
@@ -3236,7 +3327,11 @@ watch(
 const rerollSplashAnchorStyle = computed(() => {
   const splash = gameStore.state.rerollSplash;
   if (!splash) return undefined;
-  if (splash.text) return { top: '40%' };
+  // Owner 09-28 (Spec S8 follow-up): only a PLAYER-LESS `.text` splash (Weather Mage, a failed-Loner follow-up)
+  // is the full-match announcement that centres at top:40%; a skill/Leader reroll splash carries `playerId` and
+  // falls through to the same "near the card, else the token" anchoring every other splash gets — it used to be
+  // force-centred here regardless, landing on top of the still-open block dice panel it should clear.
+  if (splash.text && !splash.playerId) return { top: '40%' };
   const fresh = rerollMenuPos.ready || (Date.now() - rerollCardLastSeen.at) < REROLL_SPLASH_ANCHOR_WINDOW_MS;
   if (fresh) {
     const x = rerollMenuPos.ready ? rerollMenuPos.x : rerollCardLastSeen.x;
@@ -3450,6 +3545,8 @@ const swoopCardCopy = computed(() => swoopChoiceCopy(gameStore.game.value, gameS
 const isJuggernautCard = computed(() => gameStore.state.skillChoice?.skill === 'Juggernaut');
 const passSkillCardCopy = computed(() => passSkillUseCardCopy(gameStore.state.skillChoice));
 const hmpScatterSkillCardCopy = computed(() => hmpScatterSkillUseCardCopy(gameStore.state.skillChoice));
+// S40: a skillUse dialog with a modifying skill = three answers (skill / modifier / none), official wording.
+const modifierSkillCardCopy = computed(() => modifyingSkillCardCopy(gameStore.state.skillChoice));
 const bloodlustTastyMorselAvailable = computed(() => {
   const g = gameStore.game.value;
   const prompt = gameStore.state.bloodlust;
@@ -3485,7 +3582,11 @@ watch(() => gameStore.state.followupChoice?.seq, () => { reactivePromptDragPos.f
 watch(() => gameStore.state.blockPartial?.seq, () => { reactivePromptDragPos.blockPartial = null; });
 // Owner 09-05: a turnover (any failed action) settles every walker to idle + default facing — the acting token
 // otherwise held its last stride/facing until the server ended the activation.
-watch(() => gameStore.state.turnover?.seq, (seq) => { if (seq && renderer && !gameStore.playbackCatchingUp.value) { renderer.settleWalkersAfterTurnover(); renderer.releaseDiceAtTurnover(); }; });
+// Owner 09-28 (S7 v3): the SPLASH START settles the walkers and feeds the renderer the live splash-showing truth (so its
+// turnover-hold backstop is suspended only while the splash is on screen), but no longer releases the held dice (they
+// must read THROUGH the splash). The SPLASH END — `state.turnover` going non-null -> null, already published in spectator
+// / live-review state — is the teardown. All of that is owned by the lifecycle controller.
+watch(() => gameStore.state.turnover, (turnover, prev) => actionDiceLifecycle.onTurnover(turnover, prev), { immediate: true });
 // Owner 09-05: the applied block result stamped on the affected token(s) with the plain block symbols (no die art).
 const BLOCK_STAMP_URLS: Record<string, string> = {
   'attacker-down': new URL('../assets/blockdice-log/attacker-down.png', import.meta.url).href,
@@ -4086,7 +4187,7 @@ watch(
       renderer?.setO66MoveRolls(null);
       renderer?.setO66PassRolls(null);
     }
-    const pickIds = pick && !pick.key.startsWith('pchoice:mvp') ? (pick.eligibleIds ?? null) : null;
+    const pickIds = pick && !isPickKeptOffPitch(pick.key) ? (pick.eligibleIds ?? null) : null;
     renderer?.setPlayerPick(pickIds);
     renderer?.setPlayerPickArrows(pick && isArrowNarrowedPick(pick.key) ? pick.picked : null);
   },
@@ -4170,6 +4271,7 @@ watch(
   (now, before) => {
     const pick = gameStore.state.playerPick;
     if (!pick || !renderer) return;
+    if (isAssignTouchdownPickKey(pick.key)) return; // Assign Touchdown is answered in the end-game pane; nothing on the pitch
     if (isArrowNarrowedPick(pick.key)) renderer.setPlayerPickArrows(pick.picked); // selection changes retarget arrows
     const prev = new Set((before ?? '').split('|').filter(Boolean));
     for (const pid of pick.picked) {
@@ -4341,16 +4443,23 @@ function trackBlockReroll() {
     if (!active || !sq || !renderer || !host) { blockRerollPos.value = null; return; }
     const p = renderer.squareToCanvas(sq);
     if (p && reactivePromptHeld.value !== 'blockPartial') {
-      blockRerollPos.value = {
-        x: Math.min(Math.max(p.x, 90), Math.max(host.clientWidth - 90, 90)),
-        y: Math.min(Math.max(p.y + 66, 40), Math.max(host.clientHeight - 96, 40)),
-      };
+      // Owner 09-28 (Spec S8 follow-up): clamp against the panel's REAL measured size, not a fixed 90/96 px
+      // margin that ignored it — the S8 naming change (visible text under icons, wrapping options) made the
+      // panel bigger, and a fixed margin could run it off-screen on an edge/corner defender square at the
+      // 800x600 minimum window. Fall back to a conservative estimate for the one frame before it first renders.
+      const panelEl = host.querySelector('.block-partial') as HTMLElement | null;
+      const panelSize = { width: panelEl?.offsetWidth || 240, height: panelEl?.offsetHeight || 150 };
+      blockRerollPos.value = clampPanelAnchor(
+        { x: p.x, y: p.y + 66 },
+        panelSize,
+        { width: host.clientWidth, height: host.clientHeight },
+      );
       // W44 (owner): the partial-reroll dice card also anchors the reroll splash — same
       // last-seen recorder as the reroll-prompt menu (rerollMenuPos), so a block-triggered
       // splash lands above THIS dialog instead of falling back to the scoreboard band.
       rerollCardLastSeen.x = blockRerollPos.value.x;
       rerollCardLastSeen.y = blockRerollPos.value.y;
-      rerollCardLastSeen.h = (host.querySelector('.block-partial') as HTMLElement | null)?.offsetHeight ?? rerollCardLastSeen.h;
+      rerollCardLastSeen.h = panelEl?.offsetHeight ?? rerollCardLastSeen.h;
       rerollCardLastSeen.at = Date.now();
     }
     blockRerollRaf = requestAnimationFrame(step);
@@ -4986,7 +5095,7 @@ const unknownCopyStatus = ref('');
 const unknownCallPos = ref<{ x: number; y: number } | null>(null);
 const unknownCallStyle = computed(() =>
   unknownCallPos.value
-    ? { left: `${unknownCallPos.value.x}px`, top: `${unknownCallPos.value.y}px`, transform: 'none' }
+    ? { left: `${unknownCallPos.value.x}px`, top: `${unknownCallPos.value.y}px`, transform: 'none', maxHeight: `calc(100% - ${unknownCallPos.value.y}px - 8px)` }
     : {},
 );
 function startUnknownDrag(ev: PointerEvent) {
@@ -5054,6 +5163,20 @@ function armUnknownTilePick() {
   renderer.setTilePick(true, u.eligible);
 }
 watch(() => gameStore.state.unknownCall, (u) => { if (!u) unknownCallPos.value = null; });
+// S43: End Turn / End Activation each sit behind ONE confirmation; nothing is sent until the coach confirms.
+const unknownConfirm = ref<'endTurn' | 'endActivation' | null>(null);
+watch(() => gameStore.state.unknownCall, () => { unknownConfirm.value = null; });
+watch(() => gameStore.state.unknownCall?.attempt?.status, () => { unknownConfirm.value = null; });
+const unknownActions = () => gameStore.unknownCallActions();
+// Pointer only: a click produced by Enter / Space on a focused button has detail 0 and is ignored (the send buttons are also
+// tabindex -1 and never take focus when the confirmation opens).
+function confirmUnknownAttempt(event: MouseEvent) {
+  if (event.detail === 0) return;
+  const kind = unknownConfirm.value;
+  unknownConfirm.value = null;
+  if (kind === 'endTurn') gameStore.tryUnknownEndTurn();
+  else if (kind === 'endActivation') gameStore.tryUnknownEndActivation();
+}
 
 /** Answer the follow-up chip: gold aura on the CHOSEN square, then the wire. */
 function answerFollowup(follow: boolean) {
@@ -5323,6 +5446,14 @@ const furiousOutburstInstruction = computed(() => {
   if (!g || !gameStore.isPlaying.value || !gameStore.myTurn.value) return null;
   return furiousOutburstCoordinatePrompt(g);
 });
+// Owner 09-28 (UAT g992, S10 + S11): tell the coach who must throw a bomb that a throw is expected. Pure received
+// state, same surface as Furious Outburst; sends nothing and clears when the server state moves on.
+const bombThrowInstruction = computed(() => {
+  const g = gameStore.game.value;
+  const actingId = String(g?.actingPlayer?.playerId ?? '');
+  if (!g || !actingId || !gameStore.isPlaying.value || !gameStore.myTurn.value || !gameStore.iControl(actingId)) return null;
+  return allYouCanEatSecondBombPrompt(g, actingId) ?? caughtBombThrowPrompt(g, actingId);
+});
 // While leaping, mark the server-provided jump squares; click routing remains unchanged.
 const jumpCrosshairSquares = computed<[number, number][]>(() => {
   const g = gameStore.game.value;
@@ -5569,8 +5700,9 @@ watch([() => gameStore.state.quickSnapPhase?.seq, selectedQuickSnap], () => {
   }
   const qs = gameStore.state.quickSnapPhase!;
   const selFrom = qs.players.find((p) => p.playerId === selectedQuickSnap.value)?.coord ?? null;
-  // #216 QS-5 (Voss renderer `29cca783`): the QS destination crosshairs render in the UI PRIMARY colour, not the
-  //   seat body — feed `settings.uiPrimary` ('#RRGGBB') as a 0xRRGGBB number. Clear sites (:3058/:3065) still pass 0.
+  // #216 QS-5 / S20 (owner 09-29): the QS destination crosshairs are the standard pick crosshair (gold, pulsed); the
+  //   renderer no longer tints them, so the colour argument (`settings.uiPrimary` as 0xRRGGBB) is kept only for the
+  //   signature. Clear sites (:3058/:3065) still pass 0.
   renderer!.setQuickSnapArrows(selFrom, quickSnapValidTargets(), parseInt(settings.uiPrimary.slice(1), 16));
   const step = () => {
     if (!active()) { quickSnapTargets.value = []; renderer?.setQuickSnapArrows(null, [], 0); return; }
@@ -5705,7 +5837,9 @@ watch([o66PendingFoul, () => gameStore.game.value?.fieldModel], () => {
   const victimId = o66PendingFoul.value;
   const foulerId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const victimSq = victimId ? playerSquareById(victimId) : null;
-  if (g && victimId && foulerId && victimSq) renderer.setFoulTarget(victimSq, foulArmourTargetAt(g, foulerId, victimId) ?? 0);
+  // S42: a remembered Chainsaw foul previews the chainsaw foul target (0 = no chip when it cannot be established).
+  const chainsawFoul = gameStore.foulChoiceUsingChainsaw() === true;
+  if (g && victimId && foulerId && victimSq) renderer.setFoulTarget(victimSq, foulArmourTargetAt(g, foulerId, victimId, chainsawFoul) ?? 0);
   else renderer.setFoulTarget(null, 0);
 });
 // Owner 09-06: PRAYERS TO NUFFLE in effect — a stacked orange tag under each coach corner panel (home bottom-left,
@@ -5890,6 +6024,11 @@ function playerSquareById(pid: string): [number, number] | null {
 }
 function armourTarget(pid: string): string {
   const g = gameStore.game.value;
+  // S42: a remembered Chainsaw foul shows the foul target with the chainsaw modifier composed as the server does.
+  if (g && gameStore.foulChoiceUsingChainsaw() === true) {
+    const cs = foulArmourTargetAt(g, String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''), pid, true);
+    return cs != null ? `${BLOCK_KIND_EMOJI.chainsaw} ${cs}+` : BLOCK_KIND_EMOJI.chainsaw; // no number rather than a wrong one
+  }
   const p = g ? [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === pid) : null;
   const av = Number((p as { armour?: number } | null)?.armour);
   return Number.isFinite(av) && av > 0 ? `🥾 ${av}+` : '🥾';
@@ -5978,6 +6117,29 @@ function hailMaryPassRulerFrom(): [number, number] | null {
 }
 const hailMaryPassHintVisible = computed(
   () => !!hailMaryPassRulerMode() && !hailMaryPassRulerCommitted.value,
+);
+// S25 (owner 09-29): docked under the top-centre panel like On the Ball; click-through (the whole pitch is a target).
+const hailMaryPassNoticeStyle = computed(() => hailMaryPassNoticeDockStyle(centerPanelBox.value));
+// S30 (owner 09-29): I'll Carry You placement prompt — same dock, driven by the received dialog + turn mode for the placing coach.
+// Shown under the store's own condition for raising the Server message (dialog addressed to me), so one of the two cards is always up.
+const placeCarriedPlayerNoticeCard = computed(() =>
+  gameStore.myTurn.value ? placeCarriedPlayerNotice(gameStore.game.value) : null);
+// The store still raises `infoNotice` (Classic shows it); here the placement text is swapped for the notice card and cleared when the prompt ends.
+let placeCarriedPromptText: string | null = null;
+const serverNoticeVisible = computed(() => {
+  const n = gameStore.state.infoNotice;
+  return !!n && serverMessageForPlacement(gameStore.game.value, n.text, placeCarriedPromptText) !== 'hide';
+});
+watch(
+  () => [gameStore.game.value?.turnMode, gameStore.game.value?.dialogParameter, gameStore.state.infoNotice?.seq],
+  () => {
+    const g = gameStore.game.value;
+    const pending = placeCarriedPlayerInfoNoticeText(g);
+    if (pending !== null) { placeCarriedPromptText = pending; return; }
+    const n = gameStore.state.infoNotice;
+    if (n && serverMessageForPlacement(g, n.text, placeCarriedPromptText) === 'clear') gameStore.state.infoNotice = null;
+    placeCarriedPromptText = null;
+  },
 );
 watch(hailMaryPassRulerMode, (mode, previous) => {
   if (mode !== previous) hailMaryPassRulerCommitted.value = false;
@@ -6239,20 +6401,45 @@ watch(
 // player in view (at any zoom) while the cinematics zoom to the action.
 watch(
   () => gameStore.state.activePlayerId,
-  (id, previousId) => {
+  (id) => {
     if (!renderer) return;
     renderer.setActivePlayer(id);
-    // game_818: renderer selection is a separate, click-owned presentation mirror. Retire the
-    // just-ended actor's selection when the server-derived active id clears; otherwise its gold
-    // selection halo survives until another player click even though actingPlayer.playerId is null.
-    // Matching previousId preserves unrelated inspect selections and every in-progress activation.
-    if (!id && previousId && renderer.getSelectedPlayerId() === previousId) renderer.clearSelection();
     // Owner 2026-07-13 (feature 1): show the configured tackle zones while MY player is selected/active in o66
     // play — on SELECT, decoupled from arming the move overlay. renderer.activePlayerId tracks the acting player
     // on BOTH turns, so the my-side gate (isPlaying + myTurn) lives here where the viewer's side is known.
     renderer.o66OppTzActive = settings.order66 && gameStore.isPlaying.value && gameStore.myTurn.value && !!id;
     if (id && settings.autoDirector && !spectatorDirectorSuspended.value && !gameStore.playbackCatchingUp.value) renderer.focusActivePlayer();
   },
+);
+
+// Owner 09-29 (S33, g999): the pitch selection is click-owned, so a server-ended activation (turnover, knock-down)
+// or a passing turn left it behind and the renderer drew the inspection reach + rush dice around the fallen actor.
+// One decision, one place: a received transition retires the selection (also the game_818 halo rule: the just-ended
+// actor's selection goes when the server-derived active id clears). Tied to the transition, so a later inspect click stays.
+const receivedSelectionSource = () => ({
+  activePlayerId: gameStore.state.activePlayerId,
+  actingPlayerId: String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || null,
+  playingIsHome: gameStore.state.playingIsHome as boolean | null,
+  turnEndSeq: gameStore.state.moveTrailClearSeq ?? 0,
+});
+// The selection as it stood when the received state first changed (the decision below runs in the later pre-flush).
+let selectionBeforeTransition: string | null | undefined;
+watch(receivedSelectionSource, () => {
+  if (selectionBeforeTransition === undefined) selectionBeforeTransition = renderer?.getSelectedPlayerId() ?? null;
+}, { flush: 'sync' });
+watch(
+  receivedSelectionSource,
+  (next, previous) => {
+    const selectedBefore = selectionBeforeTransition ?? renderer?.getSelectedPlayerId() ?? null;
+    selectionBeforeTransition = undefined;
+    if (!renderer || !previous) return;
+    const playing = gameStore.isPlaying.value;
+    // A click that changed the selection after the transition was received is the coach's own: keep it.
+    if (renderer.getSelectedPlayerId() === selectedBefore
+        && receivedTransitionClearsSelection(previous, next, selectedBefore, playing)) renderer.clearSelection();
+    if (receivedTurnEndedForMySeat(previous, next, gameStore.myTeamIsHome.value, playing)) clearO66Arms();
+  },
+  { deep: false },
 );
 
 // spec-220 F-2/M-4: the renderer reaches the apex after KICK_FLYIN_MS; keep its
@@ -6775,6 +6962,9 @@ function o66Ctx(): ClientStateContext {
   return {
     mode: 'player', loggedIn: true, myIsHome: gameStore.myTeamIsHome.value ?? true,
     friendlyPlayerSwitch: settings.friendlyPlayerSwitch,
+    bigGuyActivateRollPlayerId: gameStore.bigGuyActivateRollPlayerId(), // Spec S15B/S23: labels End Activation 'Roll <Negatrait> & End Activation'
+    foulVariants: true, // S42: the main view offers Foul / Foul - Chainsaw; Classic's o66Ctx does not
+    blastinReportedTargetId: gameStore.state.blastinBeat?.targetPlayerId ?? null, // S46: second-beat range origin fallback
   };
 }
 // Action locking is enforced at sendCommand; the view only renders lock status.
@@ -6830,7 +7020,7 @@ watch(
       wideRailOwnedContext = null;
       return;
     }
-    const turn = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
+    const turn = turnSideIsHome(g) ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
     const context = { gameId, half: g.half, turn, playerId, playerAction };
     if (wideRailOwnedContext && !sameWideRailContext(wideRailOwnedContext, context)) wideRailOwnedContext = null;
     if (!election) {
@@ -6894,11 +7084,15 @@ function currentWideRailContext(): WideRailOwnedContext | null {
   const playerAction = String(g.actingPlayer?.playerAction ?? '');
   if (!playerId || !playerAction) return null;
   const gameId = String((g as { gameId?: string | number }).gameId ?? '');
-  const turn = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
+  const turn = turnSideIsHome(g) ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
   return { gameId, half: g.half, turn, playerId, playerAction };
 }
 function localWideRailElectionOwnsAction(action: CoachAction): boolean {
   if (!WIDE_RAIL_LEGACY_ACTIONS.has(action.action)) return false;
+  // Spec S13: after the Blitz target is acked the canonical Zoat row is the only route to it (the wide-rail
+  // election never offers Zoat — the server swallows it in the target stage), so a spent election must not hide it.
+  const live = gameStore.game.value;
+  if (action.ruleId === 'excuseMeAreYouAZoat' && live && zoatBlitzGazeSendable(live)) return false;
   const context = currentWideRailContext();
   return !!wideRailActivationPrompt.value
     || (!!context && !!wideRailOwnedContext && sameWideRailContext(context, wideRailOwnedContext));
@@ -6918,6 +7112,17 @@ watch([gameStore.game, o66PendingBlitzTarget], ([g, defenderId]) => {
   o66PendingBlitzTarget.value = null;
   gameStore.sendTargetSelected(defenderId);
 }, { deep: true, flush: 'sync' });
+
+// Spec S3 v2 (owner 09-28, UAT #3 game 987): feed the renderer's Kick 'em Blitz target badge
+// (renderer.setKickEmTargetMark) straight from the existing 08-25 nomination rail (state.kickEmBlitzTarget) —
+// no candidate marking here (item #1: the pre-existing pick crosshair covers candidates, unchanged).
+watch(() => gameStore.state.kickEmBlitzTarget?.targetId ?? null, (nominatedId) => {
+  if (!renderer) return;
+  // Spec S3 v2 #1/#2/#6: the badge shows ONLY the nominated target, and ONLY for the acting coach who
+  // nominated it — opponent/spectator/replay clients never populate state.kickEmBlitzTarget for themselves
+  // (syncKickEmTargetRail is iControlPlayer-gated), so no extra gate is needed here beyond the nomination itself.
+  renderer.setKickEmTargetMark(nominatedId);
+});
 
 // The confirming click owns the route before any wire leaves. Target selection and special elections remain
 // server-paced; once the received state is the declared Blitz movement rail, start the stored route with no
@@ -7018,7 +7223,11 @@ function runO66Action(a: CoachAction, playerId: string) {
     // Block as {kind:null}) → mark it so the commit skips the chooser. Any non-block declare clears the marker.
     o66ExplicitBlockChoice.value = a.action === 'block' ? { kind: a.blockKind ?? null } : null;
     if (a.action === 'gazeMove') gameStore.declareGazeIntent(playerId);
-    else gameStore.declareAction(playerId, a.action);
+    // Spec S15B: the Activate row is a `move` declaration that also arms the store's roll-on-end intent (the ordinary
+    // Move row and the left-click auto-Move shortcut never do).
+    // S42: a Chainsaw carrier's two Foul rows share `foulMove`; the row's flag is remembered for the activation.
+    else if (a.action === 'foulMove' && a.usingChainsaw !== undefined) gameStore.declareAction(playerId, a.action, undefined, { foulChainsaw: a.usingChainsaw });
+    else gameStore.declareAction(playerId, a.action, undefined, { bigGuyActivate: a.ruleId === BIG_GUY_ACTIVATE_RULE_ID });
   } else if (a.kind === 'endMove') {
     endActivationFromMenu();
   }
@@ -7036,6 +7245,7 @@ function o66ActionMenuItems(actions: CoachAction[], playerId: string, _refresh: 
       label: presentedLabel,
       kind: 'action',
       disabled: !a.enabled,
+      hint: a.reason,
       endActivation: a.kind === 'endMove',
       icon,
       action: a.kind === 'endMove' ? endActivationFromMenu : () => runO66Action(a, playerId),
@@ -7071,6 +7281,11 @@ function clearO66Arms() {
   o66PendingBlock.value = null; o66AggroStage.value = null; o66PendingBlitzBlockKind.value = null;
   o66InspectedOpponent.value = null;
   o66ExplicitBlockChoice.value = null; // T-9 (#338): drop a stale menu-flavor mark when a preview is cancelled
+  // Owner 09-28 (Spec S3 v2 #3): the Kick 'em Blitz nomination clear is deliberately NOT invoked here any
+  // more — clearO66Arms() has eight callers, including plain route/plan cancellation (a plotted route clears
+  // without touching the nomination, per the required precedence). It is invoked explicitly only from the
+  // 'cancelNomination' branch of openContextMenu's kickEmCancelDecision call and from escO66Cascade's
+  // 'cancel-kick-em-nomination' case (escCascadeDecision's own kickEmNominated input).
 }
 
 // R3: every context-menu activation end owns the same planner cleanup and guarded wire path.
@@ -7166,23 +7381,6 @@ function placeCtxMenu(items: MenuItem[], x: number, y: number, playerId = '') {
   ctxMenu.visible = true;
 }
 
-/** Surface the wide-rail declaration warning once for this explicit fresh-menu-open gesture. */
-function showWideRailAvailabilityNotice(
-  g: GameJson,
-  playerId: string,
-  actions: readonly CoachAction[],
-  x: number,
-  y: number,
-) {
-  const text = wideRailAvailabilityNotice(g, playerId, {
-    isPlaying: gameStore.isPlaying.value,
-    myTurn: gameStore.myTurn.value,
-    controlsPlayer: gameStore.iControl(playerId),
-    freshActionMenu: deriveClientState(g, o66Ctx()) === 'SELECT_PLAYER',
-    hasDeclarableAction: actions.some((action) => action.kind === 'declare' && action.enabled),
-  });
-  if (text) showToast(text, x, y, 3600);
-}
 // #6 owner ruling 08-17 (revised same day; refined 08-17b): Jump Up shows inline on the Move row, as the skill
 // ICON (availableActions.ts CoachAction.icon) in icon-capable skillDisplay modes — the earlier top-right
 // ctx-passives glyph badge is removed (MENU_PASSIVE_SKILLS had exactly one entry, 'Jump Up', so nothing else
@@ -7214,6 +7412,10 @@ function o66ArmPassTemplate(actingId: string) {
   // Also clears any stale ordinary-pass cards on menu re-arm/reconnect without touching range eligibility.
   renderer.setO66PassRolls(passRolls);
 }
+/** Spec S15B/S23: the hard-coded End rows say `Roll <Negatrait> & End Activation` exactly when the store will roll (same source as the availableActions row). */
+function endActivationLabel(playerId: string): string {
+  return gameStore.bigGuyActivateRollPlayerId() === playerId ? bigGuyRollEndLabel(gameStore.game.value, playerId) : 'End Activation';
+}
 /** R3/R4: assemble the acting-player rows (availableActions rows for MOVE/blitz-confirm, router endMove, blitz flavors,
  *  Show pass template, Throw Pass, Bounding Leap) as pure data — no UI placed, no callback run. Shared by openO66Menu
  *  and the openContextMenu disposition (spec-pass-rail-rightclick-menu v3). */
@@ -7233,7 +7435,7 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
       () => openO66Menu(target, x, y),
     ));
   } else if (ix.kind === 'endMove') {
-    items.push({ label: 'End Activation', endActivation: true, action: endActivationFromMenu });
+    items.push({ label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
   }
   {
     const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -7269,7 +7471,7 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
     }
     // R3: router, mapped, and fallback sources normalize to one marked cancellation row.
     if (target.playerId === actingId && !items.some((item) => item.endActivation)) {
-      items.push({ label: 'End Activation', endActivation: true, action: endActivationFromMenu });
+      items.push({ label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
     }
   }
   return items;
@@ -7320,7 +7522,6 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
   // R1: the disabled placeholder is presentation-only and never participates in disposition.
   if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
   placeCtxMenu(items, x, y, target.playerId);
-  showWideRailAvailabilityNotice(g, target.playerId, availableActions(g, o66Ctx(), target.playerId), x, y);
 }
 
 function openContextMenu(target: ContextTarget, x: number, y: number) {
@@ -7329,7 +7530,9 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   const actingId = String((contextGame?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const controlledActingTarget = !!actingId && target.playerId === actingId && gameStore.iControl(actingId);
   const rows = controlledActingTarget ? assembleActingPlayerRows(target, x, y) : [];
-  const disposition = selectedActingRightClick(rows, contextGame ? deriveClientState(contextGame, o66Ctx()) : '');
+  // Spec S23: a live Activate intent on the acting Big Guy surfaces the menu; only its roll row (or confirm) rolls.
+  const activateIntentLive = controlledActingTarget && gameStore.bigGuyActivateRollPlayerId() === actingId;
+  const disposition = selectedActingRightClick(rows, contextGame ? deriveClientState(contextGame, o66Ctx()) : '', activateIntentLive);
   // Drift backstop: Pixi normally consumes an open plotted route before hit-testing and calls
   // onWaypointPlanCancel. If the view owns a route before its overlay reaches Pixi, the same right-click still
   // cancels the plan and cannot become a player/pitch context-menu gesture.
@@ -7358,8 +7561,46 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     ctxMenu.visible = false;
     return;
   }
-  // FIX 15: a dialog owns the gesture; never let right-click reach the end-activation fall-through.
-  if (gameStore.interactiveDecisionSurfaceOpen()) return;
+  // Owner 09-28 (landed 047cfd2e): the blitz-chooser hold owns right-click dismissal of its own card. This MUST
+  // run BEFORE the Kick-em-exempted decision-surface gate below: plannerPromptPending (the non-exempted default)
+  // counts blitzBlockChoice too, so the other order would make this dismissal unreachable by right-click.
+  if (gameStore.dismissFoulChoice()) { ctxMenu.visible = false; return; } // S42: right-click closes the Foul / Chainsaw chooser, no wire
+  if (gameStore.state.blitzBlockChoice) {
+    const dismissed = gameStore.dismissBlitzBlockChoice();
+    if (dismissed) { o66AggroStage.value = { kind: dismissed.origin, target: dismissed.targetId, stage: 2 }; ctxMenu.visible = false; }
+    return;
+  }
+  // FIX 15: a dialog owns the gesture; never let right-click reach the end-activation fall-through. The Kick 'em
+  // Blitz variant is EXEMPTED here (Spec S3 v2 #3a): its own candidate picker (state.playerPick, always armed for
+  // the whole activation) would otherwise count as "a decision surface is up" forever, permanently swallowing
+  // every right-click before the precedence decision below ever runs. Every other decision surface (dialogs,
+  // the Yes/No confirm card, the blitzBlockChoice hold just handled above, every OTHER player-pick) still blocks
+  // exactly as before — see interactiveDecisionSurfaceOpenExceptKickEmPicker's own doc. This check MUST come
+  // AFTER the blitzBlockChoice dismiss above (see that comment for why).
+  if (gameStore.interactiveDecisionSurfaceOpenExceptKickEmPicker()) return;
+  // Owner 09-28 (Spec S3 v2 #3): route first (clear the route only, nomination/badge stay), else the nomination
+  // (cancel it, no wire, the picker re-arms), else PASS THROUGH to the ordinary menu/end-activation handling
+  // below — exactly as a right-click on an ordinary Blitz with no target yet.
+  {
+    const kickEmSt = contextGame ? deriveClientState(contextGame, o66Ctx()) : null;
+    const kickEmActing = String((contextGame?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const kickEmDecision = kickEmCancelDecision({
+      hasRoute: (o66PendingMove.value?.route.length ?? 0) > 0,
+      hasNomination: !!gameStore.state.kickEmBlitzTarget,
+      pickerArmed: gameStore.state.playerPick?.key.startsWith('kickEmTarget:') ?? false,
+      confirmationCardOpen: !!gameStore.state.yesNo?.key.startsWith('kickEmConfirm:'),
+      clientState: kickEmSt,
+    });
+    if (kickEmDecision === 'clearRoute') { clearO66Arms(); ctxMenu.visible = false; return; }
+    if (kickEmDecision === 'cancelNomination'
+        && kickEmActing && kickEmActing === gameStore.state.kickEmBlitzTarget?.actingId && gameStore.iControl(kickEmActing)) {
+      gameStore.clearKickEmBlitzNomination();
+      ctxMenu.visible = false;
+      return;
+    }
+    // 'passThrough' (or a cancelNomination whose actor/control check failed) continues into the ordinary
+    // menu/end-activation handling below, unmodified.
+  }
   // #310 / #48 / Meero SR-235: the blitz-special election card and the end-turn warning are each the single
   // armed prompt while up, so right-click declines through the same path as "Go back" and consumes the gesture
   // before any context-menu or deeper right-click semantics. Card ordering: blitzSpecial checked FIRST (SR-235
@@ -7416,11 +7657,6 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
           return;
         }
         placeCtxMenu(rows, x, y, target.playerId);
-        if (contextGame) {
-          showWideRailAvailabilityNotice(
-            contextGame, target.playerId, availableActions(contextGame, o66Ctx(), target.playerId), x, y,
-          );
-        }
         return;
       }
       // R5: a selected owned non-actor falls through to the existing context-menu routing.
@@ -7638,12 +7874,10 @@ const toast = reactive({ visible: false, text: '', x: 0, y: 0, below: false });
 let toastTimer = 0;
 /** Cancel match-owned work synchronously before a different replay position is published. */
 function cancelViewMatchPresentation() {
-  viewPresentationEpoch++;
-  for (const timer of actionDieTimers) window.clearTimeout(timer);
-  actionDieTimers.clear();
-  for (const timer of [masterChefSplashTimer, riotousRookiesSplashTimer, negatraitCueTimer,
+  actionDiceLifecycle.cancelPending(); // Owner 09-28 (S7 v3): advance the epoch + cancel pending deferred die shows
+  for (const timer of [riotousRookiesSplashTimer, negatraitCueTimer,
     stallerSplashTimer, fallOverHideTimer, toastTimer, infoNoticeTimer]) window.clearTimeout(timer);
-  masterChefSplashTimer = riotousRookiesSplashTimer = negatraitCueTimer = 0;
+  riotousRookiesSplashTimer = negatraitCueTimer = 0;
   stallerSplashTimer = fallOverHideTimer = toastTimer = infoNoticeTimer = 0;
   for (const frame of [negatraitCueRaf, skillToastRaf, koToastRaf, fallOverRaf,
     rerollSplashTokenRaf, followupRaf]) cancelAnimationFrame(frame);
@@ -7783,7 +8017,8 @@ function o66ConfirmPending(): boolean {
   if (endActConfirm.value) { confirmEndActivation(); return true; }
   if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
   if (gameStore.state.followupChoice) { answerFollowup(true); return true; }
-  if (gameStore.state.skillChoice?.mine) { gameStore.resolveSkillUse(true); return true; }
+  // S40: with a modifying skill there are three answers and no default: Space is consumed without a wire.
+  if (gameStore.state.skillChoice?.mine) { if (!gameStore.state.skillChoice.modifyingSkill) gameStore.resolveSkillUse(true); return true; }
   // Meero SR-235 M-2/M-4: one option is binary, so Space invokes that row's exact click action. With 2+ options
   // there is no server default: consume Space without a wire so it never half-works as a hidden planner confirm
   // under the open decision menu; the coach must pick an option with the mouse.
@@ -7798,6 +8033,7 @@ function o66ConfirmPending(): boolean {
   if (!actingId) return false;
   // #48 (Space parity, EX-1 blitz-flavor): a held #111 blitz-flavor commits the PLAIN block (the fast default —
   // mirrors the left-click on the target; a flavored block is the right-click pick). Never a pass/hand-off confirm.
+  if (gameStore.foulChoiceHeld()) return true; // S42: the coach picks Foul or Chainsaw on the card; Space decides nothing
   if (gameStore.state.blitzBlockChoice) { gameStore.commitBlitzBlock(null); return true; }
   const st = deriveClientState(g, o66Ctx());
   if (st === 'PUNT' && isPuntTargeting(g) && o66PendingPunt.value) {
@@ -7897,10 +8133,12 @@ function showQuickClickBlitzUnavailable(targetId: string, reason: 'modern' | 'us
  *  the attacker (or clear it) so the target shows no reach after the block resolves and later clicks don't act on it. */
 function swallowBlockTargetSelection(targetId: string): void {
   const g = gameStore.game.value;
-  if (!renderer || !g || renderer.getSelectedPlayerId() !== targetId) return;
+  if (!renderer || !g) return;
   const atk = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  if (atk && atk !== targetId) renderer.selectPlayer(atk);
-  else renderer.clearSelection();
+  const next = selectionAfterTargetConfirm(renderer.getSelectedPlayerId(), targetId, atk || null);
+  if (next === 'keep') return;
+  if (next === 'clear') renderer.clearSelection();
+  else renderer.selectPlayer(next);
 }
 function dismissO66OpponentInspection(g: GameJson): boolean {
   if (!renderer || !o66InspectedOpponent.value) return false;
@@ -7917,15 +8155,30 @@ function confirmAggroStage(): boolean {
   if (!st) return false;
   const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (st.kind === 'blitz') {
+    // Owner 09-29 (S33): the click that confirmed the quick blitz selected the opposing target in the renderer; like
+    // the `block` intent, hand the selection back so the target's reach never shows once the activation ends.
+    swallowBlockTargetSelection(st.target);
     // Once Blitz is authoritative and the target is adjacent, this is the second-click terminal. The menu-selected
     // flavor rides the existing CLIENT_BLOCK flags; no second Blitz declare or target-selection command is sent.
     if (deriveClientState(g, o66Ctx()) === 'BLITZ' && actingId
         && adjacentStandingEnemyIds(g, actingId).includes(st.target)) {
-      gameStore.sendBlock(actingId, st.target, o66BlockFlags(o66PendingBlitzBlockKind.value));
+      // Owner 09-28 (S6, g987 #6; follow-up per Sol review): the manual walk-by-tile-clicks path lands here with
+      // no menu-picked flavor — try the SAME blitz-commit hold the planner's act leg takes before sending a plain
+      // block, so a Gored by the Bull / Chainsaw offer isn't skipped. An explicit flavor already bypasses the
+      // chooser as today. The whole decision (try the hold? send now, with which flavor?) is the pure
+      // blitzAdjacentTerminalDecision so it is exhaustively unit-tested outside this .vue file; this call site
+      // only supplies the one impure step (the actual hold attempt) and always clears its own local arm —
+      // matching the planner path, which never exposes o66AggroStage during its own hold (Sol item 3). A
+      // dismissed/declined card restores this exact stage from state.blitzBlockChoice's own blitzerId/targetId
+      // (see dismissBlitzBlockChoice / escO66Cascade), so nothing needs to be kept here to "return to".
+      const shouldTryHold = blitzTerminalShouldTryHold(o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value != null);
+      const holdArmed = shouldTryHold && gameStore.tryHoldBlitzBlockChoice(actingId, st.target);
+      const outcome = blitzAdjacentTerminalDecision(o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value != null, holdArmed);
       o66AggroStage.value = null;
       o66PendingBlitzBlockKind.value = null;
       o66ExplicitBlockChoice.value = null;
-      return true;
+      if (outcome.send) o66SendBlock(actingId, st.target, outcome.blockKind as BlockKind | null);
+      return true; // outcome.send===false: card is up; commitBlitzBlock (or a dismiss) owns the terminal next
     }
     if (settings.declareBlitzBehavior !== 'modern') {
       o66AggroStage.value = null;
@@ -8002,8 +8255,15 @@ function escO66Cascade() {
     if (!cancelWideRailBlitzTarget()) declineWideRailActivationRules();
     return;
   }
+  // Owner 09-28 (Spec S3 v2 #3, Sol round-3 fix): the Kick 'em Blitz precedence now lives INSIDE
+  // escCascadeDecision itself (kickEmConfirmationCardOpen / kickEmNominated inputs below), at the position
+  // Sol's review specified — right after the existing confirmation/follow-up/skill/reroll surfaces and before
+  // the generic abort-preview bucket. A pre-branch here (the prior round's approach) ran BEFORE those surfaces
+  // and could beat a server reroll prompt or the chooser hold into cancelling a live nomination.
   const decision = escCascadeDecision({
     blitzBlockChoiceHeld: !!gameStore.state.blitzBlockChoice,
+    blitzBlockChoiceDismissible: gameStore.blitzBlockChoiceDismissible(),
+    foulChoiceHeld: gameStore.foulChoiceHeld(),
     blitzSpecialPromptVisible: false,
     wisdomPromptVisible: false,
     endActivationConfirmVisible: !!endActConfirm.value,
@@ -8019,6 +8279,8 @@ function escO66Cascade() {
     pendingGaze: !!gameStore.state.gazeIntent,
     thrownMatePending: !!o66ThrownMate.value,
     pendingBlock: !!o66PendingBlock.value,
+    kickEmConfirmationCardOpen: !!gameStore.state.yesNo?.key.startsWith('kickEmConfirm:'),
+    kickEmNominated: !!gameStore.state.kickEmBlitzTarget,
     aggroStage: o66PendingBlitzTarget.value ? 2 : (o66AggroStage.value?.stage ?? null),
     contextMenuVisible: ctxMenu.visible,
     gameMenuOpen: ui.gameMenuOpen,
@@ -8037,16 +8299,32 @@ function escO66Cascade() {
       // left/right-click (plain/flavored) contract, never Esc. (Esc-abort-of-a-#111-hold flagged to Meero.)
       if (decision.closeContextMenu) ctxMenu.visible = false;
       return; // keep the hold; never fall through to end-activation (that would wedge the paused block)
+    case 'dismiss-foul-choice':
+      // S42: close the Foul / Chainsaw chooser; nothing is sent and the activation stays.
+      gameStore.dismissFoulChoice();
+      return;
+    case 'dismiss-blitz-hold': {
+      // Owner 09-28 (S6 follow-up): a NO-PLAN hold — close the card, send nothing, restore the exact confirm
+      // stage the coach was already at (a plain re-click of the same adjacent target tries the hold again).
+      const dismissed = gameStore.dismissBlitzBlockChoice();
+      if (dismissed) o66AggroStage.value = { kind: dismissed.origin, target: dismissed.targetId, stage: 2 };
+      return;
+    }
     case 'dismiss-prompt':
       if (decision.prompt === 'endActivation') cancelEndActivation();
       else if (decision.prompt === 'endTurn') cancelEndTurnWarn();
       else if (decision.prompt === 'followup') answerFollowup(false);
-      else if (decision.prompt === 'skillChoice') gameStore.resolveSkillUse(false);
+      else if (decision.prompt === 'skillChoice') { if (!gameStore.state.skillChoice?.modifyingSkill) gameStore.resolveSkillUse(false); } // S40: Esc never picks among three
       else gameStore.resolveReRoll(null);
       return;
     case 'undeclare':
       clearO66Arms();
       gameStore.endActivation();
+      return;
+    case 'cancel-kick-em-nomination':
+      // Owner 09-28 (Spec S3 v2 #3): cancel just the nomination — no wire, the activation stays live, and the
+      // existing rail (syncKickEmTargetRail, called from clearKickEmBlitzNomination) re-arms the picker.
+      gameStore.clearKickEmBlitzNomination();
       return;
     case 'abort-preview':
       clearO66Arms();
@@ -8072,6 +8350,16 @@ function onKeydown(event: KeyboardEvent) {
   // App-shell modals own the keyboard while open. In particular, Settings Esc must
   // run its transactional rollback path rather than this gameplay handler closing it.
   if (appShellModalOwnsKeyboard(ui.settingsOpen)) return;
+  // S43: while the unanswered-prompt panel is up, Enter / Space / Esc reach no game command (Esc may close its confirmation).
+  const ucKey = unknownPanelKeyDecision({
+    panelUp: !!gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden, confirming: unknownConfirm.value !== null,
+    key: event.key, code: event.code, confirmKey: settings.confirmKey, targetIsButton: event.target instanceof HTMLButtonElement,
+  });
+  if (ucKey.handled) {
+    if (ucKey.preventDefault) event.preventDefault();
+    if (ucKey.closeConfirmation) unknownConfirm.value = null;
+    return;
+  }
   if (event.target instanceof HTMLInputElement) return;
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
   if (event.key === 'Escape') {
@@ -8213,6 +8501,9 @@ onMounted(async () => {
 
   const mountedRenderer = new PitchRenderer();
   renderer = mountedRenderer;
+  // Owner 09-28 (S7 v3): seed the splash-showing flag now the renderer exists — the turnover watcher's `immediate` pass
+  // ran (and returned) while `renderer` was still null, so nothing seeded it. A mount mid-splash must suspend the backstop.
+  actionDiceLifecycle.seedSplashShowing(!!gameStore.state.turnover);
   mountedRenderer.setD6FaceVariant(settings.d6FaceVariant);
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);
@@ -8237,7 +8528,7 @@ onMounted(async () => {
   // `ffb-client-logic/src/main/java/com/fumbbl/ffb/client/handler/ClientCommandHandlerGameState.java:136-154`
   // Replay the pending surface once the renderer exists too.
   const pendingPlayerPick = gameStore.state.playerPick;
-  renderer.setPlayerPick(pendingPlayerPick && !pendingPlayerPick.key.startsWith('pchoice:mvp')
+  renderer.setPlayerPick(pendingPlayerPick && !isPickKeptOffPitch(pendingPlayerPick.key)
     ? pendingPlayerPick.eligibleIds : null);
   renderer.setPlayerPickArrows(pendingPlayerPick && isArrowNarrowedPick(pendingPlayerPick.key)
     ? pendingPlayerPick.picked : null);
@@ -8264,6 +8555,7 @@ onMounted(async () => {
     gameStore.state.passDestination?.square ?? null,
     gameStore.state.passDestination?.kind ?? 'ball',
   );
+  renderer.setHmpScatterMarks(gameStore.state.hmpScatterMarks ?? null);
   // #92 (Increment 1): bind the renderer's sound-cue sink → the store relay (name→playSound). The single call
   //   also flips `soundCueActive` so the footfall relocation activates atomically (no drop-before / double-after);
   //   before this bind footfall stays at model-apply (inert, zero regression). Store f665e20a / renderer 527f793c.
@@ -8364,17 +8656,25 @@ onMounted(async () => {
       return;
     }
     // Clicking a held Blitz target commits plain Block; right-click remains the flavor path.
-    if (gameStore.requestKickEmBlitzBlock(playerId)) return;
-    if (gameStore.state.blitzBlockChoice && playerId === gameStore.state.blitzBlockChoice.targetId) {
-      gameStore.commitBlitzBlock(null);
-      return;
+    if (gameStore.requestKickEmBlitzBlock(playerId)) { swallowBlockTargetSelection(playerId); return; }
+    // Owner 09-28 (S6 follow-up, Sol review round 2, item 3/5): the pure gate decides precedence — the held
+    // TARGET click keeps committing plain (pre-existing), and only once that is ruled out does the generic
+    // "no OTHER click may start or extend anything" swallow apply (plan-owned or not — the card/dismiss owns
+    // the pitch until it resolves).
+    switch (playerClickDuringChooserHold({
+      blitzBlockChoiceHeld: !!gameStore.state.blitzBlockChoice || gameStore.foulChoiceHeld(),
+      isHeldTarget: gameStore.state.blitzBlockChoice?.targetId === playerId,
+    })) {
+      case 'commitPlain': swallowBlockTargetSelection(playerId); gameStore.commitBlitzBlock(null); return;
+      case 'swallowed': return;
+      case 'normal': break;
     }
     // In THROW_KEG, accept only standing opponents within Chebyshev distance 3 before sending; the server revalidates.
     if (settings.order66 && gameStore.isPlaying.value) {
       const gk = gameStore.game.value;
       const kegActing = String((gk?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       if (gk && kegActing && playerId !== kegActing && deriveClientState(gk, o66Ctx()) === 'THROW_KEG') {
-        // Tarkin `2095e3dd` extracted the inline port into `kegTargetIds` so this click-gate and Voss's KG-6 ring
+        // Tarkin `2095e3dd` extracted the inline port into `kegTargetIds` so this click-gate and Voss's KG-6 crosshair
         // sink consume ONE rule and cannot drift (Meero SR-160). Behaviour-identical to the inline version it
         // replaces: `!iControl(p)` reduced to the opposition term here anyway, since this branch already sits
         // behind `deriveClientState === 'THROW_KEG'` (⇒ my turn), and iControlPlayer is `myPlayIds.has(p) && isMyTurn`.
@@ -8460,8 +8760,8 @@ onMounted(async () => {
           return;
         }
         // Star S8: Kick 'em chainsaw commit + Blastin' target — router-gated, dedicated store senders.
-        if (ix.kind === 'kickEmBlock') { gameStore.sendKickEmBlock(ix.defenderId); return; }
-        if (ix.kind === 'blastinTarget') { gameStore.sendBlastinTarget(ix.targetId); return; }
+        if (ix.kind === 'kickEmBlock') { swallowBlockTargetSelection(ix.defenderId); gameStore.sendKickEmBlock(ix.defenderId); return; }
+        if (ix.kind === 'blastinTarget') { swallowBlockTargetSelection(ix.targetId); o66SendBlastinTarget(ix.targetId); return; }
         // In SYNCHRONOUS_MULTI_BLOCK, clicking a legal opponent toggles target selection; the store owns commit.
         if (ix.kind === 'multiBlockToggle') {
           gameStore.toggleMultiBlockTarget(ix.defenderId);
@@ -8518,14 +8818,14 @@ onMounted(async () => {
             }
             // Preserve ix.blockKind; the server selects special block behavior from CLIENT_BLOCK flags.
             else if (st === 'BLOCK') o66SendStandaloneBlock(atk, ix.defenderId, ix.blockKind ?? o66PendingBlockKind.value);
-            else gameStore.sendBlock(atk, ix.defenderId, o66BlockFlags(ix.blockKind ?? o66PendingBlockKind.value));
+            else o66SendBlock(atk, ix.defenderId, (ix.blockKind ?? o66PendingBlockKind.value) as BlockKind | null);
           }
           o66PendingBlockKind.value = null; o66AggroStage.value = null;
           return;
         }
         // A.5 (o66j #8): FOUL / HAND-OFF / PASS target clicks (the acting player already declared the moving
         // variant + optionally walked; these send the trailing command, state = ack).
-        if (ix.kind === 'foulTarget') { gameStore.sendFoulTarget(ix.defenderId); return; }
+        if (ix.kind === 'foulTarget') { gameStore.sendFoulTargetOrChoose(ix.defenderId); return; }
         // Hand-off to an already adjacent receiver commits on one click; there is no durable two-click arm.
         if (ix.kind === 'handOverTarget') {
           gameStore.sendHandOverTarget(ix.catcherId); o66PendingHandOff.value = null;
@@ -8604,7 +8904,7 @@ onMounted(async () => {
               const adjToVictim = !!(lastSq && vsq && Math.max(Math.abs(lastSq[0] - vsq[0]), Math.abs(lastSq[1] - vsq[1])) === 1);
               const foulRoute = adjToVictim ? planned! : (reach?.path ?? []);
               if (foulRoute.length > 0) gameStore.startPlan({ playerId: foulActing, actKind: 'foul', route: foulRoute, targetPlayerId: playerId });
-              else gameStore.sendFoulTarget(playerId);
+              else gameStore.sendFoulTargetOrChoose(playerId);
               o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
               return;
             }
@@ -8771,7 +9071,6 @@ onMounted(async () => {
             const items = o66ActionMenuItems(withoutOwnedWideRailLegacyRows(ix.actions), ix.playerId, () => {});
             if (items.length === 0) items.push({ label: 'No actions available', disabled: true });
             placeCtxMenu(items, clickX, clickY, ix.playerId);
-            showWideRailAvailabilityNotice(g, ix.playerId, ix.actions, clickX, clickY);
             showPopup(ix.playerId);
             return;
           }
@@ -8878,6 +9177,14 @@ onMounted(async () => {
       if (inspectingGame) dismissO66OpponentInspection(inspectingGame);
       return;
     }
+    // Owner 09-28 (S6 follow-up, Sol review round 2, item 3/5): the pure gate itself checks for a SERVER-owned
+    // pick (squarePick / unknownPickingTile) and gives it precedence — this call site never needs to be BELOW
+    // those branches for correctness (a wrong position was exactly the round-1 bug); only once neither is active
+    // does a held chooser swallow the click ahead of any client-owned movement/targeting gesture.
+    if (tileClickDuringChooserHold({
+      serverOwnedPickActive: !!gameStore.state.squarePick || unknownPickingTile.value,
+      blitzBlockChoiceHeld: !!gameStore.state.blitzBlockChoice || gameStore.foulChoiceHeld(),
+    }) === 'swallowed') return;
     // Fives lane 08-19: a square click is an explicit cancel of an undeclared quick-Blitz stage.
     if (o66AggroStage.value?.kind === 'blitz') o66AggroStage.value = null;
     const c = coord as [number, number];
@@ -9121,6 +9428,10 @@ onMounted(async () => {
   // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off.
   renderer.onKickPick = (coord) => gameStore.resolveKickPlacement(coord as [number, number]);
   renderer.onBlockConfirm = (attackerId, defenderId, preview) => {
+    // Owner 09-28 (S6 follow-up, Sol item 4, recorded not fixed): this legacy order66-off sender goes straight to
+    // gameStore.playerBlitz/playerBlock with no blitz-commit hold, so Gored/Chainsaw never offers here either —
+    // but settings.ts hard-pins order66=true unconditionally, so this whole branch is unreachable in shipped
+    // builds (dead legacy code, Phase ② excises it). Left as-is.
     // M4.2: in play mode send the REAL block (server rolls + resolves); demo otherwise.
     if (gameStore.isPlaying.value) {
       // Owner 2026-07-09 (C2/C7): a BLITZ moves to contact BEFORE blocking — send the approach path
@@ -9143,6 +9454,7 @@ onMounted(async () => {
   const kickoffScatter = gameStore.state.kickScatterPreview;
   renderer.setServerKickoffScatter(kickoffScatter ? {
     commandNr: kickoffScatter.commandNr, endpoint: kickoffScatter.unreducedEndpoint, seq: kickoffScatter.seq,
+    marker: gameStore.state.kickTargetReveal?.square,
   } : null);
   // A mode switch/reconnect/replay mount can begin with an already-successful, still-CONFUSED
   // victim. Seed the report-authoritative set before the first model token is constructed.
@@ -9157,6 +9469,7 @@ onMounted(async () => {
       fieldFlip: !p.drive.offenseIsHome,
       blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
       heldTeamMate: p.heldTeamMate, passDestination: publishedPosition.passive.passDestination,
+      hmpScatterMarks: publishedPosition.passive.hmpScatterMarks,
     });
   }
   // The held-mate watcher can run before Pixi exists on reconnect/mode mount. Reassert the complete shared Pass
@@ -9165,6 +9478,11 @@ onMounted(async () => {
   // The store may already hold this turn's occurrence when Modern mounts (reconnect, replay/spectate entry,
   // or Classic→Modern). The seq watcher ran before renderer creation, so seed after the initial token render.
   pushBlitzTokens();
+  // Owner 09-28 (Spec S3 v2 #2): same "seed after the initial token render" reasoning as pushBlitzTokens — a
+  // Classic->Modern switch (or reconnect) remounts this renderer while a Kick 'em Blitz nomination is already
+  // held; the watcher (below) only fires on a CHANGE, so a value that was already true before this renderer
+  // existed would otherwise never reach it. state.kickEmBlitzTarget is already iControlPlayer-gated in the store.
+  renderer.setKickEmTargetMark(gameStore.state.kickEmBlitzTarget?.targetId ?? null);
   if (gameStore.state.kickDescend) renderer.setKickDescend(gameStore.state.kickDescend);
   // A spectator/reconnect can mount after the store already began a confirmed tile; the seq watch will not replay
   // an unchanged value, so seed the same presentation cursor immediately after the initial model token exists.
@@ -9286,6 +9604,7 @@ watch(
         fieldFlip: !p.drive.offenseIsHome,
         blitzTokens: p.blitz?.visible ? { blitzerId: p.blitz.id, targetId: p.blitz.targetId } : null,
         heldTeamMate: p.heldTeamMate, passDestination: published.passive.passDestination,
+        hmpScatterMarks: published.passive.hmpScatterMarks,
       });
     } else if (renderer) setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, game);
     // B9-12 G11: a NEW game (fresh join) must re-fit the camera — otherwise it
@@ -9584,6 +9903,7 @@ onBeforeUnmount(() => { stopMatchPoll(); if (cgSuggestTimer) clearTimeout(cgSugg
 const browserMatches = ref<BrowserMatch[]>([]);
 const browserStatus = ref('');
 const jnlpInput = ref<HTMLInputElement | null>(null);
+const dropJnlpInput = ref<HTMLInputElement | null>(null); // S44: the Open JNLP control of the official "Connection closed" prompt
 // Owner 2026-07-06: filter the live-game list by ANY rendered string (id, team names,
 // coaches, races, score, half/turn) — e.g. typing "hype261" narrows to that game.
 const browserFilter = ref('');
@@ -10012,7 +10332,7 @@ const hud = computed(() => {
     scoreAway: game.gameResult.teamResultAway.score,
     weather,
     weatherIcon,
-    homePlaying: !!game.homePlaying,
+    homePlaying: turnSideIsHome(game), // S46: HUD turn side/clock, held through the Blastin' second-beat flip
     timeoutPossible: !!g.timeoutPossible,
     timeoutEnforced: !!g.timeoutEnforced,
     turnTime: Number(g.turnTime ?? 0),
@@ -10116,9 +10436,10 @@ const passiveSkillDecisionText = computed(() => {
   const choice = gameStore.state.skillChoice;
   if (!choice) return '';
   // Owner 09-15: once the skill is USED and its follow-up choice is open, the card reads "is using".
-  return choice.using
-    ? reactiveSkillUsingText(gameStore.game.value, choice.playerId, choice.label)
-    : reactiveSkillDecisionText(gameStore.game.value, choice.playerId, choice.label);
+  if (choice.using) return reactiveSkillUsingText(gameStore.game.value, choice.playerId, choice.label);
+  // S40: with a modifying skill the decision names both skills.
+  const names = choice.modifyingSkill ? `${choice.label} or ${prettySkillName(choice.modifyingSkill)}` : choice.label;
+  return reactiveSkillDecisionText(gameStore.game.value, choice.playerId, names);
 });
 const endTurnButtonText = computed(() => {
   if (!gameStore.myTurn.value) return "Opponent's Turn";
@@ -10218,7 +10539,13 @@ const iConceded = computed(() => {
 // how the nomination is collected (checkbox toggles reuse resolvePlayerPick; Confirm reuses confirmPlayerPick).
 const mvpPick = computed(() => {
   const pick = gameStore.state.playerPick;
-  return pick && pick.key.startsWith('pchoice:mvp') ? pick : null;
+  return pick && isMvpPickKey(pick.key) ? pick : null;
+});
+// Owner 09-29: ASSIGN TOUCHDOWN (a concede's awarded touchdowns) is its own end-game pane step BEFORE the MVP step, in
+// the MVP pane's design; the server's one-pick playerChoice (key pchoice:assignTouchdown) is answered there, never on the pitch.
+const assignPick = computed(() => {
+  const pick = gameStore.state.playerPick;
+  return pick && isAssignTouchdownPickKey(pick.key) ? pick : null;
 });
 const chargePick = computed(() => {
   const pick = gameStore.state.playerPick;
@@ -10249,7 +10576,7 @@ const prayerBoardTitle = computed(() => {
 // (resolvePlayerPick/confirmPlayerPick), never a second source of truth for eligibility.
 const rosterPickFallback = computed(() => {
   const pp = gameStore.state.playerPick;
-  if (!pp || mvpPick.value || dwarfenWisdomPick.value || prayerBoardPick.value) return null;
+  if (!pp || mvpPick.value || assignPick.value || dwarfenWisdomPick.value || prayerBoardPick.value) return null;
   if (!hasOffPitchCandidate(gameStore.game.value, pp.eligibleIds)) return null;
   return {
     prompt: pp.prompt, min: pp.minPicks, max: pp.maxPicks, picked: pp.picked, declinable: pp.declinable,
@@ -10260,8 +10587,8 @@ const rosterPickFallbackOpen = ref(false);
 watch(() => gameStore.state.playerPick?.key, () => { rosterPickFallbackOpen.value = false; });
 // Build roster rows from live results with position, acquired skills, lifetime SPP, earned delta, and eligibility.
 type MvpRosterRow = { id: string; nr: number; name: string; position: string; skills: string; sppTotal: number; sppEarned: number; eligible: boolean };
-function mvpRosterFor(side: 'home' | 'away'): MvpRosterRow[] {
-  const g = gameStore.game.value; const pick = mvpPick.value;
+function mvpRosterFor(side: 'home' | 'away', pick: { eligibleIds?: readonly string[] } | null = mvpPick.value): MvpRosterRow[] {
+  const g = gameStore.game.value;
   if (!g) return [];
   const team = side === 'home' ? g.teamHome : g.teamAway;
   const tr = side === 'home' ? g.gameResult.teamResultHome : g.gameResult.teamResultAway;
@@ -10286,6 +10613,19 @@ function mvpRosterFor(side: 'home' | 'away'): MvpRosterRow[] {
   });
 }
 const mvpRoster = computed(() => mvpRosterFor(gameStore.myTeamIsHome.value ? 'home' : 'away'));
+// Assign Touchdown rows: only the players the server offered (my side first), one selectable.
+const assignRoster = computed(() => {
+  const pick = assignPick.value;
+  if (!pick) return [];
+  const mine = gameStore.myTeamIsHome.value ? 'home' : 'away';
+  return [...mvpRosterFor(mine, pick), ...mvpRosterFor(mine === 'home' ? 'away' : 'home', pick)].filter((row) => row.eligible);
+});
+// Touchdowns already awarded this end game (server playerEvent reports), in order; the server sends no total.
+const assignAwarded = computed(() => gameStore.state.endGame.touchdownAwards.map((award, i) => {
+  const g = gameStore.game.value;
+  const player = g ? [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === award.playerId) : undefined;
+  return { key: `${i}:${award.playerId}`, name: player?.playerName ?? award.playerId };
+}));
 const postGamePhase = ref<'mvp' | 'stats' | 'roster'>('mvp');
 const postGameDismissed = ref(false);
 watch(gameOver, (over) => {
@@ -10448,10 +10788,14 @@ const mvpMySide = computed<'home' | 'away'>(() => (gameStore.myTeamIsHome.value 
 const mvpScreenActive = computed(() => gameStore.isPlaying.value
   && gameStore.state.endGame.phase === 'mvp'
   && !mvpDismissed.value);
+// The Assign Touchdown step precedes the MVP phase (phases are exclusive) and has no dismiss control, so mvpDismissed
+// (set only by the MVP step's Continue, after this step) can never hide a pending assign pick.
+const assignScreenActive = computed(() => gameStore.isPlaying.value
+  && gameStore.state.endGame.phase === 'assignTouchdowns');
 // Owner 08-19: the one endgame surface — the settled FINAL panel (all seats, existing gates), or the
 // spectate seat's earlier MVP-pending presentation (result card + placeholder + exit pair).
 const finalPostGameVisible = computed(() => !!postGame.value && !postGameDismissed.value
-  && !gameStore.state.playerPick && !mvpScreenActive.value && !!gameStore.state.endGameSettled);
+  && !gameStore.state.playerPick && !mvpScreenActive.value && !assignScreenActive.value && !!gameStore.state.endGameSettled);
 const pgSurface = computed(() => finalPostGameVisible.value ? postGame.value
   : spectatorMvpPendingActive.value ? endGamePublic.value : null);
 // Owner 09-25: the pane's input — the settled game JSON + both sides' dice tallies + the end-report feed. The
@@ -10486,7 +10830,7 @@ function capturePostGame(): void {
 watch(finalPostGameVisible, (on) => { if (on) capturePostGame(); });
 // Owner 09-06: while ANY end-game surface is up (result window / MVP nominate), the log panel and the chat toasts
 // ride ABOVE it (z 57) and stay interactive in every mode — they sat under the full-screen overlay before.
-const endGameFront = computed(() => !!pgSurface.value || mvpScreenActive.value);
+const endGameFront = computed(() => !!pgSurface.value || mvpScreenActive.value || assignScreenActive.value);
 const mvpResult = computed(() => {
   const pg = endGamePublic.value; if (!pg) return null;
   return { homeTeam: pg.home.team, homeScore: pg.home.score, awayTeam: pg.away.team, awayScore: pg.away.score };
@@ -10522,6 +10866,18 @@ const mvpChips = computed(() => {
 const mvpBothResolved = computed(() => (['home', 'away'] as const).every((s) => { const p = mvpRoll.value[s].phase; return p === 'landed' || p === 'none'; }));
 // "Waiting for opponent" — I'm not nominating (their turn / already nominated) and the reveal isn't done.
 const mvpWaiting = computed(() => mvpScreenActive.value && !mvpPick.value && !mvpBothResolved.value);
+// Assign step, no pick armed: the other coach's dialog, or the gap before the server's next touchdown dialog.
+const assignWaitingText = computed(() => {
+  const teamId = gameStore.state.endGame.dialog?.teamId;
+  const g = gameStore.game.value;
+  const mine = g ? (gameStore.myTeamIsHome.value ? g.teamHome : g.teamAway).teamId : null;
+  return teamId && mine && teamId !== mine ? 'Waiting for opponent' : 'Waiting for server';
+});
+const assignRoundKey = ref(0);
+let lastAssignPickSeq = -1;
+watch(() => assignPick.value?.seq, (seq) => {
+  if (typeof seq === 'number' && seq !== lastAssignPickSeq) { lastAssignPickSeq = seq; assignRoundKey.value++; }
+});
 // Remount the MVP nomination surface on playerPick.seq so each server nomination round visibly re-arms.
 const mvpRoundKey = ref(0);
 let lastMvpPickSeq = -1;
@@ -10606,7 +10962,8 @@ function cancelEndTurnWarn() {
 }
 // #12/#231: one reusable guard owns Escape-driven activation ends plus the existing Blitz triggers. Confirm uses
 // the unchanged clear-selection + endActivation effects; decline only dismisses the modal and sends no wire.
-type EndActivationConfirm = { kind: EndActivationConfirmKind; text: string; confirmLabel: string };
+// `roll`/`title` (Spec S15B): a confirm opened by an explicit End gesture over a live Activate intent rolls when confirmed.
+type EndActivationConfirm = { kind: EndActivationConfirmKind; text: string; confirmLabel: string; roll?: boolean; title?: string };
 const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActivationConfirm, 'kind'>> = {
   blitz: { text: 'Are you sure you want to end your blitz?', confirmLabel: 'End blitz' },
   // Owner punt-① (08-12): the parallel PUNT commission specializes the copy, mirroring the blitz idiom.
@@ -10615,7 +10972,7 @@ const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActi
 };
 const endActConfirm = ref<EndActivationConfirm | null>(null);
 watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
-function askEndActivation(kind: EndActivationConfirmKind) {
+function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
   // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
   // Blitz action for the turn — so the prompt says so. Copy only; the wire is the same endActivation.
   if (kind === 'blitz' && blitzUntouched(gameStore.game.value)) {
@@ -10635,7 +10992,9 @@ function askEndActivation(kind: EndActivationConfirmKind) {
     };
     return;
   }
-  endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind] };
+  const actingId = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const decision = endActivationConfirmDecision({ origin, kind, rollPlayerId: gameStore.bigGuyActivateRollPlayerId(), actingId, rollLabel: bigGuyRollEndLabel(gameStore.game.value, actingId) });
+  endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind], ...(decision.copy ?? {}), roll: decision.roll };
 }
 /** The declared blitzer (or punter) has done nothing yet: no squares moved, no block thrown. */
 function blitzUntouched(g: GameJson | null | undefined): boolean {
@@ -10647,15 +11006,16 @@ function requestEndActivation() {
   const st = g ? deriveClientState(g, o66Ctx()) : '';
   if (requiresBlitzEndConfirmation(st)) askEndActivation('blitz');
   else if (st === 'PUNT') askEndActivation('punt');
-  else if (gameStore.state.gazeIntent) askEndActivation('generic');
-  else gameStore.endActivation();
+  else if (gameStore.state.gazeIntent) askEndActivation('generic', 'explicit');
+  else gameStore.endActivation({ rollActivate: true }); // explicit End gesture: a held Activate intent rolls (Spec S15B)
 }
 function confirmEndActivation() {
   const kind = endActConfirm.value?.kind;
+  const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
   endActConfirm.value = null;
   clearO66Arms();
   renderer?.clearSelection();
-  gameStore.endActivation({ blitzConfirmed: kind === 'blitz' });
+  gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: roll });
 }
 function cancelEndActivation() {
   // Owner punt-① (08-12): Declining "End your punt?" de-escalates the punt targeting back to the walk state
@@ -10754,10 +11114,19 @@ function sendChat() {
           Reconnecting to {{ gameStore.state.connectionClosed.label }}…
         </p>
         <p v-else>
-          Lost connection to {{ gameStore.state.connectionClosed.label }}<span v-if="gameStore.state.connectionClosed.code"> (code {{ gameStore.state.connectionClosed.code }})</span>.
+          Lost connection to {{ gameStore.state.connectionClosed.label }}<span v-if="gameStore.state.connectionClosed.code"> (code {{ gameStore.state.connectionClosed.code }})</span>.<span v-if="gameStore.state.connectionClosed.reason"> The server said: {{ gameStore.state.connectionClosed.reason }}</span>
+        </p>
+        <!-- S44: an official game has no automatic reconnect — Reconnect is one password rejoin per click, and without a saved password only a fresh JNLP can get back in. -->
+        <p v-if="gameStore.state.connectionClosed.official && !gameStore.state.connectionClosed.reconnecting && !officialRejoinTarget()" class="hint">
+          {{ officialRejoinBlocker() || 'A fresh JNLP is needed to get back into this game.' }}
+        </p>
+        <p v-if="gameStore.state.connectionClosed.official && !gameStore.state.connectionClosed.reconnecting && officialRejoinTarget()?.viaJnlp" class="hint">
+          Reconnect uses your saved FUMBBL password (the JNLP cannot be used twice).
         </p>
         <div class="conn-closed-actions">
-          <button v-if="!gameStore.state.connectionClosed.reconnecting" type="button" class="primary" @click="gameStore.reconnect()">Reconnect</button>
+          <button v-if="!gameStore.state.connectionClosed.reconnecting && gameStore.state.connectionClosed.official && !officialRejoinTarget()" type="button" class="primary" @click="dropJnlpInput?.click()">Open JNLP</button>
+          <button v-else-if="!gameStore.state.connectionClosed.reconnecting" type="button" class="primary" @click="gameStore.state.connectionClosed.official ? rejoinOfficialGame() : gameStore.reconnect()">Reconnect</button>
+          <input ref="dropJnlpInput" type="file" accept=".jnlp,text/xml" style="display: none" @change="openJnlpFile" />
           <button type="button" @click="gameStore.state.connectionClosed.reconnecting ? gameStore.cancelReconnect() : gameStore.disconnect()">{{ gameStore.state.connectionClosed.reconnecting ? 'Cancel' : 'Disconnect' }}</button>
         </div>
       </div>
@@ -11604,27 +11973,16 @@ function sendChat() {
           </div>
         </div>
 
-        <div v-if="gameStore.state.dodgySnackCine" class="dice-cine" :class="{ 'cine-hold': settings.clickDismissCinematics }">
-          <div class="dice-title">Dodgy Snack</div>
-          <div class="wc-dice">
-            <D6Face class="wc-die from-north" :value="gameStore.state.dodgySnackCine.rollHome" :label="`Home Dodgy Snack roll ${gameStore.state.dodgySnackCine.rollHome}`" />
-            <D6Face class="wc-die from-south" :value="gameStore.state.dodgySnackCine.rollAway" :label="`Away Dodgy Snack roll ${gameStore.state.dodgySnackCine.rollAway}`" />
-          </div>
-          <div class="wc-caption"><span class="dice-icon">🤢</span><span class="dice-label">Dodgy Snack</span></div>
-        </div>
-
         <div v-if="gameStore.state.dodgySnackAnnouncement" class="masterchef-splash">
           <span class="masterchef-icon">🤢</span>
-          <span class="masterchef-head">
-            Dodgy Snack affects {{ gameStore.state.dodgySnackAnnouncement.players.join(', ') }}
+          <span class="dodgy-snack-lines">
+            <span class="masterchef-head">
+              Dodgy Snack affects {{ gameStore.state.dodgySnackAnnouncement.players.join(', ') }}
+            </span>
+            <span v-for="(name, i) in gameStore.state.dodgySnackAnnouncement.sentOff" :key="i" class="masterchef-head dodgy-snack-sentoff">
+              {{ name }} is sent off for this drive
+            </span>
           </span>
-        </div>
-
-        <!-- Owner 2026-07-06: a player whose Dodgy Snack effect roll was a 1 is sent
-             to reserves and can't play this drive. -->
-        <div v-if="gameStore.state.dodgySnackSplash" class="dodgy-snack-splash">
-          <span class="dss-emoji">🤮</span>
-          <span class="dss-text"><b>{{ gameStore.state.dodgySnackSplash.player }}</b> ate some of BB_Nut's cooking and can't play this drive.</span>
         </div>
 
         <!-- Kick-off EVENT splash — FUMBBL's kick-off_<event>.png banner + the
@@ -11664,7 +12022,7 @@ function sendChat() {
           :style="reactivePromptStyle('skillChoice', skillChoicePos.ready ? { x: skillChoicePos.x, y: skillChoicePos.y } : undefined)"
           title="Drag to move" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
           <img v-if="skillSilhouette" class="sc-silhouette" :src="skillSilhouette" alt="" />
-          <div class="sc-title">{{ hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? 'Use juggernaut to push the player?' : `Use ${gameStore.state.skillChoice.label}?`)) }}</div>
+          <div class="sc-title">{{ modifierSkillCardCopy?.title ?? hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? 'Use juggernaut to push the player?' : `Use ${gameStore.state.skillChoice.label}?`)) }}</div>
           <div v-if="gameStore.state.skillChoice.injuryResult" class="sc-subtext">Current injury: {{ gameStore.state.skillChoice.injuryResult }}</div>
           <div v-if="swoopCardCopy" class="sc-subtext">{{ swoopCardCopy.body }}</div>
           <!-- #225(b) (owner-fg 07-29): Crushing Blow — show the ACTUAL rolled armour dice (🛡 + the [d6,d6]) ABOVE
@@ -11674,9 +12032,11 @@ function sendChat() {
             <span class="sc-cb-emoji" aria-hidden="true">🛡️</span>
             <D6Face v-for="(d, di) in skillChoiceArmorDice" :key="di" class="sc-die sc-cb-die" :value="d" :label="`Armour die ${d}`" />
           </div>
+          <div v-if="!passSkillCardCopy && modifierSkillCardCopy?.resultLine" class="sc-subtext">{{ modifierSkillCardCopy.resultLine }}</div>
           <div v-if="passSkillCardCopy" class="sc-pass-result">
             <div>{{ passSkillCardCopy.rollLine }}</div>
             <div>{{ passSkillCardCopy.needLine }}</div>
+            <div v-if="modifierSkillCardCopy?.resultLine">{{ modifierSkillCardCopy.resultLine }}</div>
           </div>
           <div v-else-if="hmpScatterSkillCardCopy" class="sc-subtext">{{ hmpScatterSkillCardCopy.contextLine }}</div>
           <div v-else class="sc-body">
@@ -11691,7 +12051,20 @@ function sendChat() {
             </template>
             <span v-else class="sc-name">{{ gameStore.state.skillChoice.label }}</span>
           </div>
-          <div class="sc-actions">
+          <div v-if="modifierSkillCardCopy" class="sc-actions sc-actions-three">
+            <button class="sc-yes" :title="gameStore.state.skillChoice.label" :aria-label="`Use ${gameStore.state.skillChoice.label}`" @click="gameStore.resolveSkillUse(true)">
+              <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-btn-icon"
+                :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" alt="" />
+              <template v-else>{{ gameStore.state.skillChoice.label }}</template>
+            </button>
+            <button class="sc-yes" :title="modifierSkillCardCopy.modifierLabel" :aria-label="`Use ${modifierSkillCardCopy.modifierLabel}`" @click="gameStore.resolveSkillUse(true, 'modifier')">
+              <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.modifyingSkill!, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-btn-icon"
+                :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.modifyingSkill!, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" alt="" />
+              <template v-else>{{ modifierSkillCardCopy.modifierLabel }}</template>
+            </button>
+            <button class="sc-no" @click="gameStore.resolveSkillUse(false)">None</button>
+          </div>
+          <div v-else class="sc-actions">
             <!-- Owner 08-18 (Swoop copy): "Swoop" / "Scatter Normally" (was Glide / Land now); wire answers byte-identical. -->
             <button class="sc-yes" @click="gameStore.resolveSkillUse(true)">{{ swoopCardCopy?.accept ?? 'Yes' }}</button>
             <button class="sc-no" @click="gameStore.resolveSkillUse(false)">{{ swoopCardCopy?.decline ?? 'No' }}</button>
@@ -11716,9 +12089,14 @@ function sendChat() {
           </template>
         </PitchConfirmationPanel>
 
-        <PitchConfirmationPanel v-if="furiousOutburstInstruction" title="Furious Outburst"
+        <PitchConfirmationPanel v-if="furiousOutburstInstruction" class="pitch-instruction" title="Furious Outburst"
           label="Furious Outburst square selection" compact>
           {{ furiousOutburstInstruction }}
+        </PitchConfirmationPanel>
+
+        <PitchConfirmationPanel v-if="bombThrowInstruction" class="pitch-instruction" title="Throw Bomb"
+          label="Bomb square selection" compact>
+          {{ bombThrowInstruction }}
         </PitchConfirmationPanel>
 
         <!-- B8-3: fan-factor cinematic — a d3 per side, then the difference
@@ -11963,31 +12341,62 @@ function sendChat() {
         <!-- Owner 2026-07-04e: UNKNOWN-CALL diagnostic panel — a server dialog we
              don't recognize. Notice + screenshot/copy/log + describe + (if it
              wants a coordinate) a pitch tile picker. -->
-        <div v-if="gameStore.state.unknownCall" class="unknown-call" :style="unknownCallStyle">
-          <div class="uc-head" title="Drag to move" @pointerdown="startUnknownDrag($event)">⚠ Unrecognized server call ⠿</div>
+        <div v-if="gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden" class="unknown-call" :style="unknownCallStyle"
+          role="dialog" aria-label="Unanswered server prompt">
+          <div class="uc-head" title="Drag to move" @pointerdown="startUnknownDrag($event)">⚠ {{ gameStore.state.unknownCall.view.title }} ⠿</div>
           <div class="uc-body">
-            <p>We received the dialog <b>"{{ gameStore.state.unknownCall.id }}"</b> but have no wired
-              invocation point for it. Please help us wire it:</p>
-            <div class="uc-args">
-              <span class="uc-args-label">Arguments present:</span>
-              <code>{{ gameStore.state.unknownCall.payloadKeys.join(', ') || '(none)' }}</code>
-            </div>
-            <div v-if="gameStore.state.unknownCall.catalogArgs" class="uc-args">
-              <span class="uc-args-label">Catalog expects:</span>
-              <code>{{ gameStore.state.unknownCall.catalogArgs }}</code>
-            </div>
-            <div class="uc-actions">
-              <button class="uc-btn" @click="screenshotUnknown()">📸 Screenshot</button>
-              <button class="uc-btn" @click="copyUnknownDetails()">📋 Copy details</button>
-              <button class="uc-btn" @click="exportUnknownLog()">📄 Export log</button>
-            </div>
-            <span v-if="unknownCopyStatus" class="uc-status">{{ unknownCopyStatus }}</span>
-            <label class="uc-describe">
-              <span>What happened when this occurred?</span>
-              <textarea rows="2" :value="gameStore.state.unknownCall.description"
-                @input="gameStore.setUnknownCallDescription(($event.target as HTMLTextAreaElement).value)"
-                placeholder="Describe the action you took…"></textarea>
-            </label>
+            <section class="uc-sec">
+              <h4>What is asked</h4>
+              <p>{{ gameStore.state.unknownCall.view.what }}</p>
+              <p class="uc-who">{{ gameStore.state.unknownCall.view.askedText }}</p>
+            </section>
+            <section v-if="gameStore.state.unknownCall.view.rows.length" class="uc-sec uc-sent">
+              <h4>What the server sent</h4>
+              <dl class="uc-rows">
+                <div v-for="(row, i) in gameStore.state.unknownCall.view.rows" :key="i" class="uc-row">
+                  <dt>{{ row.label }}</dt>
+                  <dd :class="{ 'uc-raw': row.raw }">{{ row.value }}<span v-if="row.shortened" class="uc-cut"> ({{ SHORTENED_NOTE }})</span></dd>
+                </div>
+                <div v-if="gameStore.state.unknownCall.view.moreCount" class="uc-row">
+                  <dt></dt>
+                  <dd class="uc-cut">{{ gameStore.state.unknownCall.view.moreCount }} more values in Copy details</dd>
+                </div>
+              </dl>
+            </section>
+            <section class="uc-sec">
+              <h4>What you can do</h4>
+              <p class="uc-note">Nothing is sent unless you click one of these.</p>
+              <div class="uc-actions">
+                <button v-if="unknownActions().canEndTurn" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endTurn'">{{ unknownActions().retryBlocked ? 'Try End Turn (still waiting for the server)' : 'Try End Turn' }}</button>
+                <button v-if="unknownActions().canEndActivation" class="uc-btn" :disabled="unknownActions().retryBlocked" @click="unknownConfirm = 'endActivation'">{{ unknownActions().retryBlocked ? 'Try End Activation (still waiting for the server)' : 'Try End Activation' }}</button>
+                <button v-if="unknownActions().canRejoin" class="uc-btn" @click="gameStore.rejoinFromUnknownCall()">Rejoin game</button>
+                <button class="uc-btn" @click="gameStore.hideUnknownCall()">Hide</button>
+              </div>
+              <div v-if="unknownConfirm" class="uc-confirm">
+                <p>{{ unknownConfirm === 'endTurn' ? 'End your turn now?' : 'End this activation now?' }} The server's question is still open, so it may refuse.</p>
+                <div class="uc-actions">
+                  <button class="uc-btn dismiss" tabindex="-1" @keydown.enter.prevent @keydown.space.prevent @click="confirmUnknownAttempt($event)">{{ unknownConfirm === 'endTurn' ? 'Send End Turn' : 'Send End Activation' }}</button>
+                  <button class="uc-btn" @click="unknownConfirm = null">Cancel</button>
+                </div>
+              </div>
+              <p v-if="gameStore.state.unknownCall.attempt" class="uc-outcome" :data-status="gameStore.state.unknownCall.attempt.status">{{ gameStore.state.unknownCall.attempt.text }}</p>
+              <p class="uc-note">Conceding is not offered here. If you concede and then choose to keep playing, the server drops its question.</p>
+            </section>
+            <section class="uc-sec">
+              <h4>Report this</h4>
+              <div class="uc-actions">
+                <button class="uc-btn" @click="screenshotUnknown()">📸 Screenshot</button>
+                <button class="uc-btn" @click="copyUnknownDetails()">📋 Copy details</button>
+                <button class="uc-btn" @click="exportUnknownLog()">📄 Export log</button>
+              </div>
+              <span v-if="unknownCopyStatus" class="uc-status">{{ unknownCopyStatus }}</span>
+              <label class="uc-describe">
+                <span>What happened when this occurred?</span>
+                <textarea rows="2" :value="gameStore.state.unknownCall.description"
+                  @input="gameStore.setUnknownCallDescription(($event.target as HTMLTextAreaElement).value)"
+                  placeholder="Describe the action you took…"></textarea>
+              </label>
+            </section>
             <!-- coordinate response -->
             <div v-if="gameStore.state.unknownCall.expectsCoordinate" class="uc-coord">
               <template v-if="unknownPickingTile">
@@ -12001,11 +12410,10 @@ function sendChat() {
                 🎯 This call wants a coordinate — pick a tile
               </button>
             </div>
-            <div class="uc-foot">
-              <button class="uc-btn dismiss" @click="gameStore.dismissUnknownCall()">Dismiss</button>
-            </div>
           </div>
         </div>
+        <button v-if="gameStore.state.unknownCall?.hidden" type="button" class="unknown-call-chip"
+          @click="gameStore.showUnknownCall()">⚠ Unanswered server prompt</button>
 
         <!-- Owner 2026-07-04d: persistent ADMIN BROADCAST (serverAdminMessage),
              top-right; the player must Acknowledge to clear. -->
@@ -12017,9 +12425,9 @@ function sendChat() {
 
         <!-- Owner 2026-07-10: server-side messages (concede-not-granted, weather change, …) as a center-left
              modal instead of a chat toast. Sits just below the admin broadcast if both are up. -->
-        <div v-if="gameStore.state.infoNotice" class="admin-message center-left-notice server-notice">
+        <div v-if="serverNoticeVisible" class="admin-message center-left-notice server-notice">
           <div class="admin-message-head">Server message</div>
-          <div class="admin-message-body">{{ gameStore.state.infoNotice.text }}</div>
+          <div class="admin-message-body">{{ gameStore.state.infoNotice?.text }}</div>
           <button class="admin-message-ack" @click="gameStore.state.infoNotice = null">Dismiss</button>
         </div>
 
@@ -12082,7 +12490,7 @@ function sendChat() {
         </PitchConfirmationPanel>
 
         <!-- #12/#231: the single shared confirmation surface for every guarded end-activation trigger. -->
-        <PitchConfirmationPanel v-if="endActConfirm" title="End Activation?" label="End activation confirmation"
+        <PitchConfirmationPanel v-if="endActConfirm" :title="endActConfirm.title ?? 'End Activation?'" label="End activation confirmation"
           :position-style="reactivePromptStyle('endActConfirm')" draggable
           @drag-start="startReactivePromptDrag('endActConfirm', $event)">
           {{ endActConfirm.text }}
@@ -12198,8 +12606,13 @@ function sendChat() {
              renders any accompanying server text verbatim. -->
         <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq"
           title="Confirm" label="Confirmation" :position-style="reactivePromptStyle('yesNo')" draggable
+          :spaced="!!gameStore.state.yesNo.bullets"
           @drag-start="startReactivePromptDrag('yesNo', $event)">
-          {{ gameStore.state.yesNo.text }}
+          <div v-if="gameStore.state.yesNo.bullets" class="pitch-confirm-bulleted">
+            <div>{{ gameStore.state.yesNo.text.split('\n')[0] }}</div>
+            <ul><li v-for="b in gameStore.state.yesNo.bullets" :key="b">{{ b }}</li></ul>
+          </div>
+          <template v-else>{{ gameStore.state.yesNo.text }}</template>
           <template #actions>
             <button class="sendoff-btn argue" @click="gameStore.resolveYesNo(true)">{{ gameStore.state.yesNo.yesLabel }}</button>
             <button class="sendoff-btn pass" @click="gameStore.resolveYesNo(false)">{{ gameStore.state.yesNo.noLabel }}</button>
@@ -12285,7 +12698,7 @@ function sendChat() {
           :declinable="prayerBoardPick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <PitchConfirmationPanel v-if="gameStore.state.playerPick && !mvpPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && !pickMeUpPrompt"
+        <PitchConfirmationPanel v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && !pickMeUpPrompt"
           title="Select Players" label="Player selection confirmation" :position-style="reactivePromptStyle('playerPick')"
           draggable @drag-start="startReactivePromptDrag('playerPick', $event)">
           <span>{{ gameStore.state.playerPick.prompt }}</span>
@@ -12304,7 +12717,7 @@ function sendChat() {
         </PitchConfirmationPanel>
 
         <!-- Pick-Me-Up remains token/scoreboard anchored; it is a contextual election, not a global confirm. -->
-        <div v-if="gameStore.state.playerPick && !mvpPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && pickMeUpPrompt"
+        <div v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && pickMeUpPrompt"
           class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
           title="Drag to move" @pointerdown="startReactivePromptDrag('playerPick', $event)">
           <span class="pick-prompt">{{ gameStore.state.playerPick.prompt }}</span>
@@ -12368,6 +12781,42 @@ function sendChat() {
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
           :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
+
+        <!-- Owner 09-29: ASSIGN TOUCHDOWN (concede) — the MVP pane's design, one radio row, before the MVP step. -->
+        <div v-if="assignScreenActive" class="mvp-nominate-overlay" data-testid="assign-touchdown-pane">
+          <div class="mvp-nominate-card">
+            <div v-if="!assignPick" class="mvp-waiting" role="status" aria-live="polite"><span class="mvp-waiting-dots"><i>.</i><i>.</i><i>.</i></span> {{ assignWaitingText }}</div>
+            <div v-if="assignAwarded.length" class="mvp-screen-result" data-testid="assign-touchdown-awarded">
+              <span class="mvp-screen-final">Awarded {{ assignAwarded.length }}</span>
+              <span v-for="a in assignAwarded" :key="a.key" class="mvp-screen-team">{{ a.name }}</span>
+            </div>
+            <div v-if="assignPick" :key="'assign-round-' + assignRoundKey" class="mvp-nominate-round">
+              <div class="mvp-nominate-head">
+                <span class="mvp-nominate-title">Assign Touchdown</span>
+              </div>
+              <ul class="mvp-nominate-list" role="radiogroup" aria-label="Assign Touchdown">
+                <li v-for="row in assignRoster" :key="row.id" class="mvp-nominate-row"
+                  :data-eligible="row.eligible" :data-checked="assignPick.picked.includes(row.id)"
+                  @click="!assignPick.picked.includes(row.id) && gameStore.resolvePlayerPick(row.id)">
+                  <input type="radio" class="mvp-nominate-check" tabindex="-1" name="assign-touchdown"
+                    :checked="assignPick.picked.includes(row.id)" />
+                  <span class="mvp-nominate-nr">#{{ row.nr }}</span>
+                  <span class="mvp-nominate-name">{{ row.name }}</span>
+                  <span class="mvp-nominate-pos">{{ row.position }}</span>
+                  <span v-if="row.skills" class="mvp-nominate-skills">{{ row.skills }}</span>
+                  <span class="mvp-nominate-spp" :data-zero="row.sppTotal === 0 && row.sppEarned === 0">
+                    {{ row.sppTotal }} SPP<span v-if="row.sppEarned > 0" class="mvp-nominate-spp-gain"> (+{{ row.sppEarned }})</span>
+                  </span>
+                </li>
+              </ul>
+              <div class="mvp-nominate-foot">
+                <span class="mvp-nominate-count" aria-live="polite" :data-complete="assignPick.picked.length >= 1">{{ assignPick.picked.length }}/1</span>
+                <button class="mvp-nominate-confirm" :disabled="assignPick.picked.length !== 1"
+                  @click="gameStore.confirmPlayerPick()">Assign Touchdown</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- MVP nomination uses roster rows as click targets; checkboxes are display-only. -->
         <!-- Owner 2026-07-15: unified staged MVP screen. Result banner · both-teams MVP chips (mvpRoll:
@@ -12530,9 +12979,20 @@ function sendChat() {
         <BlockAttackConfirmModal v-if="blockAttackConfirm" :preview="blockAttackConfirm.preview"
           :target-name="blockAttackConfirm.targetName" @confirm="confirmAggroStage()"
           @cancel="o66AggroStage = null" />
-        <div v-if="gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm" class="block-alt-modal"
+        <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" class="block-alt-modal"
           :style="reactivePromptStyle('blockAlternative')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('blockAlternative', $event)">
+          <template v-if="gameStore.state.foulChoiceHold">
+            <div class="block-alt-title">Choose the foul</div>
+            <div class="block-alt-actions">
+              <button @click="chooseFoulKind(false)">🥾 Foul</button>
+              <button @click="chooseFoulKind(true)">
+                {{ BLOCK_KIND_EMOJI.chainsaw }} Chainsaw
+                <small v-if="foulChoiceChainsawTarget != null">Armour {{ foulChoiceChainsawTarget }}+</small>
+              </button>
+            </div>
+          </template>
+          <template v-else-if="gameStore.state.blitzBlockChoice">
           <div class="block-alt-title">Choose the {{ gameStore.state.blitzBlockChoice.origin === 'blitz' ? 'blitz' : 'block' }} attack</div>
           <div class="block-alt-actions">
             <button @click="chooseBlitzBlockAlternative(null)">🛡️ Block</button>
@@ -12544,6 +13004,7 @@ function sendChat() {
               </small>
             </button>
           </div>
+          </template>
         </div>
         <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm"
           title="Chainsaw Attack?" label="Chainsaw attack confirmation"
@@ -12592,7 +13053,10 @@ function sendChat() {
           <span class="pht-throw">🎯 <D6Face class="pass-hover-d6" :value="passBombHoverTip.throwRoll" :label="`Pass needs ${passBombHoverTip.throwRoll}`" />+</span>
           <span v-if="passBombHoverTip.catchRoll != null" class="pht-catch">🧤 <D6Face class="pass-hover-d6" :value="passBombHoverTip.catchRoll" :label="`Catch needs ${passBombHoverTip.catchRoll}`" />+</span>
         </div>
-        <div v-if="hailMaryPassHintVisible" class="hmp-hint">Hail Mary Pass Activated -- Choose any square to target</div>
+        <OnTheBallWaitingModal v-if="hailMaryPassHintVisible" title="Hail Mary Pass" message="Choose any square to target"
+          notice-id="hail-mary-pass-notice" :position-style="hailMaryPassNoticeStyle" :z-index="HMP_NOTICE_Z_INDEX" />
+        <OnTheBallWaitingModal v-if="placeCarriedPlayerNoticeCard" :title="placeCarriedPlayerNoticeCard.title" :message="placeCarriedPlayerNoticeCard.message"
+          notice-id="place-carried-player-notice" :position-style="hailMaryPassNoticeStyle" :z-index="HMP_NOTICE_Z_INDEX" />
         <!-- Punt UX v2 (owner 08-12): draggable confirm card at the renderer's live cone centre (#237 idiom —
              re-anchors on re-aim unless the user has dragged it; hidden the instant puntConeCenter() goes null). -->
         <PitchConfirmationPanel v-if="puntConeAnchor && o66PendingPunt" title="🏈 Punt"
@@ -12821,6 +13285,15 @@ function sendChat() {
           <BlockChooserCopy v-if="blockChooserCaptionTeamId != null" :game="gameStore.game.value"
             :choosing-team-id="blockChooserCaptionTeamId" :local-seat="blockChooserSeat"
             :spectator="blockChooserSpectator" />
+          <!-- Owner 09-28 (Spec S8 follow-up, coordinator-simplified after Sol's re-review): the re-roll splash
+               toast alone hid a spent skill behind this same, higher z-index panel (g987: Lord Borak's Lord of
+               Chaos used unnamed). Names the use directly ON the panel — present for the acting coach, the
+               opponent and spectators alike (usedCaption is set on the shared blockPartial state regardless of
+               `mine`), ONLY on the dialog re-presented after a BLOCK-SPECIFIC reroll (a `blockReRoll` report;
+               see blockRerollUseCaption.ts), and clears with that dialog. No die marking — the caption names
+               the re-rolled result instead of guessing at an index. Single-block panel only; the multi-block
+               per-target panel (below) gets no caption. -->
+          <div v-if="gameStore.state.blockPartial.usedCaption" class="bp-used-caption">{{ gameStore.state.blockPartial.usedCaption.text }}</div>
           <!-- #38 (owner tester): uphill-block label ABOVE the dice on any uphill (nrOfDice<0).
                The other string ("Waiting for reroll decision") is spec'd to Tarkin — it needs an
                `opponentRerollPending` store signal (the defender's phase-1 wait isn't derivable from the
@@ -12853,12 +13326,15 @@ function sendChat() {
             </span>
           </div>
           <div v-if="blockDialogMine" class="bp-actions">
-            <!-- partial-reroll options (skill icon when icons enabled, else text) -->
-            <button v-for="opt in blockPartialOptions" :key="opt.kind" class="bp-opt"
+            <!-- Owner 09-28 (Spec S8, UAT #8): every skill / source-map option's NAME is always visible text —
+                 icon-only hid Lord Borak's Lord of Chaos from the coach who used it unaware. The icon (when
+                 enabled) rides ABOVE the name. Team Re-roll and Team Mascot are separate, owner-tuned art
+                 buttons below (their own count chip / "No TRR" caption) and are untouched. -->
+            <button v-for="opt in blockPartialOptions" :key="opt.kind" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }"
               :data-active="bpDieMode === opt.kind" :title="opt.label" @click="useBlockPartialOption(opt.kind)">
               <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle)"
                 :src="skillIconUrl(opt.skill, effectiveIconStyle)!" :alt="opt.label" />
-              <span v-else>{{ opt.label }}</span>
+              <span class="bp-opt-label">{{ opt.label }}</span>
             </button>
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
@@ -12889,10 +13365,10 @@ function sendChat() {
             </button>
           </div>
           <div v-if="blockDialogMine && bpDieMode === 'multiBlockDice'" class="bp-hint bp-multi-select">
-            <span>Select one or more dice.</span>
+            <span>{{ bpMultiSelectHintText ?? 'Select one or more dice.' }}</span>
             <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">Re-roll selected</button>
           </div>
-          <div v-else-if="blockDialogMine && bpDieMode" class="bp-hint">Click a die to re-roll it ({{ bpDieMode }})</div>
+          <div v-else-if="blockDialogMine && bpDieMode" class="bp-hint">{{ bpArmedHintText }}</div>
           <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">Uphill block — use a re-roll or decline; the chooser picks the die.</div>
         </div>
 
@@ -12923,39 +13399,44 @@ function sendChat() {
                 <template v-else>{{ blockFaceLabel(d) }}</template>
               </button>
             </div>
-            <!-- per-target re-roll affordances (Tarkin recipe 114fd8c7): Pro/Consummate arm a die-select; team/mascot/
-                 Brawler fire at once. Icons when enabled, else text — same as the single-block blockPartial options. -->
+            <!-- per-target re-roll affordances (Tarkin recipe 114fd8c7): Pro/Consummate arm a die-select; Brawler
+                 fires at once. Owner 09-28 (Spec S8): every skill / source-map option's name is ALWAYS visible
+                 text (icon rides above it when icons are enabled) — same rule as the single-block blockPartial
+                 options. Team Re-roll and Team Mascot below keep their existing art + count chip / caption. -->
             <div v-if="multiBlockDialogMine" class="mbr-actions">
-              <button v-if="row.brawler" class="bp-opt" title="Brawler" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
+              <button v-if="row.brawler" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" title="Brawler" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" alt="Brawler" />
-                <span v-else>Brawler</span>
+                <span class="bp-opt-label">Brawler</span>
               </button>
               <!-- Hatred (Single Skull → Hatred, upstream Hatred.java): fires immediately like Brawler above —
                    answered CLIENT_USE_HATRED via sendMultiBlockHatred, not the generic reRollSource path. -->
-              <button v-if="row.singleSkullLabel" class="bp-opt" :title="row.singleSkullLabel" @click="gameStore.sendMultiBlockHatred(row.targetId)">
+              <button v-if="row.singleSkullLabel" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="gameStore.sendMultiBlockHatred(row.targetId)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)" :src="skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)!" :alt="row.singleSkullLabel" />
-                <span v-else>{{ row.singleSkullLabel }}</span>
+                <span class="bp-opt-label">{{ row.singleSkullLabel }}</span>
               </button>
-              <button v-if="row.pro" class="bp-opt" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
+              <button v-if="row.pro" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
                 title="Pro" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" alt="Pro" />
-                <span v-else>Pro</span>
+                <span class="bp-opt-label">Pro</span>
               </button>
-              <button v-if="row.consummate" class="bp-opt" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
+              <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? 'Consummate Professional'" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? 'Consummate'" />
-                <span v-else>Consummate</span>
+                <span class="bp-opt-label">{{ row.consummateLabel ?? 'Consummate Professional' }}</span>
               </button>
               <!-- Savage Blow (star program): reroll-ALL-dice election — rerolls the WHOLE block-dice pool at once,
                    NOT a single-die pick (canReRollAnyNumberOfBlockDice). Distinct affordance = the source icon + an
                    "ALL" badge + "re-roll ALL dice" tooltip. Gated on the server-recognized source (row.multiBlockDiceLabel,
-                   Tarkin 8dde2dec); reuses the send via multiBlockRerollAllDice (source verbatim, zero new wire). -->
-              <button v-if="row.multiBlockDiceLabel" class="bp-opt bp-savage"
+                   Tarkin 8dde2dec); reuses the send via multiBlockRerollAllDice (source verbatim, zero new wire).
+                   Owner 09-28 (Spec S8): the source's NAME is visible text too — the "ALL" badge alone did not
+                   name the rule, only the icon and hover title did. -->
+              <button v-if="row.multiBlockDiceLabel" class="bp-opt bp-savage bp-opt-icon-label"
                 :title="`${row.multiBlockDiceLabel} — re-roll ALL dice`"
                 @click="multiBlockRerollAllDice(row.targetId, row.multiBlockDice, row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)"
                   :src="skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)!" :alt="row.multiBlockDiceLabel" />
                 <img v-else :src="resourceIcon('re_roll')" alt="re-roll" />
+                <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
                 <span class="bp-sub">ALL</span>
               </button>
               <button v-if="row.teamRR && !row.mascot" class="bp-team" title="Team re-roll" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
@@ -12971,7 +13452,7 @@ function sendChat() {
               </button>
             </div>
           </div>
-          <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">Click a die to re-roll it ({{ mbrDieMode.kind }})</div>
+          <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">{{ mbrArmedHintText }}</div>
         </div>
 
         <!-- Owner o66d: the legacy action hotbar is redundant in Order 66 (the context menu drives declares) —
@@ -13085,12 +13566,15 @@ function sendChat() {
                   <span v-if="rerollPromptTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                     :title="`Team re-rolls available: ${rerollPromptTeamReRolls}`">{{ rerollPromptTeamReRolls }}</span>
                 </button>
-                <button v-else class="bp-opt" :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Re-roll with ${opt.label}`"
+                <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
+                     entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
+                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(opt.source, effectiveIconStyle) }"
+                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Re-roll with ${opt.label}`"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
                   <img v-if="skillIconUrl(opt.source, effectiveIconStyle)"
                     :src="skillIconUrl(opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                  <span v-else>{{ opt.label }}</span>
+                  <span class="bp-opt-label">{{ opt.label }}</span>
                   <!-- #205 (Meero audit row): Mascot TRR also consumes the team re-roll pool ⇒ it carries the
                        same count, inline (it's the mascot art, not the plain re-roll die). Plain 'Team Mascot'
                        (no TRR) is excluded (#188 FR-1). -->
@@ -13993,6 +14477,9 @@ function sendChat() {
   border: 1px solid var(--ui-border);
   color: var(--ui-text);
 }
+.sc-actions-three { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+.sc-actions-three button { max-width: 100%; overflow-wrap: anywhere; }
+.sc-btn-icon { width: 22px; height: 22px; vertical-align: middle; image-rendering: pixelated; }
 .sc-yes { background: #2c5232; }
 .sc-yes:hover { background: #3a6a42; }
 .sc-no { background: #55282a; }
@@ -14811,33 +15298,6 @@ function sendChat() {
 .wc-icon { font-size: max(var(--ui-min-primary-text-size, 16px), 2.2rem); line-height: 1; filter: drop-shadow(0 2px 5px #000b); }
 .dice-label,
 .wc-weather { font-size: max(var(--ui-min-primary-text-size, 16px), 1.7rem); font-weight: 800; color: var(--ui-heading); text-shadow: 0 2px 6px #000d; }
-/* Owner 2026-07-06: Dodgy Snack "can't play this drive" splash (centred card, z 47). */
-.dodgy-snack-splash {
-  position: absolute;
-  z-index: 47;
-  left: 50%;
-  top: 40%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  max-width: 460px;
-  padding: 14px 20px;
-  border-radius: 10px;
-  background: rgba(14, 18, 26, 0.94);
-  border: 1px solid #6a7a3a;
-  box-shadow: 0 6px 24px #000a;
-  pointer-events: none;
-  animation: coin-caption-in var(--p-350) ease-out forwards;
-}
-.dodgy-snack-splash .dss-emoji { font-size: max(var(--ui-min-primary-text-size, 16px), 34px); line-height: 1; }
-.dodgy-snack-splash .dss-text {
-  font-family: 'Nuffle', system-ui, sans-serif;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 1rem);
-  color: #eef0e6;
-  line-height: 1.3;
-}
-.dodgy-snack-splash .dss-text b { color: #b7e05a; }
 /* Kick-off EVENT splash — FUMBBL's kick-off_<event>.png banner + the 2d6 roll */
 .kickoff-cine {
   position: absolute;
@@ -14956,6 +15416,9 @@ function sendChat() {
   z-index: 42;
   pointer-events: none;
 }
+/* Owner 09-28: an instruction asks for a click on the pitch (bomb target, Furious Outburst square), so it must
+   never intercept one. */
+.pitch-instruction { pointer-events: none; }
 .opponent-setup-notice :deep(.pitch-confirm-title) {
   overflow-wrap: anywhere;
   text-wrap: balance;
@@ -15358,14 +15821,17 @@ function sendChat() {
 .unknown-call {
   position: absolute;
   z-index: 61;
-  top: 50%;
+  /* S43: default spot is BELOW the scoreboard, centred, above the bottom rail; wide, never wider than the pitch host. */
+  top: 116px;
   left: 50%;
-  transform: translate(-50%, -50%);
-  width: 360px;
-  max-height: 80vh;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 32px));
+  max-height: calc(100% - 116px - 72px);
+  display: flex;
+  flex-direction: column;
   /* Owner 2026-07-04f: movable (header) + RESIZABLE (style requirement) */
   resize: both;
-  overflow: auto;
+  overflow: hidden;
   min-width: 260px;
   min-height: 160px;
   background: rgba(20, 16, 26, 0.97);
@@ -15374,7 +15840,14 @@ function sendChat() {
   box-shadow: 0 10px 34px #000d;
 }
 .uc-head { padding: 9px 14px; font-size: max(var(--ui-min-primary-text-size, 16px), 13px); font-weight: 800; color: var(--ui-heading); background: #3a2410; border-radius: 10px 10px 0 0; cursor: move; display: flex; justify-content: space-between; }
-.uc-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; }
+.uc-head { flex: 0 0 auto; }
+/* Only the "what the server sent" rows scroll; the title, the exits, the report tools and the note field stay in view. */
+.uc-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 7px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.uc-body > * { flex: 0 0 auto; }
+.uc-body > .uc-sent { flex: 1 1 auto; min-height: 56px; overflow: hidden; }
+.uc-sent .uc-rows { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.uc-who { font-weight: 700; }
+.uc-cut { color: #b8b2a6; font-weight: 400; font-size: max(var(--ui-min-text-size, 12px), 11px); }
 .uc-body p { margin: 0; font-size: max(var(--ui-min-text-size, 12px), 12.5px); color: #e8e2d6; line-height: 1.4; }
 .uc-args { font-size: max(var(--ui-min-text-size, 12px), 11.5px); color: #c8c2b6; }
 .uc-args-label { font-weight: 700; color: var(--ui-heading); margin-right: 4px; }
@@ -15395,7 +15868,37 @@ function sendChat() {
   background: #10141a; color: #e8e2d6; border: 1px solid var(--ui-border); border-radius: 5px; padding: 5px;
 }
 .uc-coord-prompt { font-size: max(var(--ui-min-text-size, 12px), 12px); font-weight: 700; color: var(--ui-heading); }
-.uc-foot { display: flex; justify-content: flex-end; }
+.uc-sec { display: flex; flex-direction: column; gap: 3px; }
+.uc-sent.uc-sec { min-height: 0; }
+.uc-sec h4 { margin: 0; font-size: max(var(--ui-min-text-size, 12px), 11.5px); font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ui-heading); }
+.uc-note { color: #b8b2a6 !important; font-size: max(var(--ui-min-text-size, 12px), 11.5px) !important; }
+.uc-sim { padding: 5px 8px !important; border: 1px dashed #e0a030; border-radius: 6px; color: #ffd98a !important; font-weight: 700; }
+.uc-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: max(var(--ui-min-text-size, 12px), 12px); }
+.uc-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr; gap: 8px; }
+.uc-row dt { color: #c8c2b6; font-weight: 700; overflow-wrap: anywhere; }
+.uc-row dd { margin: 0; color: #f3ede0; overflow-wrap: anywhere; white-space: pre-line; }
+.uc-row dd.uc-raw { color: #9fd0ff; font-family: ui-monospace, Consolas, monospace; font-size: max(var(--ui-min-text-size, 12px), 11px); }
+.uc-confirm { display: flex; flex-direction: column; gap: 6px; padding: 7px 8px; border: 1px solid #b06a2e; border-radius: 6px; background: rgba(58, 36, 16, 0.6); }
+.uc-outcome { font-weight: 700; color: #ffd98a !important; }
+.uc-outcome[data-status='done'] { color: #7ee59a !important; }
+/* S43: the chip sits under the scoreboard, clear of the coach panels, the log and the quick bar; only its own box takes clicks. */
+.unknown-call-chip {
+  position: absolute;
+  z-index: 61;
+  top: 112px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  font-size: max(var(--ui-min-text-size, 12px), 12px);
+  font-weight: 800;
+  color: #ffd98a;
+  background: rgba(58, 36, 16, 0.96);
+  border: 1px solid #e0a030;
+  border-radius: 999px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px #000b;
+}
+.unknown-call-chip:hover { background: rgba(86, 54, 24, 0.98); }
 /* Owner 2026-07-04d: persistent admin broadcast toast (top-right) */
 .admin-message {
   position: absolute;
@@ -15592,23 +16095,6 @@ function sendChat() {
 }
 .pass-hover-tip .pht-catch { color: var(--ui-accent); }
 .pass-hover-d6 { width: 20px; height: 20px; vertical-align: middle; }
-/* W28b: Hail Mary Pass targeting hint — the setup-selection hint idiom, mounted with the pitch targeting chrome. */
-.hmp-hint {
-  position: absolute;
-  z-index: 13;
-  left: 50%;
-  bottom: 146px;
-  transform: translateX(-50%);
-  padding: 4px 7px;
-  font-size: max(var(--ui-min-text-size, 12px), 10.5px);
-  line-height: 1.35;
-  color: var(--ui-heading);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--ui-accent) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ui-accent) 45%, transparent);
-  white-space: nowrap;
-  pointer-events: none;
-}
 /* #113: mid-move Jump toggle badge — clickable over-head affordance on the acting player. Mirrors the target-cue
    look; the .on state (server-echoed leaping) reads as the accent-lit "engaged" style. Token-only, theme-safe. */
 .jump-toggle {
@@ -15871,7 +16357,7 @@ function sendChat() {
 .setup-reserve-chip.dragging { opacity: 0.4; }
 .player-pick-bar {
   position: absolute;
-  z-index: 12;
+  z-index: 48; /* S45: above the click-to-skip catcher (47) so a server pick card stays clickable during a kick-off cine */
   bottom: 86px;
   left: 50%;
   transform: translateX(-50%);
@@ -16492,6 +16978,8 @@ function sendChat() {
   font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); font-weight: 900; letter-spacing: 0.04em;
   color: #ffe8b0; text-shadow: 0 2px 6px #000d;
 }
+.dodgy-snack-lines { display: flex; flex-direction: column; align-items: center; gap: 6px; max-width: 80%; text-align: center; overflow-wrap: anywhere; }
+.dodgy-snack-sentoff { font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem); }
 .turnstart-head {
   font-family: 'Nuffle', system-ui, sans-serif;
   font-size: max(var(--ui-min-primary-text-size, 16px), 3rem);
@@ -16919,7 +17407,10 @@ function sendChat() {
    mirrors .hud-center's left:50% centering; its own drop-in keyframe keeps the -50% centre. */
 .reroll-toast {
   position: absolute;
-  z-index: 40;
+  /* Owner 09-28 (Spec S8 follow-up): above the block/multi-block panels (both z-index 51) — the position fix
+     above already keeps it clear of the panel, this is defense-in-depth for the rare frame where it isn't. Below
+     the MVP nomination overlay (55, `.mvp-nominate-overlay`), which must never be obscured by a reroll toast. */
+  z-index: 52;
   left: 50%;
   top: 76px;
   transform: translateX(-50%);
@@ -17794,6 +18285,10 @@ function sendChat() {
   /* Choice surfaces share the gold trim with the action-reroll bar. */
   background: color-mix(in srgb, var(--ui-surface-2) 93%, transparent); border: 1px solid var(--ui-accent); border-radius: 8px; padding: 8px 10px;
   box-shadow: 0 6px 18px #000a;
+  /* Owner 09-28 (Spec S8 follow-up): size safety net for the 800x600 minimum window (tauri.conf.json) — the JS
+     anchor clamp (trackBlockReroll) keeps the panel's POSITION on-screen; this keeps its SIZE from ever
+     exceeding the viewport regardless of anchor. */
+  max-width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
 }
 /* Owner 09-08: die buttons grown linearly 50 -> 60 px (gap 6 -> 7 px, art overscale and 3D cube fill unchanged). */
 .bp-dice { position: relative; isolation: isolate; display: flex; gap: 7px; }
@@ -17828,13 +18323,20 @@ function sendChat() {
 }
 .bp-die.bp-die-3d { background: transparent; }
 .bp-die.bp-die-3d img { opacity: 0; animation: none; }
-.bp-actions { display: flex; align-items: center; gap: 6px; }
+.bp-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .bp-opt {
   display: flex; align-items: center; justify-content: center;
   background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 5px;
   padding: 4px 8px; font-weight: 700; font-size: max(var(--ui-min-text-size, 12px), 0.78rem); cursor: pointer; min-height: 32px;
 }
 .bp-opt img { width: 30px; height: 30px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 4px 5px #000c) drop-shadow(0 1px 2px #0009); }
+/* Owner 09-28 (Spec S8): every skill / source-map option's name is always visible text — never icon-only (UAT
+   #8, Lord of Chaos used unnamed). The icon rides ABOVE the name when icons are enabled; text-only options are
+   unchanged (row layout). Team Re-roll / Team Mascot are separate `.bp-team` buttons, untouched. */
+.bp-opt-label { white-space: normal; text-align: center; line-height: 1.15; max-width: 84px; }
+.bp-opt-icon-label { flex-direction: column; gap: 2px; padding: 4px 6px; }
+.bp-opt-icon-label img { width: 22px; height: 22px; }
+.bp-opt-icon-label .bp-opt-label { font-size: max(var(--ui-min-text-size, 10px), 0.62rem); }
 .bp-opt[data-active="true"] { border-color: var(--ui-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 33%, transparent); }
 .bp-opt:hover { border-color: #6f9ede; }
 /* Owner 09-07: the watcher's read-only team re-roll cue — the live button's art, no interaction. */
@@ -17864,17 +18366,26 @@ function sendChat() {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   background: color-mix(in srgb, var(--ui-surface-2) 93%, transparent);
   border: 1px solid var(--ui-accent); border-radius: 8px; padding: 10px 14px; box-shadow: 0 6px 18px #000a;
+  /* Owner 09-28 (Spec S8 follow-up): this panel has no per-frame anchor (fixed CSS left/top, unlike
+     .block-partial's defender-square tracking), so its viewport safety is size-only: never grow past the
+     800x600-minimum-window viewport, and scroll internally instead of running off top:14%'s band. */
+  max-width: min(520px, calc(100vw - 24px)); max-height: calc(100vh - 24px - 14vh); overflow: auto;
 }
 .mbr-title { font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); font-weight: 800; letter-spacing: 0.04em; color: var(--ui-heading); }
 .mbr-row { display: flex; align-items: center; gap: 12px; }
 .mbr-name { min-width: 118px; text-align: right; font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); font-weight: 700; color: var(--ui-text); }
 .mbr-dice { display: flex; gap: 6px; }
-.mbr-actions { display: flex; align-items: center; gap: 6px; }
+.mbr-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* Savage Blow reroll-ALL-dice button — a subtle accent + the "ALL" badge so it reads apart from the single-die stars. */
 .bp-savage { outline: 1px solid color-mix(in srgb, var(--ui-accent) 55%, transparent); outline-offset: 1px; }
 .bp-savage .bp-sub { color: var(--ui-accent); font-weight: 800; }
 .mbr-picked { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
 /* #38 (owner tester): uphill-block labels stacked above the dice (the .block-partial flex-column). */
+/* Owner 09-28 (Spec S8 follow-up): the "<player> used <source>" caption on the re-presented block dialog. */
+.bp-used-caption {
+  font-size: max(var(--ui-min-text-size, 12px), 0.74rem); font-weight: 700; text-align: center;
+  color: var(--ui-heading); max-width: 260px; margin-bottom: 2px;
+}
 .bp-uphill { display: flex; flex-direction: column; align-items: center; gap: 1px; margin-bottom: 2px; }
 .bp-uphill-title { font-size: max(var(--ui-min-text-size, 12px), 0.7rem); font-weight: 800; letter-spacing: 0.08em; color: var(--ui-heading); }
 .bp-uphill-wait { font-size: max(var(--ui-min-text-size, 12px), 0.6rem); font-weight: 600; letter-spacing: 0.04em; color: var(--ui-text-dim); margin-top: 2px; }

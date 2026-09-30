@@ -382,6 +382,36 @@ export function replayChapters(commands: readonly ReplayCommand[]): ReplayChapte
   return chapters;
 }
 
+/** Owner 09-27 (replayer ">>"): the cursors where a player ACTIVATION starts — the command that made a player the
+ *  acting player, kept only when that player went on to act (a has-moved / has-blocked / … flag or Standing Up turned
+ *  true before the acting player changed again). A select-then-deselect is not an activation. Cursor = index + 1,
+ *  so a skip lands with the player selected and nothing of the activation played yet. */
+export function activationCursors(commands: readonly ReplayCommand[]): number[] {
+  const changes = (command: ReplayCommand) => (command.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [];
+  const cursors: number[] = [];
+  let open: number | null = null;
+  let acted = false;
+  const close = () => { if (open != null && acted) cursors.push(open); open = null; acted = false; };
+  commands.forEach((command, index) => {
+    for (const change of changes(command)) {
+      const id = String(change.modelChangeId ?? '');
+      if (id === 'actingPlayerSetPlayerId') {
+        close();
+        if (change.modelChangeValue) open = index + 1;
+      } else if (open != null && change.modelChangeValue === true
+          && (id.startsWith('actingPlayerSetHas') || id === 'actingPlayerSetStandingUp')) acted = true;
+    }
+  });
+  close();
+  return cursors;
+}
+/** The activation start a skip from `cursor` lands on, or null when there is none that way. */
+export function activationSkipTarget(boundaries: readonly number[], cursor: number, direction: -1 | 1): number | null {
+  if (direction > 0) return boundaries.find((boundary) => boundary > cursor) ?? null;
+  for (let index = boundaries.length - 1; index >= 0; index -= 1) if (boundaries[index]! < cursor) return boundaries[index]!;
+  return null;
+}
+
 export interface ReplayStatus {
   phase: 'empty' | 'indexing' | 'ready' | 'presenting' | 'seeking' | 'failed';
   cursor: number;
@@ -392,6 +422,8 @@ export interface ReplayStatus {
   turnMarkers: readonly ReplayTurnMarker[];
   /** owner 09-25: jump points (file / FUMBBL replays only) */
   chapters?: readonly ReplayChapter[];
+  /** owner 09-27: activation starts (the ">>" / "<<" skips) */
+  activationBoundaries?: readonly number[];
   failure: ReplayFailure | null;
 }
 
@@ -422,6 +454,7 @@ export class ReplayController<State> {
   private keyframes: readonly ReplayKeyframe<State>[] = [];
   private turns: readonly number[] = [0];
   private turnMarkers: readonly ReplayTurnMarker[] = [];
+  private activations: readonly number[] = [];
   private disposed = false;
   private cancelPresentation: (() => void) | null = null;
   private statusValue: ReplayStatus = {
@@ -471,6 +504,7 @@ export class ReplayController<State> {
     this.keyframes = [];
     this.turns = [0];
     this.turnMarkers = [];
+    this.activations = [];
     this.current = null;
     this.disposed = true;
     return prepared;
@@ -487,12 +521,14 @@ export class ReplayController<State> {
     this.turns = prepared.turns;
     this.turnMarkers = prepared.turnMarkers;
     this.current = prepared.current;
+    this.activations = activationCursors(this.commands);
     const epoch = this.statusValue.epoch + 1;
     this.adapter.resetPresentation(epoch);
     this.adapter.renderOnce(this.current, 0);
     this.replaceStatus({
       phase: 'ready', cursor: 0, total: this.commands.length, commandNr: null,
-      epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands), failure: null,
+      epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands),
+      activationBoundaries: this.activations, failure: null,
     });
   }
 
@@ -553,12 +589,14 @@ export class ReplayController<State> {
       this.turns = [...new Set(turns)].sort((left, right) => left - right);
       this.turnMarkers = labelReplayTurnMarkers(turnMarkers);
       this.current = this.adapter.cloneState(keyframes[0]!.state);
+      this.activations = activationCursors(this.commands);
       const epoch = this.statusValue.epoch + 1;
       this.adapter.resetPresentation(epoch);
       this.adapter.renderOnce(this.current, 0);
       this.replaceStatus({
         phase: 'ready', cursor: 0, total: this.commands.length, commandNr: null,
-        epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands), failure: null,
+        epoch, turnBoundaries: this.turns, turnMarkers: this.turnMarkers, chapters: replayChapters(this.commands),
+        activationBoundaries: this.activations, failure: null,
       });
     } catch (error) {
       this.fail(error);
@@ -639,6 +677,17 @@ export class ReplayController<State> {
     const prior = this.turns.filter((cursor) => cursor < this.statusValue.cursor);
     const target = prior[prior.length - 1] ?? 0;
     if (target === this.statusValue.cursor) return false;
+    this.seek(target);
+    return true;
+  }
+
+  /** Owner 09-27: ">>" / "<<" — to the start of the next / previous player activation. */
+  activationForward(): boolean { return this.activationSkip(1); }
+  activationBackward(): boolean { return this.activationSkip(-1); }
+  private activationSkip(direction: -1 | 1): boolean {
+    this.requireReady();
+    const target = activationSkipTarget(this.activations, this.statusValue.cursor, direction);
+    if (target == null) return false;
     this.seek(target);
     return true;
   }

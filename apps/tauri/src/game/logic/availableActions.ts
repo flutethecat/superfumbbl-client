@@ -16,6 +16,7 @@ import { effectiveArmour, effectiveMovement, effectiveStat, normalizeSkillName, 
 import { deriveClientState, type ClientStateContext } from './clientStateMachine';
 import { starUseSkillElection } from './coachActionDispatch';
 import { onTheBallPlayerStateIsAbleToMove } from '../onTheBallController';
+import { blastinBeatOriginId, isBlastinSecondBeat } from '../blastinSecondBeat';
 import {
   WIDE_RAIL_PRE_ACTION_RULES,
   wideRailPreActionModeForPlayerAction,
@@ -52,6 +53,9 @@ export interface CoachAction {
   reason?: string;
   /** A.3: for a Block declare, the flavor whose flag rides clientBlock (undefined = plain block). */
   blockKind?: BlockKind;
+  /** S42: on a `foulMove` row of a Chainsaw carrier, the flag the terminal `clientFoul` carries (`usingChainsaw`);
+   *  undefined on every other row (a fouler without Chainsaw has the one plain row and never sends the flag true). */
+  usingChainsaw?: boolean;
   /** Owner ruling 08-17: skill name whose icon renders inline on this row (Jump Up on Move only, no text
    *  prefix). Generic slot, not a Move-row special case — populated only where a row earns it. */
   icon?: string;
@@ -234,6 +238,23 @@ export function adjacentBlockableEnemyIds(game: GameJson, playerId: string): str
   return out;
 }
 
+/** Owner 09-28 (S12): mirror of upstream `AnimalSavageryBehaviour.adjacentTargets(game, opponentTeam, ...)` -
+ *  `findAdjacentBlockablePlayers` (= `adjacentBlockableEnemyIds`) PLUS the current `defenderId` when it is an
+ *  opponent and adjacent (regardless of its state, exactly like the upstream `team.hasPlayer(defender)` limb).
+ *  Gates the client's "Primal Savagery" offer; empty = the server never offers it. */
+export function adjacentSavageryTargetIds(game: GameJson, playerId: string): string[] {
+  const out = adjacentBlockableEnemyIds(game, playerId);
+  const defenderId = String((game as { defenderId?: unknown }).defenderId ?? '');
+  if (!defenderId || defenderId === playerId || out.includes(defenderId)) return out;
+  const iAmHome = playerSideIsHome(game, playerId);
+  const side = playerSideIsHome(game, defenderId);
+  const myPos = normSquare(findPlayer(game, playerId)?.playerCoordinate);
+  const defPos = normSquare(findPlayer(game, defenderId)?.playerCoordinate);
+  if (iAmHome === null || side === null || side === iAmHome || !myPos || !defPos) return out;
+  if (chebyshev(myPos, defPos) === 1) out.push(defenderId);
+  return out;
+}
+
 /** #93 (owner): a player can be BLOCKED / BLITZ-targeted iff its base is STANDING or MOVING — never prone/stunned.
  *  EXACT mirror of `PlayerState.canBeBlocked()` (ffb-common: `STANDING || MOVING`), which is the upstream blitz-
  *  target gate: bb2025 `SelectBlitzTargetLogicModule.playerInteraction` → `BlockLogicExtension.isValidBlitzTarget`
@@ -286,6 +307,13 @@ function hasUnusedGrantor(game: GameJson, playerId: string, skills: readonly str
  *  the server re-checks it (`bb2025/pass/StepIntercept.intercept:189`), so this is an offer-shaping mirror only. */
 export function hasUnusedSkillNamed(game: GameJson, playerId: string, skill: string): boolean {
   return hasUnusedGrantor(game, playerId, [skill]);
+}
+
+/** Owner 09-28 (S12): the `usedSkills` half of `hasUnusedGrantor` alone (same normalised name compare), for a
+ *  caller whose "has the skill" half is answered elsewhere (the server's explicit capability boolean). */
+export function skillMarkedUsed(game: GameJson, playerId: string, skill: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+  return findUsedSkills(game, playerId).some((s) => norm(s) === norm(skill));
 }
 
 /** #181 VV-3: opponents `canBeBlocked` at chebyshev EXACTLY 2 (adjacent EXCLUDED). Upstream
@@ -366,14 +394,12 @@ const WISDOM_GRANTABLE_SKILLS = ['Break Tackle', 'Dauntless', 'Mighty Blow', 'Su
  * GameMechanic.java:229-246. ActingPlayer.hasActed() is the same observable union used by Raiding Party;
  * upstream also includes `forgone`, but that limb is not carried by this fork's wire model. The server remains
  * authoritative and revalidates the target and its missing grantable skills. */
-export function wisdomAvailable(game: GameJson, playerId: string): boolean {
-  const acting = game.actingPlayer as {
-    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
-    hasTriggeredEffect?: boolean; usedSkills?: string[];
-  } | undefined;
-  if (String(acting?.playerId ?? '') !== playerId) return false;
-  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
-      || acting?.hasTriggeredEffect || (acting?.usedSkills?.length ?? 0) > 0) return false;
+// Owner 09-28 (Spec S5 fix, coordinator review): the state-only tail of `wisdomAvailable` — unused grantor +
+// eligible-team-mate geometry — with NO dependency on being the acting player. `wisdomAvailable` below calls this
+// after its own acting-only `hasActed` gate; the wide-rail "Not Available" loop in `playerDeclareSet` calls it
+// DIRECTLY for a player who has not declared yet, so a fresh carrier with no eligible team-mate right now reads
+// "Not Available" instead of the coarser "skill unused ⇒ withhold" guess.
+function wisdomGeometryAvailable(game: GameJson, playerId: string): boolean {
   if (!hasUnusedGrantor(game, playerId, CAN_GRANT_SKILLS_TO_TEAM_MATES_SKILLS)) return false;
   const origin = normSquare(findPlayer(game, playerId)?.playerCoordinate);
   const side = playerSideIsHome(game, playerId);
@@ -395,18 +421,24 @@ export function wisdomAvailable(game: GameJson, playerId: string): boolean {
   });
 }
 
+export function wisdomAvailable(game: GameJson, playerId: string): boolean {
+  const acting = game.actingPlayer as {
+    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
+    hasTriggeredEffect?: boolean; usedSkills?: string[];
+  } | undefined;
+  if (String(acting?.playerId ?? '') !== playerId) return false;
+  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
+      || acting?.hasTriggeredEffect || (acting?.usedSkills?.length ?? 0) > 0) return false;
+  return wisdomGeometryAvailable(game, playerId);
+}
+
 /** #221: exact client offer from LogicModule.isRaidingPartyAvailable:201-236. "Open" here means a STANDING
  * team-mate within five squares who is outside every opposing tacklezone and has an adjacent empty square which
  * itself neighbours an opponent. The acting player must not yet have acted; ActingPlayer.hasActed:464-466 is the
  * union below. The server revalidates and owns the final eligible-player/square sets. */
-export function raidingPartyAvailable(game: GameJson, playerId: string): boolean {
-  const acting = game.actingPlayer as {
-    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
-    hasTriggeredEffect?: boolean; forgone?: boolean; usedSkills?: string[];
-  } | undefined;
-  if (String(acting?.playerId ?? '') !== playerId) return false;
-  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
-      || acting?.hasTriggeredEffect || acting?.forgone || (acting?.usedSkills?.length ?? 0) > 0) return false;
+// Owner 09-28 (Spec S5 fix): the state-only tail of `raidingPartyAvailable` — unused grantor + eligible-team-mate
+// geometry — with no acting-player dependency; see `wisdomGeometryAvailable` for why this exists.
+function raidingPartyGeometryAvailable(game: GameJson, playerId: string): boolean {
   if (!hasUnusedGrantor(game, playerId, CAN_MOVE_OPEN_TEAM_MATE_SKILLS)) return false;
   const carrier = normSquare(findPlayer(game, playerId)?.playerCoordinate);
   const side = playerSideIsHome(game, playerId);
@@ -436,9 +468,30 @@ export function raidingPartyAvailable(game: GameJson, playerId: string): boolean
   });
 }
 
+export function raidingPartyAvailable(game: GameJson, playerId: string): boolean {
+  const acting = game.actingPlayer as {
+    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
+    hasTriggeredEffect?: boolean; forgone?: boolean; usedSkills?: string[];
+  } | undefined;
+  if (String(acting?.playerId ?? '') !== playerId) return false;
+  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
+      || acting?.hasTriggeredEffect || acting?.forgone || (acting?.usedSkills?.length ?? 0) > 0) return false;
+  return raidingPartyGeometryAvailable(game, playerId);
+}
+
 /** Catch of the Day offer from LogicModule.java:162-172: an unused canGetBallOnGround grantor may act when a
  * MOVING loose ball is within three steps. StepCatchOfTheDay rechecks the same `isBallMoving()` predicate before
  * rolling, then settles a success on the acting player; the client must not substitute a settled-ball heuristic. */
+// Owner 09-28 (Spec S5 fix): the state-only tail of `catchOfTheDayAvailable` — unused grantor + ball geometry —
+// with no acting-player dependency; see `wisdomGeometryAvailable` for why this exists.
+function catchOfTheDayGeometryAvailable(game: GameJson, playerId: string): boolean {
+  const fm = game.fieldModel as { ballInPlay?: boolean; ballMoving?: boolean } | undefined;
+  if (!hasUnusedGrantor(game, playerId, CAN_GET_BALL_ON_GROUND_SKILLS) || !(fm?.ballInPlay && fm.ballMoving)) return false;
+  const player = normSquare(findPlayer(game, playerId)?.playerCoordinate);
+  const ball = normSquare(game.fieldModel?.ballCoordinate);
+  return !!player && !!ball && chebyshev(player, ball) <= 3;
+}
+
 export function catchOfTheDayAvailable(game: GameJson, playerId: string): boolean {
   const acting = game.actingPlayer as {
     playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
@@ -447,11 +500,7 @@ export function catchOfTheDayAvailable(game: GameJson, playerId: string): boolea
   if (String(acting?.playerId ?? '') !== playerId) return false;
   if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
       || acting?.hasTriggeredEffect || acting?.forgone || (acting?.usedSkills?.length ?? 0) > 0) return false;
-  const fm = game.fieldModel as { ballInPlay?: boolean; ballMoving?: boolean } | undefined;
-  if (!hasUnusedGrantor(game, playerId, CAN_GET_BALL_ON_GROUND_SKILLS) || !(fm?.ballInPlay && fm.ballMoving)) return false;
-  const player = normSquare(findPlayer(game, playerId)?.playerCoordinate);
-  const ball = normSquare(game.fieldModel?.ballCoordinate);
-  return !!player && !!ball && chebyshev(player, ball) <= 3;
+  return catchOfTheDayGeometryAvailable(game, playerId);
 }
 
 /** `SelectBlitzTargetLogicModule(bb2025):99 isFrenziedRushAvailable`: the acting player has an unused
@@ -475,14 +524,9 @@ export function slashingNailsAvailable(game: GameJson, playerId: string): boolea
  *  (Chebyshev-1) OPPONENT that is standing-or-prone and NOT distracted (`PlayerState.isDistracted()` = confused ||
  *  hypnotized, ffb-common PlayerState.java — mirrors `FLAG_CONFUSED`/`FLAG_HYPNOTIZED` above). `skill/mixed/special/
  *  BlackInk.java` registers the grantor, ONCE_PER_GAME. Distinct from Zoat's `canGazeAutomaticallyThreeSquaresAway`. */
-export function blackInkAvailable(game: GameJson, playerId: string): boolean {
-  const acting = game.actingPlayer as {
-    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
-    hasTriggeredEffect?: boolean; standingUp?: boolean; usedSkills?: string[];
-  } | undefined;
-  if (String(acting?.playerId ?? '') !== playerId) return false;
-  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
-      || acting?.hasTriggeredEffect || acting?.standingUp || (acting?.usedSkills?.length ?? 0) > 0) return false;
+// Owner 09-28 (Spec S5 fix): the state-only tail of `blackInkAvailable` — unused grantor + adjacent-opponent
+// geometry — with no acting-player dependency; see `wisdomGeometryAvailable` for why this exists.
+function blackInkGeometryAvailable(game: GameJson, playerId: string): boolean {
   if (!hasUnusedGrantor(game, playerId, CAN_GAZE_AUTOMATICALLY_SKILLS)) return false;
   const myPos = normSquare(findPlayer(game, playerId)?.playerCoordinate);
   const iAmHome = playerSideIsHome(game, playerId);
@@ -499,6 +543,17 @@ export function blackInkAvailable(game: GameJson, playerId: string): boolean {
   return false;
 }
 
+export function blackInkAvailable(game: GameJson, playerId: string): boolean {
+  const acting = game.actingPlayer as {
+    playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
+    hasTriggeredEffect?: boolean; standingUp?: boolean; usedSkills?: string[];
+  } | undefined;
+  if (String(acting?.playerId ?? '') !== playerId) return false;
+  if (acting?.hasMoved || acting?.hasFouled || acting?.hasBlocked || acting?.hasPassed
+      || acting?.hasTriggeredEffect || acting?.standingUp || (acting?.usedSkills?.length ?? 0) > 0) return false;
+  return blackInkGeometryAvailable(game, playerId);
+}
+
 // ── Star S4: the gaze-trio use-skill elections (Look Into My Eyes / Baleful Hex / Auto Gaze Zoat) ─────
 // Grantor sets (JL-2 bare-property grep at upstream/master finds exactly one registrant each, no cancellers):
 const CAN_STEAL_BALL_SKILLS = ['Look Into My Eyes']; // canStealBallFromOpponent — skill/mixed/special/LookIntoMyEyes.java:19 (ONCE_PER_GAME)
@@ -506,7 +561,7 @@ const CAN_MAKE_OPPONENT_MISS_TURN_SKILLS = ['Baleful Hex']; // canMakeOpponentMi
 const CAN_GAZE_THREE_AWAY_SKILLS = ['"Excuse Me, Are You a Zoat?"']; // canGazeAutomaticallyThreeSquaresAway — skill/bb2025/special/ExcuseMeAreYouAZoat.java:26 (ONCE_PER_GAME); distinct from Black Ink's canGazeAutomatically
 
 /** ActingPlayer.hasActed():464-466 — hasMoved||hasFouled||hasBlocked||hasPassed||hasTriggeredEffect||usedSkills||forgone. */
-function actingHasActed(game: GameJson, playerId: string): boolean {
+export function actingHasActed(game: GameJson, playerId: string): boolean {
   const acting = game.actingPlayer as {
     playerId?: string | null; hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean;
     hasTriggeredEffect?: boolean; forgone?: boolean; usedSkills?: string[];
@@ -521,6 +576,28 @@ function stateHasTacklezones(ps: number | undefined): boolean {
   const st = ps ?? 0;
   const b = baseState(st);
   return (b === BASE_STANDING || b === BASE_MOVING || b === BASE_BLOCKED) && !(st & FLAG_CONFUSED) && !(st & FLAG_HYPNOTIZED);
+}
+
+const DODGE_CANCELLING_SKILL = 'Tackle';
+/** Owner 09-28 (S18, game 992): the server re-lists the Dodge SKILL on a failed-dodge re-roll dialog even when its own
+ *  step withheld it (bb2025 `StepMoveDodge.uncanceledDodgeRerollSource` :564-576 returns null, then
+ *  `ReRollService` re-derives the skill without the Tackle check). Mirror of that withholding: true when, at the square
+ *  the player dodged FROM (`origin`, `fCoordinateFrom`), an OPPOSING player on the pitch has tackle zones
+ *  (`UtilPlayer.findAdjacentPlayersWithTacklezones(game, otherTeam, from, false)` -> `PlayerState.hasTacklezones()`
+ *  :230-233, via `stateHasTacklezones`) and carries a skill that cancels Dodge (`UtilCards.cancelsSkill` ->
+ *  `Skill.canCancel` -> `CancelSkillProperty`; the only registration of `canRerollDodge` is `Tackle.java:25`).
+ *  `hasSkill` reads base + temporary grants like `getSkillsIncludingTemporaryOnes()`. Side unknown = false (not withheld). */
+export function dodgeSkillCancelledAt(game: GameJson, playerId: string, origin: [number, number]): boolean {
+  const dodgerIsHome = playerSideIsHome(game, playerId);
+  if (dodgerIsHome === null) return false;
+  for (const p of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
+    if (playerSideIsHome(game, p.playerId) !== !dodgerIsHome || !stateHasTacklezones(p.playerState)) continue;
+    const pos = normSquare(p.playerCoordinate);
+    // FieldCoordinateBounds.FIELD: a dugout coordinate is never "adjacent".
+    if (!pos || pos[0] < 0 || pos[0] > 25 || pos[1] < 0 || pos[1] > 14 || chebyshev(pos, origin) !== 1) continue;
+    if (hasSkill(game, p.playerId, DODGE_CANCELLING_SKILL)) return true;
+  }
+  return false;
 }
 
 /** `LogicModule.isLookIntoMyEyesAvailable(ActingPlayer)`:239-243 — `!hasActed()` AND the PRE-activation state
@@ -592,6 +669,30 @@ export function autoGazeZoatAvailable(game: GameJson, playerId: string): boolean
     const pos = normSquare(p.playerCoordinate);
     return !!pos && chebyshev(myPos, pos) <= 3;
   });
+}
+
+/** Spec S13 (game 992): upstream `bb2025/step/StepSelectBlitzTarget` has no `canGazeAutomaticallyThreeSquaresAway`
+ *  branch in its CLIENT_USE_SKILL handler, so a Zoat use sent while the server waits for the Blitz target is silently
+ *  swallowed (upstream server defect; the fork server stays upstream-identical). Hold the send until the target is
+ *  acked. `StepInitSelecting` accepts the same command after it (turn mode back to regular, action still blitzMove). */
+export function zoatBlitzTargetStageHeld(game: GameJson): boolean {
+  return game.turnMode === 'selectBlitzTarget';
+}
+/** The blitz target has been acked, from received state only: action exactly `blitzMove`, the server out of the
+ *  target stage, and a SELECTED target on the field model (real cmd 90 sets it). Cmd 27 (action set) alone, before
+ *  cmd 28 enters the stage, has no target and is NOT acked. */
+export function zoatBlitzTargetAcked(game: GameJson): boolean {
+  if (zoatBlitzTargetStageHeld(game)) return false;
+  if ((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction !== 'blitzMove') return false;
+  const target = (game.fieldModel as { targetSelectionState?: { playerId?: string | null; targetSelectionStatus?: string } | null })
+    .targetSelectionState;
+  return target?.targetSelectionStatus === 'SELECTED' && !!target.playerId;
+}
+/** Consumers' gate: the target is acked AND the acting player can still use the Zoat (not acted, unspent, an
+ *  opponent in range). Once the blitzer has moved this is false again. */
+export function zoatBlitzGazeSendable(game: GameJson): boolean {
+  const actingId = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return !!actingId && zoatBlitzTargetAcked(game) && autoGazeZoatAvailable(game, actingId);
 }
 
 // ── Star S7: Treacherous (Hakflem Skuttlespike) + Shot to Nothing (Gloriel Summerbloom) ───────────────
@@ -723,6 +824,28 @@ function illCarryYouIsCarrier(game: GameJson, playerId: string): boolean {
   return skillValueExcludingTemporary(game, playerId, ILL_CARRY_YOU_SKILL).toLowerCase() === 'carrier';
 }
 
+/** Owner 09-28 (Spec S5 fix; Sol re-review 09-28 — added the missing unused-grantor gate): the server has not
+ *  sent `initialAdjacentPartnerIds` before the declare — that field is only filled with the partners adjacent AT
+ *  the declare. For a non-acting carrier, use CURRENT adjacency instead (the same shape as `illCarryYouCandidates`
+ *  minus the post-declare `initial` filter): the skill must still be UNUSED (a spent once-per-half Carrier is
+ *  unavailable regardless of who's standing next to them — the same limb `illCarryYouCandidates` itself checks
+ *  first) AND a same-side, on-pitch, adjacent CARRIED-variant holder must exist ⇒ the row would arm once
+ *  declared, so withhold "Not Available"; either missing ⇒ show it. Once acting, `illCarryYouAvailable` (which
+ *  DOES require `initialAdjacentPartnerIds`) remains the source of truth — this helper is for the pre-declare
+ *  context-menu question only. */
+function illCarryYouAdjacentPartnerExists(game: GameJson, playerId: string): boolean {
+  if (!hasUnusedGrantor(game, playerId, [ILL_CARRY_YOU_SKILL])) return false;
+  const origin = normSquare(findPlayer(game, playerId)?.playerCoordinate);
+  const side = playerSideIsHome(game, playerId);
+  if (!origin || side === null) return false;
+  return ((game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]).some((mate) => {
+    if (mate.playerId === playerId || playerSideIsHome(game, mate.playerId) !== side) return false;
+    const square = normSquare(mate.playerCoordinate);
+    if (!square || chebyshev(origin, square) !== 1) return false;
+    return skillValueExcludingTemporary(game, mate.playerId, ILL_CARRY_YOU_SKILL).toLowerCase() === 'carried';
+  });
+}
+
 export type FreshStarActivationRuleId =
   | 'lookIntoMyEyes' | 'balefulHex' | 'excuseMeAreYouAZoat' | 'raidingParty' | 'blackInk';
 
@@ -777,6 +900,50 @@ export function furiousOutburstCoordinatePrompt(game: GameJson): string | null {
   return defender && (Number(defender.playerState ?? 0) & 0x01000) !== 0
     ? 'Select square to stab from'
     : 'Select square to end in';
+}
+
+type BombPromptActing = {
+  playerId?: string | null; playerAction?: string | null; hasPassed?: boolean; mustCompleteAction?: boolean;
+} | undefined;
+
+/** Owner 09-28 (UAT g992, S10): the second bomb of a declared All You Can Eat. Received state only. After the first
+ *  bomb resolves the server re-activates the thrower (real cmd 141): `turnMode` regular, acting action `throwBomb`,
+ *  `playerMarkSkillUsed "All You Can Eat"` on the player, `actingPlayerSetMustCompleteAction true`, nothing thrown yet.
+ *  The first bomb (cmd 113) carries neither the used skill nor mustCompleteAction. A later ordinary Bombardier
+ *  activation after All You Can Eat was spent still has mustCompleteAction false, so it cannot match. The throw
+ *  (cmd 142: hasPassed / passCoordinate) ends it. The caller adds "is my player, my turn". */
+export function allYouCanEatSecondBombPrompt(game: GameJson, playerId: string): string | null {
+  const acting = game.actingPlayer as BombPromptActing;
+  if (String(acting?.playerId ?? '') !== playerId || String(acting?.playerAction ?? '') !== 'throwBomb') return null;
+  if (String((game as { turnMode?: string }).turnMode ?? '') !== 'regular') return null;
+  if (acting?.hasPassed === true || acting?.mustCompleteAction !== true || game.passCoordinate) return null;
+  const used = findUsedSkills(game, playerId).map((s) => s.toLowerCase().replace(/[^a-z]/g, ''));
+  return used.includes('allyoucaneat') && hasSkill(game, playerId, 'All You Can Eat')
+    ? 'All You Can Eat - throw the second bomb: select a target square'
+    : null;
+}
+
+/** The four bomb turn modes: the server picks one from the ORIGINAL bomber's side and whether the throw came in a
+ *  Blitz! kick-off (BombardierBehaviour bb2025:35-52), and a catch keeps it (StepEndBomb:150-156). The wire string
+ *  is not mirrored per seat. clientStateMachine maps all four to the one BOMB state. */
+const BOMB_TURN_MODES: ReadonlySet<string> = new Set(['bombHome', 'bombAway', 'bombHomeBlitz', 'bombAwayBlitz']);
+
+/** Owner 09-28 (UAT g992, S11): a caught / intercepted BOMB. The server makes the catcher the acting player with
+ *  `throwBomb` while `turnMode` is a bomb mode (real cmd 125 / 133: `bombAway`). Bomb only: a bomb mode is entered solely by a
+ *  bomb throw and a ball interception or catch never sets action `throwBomb`. Before the new thrower throws,
+ *  hasPassed is false and passCoordinate is null (a re-thrown bomb sets both, cmd 126 / 134; the original
+ *  thrower during its own flight has hasPassed true). The caller adds "is my player, my turn". */
+export function caughtBombThrowPrompt(game: GameJson, playerId: string): string | null {
+  const acting = game.actingPlayer as BombPromptActing;
+  if (String(acting?.playerId ?? '') !== playerId || String(acting?.playerAction ?? '') !== 'throwBomb') return null;
+  if (!BOMB_TURN_MODES.has(String((game as { turnMode?: string }).turnMode ?? ''))) return null;
+  if (acting?.hasPassed === true || game.passCoordinate) return null;
+  const roster = [
+    ...((game.teamHome as { playerArray?: { playerId: string; playerName?: string }[] })?.playerArray ?? []),
+    ...((game.teamAway as { playerArray?: { playerId: string; playerName?: string }[] })?.playerArray ?? []),
+  ];
+  const name = roster.find((p) => p.playerId === playerId)?.playerName;
+  return `${name || 'Your player'} has the bomb - select a square to throw it`;
 }
 
 /**
@@ -872,7 +1039,7 @@ export function wideRailActivationOptions(
     balefulHex: balefulHexAvailable(game, playerId),
     catchOfTheDay: catchOfTheDayAvailable(game, playerId),
     blackInk: blackInkAvailable(game, playerId),
-    excuseMeAreYouAZoat: autoGazeZoatAvailable(game, playerId),
+    excuseMeAreYouAZoat: autoGazeZoatAvailable(game, playerId) && !zoatBlitzTargetStageHeld(game),
     incorporeal: incorporealAvailable(game, playerId),
     illCarryYou: illCarryYouAvailable(game, playerId),
     frenziedRush: frenziedRushAvailable(game, playerId),
@@ -1062,7 +1229,8 @@ export function thenIStartedBlastinAvailable(game: GameJson, playerId: string): 
  *  for the acting-team seat: Chebyshev ≤ 3 from the acting player, base STANDING (strict — NOT canBeBlocked),
  *  opposing team. The commit is `CLIENT_TARGET_SELECTED{playerId}`; the roll/injury are server-owned
  *  (bb2025 StepThenIStartedBlastin). One rule, two consumers: the router's click gate and any range cue. */
-export function blastinTargetIds(game: GameJson, actingId: string): string[] {
+export function blastinTargetIds(game: GameJson, actingId: string, reportedTargetId?: string | null): string[] {
+  if (isBlastinSecondBeat(game)) return blastinSecondBeatTargetIds(game, actingId, reportedTargetId);
   const myPos = normSquare(findPlayer(game, actingId)?.playerCoordinate);
   const side = playerSideIsHome(game, actingId);
   if (!myPos || side === null) return [];
@@ -1072,6 +1240,26 @@ export function blastinTargetIds(game: GameJson, actingId: string): string[] {
     if (baseState(o.playerState) !== BASE_STANDING) continue; // STANDING-strict (:90)
     const pos = normSquare(o.playerCoordinate);
     if (pos && chebyshev(myPos, pos) <= 3) out.push(o.playerId);
+  }
+  return out;
+}
+
+/** S46: the opposing coach's pick after a wide shot — port of `ThenIStartedBlastinLogicModule.isValidTarget`: measured from
+ *  the ORIGINAL target (`game.defenderId`, else the failed report's target), Chebyshev <= 3, base STANDING, EITHER team,
+ *  never the shooter. The chooser has no decline. On the pitch only (dugout squares carry off-pitch coordinates). */
+export function blastinSecondBeatTargetIds(game: GameJson, actingId: string, reportedTargetId?: string | null): string[] {
+  // game.defenderId first; when it does not resolve to an on-pitch player (stale), the failed report's target.
+  const onPitchSq = (c: [number, number] | null) => !!c && c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14;
+  const at = (id: string) => normSquare(findPlayer(game, id)?.playerCoordinate);
+  const defenderSq = at(blastinBeatOriginId(game));
+  const reportedSq = reportedTargetId ? at(String(reportedTargetId)) : null;
+  const origin = onPitchSq(defenderSq) ? defenderSq : onPitchSq(reportedSq) ? reportedSq : null;
+  if (!origin) return [];
+  const out: string[] = [];
+  for (const o of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
+    if (o.playerId === actingId || baseState(o.playerState) !== BASE_STANDING) continue;
+    const pos = normSquare(o.playerCoordinate);
+    if (pos && pos[0] >= 0 && pos[0] <= 25 && pos[1] >= 0 && pos[1] <= 14 && chebyshev(origin, pos) <= 3) out.push(o.playerId);
   }
   return out;
 }
@@ -1160,6 +1348,68 @@ export function blockTargetDecorated(game: GameJson, defenderId: string): boolea
     const c = dd.coordinate;
     return Array.isArray(c) && c[0] === defCoord[0] && c[1] === defCoord[1];
   });
+}
+
+/** S28: the squares the server decorated as vomit targets (blockKind VOMIT). Plain dice decorations (the walk phase of
+ *  Putrid Regurgitation, ordinary blocks) do not count. */
+function vomitDecoratedSquares(game: GameJson): [number, number][] {
+  const decorations = ((game.fieldModel as { diceDecorationArray?: { coordinate?: [number, number]; blockKind?: string | null }[] })?.diceDecorationArray) ?? [];
+  return decorations
+    .filter((dd) => String(dd.blockKind ?? '').toUpperCase() === 'VOMIT' && Array.isArray(dd.coordinate))
+    .map((dd) => [dd.coordinate![0], dd.coordinate![1]] as [number, number]);
+}
+
+/** S28: the opposing players to mark for Putrid Regurgitation. Only while the RAW action is putridRegurgitationBlock or
+ *  putridRegurgitationBlitz (never ...Move, whose decorations are plain and whose vomit block the server refuses), and
+ *  only for opponents whose square carries a VOMIT decoration, and none once the server has set a defender (the accepted
+ *  block, fixture cmd 94). No distance or adjacency rule of our own. */
+export function vomitTargetIds(game: GameJson, actingId: string): string[] {
+  if (String((game as { defenderId?: string | null }).defenderId ?? '')) return []; // a block is in progress: the target choice is over
+  const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  if (action !== 'putridRegurgitationBlock' && action !== 'putridRegurgitationBlitz') return [];
+  const iAmHome = playerSideIsHome(game, actingId);
+  if (iAmHome === null) return [];
+  const squares = vomitDecoratedSquares(game);
+  if (squares.length === 0) return [];
+  const out: string[] = [];
+  for (const p of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
+    const side = playerSideIsHome(game, p.playerId);
+    if (side === null || side === iAmHome) continue; // opposing team only
+    const pos = normSquare(p.playerCoordinate);
+    if (pos && squares.some((c) => c[0] === pos[0] && c[1] === pos[1])) out.push(p.playerId);
+  }
+  return out;
+}
+
+/** S39: the ONE id feed of the skill-target mark channel (renderer.setSkillTargetMarks). Blastin' Solves Everything when the
+ *  client state is THEN_I_STARTED_BLASTIN (the same blastinTargetIds the click gate uses); otherwise the Putrid vomit ids.
+ *  The two cannot coexist: Blastin' runs under turnMode thenIStartedBlastin with playerAction thenIStartedBlastin, Putrid
+ *  needs playerAction putridRegurgitationBlock/Blitz, and actingPlayer.playerAction holds one value. The caller owns the
+ *  coach-choice gates (playing, my turn, my player, no dialog or decision card, latch). No defender check for Blastin':
+ *  the real g1002 frame that sets the defender (cmd 48) also puts turnMode back to regular, so the state is already left. */
+export function skillTargetMarkIds(game: GameJson, clientState: string, actingId: string, reportedTargetId?: string | null): string[] {
+  return clientState === 'THEN_I_STARTED_BLASTIN' ? blastinTargetIds(game, actingId, reportedTargetId) : vomitTargetIds(game, actingId);
+}
+
+/** S46: the second-beat pick is sent once per beat instance (blastinBeatKey); an unrelated applied frame does not re-open it. */
+export function blastinPickLatched(sentKey: string | null, beatKey: string | null): boolean {
+  return !!beatKey && sentKey === beatKey;
+}
+
+/** S28/S39: send latch for the vomit block and the Blastin' target. Records the store's applied-frame counter at a SUCCESSFUL send (null when the send
+ *  was refused locally). The marks are hidden only while the counter still has that value, so the next applied frame,
+ *  whatever it holds, releases the latch and the received state decides. It cannot stick. */
+export function vomitLatchAfterSend(sent: boolean, appliedFrameSeq: number): number | null {
+  return sent ? appliedFrameSeq : null;
+}
+export function vomitMarksHidden(latchedAt: number | null, appliedFrameSeq: number): boolean {
+  return latchedAt !== null && latchedAt === appliedFrameSeq;
+}
+
+/** S28: the vomit-marks watcher source. Includes renderer readiness so the callback also runs when the renderer mounts
+ *  onto ids that were already current (the getter alone returned the same string, so Vue skipped the callback). */
+export function vomitWatchSource(rendererReady: number, ids: readonly string[]): string {
+  return `${rendererReady}|${ids.join(',')}`;
 }
 
 /** A.5 FOUL — standing DOWN (prone or stunned) enemies adjacent to `playerId`: the legal foul victims (a rules
@@ -2216,7 +2466,7 @@ function rosterArmour(game: GameJson, playerId: string): number {
  *  ⚠ DRIFT-GUARD (Meero SR-27 FT-1, ML-12 class): the assist counting RE-IMPLEMENTS the shared server util
  *  UtilPlayer.findFoulAssists in TS — faithful now, but a change to the server's foul-assist rule must be mirrored
  *  HERE. Tracked as porting-decisions register row 28 (docs/wiki/porting-decisions.md). */
-export function foulArmourTargetAt(game: GameJson, attackerId: string, defenderId: string): number | null {
+export function foulArmourTargetAt(game: GameJson, attackerId: string, defenderId: string, usingChainsaw = false): number | null {
   const attackerHome = playerSideIsHome(game, attackerId);
   const defenderHome = playerSideIsHome(game, defenderId);
   if (attackerHome === null || defenderHome === null || attackerHome === defenderHome) return null; // opponents only
@@ -2230,6 +2480,11 @@ export function foulArmourTargetAt(game: GameJson, attackerId: string, defenderI
   if (!atkCoord || !defCoord) return null;
   const av = rosterArmour(game, defenderId);
   if (av <= 0) return null;
+  // S42 chainsaw foul, composed as the server does (InjuryTypeFoul.armourRoll:59-71): the Chainsaw skill's +3 goes on the roll,
+  // then the foul assists / foul bonus. An UNUSED Iron Hard Skin defender (ignoresArmourModifiersFromSkills) replaces the
+  // chainsaw modifier (:60-61) AND the foul assists (ArmorModifierFactory.getFoulAssist:76-78) with its own 0 modifier,
+  // so the target is the bare AV. Dirty Player stays out (second pass), as for the plain foul.
+  if (usingChainsaw && hasUnusedSkillNamed(game, defenderId, 'Iron Hard Skin')) return Math.max(2, av);
 
   // OFFENSIVE assists: attacker-team TZ-players adjacent to the VICTIM (≠ the fouler) that are unmarked, or carry
   // Put the Boot In uncancelled by an adjacent enemy's Defensive.
@@ -2266,7 +2521,7 @@ export function foulArmourTargetAt(game: GameJson, attackerId: string, defenderI
   const foulBonus = optOn('foulBonus')
     || (optOn('foulBonusOutsideTacklezone') && tackleZonesAdjacentTo(game, attackerId) < 1) ? 1 : 0;
 
-  return Math.max(2, av - netAssists - foulBonus);
+  return Math.max(2, av - netAssists - foulBonus - (usingChainsaw ? 3 : 0));
 }
 
 /** A once-per-turn action flag from the acting team's turnData (blitzUsed/foulUsed/handOverUsed/passUsed/
@@ -2347,15 +2602,31 @@ function isBigGuy(game: GameJson, playerId: string): boolean {
   return (pos?.keywords ?? []).includes('Big Guy');
 }
 
-// Activation-starting negatraits. "Activate" is an explicit zero-route affordance for a standing Big Guy:
-// it deliberately sends the ordinary MOVE declaration so the server remains the sole owner of the trait roll.
+// Activation-starting negatraits. "Activate" is an explicit zero-route affordance for a standing Big Guy: it declares
+// removeConfusion, the one declaration the server rolls the trait for with no move step (StepInitSelecting hands it
+// straight to the activation steps, StepEndSelecting then ends the action); the server stays the sole owner of the roll.
 // Always Hungry is excluded because it is checked when Throw Team-Mate is attempted, not when the player activates.
+// Blood Lust is excluded: after a failed roll the server rewrites the non-moving action to MOVE (StepEndSelecting),
+// so the player does move. Wild Animal is excluded: bb2025 has no Wild Animal activation step, so the declaration
+// would spend the activation with no roll. A player with either skill gets no Activate row, whatever else they have.
 const BIG_GUY_ACTIVATION_NEGATRAITS = [
-  'Animal Savagery', 'Blood Lust', 'Bone Head', 'Really Stupid', 'Take Root', 'Unchannelled Fury', 'Wild Animal',
+  'Animal Savagery', 'Bone Head', 'Really Stupid', 'Take Root', 'Unchannelled Fury',
 ] as const;
+const BIG_GUY_ACTIVATE_EXCLUDED_SKILLS = ['Blood Lust', 'Wild Animal'] as const;
+
+/** `CoachAction.ruleId` of the Big Guy Activate row (a `move` declare the view arms the store's activate intent for). */
+export const BIG_GUY_ACTIVATE_RULE_ID = 'bigGuyActivate';
 
 function hasBigGuyActivationNegatrait(game: GameJson, playerId: string): boolean {
+  if (BIG_GUY_ACTIVATE_EXCLUDED_SKILLS.some((skill) => hasSkill(game, playerId, skill))) return false;
   return BIG_GUY_ACTIVATION_NEGATRAITS.some((skill) => hasSkill(game, playerId, skill));
+}
+
+/** Spec S23: the one label for the roll-and-end row on every surface (menu row, rail End row, confirm card) —
+ *  `Roll Bone Head & End Activation`, several negatraits joined with ` / `, `Roll & End Activation` if none is readable. */
+export function bigGuyRollEndLabel(game: GameJson | null | undefined, playerId: string): string {
+  const owned = game && playerId ? BIG_GUY_ACTIVATION_NEGATRAITS.filter((skill) => hasSkill(game, playerId, skill)) : [];
+  return owned.length ? `Roll ${owned.join(' / ')} & End Activation` : 'Roll & End Activation';
 }
 
 /** SECURE THE BALL availability — a FAITHFUL port of upstream LogicModule.isSecureTheBallActionAvailable:332
@@ -2387,7 +2658,7 @@ function isSecureTheBallAvailable(game: GameJson, playerId: string): boolean {
  * ends A's activation first, then declares B). Keying this on the player, not on deriveClientState landing in
  * MOVE, is what makes the switch work without a manual End Activation first.
  */
-function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike): CoachAction[] {
+function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, ctx: ClientStateContext): CoachAction[] {
   const out: CoachAction[] = [];
   const ps = p.playerState ?? 0;
   const base = baseState(ps);
@@ -2403,14 +2674,23 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike): 
   // only builds for MY side on MY turn, so the raw !active read is safe here.)
   const isActing = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') === playerId;
   if (!(ps & FLAG_ACTIVE) && !isActing) return out; // not activatable → no declares
-  // Owner 2026-08-22: an otherwise-normal standing Big Guy with an activation negatrait gets an explicit
-  // top-row Activate affordance. It is intentionally a second presentation of `move`: unlike Recover it does
-  // not mutate a status locally or send removeConfusion; the normal clientActingPlayer{playerAction:'move'}
-  // declaration lets the server roll Animal Savagery / Bone Head / Really Stupid / etc. The ordinary Move row
-  // remains below for route-oriented play. Negative-state players retain the established Recover rail instead.
+  // Owner 2026-08-22 / 09-28 (Spec S15B, option B): an otherwise-normal standing Big Guy with an activation
+  // negatrait gets an explicit top-row Activate affordance. It declares the ordinary `move` (exactly one
+  // clientActingPlayer): a declaration does NOT roll, the server rolls Animal Savagery / Bone Head / Really Stupid /
+  // etc. before the first move step. `ruleId: 'bigGuyActivate'` tells the view which `move` row was clicked (Activate
+  // vs the ordinary Move below) so the store can hold an ACTIVATE INTENT: End Activation with no step made then sends
+  // removeConfusion (roll and end, `gameStore.endActivation`) instead of the no-roll cancel. Nothing is mutated
+  // locally. Negative-state players retain the Recover rail instead.
   const negativeState = !!(ps & (FLAG_CONFUSED | FLAG_HYPNOTIZED | FLAG_EYE_GOUGED));
-  if (standing && !negativeState && isBigGuy(game, playerId) && hasBigGuyActivationNegatrait(game, playerId)) {
-    out.push({ action: 'move', label: 'Activate', kind: 'declare', enabled: true });
+  // Only a surface that can hold the intent and roll on End says so by carrying the `bigGuyActivateRollPlayerId` key in
+  // its context (SpectateView always does, null when no intent is live; `undefined` counts as absent). Classic's context omits it and cannot honour
+  // the row, so it gets no Activate row; its ordinary Move row is unchanged.
+  if (ctx.bigGuyActivateRollPlayerId !== undefined
+      && standing && !negativeState && isBigGuy(game, playerId) && hasBigGuyActivationNegatrait(game, playerId)) {
+    out.push({
+      action: 'move', label: 'Activate', kind: 'declare', enabled: true, ruleId: BIG_GUY_ACTIVATE_RULE_ID,
+      reason: 'Roll on the first step, or when you end the activation without moving',
+    });
   }
   // A.4 NEGATRAIT RIDER — Recover (removeConfusion). Owner 2026-07-13 (cited fidelity fix): a confused (0x200)
   // active (0x100) non-prone player is offered Recover ALONGSIDE the normal action set — NOT Recover-only. The
@@ -2509,23 +2789,32 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike): 
     // variant is already server-driven (the skillUse dialog, PR-2 live) — a different CONTEXT, routed to Meero, not
     // a fourth entry here. ⚠ Keg came home HERE (SR-154): I first routed it to a `playerThrowKeg` reuse that turned
     // out to be DEAD CODE — a dead function read as a contract.
-    if (viciousVinesAvailable(game, playerId)) out.push({ action: 'viciousVines', label: 'Vicious Vines', kind: 'declare', enabled: true });
-    if (theFlashingBladeAvailable(game, playerId)) out.push({ action: 'theFlashingBlade', label: 'The Flashing Blade', kind: 'declare', enabled: true });
+    // Owner 09-28 (Spec S5 fix, coordinator review): each predicate computed ONCE and reused below for the
+    // "Not Available" row's own enabled-check — these used to run twice per call.
+    const viciousVinesOk = viciousVinesAvailable(game, playerId);
+    const theFlashingBladeOk = theFlashingBladeAvailable(game, playerId);
+    const beerBarrelBashOk = beerBarrelBashAvailable(game, playerId);
+    const kickEmBlockOk = kickEmBlockAvailable(game, playerId);
+    const kickEmBlitzOk = kickEmBlitzAvailable(game, playerId);
+    const furiousOutburstOk = furiousOutburstAvailable(game, playerId);
+    const thenIStartedBlastinOk = thenIStartedBlastinAvailable(game, playerId);
+    if (viciousVinesOk) out.push({ action: 'viciousVines', label: 'Vicious Vines', kind: 'declare', enabled: true });
+    if (theFlashingBladeOk) out.push({ action: 'theFlashingBlade', label: 'The Flashing Blade', kind: 'declare', enabled: true });
     // Beer Barrel Bash! (Meero SR-154): a plain top-level declare, `throwKey` (the upstream `PlayerAction.THROW_KEG`
     // JSON key — an upstream TYPO, sent verbatim). Enters the THROW_KEG state; Fives' target-arm sends
     // CLIENT_THROW_KEG{target} on the target click (co-land seam, cross-referenced). ⚠ leaping fidelity: the generic
     // `declareAction` send passes `leaping: isJumping()` while upstream passes false for the keg — these AGREE
     // because a fresh select-menu declare has no jump toggled (isJumping reads the mid-move leaping flag, which is
     // clear before the first move); checked, not assumed, per the invisible-divergence lesson this seam taught.
-    if (beerBarrelBashAvailable(game, playerId)) out.push({ action: 'throwKey', label: 'Throw Keg', kind: 'declare', enabled: true });
+    if (beerBarrelBashOk) out.push({ action: 'throwKey', label: 'Throw Keg', kind: 'declare', enabled: true });
     // Star S8 SELECT declares (bb2025 SelectLogicModule:80-87/:212-244): each sends its exact PlayerAction wire
     // token via the generic declare (leaping=false, matching upstream's literal `false` argument). Blastin' is
     // the pair declare — declareAction chases the acting-player command with the skill's CLIENT_USE_SKILL
     // (SelectLogicModule:240-244); the server flips turnMode:thenIStartedBlastin for the target beat.
-    if (kickEmBlockAvailable(game, playerId)) out.push({ action: 'kickEmBlock', label: "Kick 'Em", kind: 'declare', enabled: true });
-    if (kickEmBlitzAvailable(game, playerId)) out.push({ action: 'kickEmBlitz', label: "Kick 'em - Blitz", kind: 'declare', enabled: true });
-    if (furiousOutburstAvailable(game, playerId)) out.push({ action: 'furiousOutburst', label: 'Furious Outburst', kind: 'declare', enabled: true });
-    if (thenIStartedBlastinAvailable(game, playerId)) out.push({ action: 'thenIStartedBlastin', label: "Blastin' Solves Everything", kind: 'declare', enabled: true });
+    if (kickEmBlockOk) out.push({ action: 'kickEmBlock', label: "Kick 'Em", kind: 'declare', enabled: true });
+    if (kickEmBlitzOk) out.push({ action: 'kickEmBlitz', label: "Kick 'em - Blitz", kind: 'declare', enabled: true });
+    if (furiousOutburstOk) out.push({ action: 'furiousOutburst', label: 'Furious Outburst', kind: 'declare', enabled: true });
+    if (thenIStartedBlastinOk) out.push({ action: 'thenIStartedBlastin', label: "Blastin' Solves Everything", kind: 'declare', enabled: true });
     // #58 (SR-54): MULTIPLE BLOCK — a `canBlockTwoAtOnce` carrier (the BB2025 "Multiple Block" skill) with >1
     // adjacent blockable opponent may block TWO at once. Mirrors upstream `isMultiBlockActionAvailable`
     // (LogicModule.java:300-316), NARROWED to the canBlockTwoAtOnce limb only — CITE-THE-MECHANISM (ML-9): the
@@ -2570,7 +2859,18 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike): 
     // server gate `!foulUsed || hasSkillProperty(allowsAdditionalFoul)` (StepInitSelecting:220-221 / LogicModule:363).
     if (chargeRestrictedSpecialActionAllowed(game)
         && (!teamTurnFlag(game, side, 'foulUsed') || hasSkill(game, playerId, 'Sneakiest of the Lot')) && hasDownEnemy(game, playerId)) {
-      out.push({ action: 'foulMove', label: 'Foul', kind: 'declare', enabled: true });
+      // Owner 09-28 (Spec S4, UAT #4): the label alone tells the coach WHY a second foul is legal — the action
+      // token (`foulMove`), enablement and wire are unchanged. Consumers must keep matching on `action`, never
+      // on this label text (audited: order66Interaction/moveRail/coachBrain all match `foulMove`, never 'Foul').
+      const foulLabel = hasSkill(game, playerId, 'Sneakiest of the Lot') ? 'Foul - Sneakiest of the Lot' : 'Foul';
+      // S42: the server has ONE foul declare; the chainsaw is a flag on the terminal clientFoul. A Chainsaw carrier
+      // therefore gets two rows on the same `foulMove` token, and the row picked is the coach's Foul / Chainsaw choice.
+      if (ctx.foulVariants === true && hasSkill(game, playerId, 'Chainsaw')) {
+        out.push({ action: 'foulMove', label: foulLabel, kind: 'declare', enabled: true, usingChainsaw: false });
+        out.push({ action: 'foulMove', label: `${foulLabel} - Chainsaw`, kind: 'declare', enabled: true, usingChainsaw: true });
+      } else {
+        out.push({ action: 'foulMove', label: foulLabel, kind: 'declare', enabled: true });
+      }
     }
     // PASS + HAND-OFF (owner o66ad #8): declarable whenever the ball is GETTABLE (carrying, or loose on the pitch).
     // The No Hands / No Ball / My Ball / Ball and Chain exclusion rides the property-mirror set above; nothing finer
@@ -2673,6 +2973,118 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike): 
     if (isSecureTheBallAvailable(game, playerId)) {
       out.push({ action: 'secureTheBall', label: 'Secure the Ball', kind: 'declare', enabled: true });
     }
+    // Owner 09-28 (Spec S5, UAT #5; coordinator review 09-28 — ownership gate + ordering + real-condition fixes):
+    // a star special rule the LOCAL COACH'S OWN player HAS but cannot elect right now must say so, not vanish
+    // (item #2 in the ledger — Nobbla's legitimately-unavailable Kick 'em read as "the rail is broken"). Placed
+    // LAST, after every enabled row above, so the disabled rows never land mid-menu; nothing else in this file
+    // addresses `out` by index, so appending here is safe.
+    // OWNERSHIP GATE (S5.5): `playerDeclareSet` has no other side filter — the SELECT_PLAYER/SWITCH call site in
+    // `availableActions()` builds this same set for ANY clicked player, own or opposing. Enabled rows are
+    // unaffected (their own predicates already read the model correctly for either side); only these NEW
+    // disabled rows are local-coach-only. Context absent (`ctx.myIsHome` undefined, e.g. a bot/harness caller
+    // that never supplied one) ⇒ emit none, never guess.
+    const mine = ctx.myIsHome != null && side === ctx.myIsHome;
+    if (mine) {
+      // Coach-elected star DECLARE rows (built above): one disabled row per rule, added ONLY when none of that
+      // rule's own rows were just pushed (its exact offer predicate, computed once above and reused here).
+      const starRuleNotAvailable: { skills: readonly string[]; label: string; enabledNow: boolean }[] = [
+        { skills: CAN_BLOCK_OVER_DISTANCE_SKILLS, label: 'Vicious Vines', enabledNow: viciousVinesOk },
+        { skills: CAN_STAB_AND_MOVE_SKILLS, label: 'The Flashing Blade', enabledNow: theFlashingBladeOk },
+        { skills: CAN_THROW_KEG_SKILLS, label: 'Throw Keg', enabledNow: beerBarrelBashOk },
+        { skills: KICK_EM_SKILLS, label: "Kick 'em", enabledNow: kickEmBlockOk || kickEmBlitzOk },
+        { skills: FURIOUS_OUTBURST_SKILLS, label: 'Furious Outburst', enabledNow: furiousOutburstOk },
+        { skills: BLASTIN_SKILLS, label: "Blastin' Solves Everything", enabledNow: thenIStartedBlastinOk },
+      ];
+      for (const rule of starRuleNotAvailable) {
+        if (rule.enabledNow) continue;
+        if (!rule.skills.some((skill) => hasSkill(game, playerId, skill))) continue;
+        // A distinct, never-sent action token — enabled:false already makes every consumer (runMenuItem,
+        // ClassicView's runClassicAction, coachBrain's bot predicates, moveRail's offeredAction) inert on this row;
+        // it is never matched by any wire-action or label lookup.
+        out.push({
+          action: 'starRuleNotAvailable',
+          label: `${rule.label} - Not Available`,
+          kind: 'declare',
+          enabled: false,
+          reason: 'Not available right now',
+        });
+      }
+      // RULING (owner's words): "Not Available" means PROVABLY UNUSABLE NOW, not merely "unused and I can't
+      // prove it yet". For a player who has not yet declared, evaluate each rule's REAL condition from the
+      // received state wherever it CAN be known before the declare (adjacency, targets in range, ball position,
+      // eligible team-mates…); only fall back to a bare unused-grantor read when the condition depends on a
+      // field the server sends ONLY at/after the declare.
+      //   - treacherous / lookIntoMyEyes / balefulHex / excuseMeAreYouAZoat: each predicate already no-ops its
+      //     `hasActed`-style gate for a non-acting playerId (`actingHasActed` returns false whenever
+      //     `actingPlayer.playerId !== playerId`), so calling it directly already gives the real pre-declare
+      //     answer — no fallback needed.
+      //   - wisdom / raidingParty / catchOfTheDay / blackInk: each HARD-gates on `actingPlayer.playerId ===
+      //     playerId` (an inline check, not the shared `actingHasActed`). Their state-only tails (unused grantor +
+      //     adjacency/target geometry) are extracted into `*GeometryAvailable` helpers with NO acting dependency —
+      //     call those directly pre-declare, so a fresh carrier with no eligible target reads Not Available.
+      //   - I'll Carry You (carrier only): the server fills `initialAdjacentPartnerIds` AT the declare, so it does
+      //     not exist yet pre-declare — use CURRENT adjacency instead (`illCarryYouAdjacentPartnerExists`), which
+      //     the server-authoritative `initialAdjacentPartnerIds` will match at the moment of declaration.
+      //   - incorporeal: acting-only field is `currentMove`/the toggle boundary, which is meaningless before any
+      //     activation — its ONLY pre-declare-knowable signal is the unused grantor or an already-active
+      //     enhancement; kept as a genuine fallback (no state-only geometry exists to extract).
+      //   - Frenzied Rush / Slashing Nails (SelectBlitzTarget-only): Not Available when the skill is spent, OR the
+      //     team's blitz is spent, OR this player has no enabled Blitz declare row in THIS result (checked against
+      //     `out`, which by this point already holds `blitzMove` if `blitzableEnemyExists` offered it above).
+      for (const rule of WIDE_RAIL_PRE_ACTION_RULES) {
+        const skillName = rule.skill ?? rule.label; // wisdomOfTheWhiteDwarf's rule.skill is null; its label IS the grantor name
+        // I'll Carry You: only the CARRIER variant (Grak) owns a row — the CARRIED partner (Crumbleberry) never
+        // shows one, checked before the generic hasSkill gate so her copy of the base skill name never qualifies.
+        if (rule.ruleId === 'illCarryYou' && !illCarryYouIsCarrier(game, playerId)) continue;
+        if (!hasSkill(game, playerId, skillName)) continue; // unknown to the game state ⇒ no row (never invent from the name)
+        let usableNow: boolean;
+        if (rule.blitzTargetStageOnly) {
+          const canBlitzNow = out.some((a) => a.action === 'blitzMove' && a.kind === 'declare' && a.enabled);
+          usableNow = hasUnusedGrantor(game, playerId, [skillName])
+            && !teamTurnFlag(game, side, 'blitzUsed')
+            && canBlitzNow;
+        } else if (rule.ruleId === 'treacherous') {
+          usableNow = treacherousActingAvailable(game, playerId);
+        } else if (rule.ruleId === 'lookIntoMyEyes') {
+          usableNow = lookIntoMyEyesAvailable(game, playerId);
+        } else if (rule.ruleId === 'balefulHex') {
+          usableNow = balefulHexAvailable(game, playerId);
+        } else if (rule.ruleId === 'excuseMeAreYouAZoat') {
+          usableNow = autoGazeZoatAvailable(game, playerId);
+        } else if (rule.ruleId === 'wisdomOfTheWhiteDwarf') {
+          usableNow = isActing ? wisdomAvailable(game, playerId) : wisdomGeometryAvailable(game, playerId);
+        } else if (rule.ruleId === 'raidingParty') {
+          usableNow = isActing ? raidingPartyAvailable(game, playerId) : raidingPartyGeometryAvailable(game, playerId);
+        } else if (rule.ruleId === 'catchOfTheDay') {
+          usableNow = isActing ? catchOfTheDayAvailable(game, playerId) : catchOfTheDayGeometryAvailable(game, playerId);
+        } else if (rule.ruleId === 'blackInk') {
+          // Sol re-review 09-28: `blackInkGeometryAvailable` has no stance check — a PRONE carrier's declare is
+          // exactly what triggers the stand-up that then trips `blackInkAvailable`'s own `standingUp` exclusion,
+          // so a prone player's Black Ink is never STABLY usable pre-declare. Require STANDING (the shared `standing`
+          // local, computed once at the top of this function) at the call site only — `blackInkGeometryAvailable`
+          // itself stays untouched so `blackInkAvailable`'s validated acting-path behaviour is byte-identical.
+          usableNow = isActing ? blackInkAvailable(game, playerId) : (standing && blackInkGeometryAvailable(game, playerId));
+        } else if (rule.ruleId === 'illCarryYou') {
+          usableNow = isActing
+            ? illCarryYouAvailable(game, playerId)
+            : !hasActiveCarryEnhancement(game, playerId) && illCarryYouAdjacentPartnerExists(game, playerId);
+        } else if (isActing) {
+          usableNow = incorporealAvailable(game, playerId); // only 'incorporeal' remains
+        } else {
+          // Incorporeal: acting-only signal is `currentMove`/the toggle boundary, which does not exist before any
+          // activation — the unused grantor or an already-active enhancement is the only pre-declare-knowable fact.
+          usableNow = hasUnusedGrantor(game, playerId, [skillName]) || incorporealIsActive(game, playerId);
+        }
+        if (usableNow) continue;
+        out.push({
+          action: 'starRuleNotAvailable',
+          label: `${rule.label} - Not Available`,
+          kind: 'declare',
+          enabled: false,
+          reason: 'Not available right now',
+        });
+      }
+    }
   }
   return out;
 }
@@ -2690,13 +3102,14 @@ function pristineActivationTypeTransitions(
   state: string,
   playerId: string,
   p: PlayerDataLike | undefined,
+  ctx: ClientStateContext,
 ): CoachAction[] {
   if (!p || !declaresAllowed(game)) return [];
   const acting = game.actingPlayer as { playerAction?: string | null } | undefined;
   const rawAction = String(acting?.playerAction ?? '');
   const currentAction = rawAction === 'move'
     ? 'move'
-    : rawAction === 'block'
+    : rawAction === 'block' || rawAction === 'chainsaw' // S41: a chainsaw attack re-declares `block` as `chainsaw`; same rows, no second block/chainsaw declare
       ? 'block'
       : (rawAction === 'blitz' || rawAction === 'blitzMove')
         ? 'blitzMove'
@@ -2706,11 +3119,34 @@ function pristineActivationTypeTransitions(
   if (!currentAction || !changeableState) return [];
   if (currentAction === 'blitzMove'
       && teamTurnFlag(game, playerSideIsHome(game, playerId), 'blitzUsed')) return [];
-  return playerDeclareSet(game, playerId, p)
+  return playerDeclareSet(game, playerId, p, ctx)
     .filter((action) => action.kind === 'declare' && action.action !== currentAction);
 }
 
+/** Owner 09-28 (Sol re-review — ORDER fix): `playerDeclareSet` already puts its OWN disabled "Not Available" rows
+ *  last, but the ACTING-player branch below seeds `out` from `pristineActivationTypeTransitions` (which can
+ *  itself start with a disabled row, since it only filters by `action !== currentAction`) and then keeps pushing
+ *  MORE enabled rows (jump, the trio, Blitz-family extras, End Activation…) after it — e.g. Blitz, Black Ink -
+ *  Not Available, End Activation. Stable-partition the FINAL result instead of trying to police every push site:
+ *  every enabled row first (original relative order), then every disabled row (original relative order). No
+ *  caller addresses rows by index (audited: `runO66Action`/`runClassicAction` dispatch by `a.action`/`a.kind`;
+ *  `o66ActionMenuItems` maps 1:1 preserving array order; `pristineActivationTypeTransitions`'s own filter and the
+ *  bot's `.find`/`.some` predicates are all content-based) — re-ordering here is display-only and safe. */
+function stablePartitionEnabledFirst(actions: CoachAction[]): CoachAction[] {
+  const enabled = actions.filter((a) => a.enabled);
+  const disabled = actions.filter((a) => !a.enabled);
+  return enabled.length === actions.length || disabled.length === actions.length ? actions : [...enabled, ...disabled];
+}
+
 export function availableActions(
+  game: GameJson | null | undefined,
+  ctx: ClientStateContext,
+  selectedPlayerId: string,
+): CoachAction[] {
+  return stablePartitionEnabledFirst(availableActionsRaw(game, ctx, selectedPlayerId));
+}
+
+function availableActionsRaw(
   game: GameJson | null | undefined,
   ctx: ClientStateContext,
   selectedPlayerId: string,
@@ -2737,14 +3173,17 @@ export function availableActions(
     return [];
   }
 
-  // AWT parity (medium req): menus are PRESENCE-ONLY — an unavailable action is absent, not a shaded row.
-  // SELECT_PLAYER = the fresh declare menu (+ End Turn). SWITCH (owner o66j #13): a selected player who is NOT
-  // the current acting player gets that same declare set even mid-activation — clicking them switches (the store
-  // ends the prior activation first). An un-actionable player (stunned/off-pitch) contributes no rows.
+  // AWT parity (medium req): most menu entries are PRESENCE-ONLY — an unavailable action is absent, not a shaded
+  // row. Owner 09-28 (Spec S5 amendment): the one deliberate exception is the local coach's own star special
+  // rules (`starRuleNotAvailable` in `playerDeclareSet`), which DO render shaded/disabled to say "the rule
+  // exists and isn't usable now" instead of "there is no such rule". SELECT_PLAYER = the fresh declare menu
+  // (+ End Turn). SWITCH (owner o66j #13): a selected player who is NOT the current acting player gets that
+  // same declare set even mid-activation — clicking them switches (the store ends the prior activation first).
+  // An un-actionable player (stunned/off-pitch) contributes no rows.
   if (state === 'SELECT_PLAYER' || (p && !clickedIsActing)) {
     // Owner o66s #7: End Turn is NO LONGER a context-menu item — the coach ends the turn from the HUD End Turn
     // button (which is now disabled off-turn). Keeps the right-click menu to per-player declares only.
-    return p && declaresAllowed(game) ? playerDeclareSet(game, selectedPlayerId, p) : [];
+    return p && declaresAllowed(game) ? playerDeclareSet(game, selectedPlayerId, p, ctx) : [];
   }
 
   // The acting player itself is clicked mid-activation: the overlay drives the click-to-act; the menu offers the
@@ -2778,7 +3217,7 @@ export function availableActions(
   const declaredActionStates = ['MOVE', 'PASS', 'PUNT', 'BOMB', 'THROW_KEG', 'FOUL', 'BLITZ', 'BLOCK', 'SYNCHRONOUS_MULTI_BLOCK', 'SELECT_BLITZ_TARGET', 'SELECT_GAZE_TARGET', 'HAND_OVER', 'THROW_TEAM_MATE', 'KICK_TEAM_MATE', 'GAZE', 'GAZE_MOVE', 'PUTRID_REGURGITATION_BLITZ', 'KICK_EM_BLITZ', 'KICK_EM_BLOCK'];
   if (declaredActionStates.includes(state)) {
     const out: CoachAction[] = clickedIsActing
-      ? pristineActivationTypeTransitions(game, state, actingId, p)
+      ? pristineActivationTypeTransitions(game, state, actingId, p, ctx)
       : [];
     // Native moving modules expose JUMP throughout these movement-capable states. Keep the state membership here,
     // while jumpActionOffer owns the capability/move-budget predicate and Pogo > Leap > Jump label hierarchy.
@@ -2876,6 +3315,18 @@ export function availableActions(
         if (excluded?.has(state)) continue;
         if (wideRailPreActionModeForPlayerAction(ruleId as WideRailPreActionRuleId, actingAction) !== 'staged') continue;
         if (!predicate(game, actingId)) continue;
+        if (ruleId === 'excuseMeAreYouAZoat' && zoatBlitzTargetStageHeld(game)) {
+          // S13: usable, but the server would swallow it now. Disabled, never-sent token; replaces the enabled row so
+          // the generic "- Not Available" row can never sit beside it.
+          out.push({
+            action: 'starRuleNotAvailable',
+            label: `${starUseSkillElection(ruleId)?.label ?? 'Excuse Me, Are You a Zoat?'} - select the blitz target first`,
+            kind: 'declare',
+            enabled: false,
+            reason: 'Select the blitz target first',
+          });
+          continue;
+        }
         const election = starUseSkillElection(ruleId);
         if (election) out.push({ action: 'starUseSkill', ruleId, label: election.label, kind: 'declare', enabled: true });
       }
@@ -2936,7 +3387,10 @@ export function availableActions(
     if (state === 'PUNT' && actingAction === 'puntMove' && isBallCarrier(game, actingId)) {
       out.push({ action: 'punt', label: 'Punt', kind: 'declare', enabled: true });
     }
-    out.push({ action: '', label: 'End Activation', kind: 'endMove', enabled: true });
+    // Spec S15B #3: the store holds a live activate intent for this unmoved mover, so the End row rolls the negatrait.
+    const rollsOnEnd = state === 'MOVE' && !!actingId && ctx.bigGuyActivateRollPlayerId === actingId
+      && !actingHasActed(game, actingId);
+    out.push({ action: '', label: rollsOnEnd ? bigGuyRollEndLabel(game, actingId) : 'End Activation', kind: 'endMove', enabled: true });
     return out;
   }
 

@@ -1,6 +1,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { serverPassRollTruth, type PassReRollResult } from './actionRollProjection';
 import { oldProArmorDice, savageMaulingInjuryResult, type InjuryResultName } from './skillUseCardPresentation';
+import { reduceHmpScatterTrail, type HmpScatterTrail } from './hmpScatterTrail';
 
 export interface SkillDecisionDetails {
   roll?: number;
@@ -8,6 +9,9 @@ export interface SkillDecisionDetails {
   needed?: number;
   injuryResult?: InjuryResultName;
   armorDice?: [number, number];
+  /** S40: the dialog's second, modifying skill (RAW, sent back as the wire skill) and the server's modifiedPassResult for it. */
+  modifyingSkill?: string;
+  modifiedResult?: PassReRollResult;
   hmpScatter?: { ordinal: number; direction: string; showNeverUse: boolean };
 }
 /** Owner 09-15: skills whose USE hands the same coach a follow-up choice on the pitch (Side Step: the push square).
@@ -21,8 +25,14 @@ export function skillUseFollowupPending(game: GameJson): boolean {
 export interface SkillDecisionProjection {
   current: { occurrence: string; playerId: string; skill: string; details: SkillDecisionDetails; using?: boolean } | null;
   lastScatter: { occurrence: string; gameId: string; playerId: string; context: NonNullable<SkillDecisionDetails['hmpScatter']> } | null;
+  /** Owner 09-28 (S16): the Hail Mary scatter squares for the pitch marks, folded from the same frames. */
+  hmpTrail: HmpScatterTrail | null;
 }
-export const createSkillDecisionProjection = (): SkillDecisionProjection => ({ current: null, lastScatter: null });
+export const createSkillDecisionProjection = (): SkillDecisionProjection => ({ current: null, lastScatter: null, hmpTrail: null });
+/** The server's own pass-result enum names; anything else (absent, unknown) yields no result line. */
+const SERVER_PASS_RESULT_LABELS: Record<string, PassReRollResult> = {
+  ACCURATE: 'Accurate', INACCURATE: 'Inaccurate', WILDLY_INACCURATE: 'Wildly Inaccurate', FUMBLE: 'Fumble',
+};
 const normalized = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
 /** Occurrence is supplied by the ingress owner, including for identical fresh dialogs.
@@ -32,6 +42,7 @@ export function reduceSkillDecisionProjection(
   reports: readonly Record<string, unknown>[], occurrence: string,
 ): SkillDecisionProjection {
   const next = structuredClone(previous);
+  next.hmpTrail = reduceHmpScatterTrail(previous.hmpTrail ?? null, game, reports);
   const action = game.actingPlayer?.playerAction ?? (game as { throwerAction?: unknown }).throwerAction;
   if (normalized(action) !== 'hailmarypass') next.lastScatter = null;
   const dialog = game.dialogParameter as Record<string, unknown> | null;
@@ -47,8 +58,10 @@ export function reduceSkillDecisionProjection(
   }
   const playerId = String(dialog.playerId ?? '');
   const skill = String(dialog.skill ?? '');
+  let opened = false;
   if (next.current?.occurrence !== occurrence || next.current.playerId !== playerId || next.current.skill !== skill) {
     next.current = { occurrence, playerId, skill, details: {} };
+    opened = true;
   }
   const details = next.current.details;
   if (normalized(skill) === 'pass') {
@@ -62,6 +75,22 @@ export function reduceSkillDecisionProjection(
       }
     }
   }
+  // S40: a skillUse dialog that names a modifying skill (official DialogSkillUse three-way choice). The
+  // modifiedPassResult report must ride the frame that OPENED this dialog instance; the server's word only.
+  // Wire shape as the re-roll dialog reads it (reRollSourceName): a plain name or a `{name}` object.
+  const rawModifier = dialog.modifyingSkill;
+  const modifier = typeof rawModifier === 'string' ? rawModifier
+    : rawModifier && typeof rawModifier === 'object' && 'name' in rawModifier ? String((rawModifier as { name: unknown }).name) : '';
+  if (modifier && normalized(modifier) !== normalized(skill)) {
+    details.modifyingSkill = modifier;
+    if (opened) {
+      for (const report of reports) {
+        if (report.reportId !== 'modifiedPassResult' || normalized(report.skill) !== normalized(modifier)) continue;
+        const result = SERVER_PASS_RESULT_LABELS[String(report.passResult ?? '')];
+        if (result !== undefined) details.modifiedResult = result;
+      }
+    }
+  } else { delete details.modifyingSkill; delete details.modifiedResult; }
   if (normalized(skill) === 'savagemauling') {
     const injury = savageMaulingInjuryResult(reports, playerId);
     if (injury !== undefined) details.injuryResult = injury;

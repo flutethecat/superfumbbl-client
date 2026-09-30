@@ -7,6 +7,10 @@ use std::{
 use tauri::{Emitter, Manager, State};
 
 mod art_pack;
+// The edition.json grammar the build script enforces; only its shared-vector test is compiled here (cargo test).
+#[cfg(test)]
+#[path = "../edition_grammar.rs"]
+mod edition_grammar;
 mod discord_presence;
 mod asset_drafts;
 mod asset_media;

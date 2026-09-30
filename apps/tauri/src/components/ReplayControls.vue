@@ -20,6 +20,20 @@ const canPlay = computed(() => ready.value && status.value.cursor < status.value
 // Owner 09-14: a turn step may cross into the neighbouring history segment (the live review says when).
 const canTurnBack = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(-1) : status.value.cursor > minimum.value));
 const canTurnForward = computed(() => ready.value && (props.review?.canTurn ? props.review.canTurn(1) : status.value.cursor < status.value.total));
+// Owner 09-27: a second pair of arrows between the step and the turn skip — ">>" / "<<" move between player
+// activations (file replays read the controller's boundaries; the live review asks its binding).
+function canSkipActivation(direction: -1 | 1): boolean {
+  if (!ready.value) return false;
+  if (props.review) return props.review.canActivation?.(direction) ?? false;
+  const boundaries = gameStore.replay.status.activationBoundaries ?? [];
+  return direction > 0 ? boundaries.some((boundary) => boundary > status.value.cursor) : boundaries.some((boundary) => boundary < status.value.cursor);
+}
+const canActivationBack = computed(() => canSkipActivation(-1));
+const canActivationForward = computed(() => canSkipActivation(1));
+function skipActivation(direction: -1 | 1): void {
+  if (props.review) { void props.review.activation?.(direction); return; }
+  if (direction < 0) gameStore.replayActivationBackward(); else gameStore.replayActivationForward();
+}
 const turnMarkers = computed(() => props.review?.turnMarkers ?? gameStore.replay.status.turnMarkers);
 // Owner 09-25: file / FUMBBL replays offer "Inducements" and "End of game" above the turns (live review has no chapters).
 const chapters = computed(() => (props.review ? [] : (gameStore.replay.status.chapters ?? [])));
@@ -278,6 +292,9 @@ function openRecentHistory(): void {
     <button type="button" class="replay-grip" title="Drag replay controls" aria-label="Drag replay controls" @pointerdown="startDrag">⠿</button>
     <div class="replay-control-group transport-controls">
       <button class="transport-icon" :disabled="!canTurnBack" title="Previous turn" aria-label="Previous turn" @click="props.review ? props.review.turn(-1) : gameStore.replayTurnBackward()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14m12-14-7 7 7 7" /></svg>
+      </button>
+      <button class="transport-icon" :disabled="!canActivationBack" title="Previous activation" aria-label="Previous activation" @click="skipActivation(-1)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m11 5-7 7 7 7m9-14-7 7 7 7" /></svg>
       </button>
       <button class="transport-icon" :disabled="!ready || status.cursor <= minimum" title="Previous step" aria-label="Previous step" @click="props.review ? props.review.stepBackward() : gameStore.replayCommandBackward()">
@@ -290,8 +307,11 @@ function openRecentHistory(): void {
       <button class="transport-icon" :disabled="!ready || status.cursor >= status.total" title="Next step" aria-label="Next step" @click="stepForward">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
       </button>
-      <button class="transport-icon" :disabled="!canTurnForward" title="Next turn" aria-label="Next turn" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
+      <button class="transport-icon" :disabled="!canActivationForward" title="Next activation" aria-label="Next activation" @click="skipActivation(1)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 5 7 7-7 7m9-14 7 7-7 7" /></svg>
+      </button>
+      <button class="transport-icon" :disabled="!canTurnForward" title="Next turn" aria-label="Next turn" @click="props.review ? props.review.turn(1) : gameStore.replayTurnForward()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 5 7 7-7 7M18 5v14" /></svg>
       </button>
     </div>
     <!-- Owner 09-09: the Turns jump list stands alone at control height; the tick COUNTER sits under the progress
@@ -375,7 +395,7 @@ function openRecentHistory(): void {
   align-items: center;
   justify-content: flex-start;
   flex-wrap: wrap;
-  width: 682px;
+  width: 752px; /* owner 09-27: +70 for the two activation arrows */
   max-width: calc(100% - 24px);
   max-height: calc(100% - 24px);
 

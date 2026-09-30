@@ -185,5 +185,10 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.21/walk-tombkings-29740fb8.zip",
     "size": 3507803,
     "sha256": "34b01a7c4980d585aac7cca8a0e2aef5584a1c0027a8791e9aacff5202004d3f"
+  },
+  "walk/stars@73d8b761064c9c0b": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.27/walk-stars-73d8b761.zip",
+    "size": 64714819,
+    "sha256": "50a133645c81295c9ba6bf96a058e9a4de5c7528422d2153c9480b74d20ed7fe"
   }
 }

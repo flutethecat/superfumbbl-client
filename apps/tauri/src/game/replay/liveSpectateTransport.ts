@@ -1,6 +1,8 @@
 import {
   ReplayAutoPlayer,
   REAL_TIME_REPLAY_FALLBACK_MS,
+  activationCursors,
+  activationSkipTarget,
   labelReplayTurnMarkers,
   type ReplaySpeed,
   type ReplayTurnMarker,
@@ -9,12 +11,13 @@ import { LiveSpectateHistory, type SpectatorSegment } from './liveSpectateHistor
 import { LiveSpectateReview, type SpectatorPresentationAdapter } from './liveSpectateReview';
 import { sameSpectatorIdentity, type SpectatorCursor, type SpectatorCheckpoint } from './spectatorCheckpoint';
 import type { ReviewControlsBinding } from './reviewControlsBinding';
+import { turnSideIsHome } from '../blastinSecondBeat';
 
 function positionLabel(checkpoint: SpectatorCheckpoint | null): string {
   if (!checkpoint) return 'Unknown starting position';
   const g = checkpoint.model;
-  const side = g.homePlaying ? 'Home' : 'Away';
-  const turn = (g.homePlaying ? g.turnDataHome : g.turnDataAway)?.turnNr;
+  const side = turnSideIsHome(g) ? 'Home' : 'Away'; // S46
+  const turn = (turnSideIsHome(g) ? g.turnDataHome : g.turnDataAway)?.turnNr;
   const half = g.half === 0 ? 'Pre-game' : g.half >= 3 ? 'Overtime' : 'Half ' + g.half;
   const phase = g.turnMode === 'setup' ? ' · Setup' : '';
   return half + ' · ' + side + ' Turn ' + (turn ?? '?') + phase;
@@ -75,6 +78,8 @@ export class LiveSpectateTransport {
       turn: (direction) => this.turn(direction), seek: (sequence) => this.seek(sequence), setSpeed: (speed) => this.setSpeed(speed),
       seekTurn: (marker) => this.seekTurn(marker),
       canTurn: (direction) => this.canTurn(direction),
+      activation: (direction) => this.activation(direction),
+      canActivation: (direction) => this.canActivation(direction),
       beginScrub: () => this.beginScrub(), endScrub: () => this.endScrub(), goToLive: () => this.goToLive(),
     };
   }
@@ -138,6 +143,33 @@ export class LiveSpectateTransport {
     if (!cursor || !window || this.review.pinned) return false;
     if (direction < 0 ? cursor.sequence > window.start : cursor.sequence < window.end) return true;
     return !!this.neighbourSegment(window, direction);
+  }
+  /** Owner 09-27: ">>" / "<<" — the next / previous player activation inside the visible segment. */
+  async activation(direction: -1 | 1): Promise<boolean> {
+    const target = this.activationTarget(direction);
+    return target == null ? false : this.seek(target);
+  }
+  canActivation(direction: -1 | 1): boolean { return this.activationTarget(direction) != null; }
+  private activationTarget(direction: -1 | 1): number | null {
+    const cursor = this.review.visible?.cursor;
+    const window = this.window;
+    if (!cursor || !window || this.review.pinned) return null;
+    return activationSkipTarget(this.segmentActivations(window), cursor.sequence, direction);
+  }
+  /** One scan per segment extent: the live tail grows by an event at a time, a sealed segment never rescans. */
+  private activationCache: { segmentId: number; start: number; end: number; cursors: number[] } | null = null;
+  private segmentActivations(window: SpectatorSegment): readonly number[] {
+    const cached = this.activationCache;
+    if (cached && cached.segmentId === window.identity.segmentId && cached.start === window.start && cached.end === window.end) return cached.cursors;
+    const commands = [];
+    for (let sequence = window.start; sequence < window.end; sequence += 1) {
+      const event = this.history.eventAfter({ ...window.identity, sequence });
+      if (!event) break;
+      commands.push(event.command);
+    }
+    const cursors = activationCursors(commands).map((cursor) => cursor + window.start);
+    this.activationCache = { segmentId: window.identity.segmentId, start: window.start, end: window.end, cursors };
+    return cursors;
   }
   private neighbourSegment(window: SpectatorSegment, direction: -1 | 1): SpectatorSegment | null {
     const segments = this.history.coverage();

@@ -1,8 +1,9 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { turnSideIsHome } from './blastinSecondBeat';
 
 export interface BlitzProjection { id: string; side: boolean; turnKey: string; targetId: string; visible: boolean }
 export function currentTurnKey(g: GameJson): string {
-  return `${g.half ?? 0}:${g.turnDataHome?.turnNr ?? 0}:${g.turnDataAway?.turnNr ?? 0}:${g.homePlaying ? 'H' : 'A'}`;
+  return `${g.half ?? 0}:${g.turnDataHome?.turnNr ?? 0}:${g.turnDataAway?.turnNr ?? 0}:${turnSideIsHome(g) ? 'H' : 'A'}`; // S46: held through the Blastin' second-beat flip
 }
 export function selectedBlitzTargetId(g: GameJson): string {
   const target = g.fieldModel.targetSelectionState as { targetSelectionStatus?: unknown; playerId?: unknown } | null;

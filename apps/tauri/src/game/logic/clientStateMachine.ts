@@ -84,10 +84,19 @@ export interface ClientStateContext {
    * unchanged; the SpectateView wiring passes the resolved value so the away coach derives correctly.
    */
   myIsHome?: boolean;
+  /** S42: ask availableActions for the Foul / Foul - Chainsaw variant rows. Only the main view opts in (its o66Ctx);
+   *  absent = the pre-S42 single Foul row for a Chainsaw carrier (Classic, bots, rigs). */
+  foulVariants?: boolean;
+  /** Spec S15B: the player whose live Big Guy Activate intent makes End Activation roll (store-derived; presentation only).
+   *  A DEFINED value (null or a string) is the capability flag: a surface that can arm the intent and roll on End supplies it on every
+   *  call (null when no intent is live); a context without it (Classic; `undefined` too) is offered no `Activate` row. */
+  bigGuyActivateRollPlayerId?: string | null;
   /** True while a skill lets this player block two foes at once (MULTIPLE_BLOCK → multi-block state). */
   canBlockTwoAtOnce?: boolean;
   /** Gameplay preference: a friendly-player click may leave the current movement activation. */
   friendlyPlayerSwitch?: boolean;
+  /** S46: the failed Blastin' report's target (store projection); the fallback origin when game.defenderId is absent. */
+  blastinReportedTargetId?: string | null;
 }
 
 interface FieldModelLike { pushbackSquareArray?: { homeChoice?: boolean }[] }

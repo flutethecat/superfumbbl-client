@@ -28,6 +28,9 @@ export interface ReviewControlsBinding {
   seekTurn?(marker: ReplayTurnMarker): Promise<unknown>;
   /** Owner 09-14: Previous/Next turn stay enabled at a segment edge when a neighbouring segment can be crossed into. */
   canTurn?(direction: -1 | 1): boolean;
+  /** Owner 09-27: ">>" / "<<" — next / previous player activation inside the visible history segment. */
+  activation?(direction: -1 | 1): Promise<unknown>;
+  canActivation?(direction: -1 | 1): boolean;
   setSpeed(speed: ReplaySpeed): void;
   beginScrub(): unknown;
   endScrub(): void;

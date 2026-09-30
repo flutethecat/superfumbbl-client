@@ -8,6 +8,8 @@ withDefaults(defineProps<{
   draggable?: boolean;
   resizable?: boolean;
   compact?: boolean;
+  /** Extra gap between the title and the body (opt-in; the default 6px stays for every other prompt). */
+  spaced?: boolean;
   testId?: string;
 }>(), {
   title: '',
@@ -15,6 +17,7 @@ withDefaults(defineProps<{
   draggable: false,
   resizable: false,
   compact: false,
+  spaced: false,
   testId: undefined,
 });
 
@@ -22,7 +25,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
 </script>
 
 <template>
-  <section class="pitch-confirm-panel" :class="{ draggable, resizable, compact }"
+  <section class="pitch-confirm-panel" :class="{ draggable, resizable, compact, spaced }"
     :style="positionStyle" :aria-label="label" :data-testid="testId"
     :title="draggable ? 'Drag to move' : undefined"
     @pointerdown="draggable && $emit('dragStart', $event)">
@@ -74,6 +77,9 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
   font-weight: 800;
   white-space: pre-wrap;
 }
+.pitch-confirm-panel.spaced .pitch-confirm-body { margin-top: 16px; }
+.pitch-confirm-body :deep(.pitch-confirm-bulleted) { text-align: left; }
+.pitch-confirm-body :deep(.pitch-confirm-bulleted ul) { margin: 6px 0 0; padding-left: 1.4em; list-style: disc; }
 .pitch-confirm-actions {
   display: flex;
   align-items: center;

@@ -1,4 +1,3 @@
-import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { injuryTypeName } from './casualtyRollProjection';
 
 export const OBSERVED_MOVEMENT_PHASES = ['observed', 'failed', 'injury'] as const;
@@ -21,6 +20,13 @@ export interface ObservedMovementOccurrence {
 
 type ModelChange = { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown };
 
+/** What the reducer reads of the PRE-frame model: the acting marker and every received coordinate. The live path
+ *  (which never clones the model per frame) passes a view built from its pre-apply capture. */
+export interface MovementGameView {
+  actingPlayer: { playerId?: unknown; playerAction?: unknown } | null | undefined;
+  fieldModel: { playerDataArray: readonly { playerId: string; playerCoordinate?: readonly number[] | null }[] };
+}
+
 const onPitch = (value: unknown): value is readonly [number, number] => Array.isArray(value) && value.length >= 2
   && Number.isInteger(value[0]) && value[0] >= 0 && value[0] < 26
   && Number.isInteger(value[1]) && value[1] >= 0 && value[1] < 15;
@@ -28,19 +34,19 @@ const onPitch = (value: unknown): value is readonly [number, number] => Array.is
 const adjacent = (from: readonly [number, number], to: readonly [number, number]): boolean =>
   Math.max(Math.abs(from[0] - to[0]), Math.abs(from[1] - to[1])) === 1;
 
-const actorId = (game: GameJson): string => String((game.actingPlayer as { playerId?: unknown } | null)?.playerId ?? '');
-const actorAction = (game: GameJson): string => String((game.actingPlayer as { playerAction?: unknown } | null)?.playerAction ?? '');
+const actorId = (game: MovementGameView): string => String((game.actingPlayer as { playerId?: unknown } | null)?.playerId ?? '');
+const actorAction = (game: MovementGameView): string => String((game.actingPlayer as { playerAction?: unknown } | null)?.playerAction ?? '');
 
 function observedStep(
-  previousGame: GameJson,
-  nextGame: GameJson,
+  previousGame: MovementGameView,
+  nextGame: MovementGameView,
   changes: readonly ModelChange[],
   sourceSequence: number,
 ): ObservedMovementOccurrence | null {
   const actors = new Set([actorId(previousGame), actorId(nextGame)].filter(Boolean));
   if (!actors.size || (!actorAction(previousGame) && !actorAction(nextGame))) return null;
   const coordinates = new Map<string, readonly number[] | null>(previousGame.fieldModel.playerDataArray
-    .map((player) => [player.playerId, player.playerCoordinate]));
+    .map((player) => [player.playerId, player.playerCoordinate ?? null]));
   let observed: ObservedMovementOccurrence | null = null;
   for (const change of changes) {
     if (change.modelChangeId !== 'fieldModelSetPlayerCoordinate') continue;
@@ -81,8 +87,8 @@ const failedMovementInjury = (report: Readonly<Record<string, unknown>>): boolea
  */
 export function reduceObservedMovementOccurrence(
   previous: ObservedMovementOccurrence | null,
-  previousGame: GameJson,
-  nextGame: GameJson,
+  previousGame: MovementGameView,
+  nextGame: MovementGameView,
   changes: readonly ModelChange[],
   reports: readonly Readonly<Record<string, unknown>>[],
   sourceSequence: number,

@@ -3,22 +3,28 @@ import type { CSSProperties } from 'vue';
 
 // Owner 09-06: the notice docks directly under the top-centre panel at that panel's width (positionStyle from
 // SpectateView) and is movable — the card takes pointer events only when draggable; the backdrop never does.
-withDefaults(defineProps<{ message: string; positionStyle?: CSSProperties; draggable?: boolean }>(), {
+// S25 (09-29): `title`/`noticeId`/`zIndex` are optional so the Hail Mary Pass notice reuses the card; defaults keep On the Ball.
+withDefaults(defineProps<{
+  message: string; positionStyle?: CSSProperties; draggable?: boolean; title?: string; noticeId?: string; zIndex?: number;
+}>(), {
   positionStyle: undefined,
   draggable: false,
+  title: 'On the Ball',
+  noticeId: 'on-the-ball-waiting',
+  zIndex: undefined,
 });
 defineEmits<{ dragStart: [event: PointerEvent] }>();
 </script>
 
 <template>
-  <div class="on-the-ball-waiting-backdrop" data-testid="on-the-ball-waiting-backdrop">
+  <div class="on-the-ball-waiting-backdrop" :data-testid="`${noticeId}-backdrop`" :style="zIndex ? { zIndex } : undefined">
     <section class="on-the-ball-waiting" :class="{ anchored: !!positionStyle, draggable }" :style="positionStyle"
       role="status" aria-live="polite"
-      aria-labelledby="on-the-ball-waiting-title" aria-describedby="on-the-ball-waiting-message"
-      data-testid="on-the-ball-waiting" :title="draggable ? 'Drag to move' : undefined"
+      :aria-labelledby="`${noticeId}-title`" :aria-describedby="`${noticeId}-message`"
+      :data-testid="noticeId" :title="draggable ? 'Drag to move' : undefined"
       @pointerdown="draggable && $emit('dragStart', $event)">
-      <h2 id="on-the-ball-waiting-title">On the Ball</h2>
-      <p id="on-the-ball-waiting-message">{{ message }}</p>
+      <h2 :id="`${noticeId}-title`">{{ title }}</h2>
+      <p :id="`${noticeId}-message`">{{ message }}</p>
     </section>
   </div>
 </template>

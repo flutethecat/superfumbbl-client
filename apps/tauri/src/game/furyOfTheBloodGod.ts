@@ -33,7 +33,8 @@ export function furySecondBlockTargeting(game: GameJson): FurySecondBlockTargeti
     usedSkills?: string[];
   } | null;
   const playerId = String(acting?.playerId ?? '');
-  if (!playerId || String(acting?.playerAction ?? '') !== 'block') return null;
+  const action = String(acting?.playerAction ?? '');
+  if (!playerId || (action !== 'block' && action !== 'chainsaw')) return null; // S41: a chainsaw attack is declared as `chainsaw`
   if (acting?.hasBlocked !== false || game.defenderId != null) return null;
   if (!(acting?.usedSkills ?? []).includes(FURY_OF_THE_BLOOD_GOD)) return null;
 

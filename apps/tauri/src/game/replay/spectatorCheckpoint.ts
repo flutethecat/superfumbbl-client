@@ -32,6 +32,7 @@ import { observedFailedMovementDestination, reduceObservedMovementOccurrence, ty
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext } from '../kickoffWeatherPresentation';
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationContext } from '../turnPresentation';
 import { ballProjectilePresentation, createBallProjectileContext, type BallProjectileContext } from '../ballProjectilePresentation';
+import { blastinStaleRerollDialog } from '../blastinSecondBeat';
 
 export interface SpectatorIdentity {
   sessionId: string;
@@ -188,7 +189,7 @@ export function seedSpectatorCheckpoint(snapshot: GameJson, cursor: SpectatorCur
       apothecaryResult: model.dialogParameter?.dialogId === 'apothecaryChoice' ? buildApothecaryResult(model, model.dialogParameter, createCasualtyRollProjection()) : null,
       apothecaryCard: apothecaryDecisionFromModel(model),
       blockCard: ['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll'].includes(String(model.dialogParameter?.dialogId)) ? buildBlockDecision(model, model.dialogParameter!, true) : null,
-      reRollCard: ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) ? buildReRollDecision(model, model.dialogParameter!, createActionRollProjection()) : null,
+      reRollCard: ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, createActionRollProjection()) : null,
       followup: createFollowupProjection(), pendingPushes: [], movementOccurrence: null,
       kickoffWeather: createKickoffWeatherContext(model), turnPresentation: createTurnPresentationContext(),
       ballProjectile: createBallProjectileContext(),
@@ -336,7 +337,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   projection.apothecaryResult = model.dialogParameter?.dialogId === 'apothecaryChoice' ? buildApothecaryResult(model, model.dialogParameter, projection.casualtyRolls) : null;
   projection.apothecaryCard = projection.pendingDecision?.state === 'offered' ? apothecaryDecisionFromModel(model) : null;
   projection.blockCard = ['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll'].includes(String(model.dialogParameter?.dialogId)) ? buildBlockDecision(model, model.dialogParameter!, true) : null;
-  projection.reRollCard = projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) ? buildReRollDecision(model, model.dialogParameter!, projection.actionRolls) : null;
+  projection.reRollCard = projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence) : null;
   projection.endGameHud = reduceEndGameHud(projection.endGameHud, reports, model);
   projection.endGame = reduceEndGame(projection.endGame, endGameFrameFromServer(model, command));
   const observed = projection.provenance;
@@ -493,16 +494,27 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   const skill = p.skillDecision;
   const scatterValid = (v: unknown) => object(v) && keys(v, ['ordinal', 'direction', 'showNeverUse'])
     && Number.isInteger(v.ordinal) && Number(v.ordinal) >= 1 && Number(v.ordinal) <= 3 && typeof v.direction === 'string' && !!v.direction.trim() && typeof v.showNeverUse === 'boolean';
-  if (!object(skill) || !keys(skill, ['current', 'lastScatter'])) fail(33);
+  if (!object(skill) || !(keys(skill, ['current', 'lastScatter', 'hmpTrail']) || keys(skill, ['current', 'lastScatter']))) fail(33);
+  const trail = skill.hmpTrail ?? null; // a checkpoint written before the trail existed has no such key
+  const square = (v: unknown) => numbers(v) && (v as unknown[]).length === 2 && (v as number[]).every((n) => Number.isInteger(n));
+  if (trail !== null && (!object(trail) || !keys(trail, ['gameId', 'playerId', 'aim', 'ball', 'scattering', 'final', 'lost', 'steps', 'decision'])
+    || typeof trail.gameId !== 'string' || typeof trail.playerId !== 'string' || !square(trail.aim) || !(trail.ball === null || square(trail.ball))
+    || ![trail.scattering, trail.final, trail.lost].every((v) => typeof v === 'boolean')
+    || !Array.isArray(trail.steps) || trail.steps.length > 3 || !trail.steps.every(square)
+    || !(trail.decision === null || (object(trail.decision) && keys(trail.decision, ['ordinal', 'direction', 'square']) && (trail.decision.square === null || square(trail.decision.square))
+      && Number.isInteger(trail.decision.ordinal) && Number(trail.decision.ordinal) >= 1 && Number(trail.decision.ordinal) <= 3
+      && typeof trail.decision.direction === 'string' && !!trail.decision.direction.trim())))) fail(55);
   if (skill.lastScatter !== null && (!object(skill.lastScatter) || !keys(skill.lastScatter, ['occurrence', 'gameId', 'playerId', 'context'])
     || ![skill.lastScatter.occurrence, skill.lastScatter.gameId, skill.lastScatter.playerId].every((v) => typeof v === 'string') || !scatterValid(skill.lastScatter.context))) fail(34);
   if (skill.current !== null) {
     const c = skill.current;
     if (!object(c) || !keys(c, ['occurrence', 'playerId', 'skill', 'details']) || ![c.occurrence, c.playerId, c.skill].every((v) => typeof v === 'string') || !object(c.details)) fail(35);
     const d = c.details;
-    if (Object.keys(d).some((k) => !['roll', 'result', 'needed', 'injuryResult', 'armorDice', 'hmpScatter'].includes(k))
+    if (Object.keys(d).some((k) => !['roll', 'result', 'needed', 'injuryResult', 'armorDice', 'hmpScatter', 'modifyingSkill', 'modifiedResult'].includes(k))
       || ('roll' in d && !finite(d.roll)) || ('needed' in d && !finite(d.needed))
       || ('result' in d && !oneOf(PASS_RE_ROLL_RESULTS, d.result))
+      || ('modifyingSkill' in d && (typeof d.modifyingSkill !== 'string' || !d.modifyingSkill.trim()))
+      || ('modifiedResult' in d && !oneOf(PASS_RE_ROLL_RESULTS, d.modifiedResult))
       || ('injuryResult' in d && !oneOf(INJURY_RESULT_NAMES, d.injuryResult))
       || ('armorDice' in d && (!Array.isArray(d.armorDice) || d.armorDice.length !== 2 || !d.armorDice.every((v) => Number.isInteger(v) && v >= 1 && v <= 6)))
       || ('hmpScatter' in d && !scatterValid(d.hmpScatter))) fail(36);

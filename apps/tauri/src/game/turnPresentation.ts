@@ -1,5 +1,6 @@
 import { type GameJson } from '@fumbbl40k/ffb-protocol';
 import { injuryTypeName } from './casualtyRollProjection';
+import { turnSideIsHome } from './blastinSecondBeat';
 
 const TURNOVER_FAIL_IDS = new Set(['dodgeRoll', 'goForItRoll', 'pickUpRoll', 'passRoll', 'catchRoll', 'leapRoll']);
 
@@ -17,9 +18,9 @@ export interface TurnPresentationBefore {
 
 /** Capture only the facts needed after publication; do not retain another model graph. */
 export function captureTurnPresentationBefore(game: GameJson): TurnPresentationBefore {
-  const side = game.homePlaying ? game.teamHome : game.teamAway;
+  const side = turnSideIsHome(game) ? game.teamHome : game.teamAway;
   return {
-    homePlaying: !!game.homePlaying,
+    homePlaying: turnSideIsHome(game), // S46: the Blastin' second-beat flip is not a turn change
     homeTurn: Number(game.turnDataHome?.turnNr ?? 0),
     awayTurn: Number(game.turnDataAway?.turnNr ?? 0),
     playingPlayerIds: side.playerArray.map((player) => player.playerId),
@@ -133,7 +134,7 @@ export function turnPresentation(
       if (turn >= 1) toast = { ...team, turn, context: 'normal' };
     }
   } else if (mode === 'regular') {
-    const side: 'home' | 'away' = after.homePlaying ? 'home' : 'away';
+    const side: 'home' | 'away' = turnSideIsHome(after) ? 'home' : 'away';
     const beforeTurn = side === 'home' ? before.homeTurn : before.awayTurn;
     const turn = Number((side === 'home' ? after.turnDataHome : after.turnDataAway)?.turnNr ?? 0);
     if (turn >= 1 && turn > beforeTurn) toast = { ...teamPresentation(after, side), turn, context: 'normal' };

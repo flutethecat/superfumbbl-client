@@ -362,6 +362,7 @@ import { applyImportedMarkings, prefillMarkerTextFromJson } from './game/skillDi
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
+  appShellModalOwnsKeyboard,
   acceptSettingsPreview,
   cancelSettingsPreview,
   focusFirstInDialog,
@@ -1376,6 +1377,7 @@ const leaveGamePromptMessage = computed(() => gameStore.isPlaying.value
   ? 'The game is saved. You do not concede or forfeit.'
   : 'You will stop spectating. The game is saved.');
 
+
 function requestLeaveGame() {
   // Registry-owned as a client-local dialog: opening this gate never resolves or
   // synthesizes a server dialog/wire command.
@@ -1434,7 +1436,7 @@ function captureKey(event: KeyboardEvent) {
 </script>
 
 <template>
-  <main v-if="!firstOpenGateOpen" class="shell" :class="{ 'cb-accent': colorblindAccent }" :style="colorblindFilterStyle">
+  <main v-if="!firstOpenGateOpen" class="shell" :class="{ 'cb-accent': colorblindAccent, 'shell--in-game': !!gameStore.game.value }" :style="colorblindFilterStyle">
     <!-- Owner 09-10: colourblind correction filters (daltonization: the channel difference a dichromat cannot see is
          shifted into channels they can). Applied as a CSS filter on the shell, so the WebGL pitch and the DOM get the
          same treatment with no asset conversion. Matrices = I + M·(I − S), S = Machado 2009 full-severity simulation. -->
@@ -3232,6 +3234,11 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
+/* Owner 09-28: with a game on screen the window itself never scrolls - a HUD element reaching past the window
+   edge put a scroll bar on the viewport. The pitch pans inside the renderer and every panel scrolls inside
+   itself, so nothing is lost. The console blades (no game) keep their normal scrolling. */
+.shell--in-game { overflow: hidden; }
+html:has(.shell--in-game), body:has(.shell--in-game) { overflow: hidden; }
 /* Owner UX 08-12: positive carve-outs that STAY selectable — the log/chat panel (owner-named copy-pastable) and
    EVERY editable field (user-select:none must NEVER reach an input/textarea). Global (App.vue is un-scoped), so it
    reaches all views incl. the console (team-builder names, filters) and Classic inherits at Pellaeon's re-sync. */

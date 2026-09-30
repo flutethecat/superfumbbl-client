@@ -10,11 +10,12 @@ type FlyModule = { FlyChaosCoach: new (url: string, seed: number, options: { onD
 const flyModules = import.meta.glob<FlyModule>('../../../../../packages/fly-coach/src/flyChaosCoach.ts');
 const FLY_MODULE = '../../../../../packages/fly-coach/src/flyChaosCoach.ts';
 import {
-  adjacentBlockableEnemyIds, availableActions, normSquare,
+  adjacentBlockableEnemyIds, availableActions, blastinTargetIds, normSquare,
   type CoachAction,
 } from './availableActions';
 import { deriveClientState, type ClientStateContext, type ClientStateId } from './clientStateMachine';
 import { settings, type AppSettings } from '../settings';
+import { blastinChooserIsMe, turnSideIsHome, type BlastinBeatFact } from '../blastinSecondBeat';
 
 export type { CoachIntent, MoveSquareFact };
 export interface CoachObservation extends BrainObservation {
@@ -81,6 +82,22 @@ export interface CoachFrame {
   revision: number;
   turnClockMs: number;
   moveOffered?: (playerId: string, square: FieldCoordinateJson) => boolean;
+  /** S46: the store's failed-Blastin' projection (range-origin fallback, fumble veto). */
+  blastinBeat?: BlastinBeatFact | null;
+}
+
+/** S46: when this seat is the picker of a Blastin' second beat, the target the driver sends (outside the brain: the pick is
+ *  server-forced, not a policy choice, and every brain would otherwise wedge the match). Rule: the first legal target
+ *  (`blastinTargetIds` order) that is NOT on my own team, else the first legal target. null when no pick is mine. */
+export function blastinPickTarget(frame: Pick<CoachFrame, 'game' | 'context' | 'blastinBeat'>): string | null {
+  const { game: g, context } = frame;
+  const myIsHome = context.myIsHome !== false;
+  if (!blastinChooserIsMe(g, myIsHome, frame.blastinBeat)) return null;
+  const actingId = String(g.actingPlayer?.playerId ?? '');
+  const ids = blastinTargetIds(g, actingId, frame.blastinBeat?.targetPlayerId);
+  if (!ids.length) return null;
+  const mine = new Set(((myIsHome ? g.teamHome : g.teamAway)?.playerArray ?? []).map((p) => p.playerId));
+  return ids.find((id) => !mine.has(id)) ?? ids[0]!;
 }
 
 export function coachTurnKey(g: Readonly<GameJson>): string {
@@ -215,7 +232,7 @@ function echoed(before: CoachObservation, intent: CoachIntent, after: GameJson):
     case 'block': return newDialog || actor?.playerId !== before.selectedPlayerId
       || after.fieldModel.playerDataArray.find((p) => p.playerId === intent.defenderId)?.playerState
         !== before.game.fieldModel.playerDataArray.find((p) => p.playerId === intent.defenderId)?.playerState;
-    case 'endTurn': return before.game.homePlaying !== after.homePlaying;
+    case 'endTurn': return turnSideIsHome(before.game) !== turnSideIsHome(after); // S46
     case 'pass': return true;
   }
 }
@@ -223,6 +240,8 @@ function echoed(before: CoachObservation, intent: CoachIntent, after: GameJson):
 export interface CoachDriverPorts {
   read(): CoachFrame | null;
   send(intent: CoachIntent, observation: CoachObservation): boolean | void;
+  /** S46: send the forced Blastin' second-beat pick (once per beat instance). */
+  pick?(targetId: string): boolean | void;
   report(message: string): void;
   brain?: CoachBrain;
 }
@@ -237,6 +256,7 @@ export function createCoachDriver(ports: CoachDriverPorts) {
   };
   let pending: Pending | null = null;
   let turnKey = '';
+  let pickedKey = '';
   let brainKey = '';
   let sessionKey: object | null = null;
   let count = 0;
@@ -322,6 +342,17 @@ export function createCoachDriver(ports: CoachDriverPorts) {
       }
       fallback = new RandomLegalCoach(`${frame.game.gameId}:fallback`);
     }
+    // S46: a second-beat pick is the only thing the server accepts; answer it here, once, and let the brain sit it out.
+    const pickId = blastinPickTarget(frame);
+    if (pickId) {
+      const key = `${frame.game.gameId}:${frame.game.actingPlayer?.playerId ?? ''}`;
+      if (frame.enabled && pickedKey !== key) {
+        pickedKey = key;
+        if (ports.pick?.(pickId) === false) ports.report("Coach brain paused: the Blastin' pick was declined by the sender.");
+      }
+      return;
+    }
+    pickedKey = '';
     if (pending) {
       if (frame.revision !== pending.revision && echoed(pending.observation, pending.intent, frame.game)) {
         const accepted = pending;

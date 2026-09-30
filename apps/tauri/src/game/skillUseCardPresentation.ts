@@ -1,3 +1,5 @@
+import { prettySkillName } from './logic/prettySkillName';
+
 export interface PassSkillUseCardInput {
   label?: string;
   roll?: number;
@@ -64,6 +66,22 @@ export function passSkillUseCardCopy(input: PassSkillUseCardInput | null | undef
     title: 'Use Pass?',
     rollLine: `Rolled ${input.roll} - ${input.result}`,
     needLine: `Need ${input.needed}+`,
+  };
+}
+
+/** S40: a skillUse dialog with a modifying skill is the official three-way choice (DialogSkillUse.create):
+ *  "Use <skill> or <modifyingSkill>?". The modified result is the server's own modifiedPassResult, in the
+ *  result-name format of the pass card; absent when the report did not ride the dialog's frame. */
+export function modifyingSkillCardCopy(
+  input: { label?: string; modifyingSkill?: string; modifiedResult?: string } | null | undefined,
+): { title: string; modifierLabel: string; resultLine: string | null } | null {
+  const raw = input?.modifyingSkill?.trim();
+  if (!input || !raw) return null;
+  const modifierLabel = prettySkillName(raw);
+  return {
+    title: `Use ${input.label ?? 'the skill'} or ${modifierLabel}?`,
+    modifierLabel,
+    resultLine: input.modifiedResult ? `${modifierLabel}: ${input.modifiedResult}` : null,
   };
 }
 

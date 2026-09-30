@@ -407,6 +407,10 @@ function blockAttacker(r: Report, g: GameJson | null, context: ReportLogContext)
 // ffb-common/src/main/java/com/fumbbl/ffb/BlockResult.java:3-5.
 const BLOCK_FACES = ['', 'Player Down!', 'Both Down', 'Push Back', 'Push Back', 'Stumble!', 'POW!'];
 const face = (roll: unknown) => BLOCK_FACES[Number(roll)] ?? String(roll);
+/** Owner 09-28 (Spec S8 follow-up): the same numeric-die-value -> face-name table the log lines already use
+ *  (identical to `PitchRenderer.blockFaceLabel`), exported so a pure `game/logic/` module can name a re-rolled
+ *  block die's result without importing the (Pixi-backed) renderer. */
+export const blockDieFaceName = (roll: unknown): string => face(roll);
 const blockDie = (roll: unknown) => isBlockDieFaceValue(roll)
   ? `${BLOCK_DIE_MARK}${roll}${BLOCK_DIE_END}`
   : face(roll);

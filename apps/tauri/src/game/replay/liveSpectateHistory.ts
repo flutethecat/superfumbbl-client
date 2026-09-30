@@ -4,6 +4,7 @@ import { REPLAY_MODEL_COMMANDS, replayCommandIsTurnEnd } from './replayModel';
 import type { ReplayedStandingRerolls } from '../standingRerollProjection';
 import { buildReRollDecision } from '../reRollDecisionProjection';
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, seedSpectatorCheckpoint, withSpectatorClock, type SpectatorCheckpoint, type SpectatorClock, type SpectatorCursor, type SpectatorEvent, type SpectatorIdentity } from './spectatorCheckpoint';
+import { blastinStaleRerollDialog, turnSideIsHome } from '../blastinSecondBeat';
 
 export type SpectatorPacketClass = 'snapshot' | 'match' | 'clock' | 'annotation' | 'connection' | 'unsupported';
 /** Exhaustive inventory of the protocol's externally delivered server commands. */
@@ -69,9 +70,9 @@ interface Segment extends SpectatorSegment { events: StoredEvent[]; anchors: Anc
 export function spectatorTurnPosition(checkpoint: SpectatorCheckpoint | null): ReplayTurnPosition | null {
   if (!checkpoint) return null;
   const game = checkpoint.model;
-  const turn = (game.homePlaying ? game.turnDataHome : game.turnDataAway)?.turnNr;
+  const turn = (turnSideIsHome(game) ? game.turnDataHome : game.turnDataAway)?.turnNr; // S46: the Blastin' second-beat flip is not a turn
   return Number.isInteger(turn) && Number(turn) > 0 && game.half > 0
-    ? { side: game.homePlaying ? 'H' : 'A', turn: Number(turn), half: game.half }
+    ? { side: turnSideIsHome(game) ? 'H' : 'A', turn: Number(turn), half: game.half }
     : null;
 }
 /** After a turn-end command: the finished turn (at the cursor AFTER the command) and, when it differs, the started one. */
@@ -172,8 +173,8 @@ export class LiveSpectateHistory {
     }
     if (!changed) return null;
     const projection = next.durableProjection;
-    if (projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(projection.pendingDecision.type)) {
-      projection.reRollCard = buildReRollDecision(next.model, next.model.dialogParameter!, projection.actionRolls);
+    if (projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(projection.pendingDecision.type) && !blastinStaleRerollDialog(next.model)) {
+      projection.reRollCard = buildReRollDecision(next.model, next.model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence);
     }
     const checkpoint = freezeSpectatorValue(next);
     const bytes = spectatorCheckpointBytes(checkpoint);

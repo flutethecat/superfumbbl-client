@@ -1,4 +1,6 @@
 import { artPackPlugin } from './vite-plugin-art-pack';
+import { publicStripPlugin } from './vite-plugin-public-strip';
+import { readEdition } from './read-edition.mjs';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { readFileSync } from 'node:fs';
@@ -23,13 +25,16 @@ const assetPackBuilder = process.env.F40KMOD_BUILDER_UI === '1';
 // Owner 09-10 (public repo): the EDITION — 'fork' (private tree, default) or 'public' (the export rewrites
 // apps/tauri/edition.json). Public = Official FUMBBL only on the play path; the fork blades, targets, accounts,
 // Discord SSO and tournament polling are compiled out. Bug reports stay (config-web accepts a public-edition report).
-const edition = String(JSON.parse(readFileSync(new URL('./edition.json', import.meta.url), 'utf8')).edition ?? 'fork');
+// Fail closed (owner 09-29): exactly 'public' or 'fork', else the build throws (read-edition.mjs).
+const edition = readEdition(new URL('./edition.json', import.meta.url));
 let gitSha = 'nogit';
 try { gitSha = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim(); } catch { /* not a git checkout */ }
 
 // Tauri expects a fixed dev port (see src-tauri/tauri.conf.json devUrl).
 export default defineConfig({
   plugins: [
+    // Owner 09-29: public builds compile without the private developer tooling (fork build: not added, unchanged).
+    ...(edition === 'public' ? [publicStripPlugin({ edition })] : []),
     vue(),
     // Owner 09-23: the art pack (FUMBBL_ASSET_PACK=split moves packages/ffb-pitch/assets out of the installer).
     artPackPlugin({
@@ -56,6 +61,8 @@ export default defineConfig({
   // Keep shipped placeholder art as auditable files. Inlining would hide the
   // bytes inside JavaScript and make the installer-content gate ambiguous.
   build: { assetsInlineLimit: 0 },
+  // Web workers are bundled by their own plugin pipeline: the public strip must run there too.
+  worker: { plugins: () => (edition === 'public' ? [publicStripPlugin({ edition })] : []) },
   define: {
     __FORK_EDITION__: JSON.stringify(edition !== 'public'),
     __APP_VERSION__: JSON.stringify(appVersion),
