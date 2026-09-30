@@ -12786,6 +12786,11 @@ function sendChat() {
           :message="gameStore.state.onTheBallWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- S48: Charge — same card, dock and drag slot as On the Ball (they never stand together: kickoff vs kickoffReturn/passBlock). -->
+        <OnTheBallWaitingModal v-if="gameStore.state.chargeWaiting" title="Charge!" notice-id="charge-waiting"
+          :message="gameStore.state.chargeWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
           :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
 

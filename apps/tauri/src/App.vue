@@ -67,6 +67,7 @@ import { CHRISTER_MIT_LICENSE, CLIENT_MIT_LICENSE, LEGAL_ACCEPTANCE_VERSION, nee
 import type { JnlpJoinRequest } from './game/jnlpCompat';
 import { installNativeContextMenuSuppression } from './game/nativeContextMenu';
 import { readFullscreenSurface, toggleFullscreenSurface, type NativeFullscreenHost } from './game/fullscreen';
+import { fullscreenKeyDecision } from './game/fullscreenKeys';
 
 let removeNativeContextMenuSuppression: (() => void) | null = null;
 onMounted(() => { removeNativeContextMenuSuppression = installNativeContextMenuSuppression(); });
@@ -1043,6 +1044,17 @@ async function toggleFullscreen(): Promise<void> {
   fullscreenIsNative.value = state.native;
 }
 
+// S49 (owner 09-30): F11 / Alt+Enter toggle fullscreen app-wide. Capture phase + stopImmediatePropagation so the game
+// view's own Enter (open chat) and the webview's F11 / Alt+Enter defaults never also act.
+function onFullscreenHotkey(e: KeyboardEvent): void {
+  if (fullscreenKeyDecision(e, { confirmKey: settings.confirmKey, capturingKey: !!capturingKey.value }) !== 'toggle') return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  void toggleFullscreen();
+}
+onMounted(() => window.addEventListener('keydown', onFullscreenHotkey, true));
+onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenHotkey, true));
+
 // #16 (owner 08-11): the import coach — AUTOFILLED with the user's own FUMBBL coach, freely editable to any coach.
 const importCoach = ref(settings.coach);
 async function importMarkings() {
@@ -1821,6 +1833,7 @@ function captureKey(event: KeyboardEvent) {
             <div class="row"><span>Pick action 1–6 (selected player)</span><span class="keybind static">1 – 6</span></div>
             <div class="row"><span>Camera pan</span><span class="keybind static">W A S D</span></div>
             <div class="row"><span>Open chat</span><span class="keybind static">Enter</span></div>
+            <div class="row"><span>Toggle fullscreen</span><span class="keybind static">F11 / Alt + Enter</span></div>
             <div class="row"><span>Mark square / player arrow</span><span class="keybind static">Shift + click</span></div>
             <div class="row"><span>Mark row · column</span><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></div>
             <label class="row">

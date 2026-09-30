@@ -125,6 +125,19 @@ export function interceptionWaitFromGame(g: GameJson, rolls: ActionRollProjectio
   };
 }
 
+/** S48: the standing `playerChoice` dialog with mode `charge` belongs to the kicking team; every seat that is NOT that team
+ *  (the other coach, spectators, replay) is told who is choosing. Pure read of the model; the choosing seat gets the pick rail instead.
+ *  The wire (corpus-charge cmd 43) leaves the answered dialog in the model and only flips the turn mode to blitz, so the notice also ends with `kickoff`. */
+export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (g.turnMode !== 'kickoff' || dialog?.dialogId !== 'playerChoice' || dialog.playerChoiceMode !== 'charge') return null;
+  const teamId = String(dialog.teamId ?? '');
+  const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
+  return { message: `${subject} is selecting players for the Charge!` };
+}
+
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
  *  fallback the live applier uses (store: dp.playerId ?? dp.playerIds[0]). */
 function shadowingPlayerId(dialog: Record<string, unknown> | null): string | null {
@@ -170,6 +183,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     opponentChoicePendingPlayerId: shadowTeam ? shadowingPlayerId(dialog)
       : followupWaiting || blastinWaiting ? String(g.actingPlayer?.playerId ?? '') || null : null,
     // Existing On-the-Ball copy is opponent-player-only; spectators have no owned reaction turn.
+    chargeWaiting: chargeWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),
