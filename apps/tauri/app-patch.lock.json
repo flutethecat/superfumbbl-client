@@ -1,126 +1,131 @@
 {
   "acasas-weather-fx@2e05963ca27e3df5": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/acasas-weather-fx-2e05963c.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/acasas-weather-fx-2e05963c.zip",
     "size": 16951562,
     "sha256": "275960a5cc184064e1b562386c92c61b30c35e98b4fb2db191b954e594ba284a"
   },
   "acasas-weather@c9dea7d21ee85648": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/acasas-weather-c9dea7d2.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/acasas-weather-c9dea7d2.zip",
     "size": 1865512,
     "sha256": "ed1ae4948160303606e9bafb0ae79269e5eabbe579a6acdc9fc7e2302d0d9922"
   },
+  "app@290fd39493a520d4": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-290fd394.zip",
+    "size": 4685031,
+    "sha256": "fd322e3474c86f2d7fba83c82235cdc3d7e62d7ff84a72284a120795104d7f7d"
+  },
   "app@f28b82eeb966777a": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/app-f28b82ee.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-f28b82ee.zip",
     "size": 4685031,
     "sha256": "9960ea287a6e8e8d710427db1bf32a863ae5cac5fd73a311e7fb688879110533"
   },
   "blockdice@bca1842e4293e771": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/blockdice-bca1842e.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/blockdice-bca1842e.zip",
     "size": 9300440,
     "sha256": "9cfeaf0903677a792941d00520e00206f277fa8f075d5d55331c00b1b821583d"
   },
   "checkers@8c0b76ee9440abfe": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/checkers-8c0b76ee.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/checkers-8c0b76ee.zip",
     "size": 14986,
     "sha256": "ccdc838316d1655b90a4b1f6e44660f0edaa879aa2804491be9ab0b02193abad"
   },
   "chess@cf1876d0682758a8": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/chess-cf1876d0.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/chess-cf1876d0.zip",
     "size": 23028,
     "sha256": "ef839a639ecd5ce011c5fc13df4608855f0f1fa5432a1bd7bf67472e0746b930"
   },
   "cursors@53176a252b2dd191": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/cursors-53176a25.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/cursors-53176a25.zip",
     "size": 9638,
     "sha256": "e1cfc886aa05da2bfd4508f879acc605c2e01410773e87dd3db9e43243675e2e"
   },
   "d6@d7e400e846fb3827": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/d6-d7e400e8.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/d6-d7e400e8.zip",
     "size": 5287176,
     "sha256": "dbefadb65e133ecd8bb34abbe51a26bacb4e19263e86a71054959c8db99e8e36"
   },
   "decorations@72620320ebc42227": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/decorations-72620320.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/decorations-72620320.zip",
     "size": 15040292,
     "sha256": "df48d3c91bbd56392eac4ba54b03baca6b53d875331dcb53541fe67cf6d3ed43"
   },
   "default-weather@0e590546adf43f39": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/default-weather-0e590546.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/default-weather-0e590546.zip",
     "size": 4563443,
     "sha256": "92011d21943a9e6e9b9c22ffdadefd004c81ce075824def06550948ff8722363"
   },
   "fireball-snes@482d600ed773bd30": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/fireball-snes-482d600e.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/fireball-snes-482d600e.zip",
     "size": 34576,
     "sha256": "0730c8b4fd76d97621f33354d4a8a9044d03d56da1374554ee5621a6e79817d1"
   },
   "ground@0c3e0a2e39ffed8e": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/ground-0c3e0a2e.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/ground-0c3e0a2e.zip",
     "size": 3116,
     "sha256": "b85cb19b1210eb982eb56517baac19c1e6c5bf8cac0169b6a271066567f0af37"
   },
   "images@d1f8cd887883a7ba": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/images-d1f8cd88.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/images-d1f8cd88.zip",
     "size": 8723703,
     "sha256": "380e3c1c8386cf2f90b2b6512c6ee6c0f5a146545f6e6bed8213816072814d14"
   },
   "media@c69cd17c19c8195a": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/media-c69cd17c.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/media-c69cd17c.zip",
     "size": 12125612,
     "sha256": "9e7f79a2ce5d7a483f34c6c5cc9442300aa3c725504518cf20b62c0cac64b45d"
   },
   "pixel-weather@85a6b15a1edcf98f": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/pixel-weather-85a6b15a.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/pixel-weather-85a6b15a.zip",
     "size": 973566,
     "sha256": "3280d6a1b8b2adba1e7fa854c10555132a3cd0622990aba74ddd6484db65189f"
   },
   "resources@fa73342ef659c520": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/resources-fa73342e.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/resources-fa73342e.zip",
     "size": 23962,
     "sha256": "70ba94a0efd7f3d615e0bfbe0d3dc05bd2b13c426b65d7110a15225bc3ecb06a"
   },
   "signfans@cac7550a750f6464": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/signfans-cac7550a.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/signfans-cac7550a.zip",
     "size": 296259,
     "sha256": "5851bda958d1bf57a54a986da076ca530c188e0e2a0a6103cd16fce660b24669"
   },
   "skill-badges-illustrated@c2f166eae25c8f32": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/skill-badges-illustrated-c2f166ea.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/skill-badges-illustrated-c2f166ea.zip",
     "size": 6851076,
     "sha256": "613d69cdb194a20483b22e5a98be670da0f6d66090f8a56bd0bf3d1dee6f280a"
   },
   "skill-badges@819365468fa8dd58": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/skill-badges-81936546.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/skill-badges-81936546.zip",
     "size": 809136,
     "sha256": "6a235d9390f6e86e5b19e4078248103663da608d8199792525d9c6de97f966f3"
   },
   "sprites@4a6e1922734871c2": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/sprites-4a6e1922.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/sprites-4a6e1922.zip",
     "size": 4075,
     "sha256": "ea17e3def36b6df8f4da951573d7e1e39ef0aed2ed9383944fb904a0de80b800"
   },
   "stadium@071385e866488cf9": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/stadium-071385e8.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/stadium-071385e8.zip",
     "size": 693338,
     "sha256": "6e5eb6e8f5a4b9055c42c6d00d5407360f72378b0249a0cfa466aef9af109e26"
   },
   "status@e05a05c5e214a5de": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/status-e05a05c5.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/status-e05a05c5.zip",
     "size": 18890745,
     "sha256": "3170f07783a633b1979da61b661e32c78f849c95a590c60c1b555f3ce5e0f899"
   },
   "textures@76f98d8279066dce": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/textures-76f98d82.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/textures-76f98d82.zip",
     "size": 28652,
     "sha256": "9a8923cd8455c6d1a60217b7d3bae3bdc3424cc5564a2632797f510eef79e0dc"
   },
   "tokens@9612db53286cbb43": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/tokens-9612db53.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/tokens-9612db53.zip",
     "size": 580850,
     "sha256": "54b4d300f5ebedec0b3b37114bd00aba7db01180ee2ca54dfdad145fc78d5ef4"
   },
   "turn-track@817d81ff689ad4f8": {
-    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.31/turn-track-817d81ff.zip",
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/turn-track-817d81ff.zip",
     "size": 165481,
     "sha256": "c02c5ccc4bab19d4de4d6bde9c39e834c34ff746adf2a697017330a64c8ff5fd"
   }

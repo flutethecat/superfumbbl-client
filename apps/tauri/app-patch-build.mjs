@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { partHash, readArtPackLock, zipPart } from './part-zip.mjs';
+import { partHash, partUrl, readArtPackLock, zipPart } from './part-zip.mjs';
 import { assertValidManifest, MAX_PATCH_FILES, validPatchName, validPatchPath } from './app-patch-rules.mjs';
 
 export { MAX_PATCH_FILES, validPatchName, validPatchPath };
@@ -25,8 +25,9 @@ export function appPatchGroup(rel, originGroup) {
   return 'app';
 }
 
-export function appPatchPartUrl(publicRepo, version, group, hash) {
-  return `https://github.com/${publicRepo}/releases/download/v${version}/${group.replace('/', '-')}-${hash.slice(0, 8)}.zip`;
+/** Owner 09-30: parts live on the `parts` release (part-zip.mjs); `version` is kept for the call sites, unused. */
+export function appPatchPartUrl(publicRepo, _version, group, hash) {
+  return partUrl(publicRepo, group, hash);
 }
 
 export function listDist(distDir) {

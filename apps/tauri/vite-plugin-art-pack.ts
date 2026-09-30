@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { partHash, readArtPackLock, zipPart } from './part-zip.mjs';
+import { partHash, readArtPackLock, zipPart, partUrl } from './part-zip.mjs';
 import type { Plugin } from 'vite';
 
 /**
@@ -28,8 +28,9 @@ export function artPackGroup(originalFileName: string): string | null {
   return segs[0] === 'walk' && segs.length >= 3 ? `walk/${segs[1]}` : segs[0]!;
 }
 
-export function artPackPartUrl(publicRepo: string, version: string, group: string, hash: string): string {
-  return `https://github.com/${publicRepo}/releases/download/v${version}/${group.replace('/', '-')}-${hash.slice(0, 8)}.zip`;
+/** Owner 09-30: parts live on the `parts` release (part-zip.mjs); `version` is kept for the call sites, unused. */
+export function artPackPartUrl(publicRepo: string, _version: string, group: string, hash: string): string {
+  return partUrl(publicRepo, group, hash);
 }
 
 /** Groups below this many bytes stay in the installer: the placeholder sprites the verify gate demands, cursors,

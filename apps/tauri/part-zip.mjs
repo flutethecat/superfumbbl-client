@@ -18,6 +18,12 @@ export function partHash(files) {
  *  the publisher's size check called the hosted zip "already on the release" while the installer's manifest
  *  expected the new bytes. Parts are now zipped deterministically (fixed mtime, name-sorted entries, stored) and
  *  the lock pins the published size + sha256 so every later build (local or hosted) describes the hosted bytes. */
+/** Owner 09-30: EVERY part (art pack + app patch) lives on ONE release, `parts` (a pre-release, never Latest), so the
+ *  version releases carry only installers + manifests; a part keeps its URL for as long as its bytes are unchanged. */
+export const PARTS_RELEASE = 'parts';
+export function partUrl(publicRepo, group, hash) {
+  return `https://github.com/${publicRepo}/releases/download/${PARTS_RELEASE}/${group.replace('/', '-')}-${hash.slice(0, 8)}.zip`;
+}
 export const ART_PACK_ZIP_MTIME = new Date(Date.UTC(2020, 0, 1));
 export function zipPart(files) {
   const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
