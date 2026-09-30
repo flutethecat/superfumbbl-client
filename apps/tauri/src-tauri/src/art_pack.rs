@@ -151,7 +151,7 @@ pub fn art_pack_read(app: AppHandle, group: String, name: String) -> Result<taur
 }
 
 /// Replace the group directory with the zip's files (plain basenames only), atomically via a staging dir.
-fn extract_flat(bytes: &[u8], group_dir: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn extract_flat(bytes: &[u8], group_dir: &Path) -> Result<Vec<String>, String> {
     let staging = group_dir.with_extension("staging");
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;

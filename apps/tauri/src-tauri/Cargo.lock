@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "fumbbl40k"
-version = "1.0.30"
+version = "1.0.31"
 dependencies = [
  "base64 0.22.1",
  "discord-presence",
@@ -1174,7 +1174,9 @@ dependencies = [
  "image",
  "keyring",
  "libc",
+ "minisign-verify",
  "png 0.17.16",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

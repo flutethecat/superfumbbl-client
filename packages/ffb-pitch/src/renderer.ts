@@ -9574,7 +9574,7 @@ export class PitchRenderer {
         icon.zIndex = this.depthZ(headerX, y) + 0.5;
         this.turnTrackLayer.addChild(icon);
       } else {
-        const hLabel = new Text({ text: headers[ci]!, style: TURN_TRACK_EMOJI_STYLE });
+        const hLabel = new Text({ text: headers[ci]!, style: TURN_TRACK_EMOJI_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         hLabel.anchor.set(0.5);
         hLabel.scale.set(hsc);
         hLabel.position.set(hMid.x, hMid.y);
@@ -9584,7 +9584,8 @@ export class PitchRenderer {
       for (let v = 1; v <= 8; v++) {
         const x = cellOf(v);
         const mid = squareAnchor(x, y);
-        const t = new Text({ text: String(v), style: TURN_TRACK_STYLE });
+        // Owner 09-30: 4x raster + linear filtering + mipmaps (marking-text rule) — the 1x canvas read low-res.
+        const t = new Text({ text: String(v), style: TURN_TRACK_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         t.anchor.set(0.5);
         t.scale.set(depthScale(x, y));
         t.position.set(mid.x, mid.y);

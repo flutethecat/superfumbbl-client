@@ -6,6 +6,7 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 
+mod app_patch;
 mod art_pack;
 // The edition.json grammar the build script enforces; only its shared-vector test is compiled here (cargo test).
 #[cfg(test)]
@@ -579,7 +580,13 @@ pub fn run() {
     let callback_reader = reader.clone();
 
     let mut builder = tauri::Builder::default()
-        .register_uri_scheme_protocol("f40kmod", asset_mods::asset_protocol);
+        .register_uri_scheme_protocol("f40kmod", asset_mods::asset_protocol)
+        // Owner 09-30 (S51): the page itself — active app patch > embedded dist. Async so part reads stay off the
+        // webview thread.
+        .register_asynchronous_uri_scheme_protocol("sfapp", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || responder.respond(app_patch::serve(&app, request)));
+        });
     // Single-instance forwarding is OPT-IN (FUMBBL_SINGLE_INSTANCE) on the FORK edition: a plain second launch
     // must stay a full independent client (owner two-coach testing, 08-11). Off = a double-clicked .jnlp opens
     // a NEW instance and joins via the cold-start argv path above; forward-into-running needs the env var.
@@ -611,10 +618,22 @@ pub fn run() {
         .manage(pending)
         .manage(asset_mods::AssetPackState::default())
         .manage(discord_presence::PresenceState::default())
+        .manage(app_patch::AppPatchState::default())
         // Diagnostics: FUMBBL_DEVTOOLS=1 opens the web inspector at launch. The native
         // context menu is suppressed in the UI, so this is the only way to reach the
         // console in a release build (e.g. a blank window on a new platform).
         .setup(|app| {
+            // Owner 09-30 (S51): the main window is `create: false` in tauri.conf.json (url sfapp://localhost/) and
+            // built here, so a dev run keeps loading the dev server (devUrl) instead of the scheme. A config that
+            // auto-creates "main" (the asset-builder overlay) is left alone.
+            if app.get_webview_window("main").is_none() {
+                if let Some(mut config) = app.config().app.windows.iter().find(|w| w.label == "main" && !w.create).cloned() {
+                    if cfg!(dev) {
+                        config.url = tauri::WebviewUrl::App("index.html".into());
+                    }
+                    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
+                }
+            }
             if std::env::var_os("FUMBBL_DEVTOOLS").is_some() {
                 if let Some(window) = app.get_webview_window("main") {
                     window.open_devtools();
@@ -635,6 +654,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
+            app_patch::app_patch_status,
+            app_patch::app_patch_check,
+            app_patch::app_patch_install_part,
+            app_patch::app_patch_activate,
+            app_patch::app_patch_rollback,
+            app_patch::app_patch_prune,
             art_pack::art_pack_dir,
             art_pack::art_pack_installed,
             art_pack::art_pack_install_part,

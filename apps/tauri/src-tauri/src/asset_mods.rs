@@ -2742,7 +2742,7 @@ pub fn asset_protocol<R: Runtime>(
     asset_response(&location, bytes, is_head, requested_range)
 }
 
-fn parse_single_range(value: &str, length: usize) -> Option<(usize, usize)> {
+pub(crate) fn parse_single_range(value: &str, length: usize) -> Option<(usize, usize)> {
     let spec = value.strip_prefix("bytes=")?;
     if length == 0 || spec.contains(',') {
         return None;

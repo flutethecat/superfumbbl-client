@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { zipSync } from 'fflate';
+import { partHash, readArtPackLock, zipPart } from './part-zip.mjs';
 import type { Plugin } from 'vite';
 
 /**
@@ -28,14 +28,6 @@ export function artPackGroup(originalFileName: string): string | null {
   return segs[0] === 'walk' && segs.length >= 3 ? `walk/${segs[1]}` : segs[0]!;
 }
 
-export function partHash(files: { name: string; bytes: Uint8Array }[]): string {
-  const h = createHash('sha256');
-  for (const f of [...files].sort((a, b) => a.name.localeCompare(b.name))) {
-    h.update(f.name); h.update('\0'); h.update(createHash('sha256').update(f.bytes).digest()); h.update('\0');
-  }
-  return h.digest('hex').slice(0, 16);
-}
-
 export function artPackPartUrl(publicRepo: string, version: string, group: string, hash: string): string {
   return `https://github.com/${publicRepo}/releases/download/v${version}/${group.replace('/', '-')}-${hash.slice(0, 8)}.zip`;
 }
@@ -47,24 +39,9 @@ export const MIN_PART_BYTES = 1_000_000;
 /** Owner 09-24: only the walk sprite sheets travel in the pack; stadium, weather, decorations, badges, dice stay bundled. */
 export const PACK_GROUPS = /^walk\//;
 
-/** Owner 09-25 (live, first public 1.0.21 install: "part walk/amazon: sha256 mismatch"): the part zips carried the
- *  BUILD TIME in their entries, so re-zipping identical art gave a different sha256 with the same name and size —
- *  the publisher's size check called the hosted zip "already on the release" while the installer's manifest
- *  expected the new bytes. Parts are now zipped deterministically (fixed mtime, name-sorted entries, stored) and
- *  the lock pins the published size + sha256 so every later build (local or hosted) describes the hosted bytes. */
-export const ART_PACK_ZIP_MTIME = new Date(Date.UTC(2020, 0, 1));
-export function zipPart(files: { name: string; bytes: Uint8Array }[]): Uint8Array {
-  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
-  return zipSync(Object.fromEntries(sorted.map((f) => [f.name, f.bytes])), { level: 0, mtime: ART_PACK_ZIP_MTIME }); // PNGs are already compressed
-}
-export interface ArtPackLockEntry { url: string; size?: number; sha256?: string }
-/** The lock: `group@hash` → where the part is published (+ the published bytes' size/sha256 once known). Older locks
- *  stored the bare URL string. */
-export function readArtPackLock(file: string): Record<string, ArtPackLockEntry> {
-  if (!existsSync(file)) return {};
-  const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, string | ArtPackLockEntry>;
-  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? { url: v } : v]));
-}
+// Owner 09-30 (S51): partHash / zipPart (deterministic, see part-zip.mjs for the 09-25 history) / the lock reader moved
+// to part-zip.mjs so the app patch (plain node) shares them.
+export { ART_PACK_ZIP_MTIME, partHash, readArtPackLock, zipPart, type ArtPackLockEntry } from './part-zip.mjs';
 
 export function artPackPlugin(opts: { split: boolean; version: string; publicRepo: string; lockFile: string; outDir: string; minPartBytes?: number; packGroups?: RegExp }): Plugin {
   return {

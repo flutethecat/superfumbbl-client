@@ -1,4 +1,5 @@
 import { artPackPlugin } from './vite-plugin-art-pack';
+import { appPatchPlugin } from './vite-plugin-app-patch';
 import { publicStripPlugin } from './vite-plugin-public-strip';
 import { readEdition } from './read-edition.mjs';
 import { defineConfig } from 'vite';
@@ -43,6 +44,12 @@ export default defineConfig({
       publicRepo: 'flutethecat/superfumbbl-client',
       lockFile: fileURLToPath(new URL('./art-pack.lock.json', import.meta.url)),
       outDir: fileURLToPath(new URL('./dist-pack', import.meta.url)),
+    }),
+    // Owner 09-30 (S51): app-version.json always; FUMBBL_APP_PATCH=1 records asset origins for scripts/build-app-patch.mjs.
+    appPatchPlugin({
+      enabled: process.env.FUMBBL_APP_PATCH === '1',
+      appVersion,
+      outDir: fileURLToPath(new URL('./dist-patch', import.meta.url)),
     }),
     ...(assetPackBuilder ? [{
       name: 'f40kmod-builder-entry',

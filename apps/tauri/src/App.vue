@@ -28,6 +28,7 @@ import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { fetchLatestRelease, inAppUpdaterEnabled, PUBLIC_RELEASES_REPO, updateAvailable } from './game/updateCheck';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
+import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
@@ -106,14 +107,51 @@ type UpdaterUpdate = { version: string; body?: string | null; downloadAndInstall
 let pendingUpdate: UpdaterUpdate | null = null;
 const updateProgress = ref<{ downloaded: number; total: number | null; phase: 'downloading' | 'installing' } | null>(null);
 const updateError = ref('');
+// Owner 09-30 (S51): the APP PATCH channel rides the same prompt — the shell pulls the signed web app parts, "Restart"
+// reloads the page. `appPatchStatus` = shell/embedded/active versions (About panel, D2); null outside the packaged
+// public edition (fork, dev cuts, web: no patch check, like the installer updater).
+const patchEnabled = inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION });
+const appPatchStatus = ref<AppPatchStatus | null>(null);
+let appPatchHost: AppPatchHost | null = null;
+// The offered patch while the prompt is up (reactive: while it is held the prompt never shows the installer's
+// "Download now"). Round 3: an offer whose parts are all installed (toFetch empty - staged earlier in this session
+// or before a process restart) is Restart-ready at once; "Update now" only stages.
+const pendingPatch = ref<AppPatchOffer | null>(null);
+const patchReady = ref(false);
+async function loadAppPatchStatus(): Promise<AppPatchStatus | null> {
+  if (!patchEnabled) return null;
+  try {
+    appPatchHost ??= await tauriAppPatchHost();
+    appPatchStatus.value = await appPatchHost.status();
+  } catch (error) { console.warn('[app-patch] status unavailable', error); }
+  return appPatchStatus.value;
+}
 // Owner 09-25: the prompt NAGS — every launch and every hourly poll re-offers an available update, "Later" or not.
 async function checkForUpdate(): Promise<void> {
   if (updatePrompt.value || updateProgress.value) return;
   if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
+    // D2: installer updates compare with the SHELL version (a patched page is ahead of its shell).
+    const shellVersion = (await loadAppPatchStatus())?.shellVersion ?? appVersion;
+    if (appPatchHost) {
+      try {
+        const decision = decideAppPatch(await appPatchHost.check());
+        if (decision.kind === 'offer') {
+          if (gameStore.game.value) return; // never surface the prompt mid-game (the check was awaited)
+          pendingPatch.value = decision.offer;
+          patchReady.value = decision.offer.toFetch.length === 0;
+          updatePrompt.value = { version: decision.offer.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases`, inApp: true, notes: decision.offer.notes };
+          return;
+        }
+        // 'shell': the patch needs a newer shell - the installer updater below offers it; the patch follows after.
+      } catch (error) {
+        console.warn('[app-patch] check failed', error);
+      }
+    }
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check({ timeout: 15_000 });
-      if (update && updateAvailable(appVersion, update.version)) {
+      if (update && shellUpdateAvailable(shellVersion, update.version)) {
+        if (gameStore.game.value) return;
         pendingUpdate = update as unknown as UpdaterUpdate;
         updatePrompt.value = { version: update.version, url: `https://github.com/${PUBLIC_RELEASES_REPO}/releases/tag/v${update.version}`, inApp: true, notes: update.body ?? undefined };
       }
@@ -123,9 +161,35 @@ async function checkForUpdate(): Promise<void> {
     }
   }
   const latest = await fetchLatestRelease((url, init) => (inTauri ? tauriFetch(url, init) : fetch(url, init)));
-  if (latest && updateAvailable(appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false };
+  if (gameStore.game.value) return;
+  if (latest && updateAvailable(appPatchStatus.value?.shellVersion ?? appVersion, latest.version)) updatePrompt.value = { ...latest, inApp: false };
+}
+async function installAppPatchNow(offer: AppPatchOffer, host: AppPatchHost): Promise<void> {
+  updateError.value = '';
+  updateProgress.value = { downloaded: 0, total: null, phase: 'downloading' };
+  try {
+    await installAppPatch(host, offer, (p) => { if (updateProgress.value) { updateProgress.value.downloaded = p.downloaded; updateProgress.value.total = p.total || null; } });
+    updateProgress.value = null;
+    patchReady.value = true; // staged, not active: Restart activates
+  } catch (error) {
+    updateProgress.value = null;
+    updateError.value = `The update could not be installed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+async function restartAfterPatch(): Promise<void> {
+  if (!appPatchHost || !pendingPatch.value) return;
+  updateError.value = '';
+  try { await restartIntoPatch(appPatchHost, pendingPatch.value); } catch (error) {
+    // Round 3: keep Restart (retry) / Later visible with the error.
+    updateError.value = `The update could not be activated: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+async function useBuiltInAppVersion(): Promise<void> {
+  if (!appPatchHost) return;
+  try { await useBuiltInVersion(appPatchHost); } catch (error) { console.warn('[app-patch] rollback failed', error); }
 }
 async function installUpdateNow(): Promise<void> {
+  if (pendingPatch.value && appPatchHost) { await installAppPatchNow(pendingPatch.value, appPatchHost); return; }
   const update = pendingUpdate;
   if (!update) { openUpdateRelease(); return; }
   updateError.value = '';
@@ -144,10 +208,12 @@ async function installUpdateNow(): Promise<void> {
     updateError.value = `The update could not be installed: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
-function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; }
+function dismissUpdate(): void { updatePrompt.value = null; updateProgress.value = null; updateError.value = ''; pendingPatch.value = null; patchReady.value = false; }
 function updatePercent(): number | null { const p = updateProgress.value; return p && p.total ? Math.min(100, Math.round((p.downloaded / p.total) * 100)) : null; }
 // Owner 09-25: an invisible marker for the first in-app update test (1.0.23 → 1.0.24) — the console shows the build.
-console.info(`[super-fumbbl] build ${appVersion} (${gitSha})`);
+// Owner 09-30 (S51): the packaged public edition logs `app X (shell Y)` once the shell answers.
+if (patchEnabled) void loadAppPatchStatus().then((s) => console.info(`[super-fumbbl] build ${versionLine(appVersion, s)} (${gitSha})`));
+else console.info(`[super-fumbbl] build ${appVersion} (${gitSha})`);
 // Owner 09-25: besides the launch check, poll every 60 minutes — held back while a game is on screen so the
 // prompt never lands mid-turn; it fires on the next tick after the board is left, and re-offers after "Later".
 const UPDATE_POLL_MS = 60 * 60 * 1000;
@@ -1661,9 +1727,16 @@ function captureKey(event: KeyboardEvent) {
           <div class="update-progress-track"><div class="update-progress-fill" :style="{ width: (updatePercent() ?? 100) + '%' }" :data-indeterminate="updatePercent() === null"></div></div>
           <small>{{ updateProgress.phase === 'installing' ? 'Installing… the client restarts when it is done.' : updatePercent() === null ? 'Downloading…' : `Downloading… ${updatePercent()}%` }}</small>
         </div>
+        <p v-if="updatePrompt.notes" class="update-notes">{{ updatePrompt.notes }}</p>
         <p v-if="updateError" class="update-error" role="alert">{{ updateError }}</p>
-        <div v-if="!updateProgress" class="save-prompt-actions">
-          <button v-if="updatePrompt.inApp && !updateError" class="primary" @click="installUpdateNow()">Update now</button>
+        <!-- Owner 09-30 (S51): an app patch is installed - Restart reloads the page onto it (the shell keeps running). -->
+        <div v-if="patchReady" class="save-prompt-actions">
+          <small>Update installed.</small>
+          <button class="primary" @click="restartAfterPatch()">Restart</button>
+          <button @click="dismissUpdate()">Later</button>
+        </div>
+        <div v-else-if="!updateProgress" class="save-prompt-actions">
+          <button v-if="updatePrompt.inApp && (!updateError || pendingPatch)" class="primary" @click="installUpdateNow()">Update now</button>
           <button v-else class="primary" @click="openUpdateRelease()">Download now</button>
           <button @click="dismissUpdate()">{{ updatePrompt.inApp ? 'Later' : 'Download later' }}</button>
         </div>
@@ -2619,6 +2692,13 @@ function captureKey(event: KeyboardEvent) {
 
         <!-- ============================ CREDITS ============================= -->
         <section v-if="settingsTab === 'credits'">
+          <!-- Owner 09-30 (S51): which web app runs on which shell; an app patch can be dropped for the built-in one. -->
+          <template v-if="appPatchStatus">
+            <h3 class="credits-head">Version</h3>
+            <p class="hint" data-testid="app-version-line">{{ versionLine(appVersion, appPatchStatus) }}</p>
+            <p v-if="appPatchStatus.lastError" class="hint update-error">Last app update error: {{ appPatchStatus.lastError }}</p>
+            <button v-if="appPatchStatus.activeVersion" type="button" @click="useBuiltInAppVersion()">Use the built-in version ({{ appPatchStatus.embeddedVersion }})</button>
+          </template>
           <h3 class="credits-head">Attributions</h3>
           <p class="hint">Third-party assets and fonts used in Super FUMBBL, with thanks to their creators.</p>
           <ul class="credits-list">
@@ -4086,6 +4166,7 @@ textarea:focus-visible,
 .credits-list a { color: var(--ui-accent); text-decoration: none; }
 .credits-list a:hover { text-decoration: underline; }
 .license-head { margin-top: 1rem; }
+.update-notes { margin: 0.4rem 0; max-height: 12rem; overflow: auto; white-space: pre-wrap; }
 .license-text { margin: 0.4rem 0 0; padding: 0.6rem 0.8rem; font-size: max(var(--ui-min-text-size, 12px), 0.7rem); line-height: 1.4; color: var(--ui-text); background: rgba(0, 0, 0, 0.2); border-radius: 4px; white-space: pre-wrap; }
 .attribution-mirror { margin-top: 0.4rem; font-size: max(var(--ui-min-text-size, 12px), 0.75rem); line-height: 1.45; color: var(--ui-text); }
 .attribution-mirror h4 { margin: 0.8rem 0 0.2rem; font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: var(--ui-text); }

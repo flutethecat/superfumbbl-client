@@ -1,6 +1,6 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.30"
+version = "1.0.31"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 
@@ -31,6 +31,8 @@ hex = "0.4"
 # Owner 09-23: the art pack - zipped parts downloaded from the public release (via tauri-plugin-http reqwest).
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
+# Owner 09-30: the app patch channel verifies app-patch.json with the updater's minisign key (already in the lock via tauri-plugin-updater).
+minisign-verify = "0.2"
 png = "0.17"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "ogg", "pcm", "vorbis", "wav"] }
@@ -48,3 +50,5 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Throwaway ed25519 keys to sign test manifests (app_patch.rs tests; already in the lock).
+ring = "0.17"
