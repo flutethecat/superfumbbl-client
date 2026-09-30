@@ -187,24 +187,33 @@ const KICK_SCATTER_STEP: Record<string, [number, number]> = {
   South: [0, 1], Southwest: [-1, 1], West: [-1, 0], Northwest: [-1, -1],
 };
 
-/** S45: the square the kicker NOMINATED. ReportKickoffScatter carries only the deviated end, the direction and the D6 distance (no
- *  start), so unless a `ballCoordinateStart` is ever sent the nomination is the server's own scatter walked back: end - direction * distance.
- *  Null when the report is not a well-formed scatter or the result is off the pitch; the caller then keeps the pre-S45 marker at the scatter end (the landing). */
-export function projectKickNominatedSquare(report: Record<string, unknown>): [number, number] | null {
-  const onPitch = (c: [number, number]) => c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14;
-  try {
-    if (report.ballCoordinateStart != null) {
-      const start = integralCoordinate(report.ballCoordinateStart, 'kickoffScatter.ballCoordinateStart');
-      return onPitch(start) ? start : null;
-    }
-    const preview = projectKickScatterPreview(report);
-    const step = KICK_SCATTER_STEP[preview.direction]!;
-    const nominated: [number, number] = [
-      preview.unreducedEndpoint[0] - step[0] * preview.distanceRoll,
-      preview.unreducedEndpoint[1] - step[1] * preview.distanceRoll,
-    ];
-    return onPitch(nominated) ? nominated : null;
-  } catch { return null; }
+/** S47: the LAST in-bounds `fieldModelSetBallCoordinate` of a frame's model changes (the server's own ball square), or null when the frame sets none / sets it off the pitch. */
+export function modelBallInBounds(modelChanges: unknown): [number, number] | null {
+  const changes = Array.isArray(modelChanges) ? modelChanges as { modelChangeId?: unknown; modelChangeValue?: unknown }[] : [];
+  const model = changes.filter((change) => change?.modelChangeId === 'fieldModelSetBallCoordinate').pop()?.modelChangeValue;
+  if (!Array.isArray(model) || model.length !== 2 || !Number.isInteger(model[0]) || !Number.isInteger(model[1])) return null;
+  const [x, y] = model as [number, number];
+  return x >= 0 && x <= 25 && y >= 0 && y <= 14 ? [x, y] : null;
+}
+
+/** S47: the marker square for a scatter. The deviation is public before the kick-off event, so the marker is the LANDING. Authoritative: the model ball coordinate the same
+ *  frame sets (`fieldModelSetBallCoordinate`), which the server keeps in bounds. Without one (or off the pitch) fall back to the server's own rule
+ *  (StepKickoffScatterRoll: `while (!isInBounds(lastValid)) lastValid = scatter(start, direction, --distance)`): walk the distance DOWN along the direction from the
+ *  derived start (end - direction * distance), which on a diagonal moves both axes (not a per-axis clamp). Malformed reports fall back to the report end. */
+export function projectKickLandingSquare(report: Record<string, unknown>, modelChanges: unknown): [number, number] {
+  const inBounds = (c: readonly number[]) => c[0]! >= 0 && c[0]! <= 25 && c[1]! >= 0 && c[1]! <= 14;
+  const model = modelBallInBounds(modelChanges);
+  if (model) return model;
+  const preview = projectKickScatterPreview(report);
+  const end = preview.unreducedEndpoint;
+  if (inBounds(end)) return [end[0], end[1]];
+  const step = KICK_SCATTER_STEP[preview.direction]!;
+  const start = [end[0] - step[0] * preview.distanceRoll, end[1] - step[1] * preview.distanceRoll];
+  for (let distance = preview.distanceRoll - 1; distance > 0; distance--) {
+    const square = [start[0]! + step[0] * distance, start[1]! + step[1] * distance];
+    if (inBounds(square)) return [square[0]!, square[1]!];
+  }
+  return [start[0]!, start[1]!];
 }
 
 export type KickPlaybackContext = 'live' | 'pacedReplay' | 'catchingUp' | 'reconnectSnapshot' | 'replaySeek';

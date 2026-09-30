@@ -121,7 +121,8 @@ import { actionAllowed, canFreeSelectPass, canSwitchMoveActingPlayer, friendlyAc
 import {
   KickElectionController,
   projectAuthoritativeKick,
-  projectKickNominatedSquare,
+  modelBallInBounds,
+  projectKickLandingSquare,
   projectKickScatterPreview,
   type AuthoritativeKickBeat,
   type KickChoice,
@@ -621,7 +622,8 @@ const legacyState = reactive({
     unreducedEndpoint: [number, number];
     candidates: { normal: [number, number]; reduced: [number, number] } | null;
   } | null,
-  /** S45: the kicker's NOMINATED square, revealed when kickoffScatter arrives (marker only; the ball stays masked, no flight, `kickAim` untouched).
+  /** S47: the scatter's LANDING square (the report's end, clamped in-bounds), shown from the kickoffScatter frame (the deviation is public before the event) and held through
+   *  the Master Chef / event cine / Dodgy Snack and any pre-flight mini-turn (marker only; the ball stays masked, no flight, `kickAim` untouched).
    *  Retired when the flight arms (`authoritativeKick` pass, after the kickAim/kickDescend pair) or by any kick teardown. */
   kickTargetReveal: null as { square: [number, number]; seq: number } | null,
   /** Authoritative KICK aim, armed only when its immutable animation frame reaches the #67 FIFO head. */
@@ -1380,7 +1382,7 @@ const DODGY_SNACK_CINE_MS = 2400; // owner 09-09: 3800 -> 2400; the dice state i
 const DODGY_SNACK_ANNOUNCEMENT_MS = 4200;
 /** Bumped by clearCinematics: a Dodgy Snack surface or timer armed before a seek / stop / game change / reconnect never fires after it. */
 let dodgySnackGen = 0;
-/** S45: the Master Chef steal of this kick-off, held from its (earlier) report frame until kickoffScatter reveals the nominated square. */
+/** S45: the Master Chef steal of this kick-off, held from its (earlier) report frame until kickoffScatter reveals the landing. */
 let pendingMasterChef: { team: string; stolen: number; rolls: number[] } | null = null;
 /** S45: which blocking kick-off splash cine (Master Chef / Dodgy Snack) owns the screen — drives the click-to-skip catcher (`presentation` is not reactive). */
 const blockingSplashCine = shallowRef<'masterChef' | 'dodgySnack' | null>(null);
@@ -2477,7 +2479,7 @@ function flushPendingKickoffSplash(): void {
   enqueuePromptBehind('kickoffVictimSplash', surface);
 }
 
-/** S45: surface the stashed Master Chef steal as a BLOCKING cine — after the nominated-square reveal, ahead of the kick-off event cine
+/** S45: surface the stashed Master Chef steal as a BLOCKING cine — after the landing reveal, ahead of the kick-off event cine
  *  (both enqueue behind each other in server order). Play/live: a gate-bearing #67 FIFO cine; non-FIFO (order66 off): a pregame-cine step.
  *  Nothing is inserted without a report; catch-up drops it (historical). */
 function flushPendingMasterChef(): void {
@@ -2858,7 +2860,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
     pendingKickoffVictimSplash = victimSplash;
   }
   // #139 (owner P1): surface the Master Chef steal splash (presentation-only off the report; Fives view-watches .seq → a pregame splash naming the steal). Only a real steal reaches here (stolen > 0).
-  // S45: STASH, don't assign — the splash belongs after the nominated-square reveal (kickoffScatter, a later frame); flushPendingMasterChef() surfaces it.
+  // S45: STASH, don't assign — the splash belongs after the landing reveal (kickoffScatter, a later frame); flushPendingMasterChef() surfaces it.
   if (masterChef && !suppressPresentation) pendingMasterChef = masterChef;
   else if (suppressPresentation) pendingMasterChef = null;
   // owner ruling 08-17 (audit P2): PRAYERS TO NUFFLE — one FIFO'd banner per rolled prayer, right after the
@@ -3569,7 +3571,7 @@ async function pauseSpectatorView(): Promise<void> {
   let transitionTurnPresentation: TurnPresentationContext = createTurnPresentationContext();
   let transitionBallProjectile: BallProjectileContext = createBallProjectileContext();
   let transitionTurnBefore: TurnPresentationBefore = captureTurnPresentationBefore(checkpoint.model);
-  let transitionMasterChef: { team: string; stolen: number; rolls: number[] } | null = null; // S45: a steal held from its own frame until the nominated square is revealed
+  let transitionMasterChef: { team: string; stolen: number; rolls: number[] } | null = null; // S45: a steal held from its own frame until the landing is revealed
   let transitionKickoffBefore: Pick<GameJson, 'turnMode' | 'homePlaying'> = {
     turnMode: checkpoint.model.turnMode, homePlaying: checkpoint.model.homePlaying,
   };
@@ -3706,10 +3708,9 @@ async function pauseSpectatorView(): Promise<void> {
         ? kickoffWeather.scatterPreview : projectile.kickScatterPreview;
       const scatterReport = reports.find((report) => String(report.reportId) === 'kickoffScatter');
       if (scatterPreview) {
-        // S45: the nominated square first (the view's sync preview watcher reads it); a re-published preview with no report keeps the earlier one.
+        // S47: the deviation is public before the event, so the marker is the LANDING (assigned before the preview so the view's sync preview watcher already sees it); a re-published preview with no report keeps the earlier one.
         if (scatterReport) {
-          const nominated = projectKickNominatedSquare(scatterReport);
-          state.kickTargetReveal = nominated ? { square: nominated, seq: (state.kickTargetReveal?.seq ?? 0) + 1 } : null;
+          state.kickTargetReveal = { square: projectKickLandingSquare(scatterReport, (event.command.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray), seq: (state.kickTargetReveal?.seq ?? 0) + 1 };
         }
         state.kickScatterPreview = {
           commandNr: Number(event.command.commandNr ?? position.cursor.sequence),
@@ -3723,6 +3724,7 @@ async function pauseSpectatorView(): Promise<void> {
       } else if (projectile?.kickScatterPreview === null) {
         state.kickScatterPreview = null; state.kickTargetReveal = null;
       }
+      if (!projectile?.authoritativeKick) followKickMarkerToModelBall((event.command.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray);
       if (scatterReport && !await presentMasterChef()) return; // S45: reveal -> Master Chef -> event cine -> Dodgy Snack -> flight
       const pregameByKind = (kind: PregamePresentationCue['kind']) => kickoffWeather.pregame.filter((cue) => cue.kind === kind);
       for (const cue of pregameByKind('fanFactor')) {
@@ -4655,7 +4657,7 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       seq: ++kickDescendSeqCounter,
     };
     enqueueKickArcBarrier(state.kickDescend.seq, true);
-    state.kickTargetReveal = null; // S45: the nominated-square marker retires with the flight — the view replaces it when kickAim arms (showKickTargetPersistent), this only clears the state
+    state.kickTargetReveal = null; // S45: the landing marker retires with the flight — the view replaces it when kickAim arms (showKickTargetPersistent), this only clears the state
     return Promise.resolve();
   }
   if (ev.kind === 'kickoffBounce') {
@@ -5112,6 +5114,22 @@ function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
 
 /** Owner 09-10: kickDescend seqs never repeat within a session (see the authoritativeKick handler). */
 let kickDescendSeqCounter = 0;
+
+/** S47: while the landing marker is held (scatter frame -> flight arms) it FOLLOWS the server's model ball: any frame that sets an in-bounds ball coordinate moves it there
+ *  (the Kick skill's halved distance arrives as a bare model change with no second scatter report; a pre-flight Changing Weather gust moves the ball the same way).
+ *  The seq is bumped only when the square changes. The callers gate on "no KICK frame received yet". */
+function followKickMarkerToModelBall(modelChanges: unknown): void {
+  const reveal = state.kickTargetReveal;
+  const ball = reveal ? modelBallInBounds(modelChanges) : null;
+  if (!reveal || !ball || (ball[0] === reveal.square[0] && ball[1] === reveal.square[1])) return;
+  state.kickTargetReveal = { square: ball, seq: reveal.seq + 1 };
+}
+
+/** S47: a terminal state (game finished, concede confirmed, server shutdown, connection closed) can end a kick-off with no flight; retire the landing marker, the masked
+ *  ball and the preview exactly as the flight teardown would (kickClearSeq reaches the renderer). Ordinary turn ends inside the window are NOT terminal and keep it. */
+function retireKickoffForTerminalState(): void {
+  if (state.kickTargetReveal || state.kickScatterPreview) clearAuthoritativeKickPresentation(true);
+}
 
 /** Clear authoritative art/state and optionally remove queued kick beats. Model truth is already applied. */
 function clearAuthoritativeKickPresentation(dropQueued: boolean): void {
@@ -5640,7 +5658,7 @@ function syncEndGame(g: GameJson, command?: Pick<ServerCommand, 'commandNr'> & {
     state.penaltyShootout = null;
   }
 
-  if (state.endGame.finalPresentationReady) startEndGameSettle();
+  if (state.endGame.finalPresentationReady) { retireKickoffForTerminalState(); startEndGameSettle(); } // S47: game finished — no flight will clear the landing marker
 }
 
 /** Owner ruling 08-17: a server-side socket close after the game has already finished
@@ -6877,6 +6895,7 @@ function applyFrameContents(frame: QueuedFrame) {
     if (notice && concedeShownFor !== notice.side) {
       concedeShownFor = notice.side;
       state.concedeNotice = notice;
+      retireKickoffForTerminalState(); // S47: a concede inside a kick-off mini-turn never reaches a flight
     }
   }
   const conceded = !!concedeShownFor;
@@ -7403,10 +7422,9 @@ function applyFrameContents(frame: QueuedFrame) {
         kickoffPresentationOccurrence = null;
       } else if (!duplicate) {
         if (revealKey) acceptedKickoffScatterReveals.add(revealKey);
-        // S45: the NOMINATED square is revealed first (assigned before the preview so the view's sync preview watcher already sees it). Marker only:
-        // kickAim / kickDescend stay untouched, the ball stays masked. Null (unreadable / off-pitch) falls back to the pre-S45 marker at the scatter end, i.e. the landing.
-        const nominated = projectKickNominatedSquare(scatterReport);
-        state.kickTargetReveal = nominated ? { square: nominated, seq: (state.kickTargetReveal?.seq ?? 0) + 1 } : null;
+        // S47: the deviation is revealed to both coaches before the event, so the marker is the LANDING (the model ball this frame sets, else the server's walk-down; see projectKickLandingSquare), held to the flight.
+        // Assigned before the preview so the view's sync preview watcher already sees it. Marker only: kickAim / kickDescend stay untouched, the ball stays masked.
+        state.kickTargetReveal = { square: projectKickLandingSquare(scatterReport, (cmd.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray), seq: (state.kickTargetReveal?.seq ?? 0) + 1 };
         state.kickScatterPreview = {
           commandNr,
           seq: ++kickScatterPreviewSeq,
@@ -7433,6 +7451,8 @@ function applyFrameContents(frame: QueuedFrame) {
     // Owner 2026-07-06: a kickoff starts a new DRIVE — the RECEIVING (offensive) team is the one whose half the ball lands in (home half = x 0..12). Fixes the spectator drive-north orientation for the whole drive until the next kickoff.
     visibleDriveProjection = reduceDriveProjection(visibleDriveProjection, reports, game.value);
   }
+  // S47: the landing marker follows the model ball until the KICK frame is received (Kick skill accept, pre-flight gust); nothing after the KICK may move it.
+  if (kickoffPresentationOccurrence && kickoffPresentationOccurrence.kickCommandNr == null) followKickMarkerToModelBall((cmd.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray);
   // S45: the Master Chef splash follows the reveal (and precedes this kick-off's event cine, which arrives in a later frame).
   if (scatterReport) flushPendingMasterChef();
   // Preliminary scatter never arms a gate; result cues keep their received position ahead of final KICK.
@@ -7821,7 +7841,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // presentation whether the aim or the descend is what's still armed, and an idempotent renderer clear covers a
       // reticle the store no longer tracks. Same rule in play and spectate.
       if (state.kickDescend || state.kickAim) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
-      else if (String(game.value.turnMode ?? '') === 'regular') state.kickClearSeq++;
+      else if (String(game.value.turnMode ?? '') === 'regular' && !state.kickTargetReveal) state.kickClearSeq++; // S47: the landing marker outlives a mini-turn's turn ends (only the flight retires it)
       state.kickoffVictimSplash = null; // #131 fail-safe: a stale kickoff victim-splash never survives a turn
       state.multiBlockSel = null; // #58 (ML-7 fail-safe): a stale multi-block selection never survives a turnEnd
       if (ownRegularEndTurnAcked) {
@@ -8470,7 +8490,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearUnknownCall(); unknownDialogInstance = 0;
   state.weatherCine = null; state.kickoffCine = null; state.kickoffArcNeedsDecisionDwell = false;
   state.dodgySnackCine = null; state.dodgySnackAnnouncement = null; state.dodgySnackPlayers = [];
-  pendingMasterChef = null; blockingSplashCine.value = null; state.kickTargetReveal = null; // S45: a held steal / blocking splash / nominated-square marker never survives a reset, seek or game change
+  pendingMasterChef = null; blockingSplashCine.value = null; state.kickTargetReveal = null; // S45: a held steal / blocking splash / landing marker never survives a reset, seek or game change
   state.kickoffVictimSplash = null; // #131: flush the kickoff victim-splash on a game change
   pendingKickoffTurnStartSide = null; // 647: drop a deferred turn-start so the surface-clear watch can't re-fire into a torn-down game
   state.masterChefSplash = null; // #139: flush the master-chef splash on a game change
@@ -18592,6 +18612,7 @@ function handleGameShutdown(code: number) {
   lastAdminMessageAt = 0; // one-shot — don't reclassify a later drop as this shutdown
   state.adminMessage = null; // folded into the overlay
   state.gameShutdown = { reason, code };
+  retireKickoffForTerminalState(); // S47: the frozen board keeps no landing marker / masked ball
   state.hmpScatterMarks = null; // S16: no scatter marks on the frozen board under the shutdown overlay
   clearCinematics(); // B12/D1/D5: drop the previous game's queued splashes/animations/assets
   log('system', `match shut down by server: ${reason}`);
@@ -20597,6 +20618,7 @@ export const gameStore = {
         // so the user can reconnect to the same game. No auto-retry for spectators; the
         // reconnect is their choice.
         state.connectionClosed = { mode: 'spectator', label: `game ${params.gameId}`, code, reconnecting: false };
+        retireKickoffForTerminalState(); // S47
         expectingGame = false;
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
       } else if (expectingGame && !game.value) {
@@ -20936,6 +20958,7 @@ export const gameStore = {
         // AUTO-reconnect to the same game (the coach shouldn't have to click through a drop
         // mid-match). The prompt shows "Reconnecting…" while attempts remain; a manual
         // Reconnect button takes over once they're exhausted.
+        retireKickoffForTerminalState(); // S47: connection closed mid kick-off
         state.connectionClosed = { mode: 'player', label: joinLabel, code, reconnecting: !officialFumbbl && reconnectAttempts < RECONNECT_MAX_ATTEMPTS, ...(officialFumbbl ? { official: true } : {}), ...(reason ? { reason: String(reason) } : {}) };
         expectingGame = false;
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }

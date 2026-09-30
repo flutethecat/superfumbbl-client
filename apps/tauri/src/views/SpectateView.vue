@@ -2955,9 +2955,16 @@ watch(
       commandNr: scatter.commandNr,
       endpoint: scatter.unreducedEndpoint,
       seq: scatter.seq,
-      marker: gameStore.state.kickTargetReveal?.square, // S45: the nominated square (assigned just before the preview)
+      marker: gameStore.state.kickTargetReveal?.square, // S47: the landing square (assigned just before the preview)
     } : null);
   },
+  { flush: 'sync' },
+);
+
+// S47: the landing marker follows the model ball (Kick skill accept, pre-flight gust): a moved square redraws the reticle while the kick-off is still masked.
+watch(
+  () => gameStore.state.kickTargetReveal?.seq,
+  () => renderer?.setServerKickoffScatterMarker(gameStore.state.kickTargetReveal?.square ?? null),
   { flush: 'sync' },
 );
 

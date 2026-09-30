@@ -2754,7 +2754,7 @@ export class PitchRenderer {
   private pendingServerKickoffScatter: ServerKickoffScatterOccurrence | null = null;
   /** While present, the server model ball is intentionally masked: kickoffScatter revealed a destination, not flight. */
   private serverKickoffScatterReveal: [number, number] | null = null;
-  /** S45: where the reveal marker is drawn when it is not the scatter end (the kicker's nominated square). Null = the end, as before. */
+  /** S45: where the reveal marker is drawn when it is not the scatter end (the in-bounds model ball when the report end leaves the pitch). Null = the end, as before. */
   private serverKickoffScatterMarker: [number, number] | null = null;
   private suppressGenericBallInThisRefresh = false;
   private kickoffScatterSeqSeen = -1;
@@ -11280,7 +11280,7 @@ export class PitchRenderer {
     if (!snap) { this.pendingServerKickoffScatter = null; this.serverKickoffScatterReveal = null; this.serverKickoffScatterMarker = null; return; }
     if (snap.seq === this.kickoffScatterSeqSeen) return;
     this.kickoffScatterSeqSeen = snap.seq;
-    // S45: `marker` (the nominated square) is drawn instead of the end; the end still keys the model-ball transition and the mask.
+    // S45: `marker` (the in-bounds landing) is drawn instead of the end; the end still keys the model-ball transition and the mask.
     this.serverKickoffScatterMarker = snap.marker ? [snap.marker[0], snap.marker[1]] : null;
     this.pendingServerKickoffScatter = {
       kind: 'serverKickoffScatter',
@@ -11289,6 +11289,12 @@ export class PitchRenderer {
     };
     this.serverKickoffScatterReveal = [snap.endpoint[0], snap.endpoint[1]];
     this.showKickTargetPersistent(this.serverKickoffScatterMarker ?? snap.endpoint, false);
+  }
+  /** S47: the public landing marker moved (Kick skill accept, pre-flight gust) while the occurrence is still masked: redraw the reticle there. Marker only. */
+  setServerKickoffScatterMarker(square: [number, number] | null): void {
+    if (!square || !this.serverKickoffScatterReveal) return;
+    this.serverKickoffScatterMarker = [square[0], square[1]];
+    this.showKickTargetPersistent(this.serverKickoffScatterMarker, false);
   }
   /** @internal Behavioral probe for the server kickoff occurrence; presentation-only state, never model state. */
   kickoffPresentationProbe(): { modelBallMasked: boolean; ballTweenActive: boolean; authoritativeFlightArmed: boolean } {
