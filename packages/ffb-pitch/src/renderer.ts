@@ -17738,9 +17738,9 @@ export class PitchRenderer {
       if (eye) eye.alpha = Math.min(1, 1 / alpha);
       const gouge = token.getChildByLabel?.('eyeGougeMarker', false); // 09-07: same treatment
       if (gouge) gouge.alpha = Math.min(1, 1 / alpha);
-      for (const label of litMarkers) { // 09-30: the banners too
+      for (const label of litMarkers) { // 09-30: the banners cancel the token alpha exactly like the activated ✓ (unclamped)
         const marker = token.getChildByLabel?.(label, false);
-        if (marker) marker.alpha = Math.min(1, 1 / alpha);
+        if (marker) marker.alpha = 1 / alpha;
       }
       // item3 follow-up: the position ring/glow/star base rides the SAME kk — but only
       // when kk is the acted-driven level (a pick-ineligible dim never dims the ring).
