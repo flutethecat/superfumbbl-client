@@ -388,7 +388,7 @@
    "role": "grailknight",
    "side": "home",
    "file": "bretonnian/grailknight-home.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -400,14 +400,15 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "bretonnian",
    "role": "grailknight",
    "side": "away",
    "file": "bretonnian/grailknight-away.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -419,7 +420,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "chaoschosen",
@@ -622,7 +624,7 @@
    "role": "bullcentaurblitzer",
    "side": "home",
    "file": "chaosdwarf/bullcentaurblitzer-home.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -634,14 +636,15 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "chaosdwarf",
    "role": "bullcentaurblitzer",
    "side": "away",
    "file": "chaosdwarf/bullcentaurblitzer-away.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -653,7 +656,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "chaosdwarf",

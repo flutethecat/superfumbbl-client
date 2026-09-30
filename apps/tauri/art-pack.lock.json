@@ -190,5 +190,15 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.27/walk-stars-73d8b761.zip",
     "size": 64714819,
     "sha256": "50a133645c81295c9ba6bf96a058e9a4de5c7528422d2153c9480b74d20ed7fe"
+  },
+  "walk/bretonnian@67f1b258c0f3f3f8": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.30/walk-bretonnian-67f1b258.zip",
+    "size": 2842453,
+    "sha256": "34344919cee7f3f0db11ec693cae1a444a7173809f11c493c63839f6b90c912a"
+  },
+  "walk/chaosdwarf@6de11473a6dcf0c5": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/v1.0.30/walk-chaosdwarf-6de11473.zip",
+    "size": 5114635,
+    "sha256": "f243268d0a781abf258dc8524c1a4a87c2d2abd885af213a533c506a8cafcaa5"
   }
 }
