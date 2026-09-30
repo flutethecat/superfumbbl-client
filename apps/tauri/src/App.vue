@@ -27,6 +27,7 @@ import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { fetchLatestRelease, inAppUpdaterEnabled, PUBLIC_RELEASES_REPO, updateAvailable } from './game/updateCheck';
+import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
@@ -1727,7 +1728,7 @@ function captureKey(event: KeyboardEvent) {
           <div class="update-progress-track"><div class="update-progress-fill" :style="{ width: (updatePercent() ?? 100) + '%' }" :data-indeterminate="updatePercent() === null"></div></div>
           <small>{{ updateProgress.phase === 'installing' ? 'Installing… the client restarts when it is done.' : updatePercent() === null ? 'Downloading…' : `Downloading… ${updatePercent()}%` }}</small>
         </div>
-        <p v-if="updatePrompt.notes" class="update-notes">{{ updatePrompt.notes }}</p>
+        <p v-if="updateNotesText(updatePrompt.notes)" class="update-notes">{{ updateNotesText(updatePrompt.notes) }}</p>
         <p v-if="updateError" class="update-error" role="alert">{{ updateError }}</p>
         <!-- Owner 09-30 (S51): an app patch is installed - Restart reloads the page onto it (the shell keeps running). -->
         <div v-if="patchReady" class="save-prompt-actions">

@@ -537,7 +537,7 @@ onBeforeUnmount(() => {
           <path d="M0,0 L4,2 L0,4 z" :style="{ fill: preset.value }" />
         </marker>
       </defs>
-      <!-- Owner 08-17 (weight-picker addition): stroke WEIGHT is fixed screen pt (2/4/6/8),
+      <!-- Owner 08-17 (weight-picker addition; 09-30: 2/4/6/8/12/16): stroke WEIGHT is fixed screen pt,
            independent of zoom — vector-effect keeps it non-scaling in case an SVG-level transform
            is ever reintroduced upstream of this layer; today the layer has no viewBox/transform of
            its own (positions are pre-projected to screen pixels below), so it's already
@@ -644,7 +644,7 @@ onBeforeUnmount(() => {
 }
 .shape-flyout { right: 0; display: grid; min-width: 92px; }
 .weight-picker { left: 50%; display: flex; transform: translateX(-50%); }
-.weight-picker button { width: 52px; height: 32px; padding: 2px; }
+.weight-picker button { width: 44px; height: 32px; padding: 2px; } /* owner 09-30: six weights fit the 320 px popover */
 .weight-picker svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .weight-picker line { stroke: var(--ui-text); stroke-linecap: round; }
 .weight-trigger { display: grid; place-items: center; }

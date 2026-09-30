@@ -124,12 +124,15 @@ function refreshRosterPlayer(existing: PlayerJson, incoming: PlayerJson): Player
     mutable[field] = incoming[field];
   }
   mutable.lastingInjuries = structuredClone(incoming.lastingInjuries);
-  mutable.recoveringInjury = incoming.recoveringInjury;
-  mutable.urlPortrait = incoming.urlPortrait;
-  mutable.urlIconSet = incoming.urlIconSet;
-  mutable.nrOfIcons = incoming.nrOfIcons;
   mutable.skillArray = structuredClone(incoming.skillArray);
-  mutable.playerStatus = incoming.playerStatus;
+  // Owner 09-30 (live 1948635, pre-kick spectate): upstream RosterPlayer.toJsonValue writes these keys only when
+  // they are set, so a re-added player used to gain `playerStatus: undefined` - not JSON, and the spectator
+  // checkpoint refused the whole backfill ("Non-JSON spectator value at $.model.teamAway.playerArray.15.playerStatus").
+  // Mirror the wire: copy the key when present, drop it when absent (same shape as a fresh insert).
+  for (const field of ['recoveringInjury', 'urlPortrait', 'urlIconSet', 'nrOfIcons', 'playerStatus'] as const) {
+    if (incoming[field] === undefined) delete mutable[field];
+    else (mutable as Record<string, unknown>)[field] = incoming[field];
+  }
   return mutable;
 }
 

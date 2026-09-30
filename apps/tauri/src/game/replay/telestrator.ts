@@ -51,12 +51,16 @@ export const TELESTRATOR_STROKE_LIMIT_NOTICE = 'Stroke limit reached — start a
 // (ReplayTelestrator.vue renders it via vector-effect="non-scaling-stroke"), while its drawn
 // POSITION still tracks the pitch (world-space points, reprojected through the live camera).
 export const TELESTRATOR_MIN_THICKNESS = 2;
-export const TELESTRATOR_MAX_THICKNESS = 8;
+// Owner 09-30: "I'd like to be able to go thicker" - two heavier weights (12, 16) for arrows that must read over a
+// busy pitch; the default stays 4.
+export const TELESTRATOR_MAX_THICKNESS = 16;
 export const TELESTRATOR_DEFAULT_THICKNESS = 4;
 export const TELESTRATOR_THICKNESS_PRESETS = [
   TELESTRATOR_MIN_THICKNESS,
   TELESTRATOR_DEFAULT_THICKNESS,
   6,
+  8,
+  12,
   TELESTRATOR_MAX_THICKNESS,
 ] as const;
 
