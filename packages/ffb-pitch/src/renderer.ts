@@ -4477,6 +4477,17 @@ export class PitchRenderer {
         texture.source.scaleMode = 'nearest';
         this.downDecorations.set(name, texture);
       }
+      // Owner 09-30: the STUNNED banner (owner ImageGen art, 512 px master) replaces the X + caption on a stunned
+      // token; linear + mipmaps because it is drawn at ~40 px wide under the camera zoom.
+      try {
+        const banner = await Assets.load<Texture>(new URL('../assets/decorations/stunned-banner.png', import.meta.url).href);
+        if (!this.initActive(generation, app)) return;
+        banner.source.scaleMode = 'linear';
+        banner.source.autoGenerateMipmaps = true;
+        this.downDecorations.set('stunned-banner', banner);
+      } catch (error) {
+        console.warn('ffb-pitch: stunned banner failed to load, using the X + caption', error);
+      }
       // Apothecary/doctor sprite for the treatment cinematic (owner 2026-07-03 r6f).
       try {
         const apoTex = await Assets.load<Texture>(new URL(`../assets/resources/apothecary.png`, import.meta.url).href);
@@ -17565,6 +17576,20 @@ export class PitchRenderer {
       for (const child of token.children) {
         if (child instanceof Sprite && child.label !== 'castShadow') child.tint = 0x7f8a99; // 09-06: shadow stays black
       }
+    }
+    // Owner 09-30: a REAL stunned player (stunned + caption = the pitch, not the dugout's faked-STUNNED stubs) wears
+    // the STUNNED banner centred on the token instead of the X + gold caption; the dugout stubs keep the plain X.
+    const banner = stunned && withCaption && withX ? this.downDecorations.get('stunned-banner') : undefined;
+    if (banner) {
+      const overlay = new Sprite(banner);
+      overlay.label = 'stunnedBanner';
+      overlay.anchor.set(0.5, 0.5);
+      overlay.width = TILE_W * 0.98;
+      overlay.height = overlay.width * (banner.height / banner.width);
+      overlay.position.set(0, centreY);
+      overlay.zIndex = 52;
+      token.addChild(overlay);
+      return;
     }
     // Owner 09-15 (r2): withX=false (the dugout's injured box) keeps the tint + caption rules but draws no X.
     const texture = withX ? this.downDecorations.get(stunned ? 'stunned' : 'prone') : undefined;

@@ -1,0 +1,9 @@
+{
+  "file": "stunned-banner.png",
+  "purpose": "STUNNED banner overlaid on the centre of a stunned player's token (replaces the white X + gold caption, owner 09-30).",
+  "license": "Super FUMBBL Media License (original art)",
+  "source": "C:/Users/Jay/.codex/generated_images/01a07978-92fd-7f03-ae12-07f78a6b8772/exec-86b8f41a-80b9-49a0-b06a-ef31aead6a5e.png",
+  "sha256": "e90a1ffa840a6a483e9270712dbbe6253d36ebea9b5c2e3ca1f36dd6dc966637",
+  "tool": "Codex ImageGen (owner-supplied 09-30); 1944x809 master downscaled to 512x213 (Lanczos), served with linear filtering + mipmaps",
+  "note": "No FUMBBL or Games Workshop material."
+}
