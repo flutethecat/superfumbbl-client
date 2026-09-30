@@ -1874,6 +1874,9 @@ export class PitchRenderer {
   private hypnogazeTargetDecoTexture: Texture | null = null;
   /** Owner 09-15 (CHOMPED handoff): CHOMPED word art at the feet (ROOTED / DODGY SNACK family). */
   private chompedDecoTexture: Texture | null = null;
+  /** Owner 09-30: DISTRACTED banner (owner ImageGen art) for a standing player without tackle zones (CONFUSED /
+   *  HYPNOTIZED flags) - replaces the red "?" and the gaze victim's eye; null = the glyph fallbacks. */
+  private distractedDecoTexture: Texture | null = null;
   /** Owner 09-06: Move / Pass / Foul player-action decorations (approved art) — same path as the Blitz marker. */
   private actionMoveDecoTexture: Texture | null = null;
   private actionPassDecoTexture: Texture | null = null;
@@ -3956,6 +3959,16 @@ export class PitchRenderer {
       this.chompedDecoTexture = texture;
     } catch {
       this.chompedDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try { // owner 09-30: DISTRACTED banner (512x205 master) centred on the torso of a player without tackle zones
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/distracted.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.scaleMode = 'linear';
+      texture.source.autoGenerateMipmaps = true;
+      this.distractedDecoTexture = texture;
+    } catch {
+      this.distractedDecoTexture = null;
     }
     if (!this.initActive(generation, app)) return;
     try { // owner 09-15: HYPNOGAZE target reticle (1312x1199, visible 1089x1133 — the block target's own canvas)
@@ -15527,12 +15540,18 @@ export class PitchRenderer {
     const gazeMarked = this.gazeTarget === playerId || (confused && this.gazeVictims.has(playerId));
     // Owner 09-15: the DECLARED target wears the hypno token inside the crosshair ring (like the blitz target);
     // a confused victim keeps the plain eye.
+    // Owner 09-30: a standing player WITHOUT tackle zones (CONFUSED from Bone-head / Really Stupid / Animal Savagery /
+    // failed Bloodlust, or HYPNOTIZED) wears the DISTRACTED banner centred on the torso; the declared gaze target keeps
+    // its crosshair token. The red "?" and the victim's eye remain the unloaded-art fallbacks.
+    const distracted = !isDown(playerState) && (confused || hasFlag(playerState, PlayerStateFlag.HYPNOTIZED));
+    const banner = distracted && this.gazeTarget !== playerId && !!this.distractedDecoTexture;
     if (this.gazeTarget === playerId) this.addGazeTargetMarker(token, isDown(playerState));
+    else if (banner) this.addDistractedMarker(token);
     else if (gazeMarked) this.addGazeVictimMarker(token);
     // Owner 09-07: EYE GOUGE rides the same chest mount as the gaze eye while the server's EYE_GOUGED bit is set
     // (it clears on the victim's activation) — was a DOM overlay floating over the head.
     if (!isDown(playerState) && (playerState & EYE_GOUGED_BIT) !== 0) this.addEyeGougeMarker(token);
-    if (confused && !gazeMarked) markers.push({ text: '?', emoji: false, deco: 'confused' });
+    if (confused && !gazeMarked && !banner) markers.push({ text: '?', emoji: false, deco: 'confused' });
     // Owner 2026-07-07: TAKE ROOT (the ROOTED state flag) → a roots/sprout emoji, surfaced
     // the same way as CONFUSED.
     // Owner 09-07: ROOTED wears the approved word art at the FEET (addRootedMarker); the 🌱 row glyph is only the
@@ -15714,6 +15733,29 @@ export class PitchRenderer {
       node.scale.set(scale);
     }
     node.zIndex = 49;
+    token.sortableChildren = true;
+    token.addChild(node);
+  }
+
+  /** Owner 09-30: the DISTRACTED banner centred on the torso of a standing player, a tile wide like the STUNNED
+   *  banner (512x205 art). Label 'distractedMarker'; above the state row. */
+  private addDistractedMarker(token: Container): void {
+    const tex = this.distractedDecoTexture;
+    if (!tex) return;
+    const node = new Sprite(tex);
+    node.anchor.set(0.5, 0.5);
+    node.label = 'distractedMarker';
+    // Token-local placement exactly like the STUNNED banner (addDownDecoration): a tile wide, centred on the figure
+    // (a standing walker's torso centre is y=-4 in token units: feet at WALKER_FEET_Y_PX, body ~30 tall).
+    node.width = TILE_W * 0.98;
+    node.height = node.width * (tex.height / tex.width);
+    if (isWalkerToken(token)) {
+      node.position.set(0, -4);
+    } else {
+      const bounds = token.getLocalBounds();
+      node.position.set(0, (bounds.minY + bounds.maxY) / 2);
+    }
+    node.zIndex = 52;
     token.sortableChildren = true;
     token.addChild(node);
   }
