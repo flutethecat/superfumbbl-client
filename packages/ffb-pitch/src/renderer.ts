@@ -17714,7 +17714,10 @@ export class PitchRenderer {
     // item3: the SAME endpoints, now reached by lerp from each sprite's BASE tint (captured before we
     // touch it, so the stunned slate / other per-sprite tints still compose exactly as before at k=1).
     // owner 09-06: the walker's cast shadow stays black (its tint is the shadow ink, not a body layer)
-    const sprites = token.children.filter((c): c is Sprite => c instanceof Sprite && c.label !== 'castShadow');
+    // Owner 09-30: the STUNNED / DISTRACTED banners stay FULLY LIT on a shaded player (the status must read, like
+    // the gaze eye) — never tinted, and their alpha compensates the token's.
+    const litMarkers = new Set(['stunnedBanner', 'distractedMarker']);
+    const sprites = token.children.filter((c): c is Sprite => c instanceof Sprite && c.label !== 'castShadow' && !litMarkers.has(String(c.label)));
     const baseTints = sprites.map((s) => Number(s.tint));
     const paint = (kk: number): void => {
       if (token.destroyed) return;
@@ -17735,6 +17738,10 @@ export class PitchRenderer {
       if (eye) eye.alpha = Math.min(1, 1 / alpha);
       const gouge = token.getChildByLabel?.('eyeGougeMarker', false); // 09-07: same treatment
       if (gouge) gouge.alpha = Math.min(1, 1 / alpha);
+      for (const label of litMarkers) { // 09-30: the banners too
+        const marker = token.getChildByLabel?.(label, false);
+        if (marker) marker.alpha = Math.min(1, 1 / alpha);
+      }
       // item3 follow-up: the position ring/glow/star base rides the SAME kk — but only
       // when kk is the acted-driven level (a pick-ineligible dim never dims the ring).
       // Owner 08-19: floored via ringDimAlpha — the acted ring dims, never vanishes.
