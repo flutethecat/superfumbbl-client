@@ -39,6 +39,11 @@
     "size": 4685367,
     "sha256": "2c1cc9f1160c370fe21918737f299ad871741f2c1772f6eaa1a6d66a1e319541"
   },
+  "app@dded96ca598fa017": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-dded96ca.zip",
+    "size": 4687155,
+    "sha256": "87b84501bf7aef2e9a4f3eded3a7264a2f8af833628d7e2fb7236476cd93bfcb"
+  },
   "app@f28b82eeb966777a": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-f28b82ee.zip",
     "size": 4685031,
@@ -83,6 +88,11 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/decorations-755c3a10.zip",
     "size": 15278557,
     "sha256": "9b1e887a949423e2de0d797bfd1bc09fc2ef6c5c40c47a9c73d64637e4329a2b"
+  },
+  "decorations@af07f018286b178f": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/decorations-af07f018.zip",
+    "size": 15280895,
+    "sha256": "96217bf20b83b0ca9b8041d3fb2a64f8e5801056f4dd7ba73b8a51652f80c18c"
   },
   "default-weather@0e590546adf43f39": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/default-weather-0e590546.zip",
