@@ -833,7 +833,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-col { display: flex; flex-direction: column; padding: 0 0 6px; }
 .pg-dice-col[data-side='home'] .pg-stat-col-head { border-top: 3px solid #3d7cff; }
 .pg-dice-col[data-side='away'] .pg-stat-col-head { border-top: 3px solid #f2363c; }
-.pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid var(--ui-border); }
+/* Owner 10-01 (S72): the dividers between charts were too dark to see (--ui-border); they are the muted label grey
+   now, and Dodge dice gets its own divider under the Dodges-by-target chart it shares a block with. */
+.pg-dice-block { padding: 6px 12px 4px; border-top: 1px solid color-mix(in srgb, var(--ui-muted) 70%, transparent); }
+.pg-dice-block .pg-dodge-legend + h4 { margin: 0 -12px 0.25em; padding: 6px 12px 0; border-top: 1px solid color-mix(in srgb, var(--ui-muted) 70%, transparent); }
 .pg-dice-block h4 { margin: 0 0 0.25em; font-family: 'Nuffle', sans-serif; font-weight: 700; font-size: 1.05em; color: var(--ui-heading); letter-spacing: 0.03em; display: flex; justify-content: space-between; align-items: baseline; }
 .pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.85em; color: var(--ui-muted); letter-spacing: 0; }
 .pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
