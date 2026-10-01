@@ -4702,7 +4702,7 @@ export class PitchRenderer {
       .moveTo(-12, -9).lineTo(13, 0).lineTo(-12, 9).closePath()
       .fill({ color: 0x22a7ff, alpha: 0.98 })
       .stroke({ color: 0x001b35, width: 3, alpha: 1 });
-    const ballEdgeLabel = new Text({ text: 'BALL', style: BALL_MARKER_STYLE });
+    const ballEdgeLabel = new Text({ text: 'BALL', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     ballEdgeLabel.anchor.set(0.5, 1);
     ballEdgeLabel.position.set(0, -14);
     ballEdgeMarker.addChild(ballEdgeArrow, ballEdgeLabel);
@@ -4713,7 +4713,7 @@ export class PitchRenderer {
       .moveTo(-12, -9).lineTo(13, 0).lineTo(-12, 9).closePath()
       .fill({ color: 0xf5c542, alpha: 0.98 })
       .stroke({ color: 0x332400, width: 3, alpha: 1 });
-    const activeEdgeLabel = new Text({ text: 'ACTIVE', style: ACTIVE_MARKER_STYLE });
+    const activeEdgeLabel = new Text({ text: 'ACTIVE', style: ACTIVE_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     activeEdgeLabel.anchor.set(0.5, 1);
     activeEdgeLabel.position.set(0, -14);
     activeEdgeMarker.addChild(activeEdgeArrow, activeEdgeLabel);
@@ -7959,7 +7959,7 @@ export class PitchRenderer {
             .circle(a.x, a.y - 3, 8 * stepScale)
             .stroke({ color: 0xf5c542, width: 1.5 });
           this.pathLayer.addChild(marker);
-          const nr = new Text({ text: String(info.used + i + 1), style: BADGE_STYLE });
+          const nr = new Text({ text: String(info.used + i + 1), style: BADGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
           nr.anchor.set(0.5, 0.5);
           nr.scale.set(stepScale);
           nr.position.set(a.x, a.y - 3);
@@ -8064,7 +8064,7 @@ export class PitchRenderer {
       if (!range || ((blizzard || this.passTemplateMaxRange === 'S') && (range === 'L' || range === 'B'))) break;
       if (range !== previous) {
         const a = squareAnchor(sx, from[1]);
-        const label = new Text({ text: TIER_MODIFIERS[range], style: DISTANCE_STYLE });
+        const label = new Text({ text: TIER_MODIFIERS[range], style: DISTANCE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         label.anchor.set(0.5, 0.5);
         label.alpha = 0.75;
         label.scale.set(depthScale(sx, from[1]) * 0.55);
@@ -8104,7 +8104,7 @@ export class PitchRenderer {
 
     const label = new Text({
       text: labels[band],
-      style: { fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: colour, stroke: { color: 0x101418, width: 3 } },
+      style: { fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: colour, stroke: { color: 0x101418, width: 3 } }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     label.anchor.set(0.5, 1);
     label.position.set(end.x, end.y - 6 * endScale);
@@ -8145,7 +8145,7 @@ export class PitchRenderer {
     const chip = (text: string, sq: Square, dy: number) => {
       const p = squareAnchor(sq[0], sq[1]);
       const s = depthScale(sq[0], sq[1]);
-      const t = new Text({ text, style: ACTION_CHIP_STYLE });
+      const t = new Text({ text, style: ACTION_CHIP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       t.anchor.set(0.5, 1);
       t.scale.set(Math.max(0.7, s));
       t.position.set(p.x, p.y - TILE_H * dy * s);
@@ -8189,7 +8189,7 @@ export class PitchRenderer {
     const p = squareAnchor(square[0], square[1]);
     const s = depthScale(square[0], square[1]);
     const tip = new Container();
-    const glyph = new Text({ text: '✋', style: INTERCEPT_GLYPH_STYLE });
+    const glyph = new Text({ text: '✋', style: INTERCEPT_GLYPH_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     glyph.anchor.set(0.5, 0.5);
     tip.addChild(glyph);
     const slash = new Graphics();
@@ -8284,7 +8284,7 @@ export class PitchRenderer {
         const a = squareAnchor(sx, sy);
         const chip = new Text({
           text: `−${n}`,
-          style: { fontFamily: 'sans-serif', fontSize: 12, fontWeight: 'bold', fill: 0xe0402f, stroke: { color: 0xf2efe6, width: 2.5, join: 'round' } },
+          style: { fontFamily: 'sans-serif', fontSize: 12, fontWeight: 'bold', fill: 0xe0402f, stroke: { color: 0xf2efe6, width: 2.5, join: 'round' } }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
         });
         chip.anchor.set(0.5, 0.5);
         chip.scale.set(depthScale(sx, sy));
@@ -8336,7 +8336,7 @@ export class PitchRenderer {
     const glyph = (emoji: string, sq: Square, dy: number) => {
       const p = squareAnchor(sq[0], sq[1]);
       const s = depthScale(sq[0], sq[1]);
-      const g = new Text({ text: emoji, style: INTERCEPT_GLYPH_STYLE });
+      const g = new Text({ text: emoji, style: INTERCEPT_GLYPH_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       g.anchor.set(0.5, 0.5);
       g.scale.set(Math.max(0.8, s) * 1.2);
       g.position.set(p.x, p.y - TILE_H * dy * s);
@@ -8437,13 +8437,13 @@ export class PitchRenderer {
       const face = this.buildD6(target);
       face.scale.set(0.62 * scale);
       die.addChild(face);
-      const plus = new Text({ text: '+', style: ROLL_DIE_STYLE });
+      const plus = new Text({ text: '+', style: ROLL_DIE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       plus.anchor.set(0, 0.5);
       plus.scale.set(scale);
       plus.position.set(9 * scale, 0);
       die.addChild(plus);
     } else {
-      const label = new Text({ text: `${target}+`, style: ROLL_DIE_STYLE });
+      const label = new Text({ text: `${target}+`, style: ROLL_DIE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       label.anchor.set(0.5, 0.5);
       label.scale.set(scale);
       die.addChild(label);
@@ -8717,7 +8717,7 @@ export class PitchRenderer {
       }
     }
     if (opponentChoice) {
-      const warning = new Text({ text: "OPPONENT'S CHOICE", style: OPP_CHOICE_STYLE });
+      const warning = new Text({ text: "OPPONENT'S CHOICE", style: OPP_CHOICE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       warning.anchor.set(0.5, 1);
       warning.scale.set(scale);
       warning.position.set(anchor.x, y - 17 * scale);
@@ -8755,7 +8755,7 @@ export class PitchRenderer {
     const gap = 2;
     let cursor = 0;
     const addText = (value: string) => {
-      const text = new Text({ text: value, style: DODGE_STYLE });
+      const text = new Text({ text: value, style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       text.anchor.set(0, 0.5);
       text.position.set(cursor, 0);
       content.addChild(text);
@@ -8957,7 +8957,7 @@ export class PitchRenderer {
         const fillColor = single ? 0xe08a2a : color;
         const alpha = single ? 0.26 : Math.min(0.2 + (count - 1) * 0.12, 0.56);
         shade.poly(quad.points.flat()).fill({ color: fillColor, alpha });
-        const label = new Text({ text: `−${count}`, style });
+        const label = new Text({ text: `−${count}`, style, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         label.anchor.set(1, 0);
         const scale = depthScale(sx, sy);
         label.scale.set(scale);
@@ -9422,7 +9422,7 @@ export class PitchRenderer {
           this.dugoutHits.push({ x: anchor.x, y: anchor.y, r: TILE_W * 0.55 * scale, playerId: data.playerId });
           const card = new Text({
             text: '🟥',
-            style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 16 },
+            style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 16 }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
           });
           card.anchor.set(0.5, 0.5);
           card.position.set(anchor.x, Math.min(anchor.y - 27 * scale, anchor.y + token.getLocalBounds().minY * token.scale.y - 6 * scale));
@@ -9690,7 +9690,7 @@ export class PitchRenderer {
     // Compact ground-plane caption at the near side of the station; the socket itself is
     // reserved for the token. Its position and non-uniform scale come from the same projected
     // quad as the box, avoiding the old screen-Y offset/perspective mismatch.
-    const label = new Text({ text: 'APOTHECARY', style: DUGOUT_LABEL_STYLE });
+    const label = new Text({ text: 'APOTHECARY', style: DUGOUT_LABEL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     label.anchor.set(0.5);
     const stationScale = depthScale(apoX, boxY);
     const labelBounds = label.getLocalBounds();
@@ -10386,7 +10386,7 @@ export class PitchRenderer {
       // "Pick-me-up?" label just above the arrow (scaled by depth, dark-stroked to read over the pitch).
       // #164: tokenPos so the label tracks the token's wing nudge, like the arrow above.
       const a = this.tokenPos(coord[0], coord[1]);
-      const label = new Text({ text: 'Pick-me-up?', style: ACTION_CHIP_STYLE });
+      const label = new Text({ text: 'Pick-me-up?', style: ACTION_CHIP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       label.anchor.set(0.5, 1);
       label.scale.set(arrow.scale);
       label.position.set(a.x, a.y - TILE_H * arrow.scale * 1.95);
@@ -10790,7 +10790,7 @@ export class PitchRenderer {
         fontSize: Math.max(14, Math.round(TILE_W * 0.3)),
         align: 'center',
         stroke: { color: 0x081218, width: 3 },
-      }),
+      }), resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     icon.anchor.set(0.5);
     icon.label = `pass-destination-kind-${this.passDestinationKind}`;
@@ -11038,7 +11038,7 @@ export class PitchRenderer {
         const norm = skillName.toLowerCase().replace(/[^a-z]/g, '');
         const [color, glyph] = SKILL_BADGE_GLYPH[norm] ?? [0x777777, (skillName[0] ?? '?').toUpperCase()];
         c.addChild(new Graphics().circle(0, 0, R).fill({ color }).circle(0, 0, R).stroke({ color: 0x14161a, width: Math.max(1, 1.5 * depth) }));
-        const t = new Text({ text: glyph, style: DIE_TAG_STYLE });
+        const t = new Text({ text: glyph, style: DIE_TAG_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         t.anchor.set(0.5, 0.5);
         t.scale.set(depth);
         t.position.set(0, -R * 0.06);
@@ -11497,7 +11497,7 @@ export class PitchRenderer {
         glow.ellipse(0, -6, TILE_W * rx, TILE_H * ry).fill({ color: putrid, alpha });
       }
       node.addChild(glow);
-      const glyph = new Text({ text: '🚫', style: emojiStyle }); // sent off (owner tunes glyph)
+      const glyph = new Text({ text: '🚫', style: emojiStyle, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // sent off (owner tunes glyph)
       glyph.anchor.set(0.5, 0.5);
       glyph.position.set(0, -16);
       node.addChild(glyph);
@@ -11508,7 +11508,7 @@ export class PitchRenderer {
         glow.ellipse(0, -6, TILE_W * rx, TILE_H * ry).fill({ color: crowd, alpha });
       }
       node.addChild(glow);
-      const glyph = new Text({ text: '👥', style: emojiStyle }); // pitch invasion / fans (owner tunes glyph)
+      const glyph = new Text({ text: '👥', style: emojiStyle, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // pitch invasion / fans (owner tunes glyph)
       glyph.anchor.set(0.5, 0.5);
       glyph.position.set(0, -16);
       node.addChild(glyph);
@@ -11816,7 +11816,7 @@ export class PitchRenderer {
     const tp = this.tokenPos(x, y);
     const anchor = squareAnchor(x, y);
     const scale = depthScale(x, y);
-    const node = new Text({ text: '🥾', style: FOUL_CUE_STYLE });
+    const node = new Text({ text: '🥾', style: FOUL_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     node.anchor.set(0.5);
     node.scale.set(scale);
     const baseY = anchor.y - TILE_H * 0.62 * scale; // float above the token body
@@ -11908,7 +11908,7 @@ export class PitchRenderer {
       const cue = this.rosterAttentionCue;
       if (!cue || cue.arm !== arm || !this.app) return; // superseded or cleared
       cue.arm = null;
-      const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE });
+      const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       node.anchor.set(0.5);
       node.scale.set(scale);
       // Owner 08-23: the locate/highlight arrow floated too far above the player's head. This cue is
@@ -11966,7 +11966,7 @@ export class PitchRenderer {
       const tp = this.tokenPos(x, y);
       const anchor = squareAnchor(x, y);
       const scale = depthScale(x, y);
-      const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE });
+      const node = new Text({ text: '▼', style: ROSTER_CUE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       node.anchor.set(0.5);
       node.scale.set(scale);
       const baseY = anchor.y - TILE_H * 0.5 * scale;
@@ -12146,7 +12146,7 @@ export class PitchRenderer {
             fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif',
             fontSize: 17,
             dropShadow: { color: 0x000000, alpha: 0.9, blur: 3, distance: 2.5, angle: Math.PI / 2 },
-          },
+          }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
         });
         glyph.anchor.set(0.5, 0.5);
         c.addChild(glyph);
@@ -12176,9 +12176,9 @@ export class PitchRenderer {
    *  and stores it as this.ballMarker so the ticker bobs it. */
   private buildBallToken(shape: 'arrow' | 'label-top' | 'label-bottom' | 'label-centre' = 'arrow'): Container {
     const marker = new Container();
-    const label = new Text({ text: 'BALL', style: BALL_MARKER_STYLE });
+    const label = new Text({ text: 'BALL', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     if (shape === 'arrow') {
-      const arrow = new Text({ text: '▼', style: BALL_MARKER_STYLE });
+      const arrow = new Text({ text: '▼', style: BALL_MARKER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       arrow.anchor.set(0.5, 1);
       label.anchor.set(0.5, 1);
       label.position.set(0, -14);
@@ -12792,7 +12792,7 @@ export class PitchRenderer {
     const style = new TextStyle({ fontFamily: 'sans-serif', fontSize: 13, fontWeight: 'bold', fill: 0xffffff });
     let cursor = 0;
     const addText = (label: string) => {
-      const text = new Text({ text: label, style });
+      const text = new Text({ text: label, style, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       text.anchor.set(0, 0.5);
       text.position.set(cursor, 0);
       content.addChild(text);
@@ -12852,7 +12852,7 @@ export class PitchRenderer {
       const face = this.buildD6(needed);
       face.scale.set(0.52);
       face.position.set(failed.width / 2 + 9, 0);
-      const plus = new Text({ text: '+', style: DODGE_STYLE });
+      const plus = new Text({ text: '+', style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       plus.anchor.set(0, 0.5);
       plus.position.set(failed.width / 2 + 17, 0);
       c.addChild(face, plus);
@@ -12883,7 +12883,7 @@ export class PitchRenderer {
       } else {
         const label = isTeam ? 'TRR' : (skillName.split(/\s+/).map((w) => w[0] ?? '').join('').slice(0, 3).toUpperCase() || '★');
         const g = new Container();
-        const t = new Text({ text: label, style: { fontFamily: 'Arial Black, sans-serif', fontSize: 10, fontWeight: 'bold', fill: gold } });
+        const t = new Text({ text: label, style: { fontFamily: 'Arial Black, sans-serif', fontSize: 10, fontWeight: 'bold', fill: gold }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         t.anchor.set(0, 0.5);
         const plate = new Graphics().roundRect(-2, -8, t.width + 4, 16, 4).fill({ color: 0x14161a, alpha: 0.85 }).stroke({ color: gold, width: 1 });
         g.addChild(plate, t);
@@ -12961,7 +12961,7 @@ export class PitchRenderer {
       } else {
         const label = skillName.split(/\s+/).map((w) => w[0] ?? '').join('').slice(0, 3).toUpperCase() || '★';
         const plate = new Graphics().roundRect(-18, -11, 36, 22, 5).fill({ color: 0x14161a, alpha: 0.92 }).stroke({ color: 0xe8b23a, width: 1.5 });
-        const t = new Text({ text: label, style: { fontFamily: 'sans-serif', fontSize: 12, fontWeight: 'bold', fill: 0xe8b23a } });
+        const t = new Text({ text: label, style: { fontFamily: 'sans-serif', fontSize: 12, fontWeight: 'bold', fill: 0xe8b23a }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         t.anchor.set(0.5, 0.5);
         node.addChild(plate, t);
       }
@@ -12991,7 +12991,7 @@ export class PitchRenderer {
     const scale = depthScale(x, y);
     const node = new Text({
       text: '🧛',
-      style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif', fontSize: 22 },
+      style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif', fontSize: 22 }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     node.anchor.set(0.5, 0.5);
     node.position.set(tp.x, anchor.y - TILE_H * 0.98 * scale); // over the head
@@ -13034,7 +13034,7 @@ export class PitchRenderer {
       ? Object.assign(new Sprite(plateTex), { height: 16, width: 16 * (plateTex.width / plateTex.height) })
       : new Text({
           text: '🛡',
-          style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif', fontSize: 15 },
+          style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif', fontSize: 15 }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
         });
     plate.anchor.set(0.5, 0.5);
     plate.position.set(-18, 0);
@@ -13396,7 +13396,7 @@ export class PitchRenderer {
               fontFamily: 'Arial Black, sans-serif', fontSize: 18, fontWeight: '900', fill: 0xff3838,
               stroke: { color: 0x250000, width: 4, join: 'round' },
               dropShadow: { color: 0x000000, alpha: 0.8, blur: 2, distance: 2 },
-            }),
+            }), resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
           });
           label.anchor.set(0.5, 1);
           label.position.set(target.x, target.y - TILE_H * 0.32 * scale);
@@ -13512,7 +13512,7 @@ export class PitchRenderer {
   crowdQuip(text: string, side: 'home' | 'away' | 'any' = 'any'): void {
     const fan = this.randomFanOn(side);
     if (!fan) return;
-    const label = new Text({ text, style: CROWD_SIGN_STYLE });
+    const label = new Text({ text, style: CROWD_SIGN_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
     label.anchor.set(0.5);
     this.spawnCrowdOverlay(this.buildFFBubble(label, 10, 6), fan.x, fan.y - 22, 2400);
   }
@@ -13530,7 +13530,7 @@ export class PitchRenderer {
       this.blockFaceStaticSprites.add(s);
       inner = s;
     }
-    else { const t = new Text({ text: '💀', style: CROWD_SIGN_STYLE }); t.anchor.set(0.5); inner = t; }
+    else { const t = new Text({ text: '💀', style: CROWD_SIGN_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); t.anchor.set(0.5); inner = t; }
     this.spawnCrowdOverlay(this.buildFFBubble(inner, 8, 7), fan.x, fan.y - 22, 2600);
   }
 
@@ -13557,9 +13557,9 @@ export class PitchRenderer {
       if (!entry) return;
       const lines = PitchRenderer.signLines(entry);
       // Two lines in a terminal font: "I ❤️" (or a saying's first line) over the sized-to-fit second line.
-      const top = new Text({ text: lines.top, style: SIGN_TERMINAL_STYLE });
+      const top = new Text({ text: lines.top, style: SIGN_TERMINAL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       top.anchor.set(0.5);
-      const bottom = new Text({ text: lines.bottom, style: SIGN_TERMINAL_STYLE });
+      const bottom = new Text({ text: lines.bottom, style: SIGN_TERMINAL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       bottom.anchor.set(0.5);
       const topFit = Math.min((slot.signW * 0.9) / top.width, (slot.signH * 0.42) / top.height, 1.2);
       const nameFit = Math.min((slot.signW * 0.9) / bottom.width, (slot.signH * 0.42) / bottom.height, 1.5);
@@ -13695,7 +13695,7 @@ export class PitchRenderer {
     }
     const [color, glyph] = DIE_CAUSE_TAG[traitSkill ? 'trait' : cause] ?? [0x777777, '?'];
     if (cause === 'breakTackle' || cause === 'timmber') {
-      const t = new Text({ text: glyph, style: DIE_TAG_STYLE });
+      const t = new Text({ text: glyph, style: DIE_TAG_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       const width = t.width + S * 0.28;
       const height = Math.max(t.height + S * 0.1, S * 0.42);
       c.addChild(
@@ -13719,7 +13719,7 @@ export class PitchRenderer {
           .circle(0, 0, R)
           .stroke({ color: 0x14161a, width: 1.6 }),
       );
-      const t = new Text({ text: 'D', style: DIE_TAG_STYLE_DARK });
+      const t = new Text({ text: 'D', style: DIE_TAG_STYLE_DARK, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       t.anchor.set(0.5, 0.5);
       t.position.set(0, -R * 0.06);
       c.addChild(t);
@@ -13744,7 +13744,7 @@ export class PitchRenderer {
       for (let i = -1; i <= 1; i++) ball.moveTo(i * R * 0.16, -R * 0.13).lineTo(i * R * 0.16, R * 0.13).stroke({ color: 0xffffff, width: 0.9 });
       c.addChild(ball);
     } else {
-      const t = new Text({ text: glyph, style: DIE_TAG_STYLE });
+      const t = new Text({ text: glyph, style: DIE_TAG_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       t.anchor.set(0.5, 0.5);
       t.position.set(0, cause === 'gaze' ? -R * 0.05 : -R * 0.08);
       c.addChild(t);
@@ -15146,7 +15146,7 @@ export class PitchRenderer {
       token.addChild(frog);
       if (down) this.addDownDecoration(token, this.showStunMark(data), stunCaption, undefined, downMark);
       if (isHome && this.showPlayerNumbers) {
-        const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE });
+        const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         nr.anchor.set(0.5, 0.5);
         nr.position.set(8, 11);
         token.addChild(nr);
@@ -15186,7 +15186,7 @@ export class PitchRenderer {
         this.addMarkingText(token, player, down);
         // Owner 09-15: the position shorthand on the piece, as on the checkers — over the body just above the base,
         // clear of the markings hanging below. Added after the overlays so it paints on top.
-        const shorthand = new Text({ text: positionLetter(player, team), style: CHECKER_LETTER_STYLE });
+        const shorthand = new Text({ text: positionLetter(player, team), style: CHECKER_LETTER_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
         shorthand.anchor.set(0.5, 0.5);
         shorthand.position.set(0, feetY - size * 0.42); // owner 09-15: up a touch, onto the piece's body
         token.addChild(shorthand);
@@ -15313,7 +15313,7 @@ export class PitchRenderer {
         if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption, undefined, downMark);
         // number on the right foot, home team only (owner 2026-07-02) — off by default (owner 2026-07-04)
         if (isHome && this.showPlayerNumbers) {
-          const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE });
+          const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
           nr.anchor.set(0.5, 0.5);
           nr.position.set(8, 11);
           token.addChild(nr);
@@ -15515,7 +15515,7 @@ export class PitchRenderer {
 
   private addPlayerNumber(token: Container, player: PlayerJson, isHome: boolean, down: boolean): void {
     if (isHome && this.showPlayerNumbers) {
-      const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE });
+      const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       nr.anchor.set(0.5, 0.5);
       nr.position.set(down ? 12 : 6, (down ? -4 : -3) + TOKEN_BASE_SHIFT_PX);
       token.addChild(nr);
@@ -15607,7 +15607,7 @@ export class PitchRenderer {
       } else {
       const vom = new Text({
         text: '🤮',
-        style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 11 }, // owner 08-12: match the skill/status badge scale (was 13, oversized)
+        style: { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 11 }, // owner 08-12: match the skill/status badge scale (was 13, oversized), resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true
       });
       vom.anchor.set(0.5, 0.5);
       placeWalkerDecor(token, vom, 0, -4); // token centre (sprite body is anchored at y=-3); walkers: decor-1 units
@@ -15912,7 +15912,7 @@ export class PitchRenderer {
       text: marker.text,
       style: marker.emoji
         ? { fontFamily: '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif', fontSize: 17 }
-        : { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 20, fontWeight: 'bold', fill: 0xff5555, stroke: { color: 0x14161a, width: 3 } },
+        : { fontFamily: 'Arial Black, Arial, sans-serif', fontSize: 20, fontWeight: 'bold', fill: 0xff5555, stroke: { color: 0x14161a, width: 3 } }, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     node.anchor.set(0.5, 0.5);
     return node;
@@ -17884,7 +17884,7 @@ export class PitchRenderer {
             .fill(isCharacteristic ? presentation.fill : COLORS.badge)
             .stroke({ color: isCharacteristic ? presentation.stroke : trim, width: 1 });
           group.addChild(badge);
-          const letter = new Text({ text: presentation.label, style: BADGE_STYLE });
+          const letter = new Text({ text: presentation.label, style: BADGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
           letter.anchor.set(0.5, 0.5);
           letter.position.set(bx, by + 5);
           group.addChild(letter);
