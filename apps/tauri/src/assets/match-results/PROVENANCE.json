@@ -1,107 +1,235 @@
 {
-  "source": "owner handoff 2026-10-01: Super FUMBBL Team Icons/action-icons/match-results (HANDOFF-WIN-LOSS-DRAW.md)",
-  "tool": "built-in image_gen",
-  "generated": "2026-10-01",
-  "note": "Label masters (1774x887) trimmed to content and Lanczos-resampled to 1x/2x/3x of the CSS size so the letters of all three labels share one height (30 CSS px). Original artwork, no third-party or GW-derived imagery.",
+  "source": "owner handoff 2026-10-01 (approved final): Super FUMBBL Team Icons/action-icons/match-results/HANDOFF-WIN-LOSS-DRAW.md + handoff-manifest.json",
+  "status": "user-approved-for-handoff",
+  "note": "Approved label masters trimmed to content (alpha > 40) and Lanczos-resampled (premultiplied) to 1x/2x/3x of the CSS size, so the LETTERS of all three labels share one height (40 CSS px). textCenterX = the centre of the lettering in CSS px from the image left edge; the client centres THAT on the result box and lets the symbol sit to its left. Original artwork (built-in image generation, owner-approved); no third-party or GW-derived imagery.",
+  "promptSources": {
+    "variants-v2.provenance.json": {
+      "tool": "built-in image_gen",
+      "date": "2026-10-01",
+      "assets": [
+        {
+          "name": "win-label-v2",
+          "prompt": "Create one horizontal WIN result icon for a brutal fantasy football game called Super FUMBBL. Fresh variation with much more fantasy football personality than a generic trophy. LEFT: a squat battered gold trophy holding an unmistakable brown oval American football with ivory laces and TWO steel hoops near the ball ends; short triangular spikes attach ONLY to these metal hoops. Trophy has sturdy angular handles and riveted base. RIGHT: bold uppercase WIN in chunky gold arcade block lettering, ivory highlights, amber shadows, thick black outline. Retro 16-bit pixel art with deliberate large pixel clusters, limited rich palette, bold contours. Sports equipment, heavy metal rivets, modest chips and dents, rugged rather than elegant. Compact readable UI graphic, one dominant symbol, no tiny clutter. Football trophy and text balanced, text height about 70 percent icon height. Centered horizontal layout, transparent gap between symbol and word, safe margins. Genuine transparent alpha background. No scene, border panel, official logos or additional words.",
+          "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-9dbe1a51-3246-4fee-b676-d725dc85fbf4.png",
+          "status": "superseded-for-current-handoff",
+          "master": "win-label-v2.png",
+          "imageCheck": {
+            "width": 1774,
+            "height": 887,
+            "hasAlpha": true,
+            "alphaMin": 0
+          },
+          "exports": [
+            "win-label-v2-32.png",
+            "win-label-v2-48.png",
+            "win-label-v2-64.png",
+            "win-label-v2-128.png"
+          ]
+        },
+        {
+          "name": "loss-label-v2",
+          "prompt": "Create one horizontal LOSS result icon, matching reference WIN graphic's rugged retro fantasy football pixel-art style and typography. LEFT: an empty battered dark red American football helmet in three-quarter side view, unmistakable bent steel face cage, one large crushed dent on crown, a broken short metal spike on its side and chunky rivets. No person inside, no head, no gore. Strong helmet silhouette, simple large damage shapes, readable at small size. RIGHT: exact uppercase LOSS in large red block/slab arcade letters with pale highlights, deep crimson shadows, black outline, a few broad chips, matching reference lettering weight. Symbol and word separated by transparent space. Rugged fantasy sports equipment, chunky pixel art, limited palette, clear contours, upper-left highlights. Text cap height approximately 70 percent helmet height. Compact horizontal UI asset with safe margins. Genuine transparent alpha background, no panel, scene, other words or logos.",
+          "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-77c7a83e-e3ec-46c1-8c88-48cf29c55e47.png",
+          "status": "user-approved-for-handoff",
+          "master": "loss-label-v2.png",
+          "imageCheck": {
+            "width": 1774,
+            "height": 887,
+            "hasAlpha": true,
+            "alphaMin": 0
+          },
+          "exports": [
+            "loss-label-v2-32.png",
+            "loss-label-v2-48.png",
+            "loss-label-v2-64.png",
+            "loss-label-v2-128.png"
+          ]
+        },
+        {
+          "name": "draw-label-v2",
+          "prompt": "Create one horizontal DRAW result icon matching supplied WIN graphic's rugged retro fantasy football pixel-art style and lettering. LEFT: two chunky armored football gauntlets pressing knuckle-to-knuckle horizontally, equally matched in a stalemate, one ivory/gold from left and one dark steel/blue from right. Both closed fists in simple side profile; no spread fingers or interlaced hands. Thick riveted wrist cuffs, short armor spikes only on cuffs, bold readable shape. Small bright silver equals sign above the fist contact to clarify tied result. No explosion or winner. RIGHT: exact uppercase DRAW in large silver-white arcade slab/block letters, cool steel-blue bevel shadows, black outline, few broad scuffs. Same typography weight and lighting as reference. Retro 16-bit chunky pixel clusters, high contrast, minimal detail for small UI display. Separate symbol and word with transparent gap, text about 70 percent symbol height. Compact horizontal asset, genuine transparent alpha, full safe margins. No scene, panel, other words or logos.",
+          "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-76a735fc-85b8-4495-80e8-cb31e6c5111b.png",
+          "status": "superseded-for-current-handoff",
+          "master": "draw-label-v2.png",
+          "imageCheck": {
+            "width": 1774,
+            "height": 887,
+            "hasAlpha": true,
+            "alphaMin": 0
+          },
+          "exports": [
+            "draw-label-v2-32.png",
+            "draw-label-v2-48.png",
+            "draw-label-v2-64.png",
+            "draw-label-v2-128.png"
+          ]
+        }
+      ],
+      "currentHandoff": "handoff-manifest.json"
+    },
+    "variants-v4.provenance.json": {
+      "tool": "built-in image_gen",
+      "date": "2026-10-01",
+      "assets": [
+        {
+          "name": "win-label-v4",
+          "prompt": "Localized edit to the football's VIEWER-RIGHT steel hoop only. Remove the two spikes sticking outside the ball to the right at middle and lower-right (approximately x750 y235 and x720 y320 on the 1774x887 source). Move them onto the FRONT FACE of the right steel hoop, replacing its two round rivets at approximately x665 y233 and x652 y329. Render two short conical steel spikes there, foreshortened toward viewer, mirroring the existing two short spikes on the LEFT hoop. Clean transparent exterior where the former outward spikes were. Keep top-right spike unchanged. All spikes must be attached to steel hoop, never leather. Preserve absolutely everything else: left hoop spikes, football, laces, ivory skull on trophy, trophy handles and base, gold WIN lettering, pixel-art style, colors, layout and size. Genuine transparent alpha background. No annotations, no added symbols.",
+          "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-3cb4eafc-9977-493a-aabc-39c7b29acee5.png",
+          "status": "user-approved-for-handoff",
+          "master": "win-label-v4.png",
+          "imageCheck": {
+            "width": 1650,
+            "height": 953,
+            "hasAlpha": true,
+            "alphaMin": 0
+          },
+          "exports": [
+            "win-label-v4-32.png",
+            "win-label-v4-48.png",
+            "win-label-v4-64.png",
+            "win-label-v4-128.png"
+          ]
+        },
+        {
+          "name": "draw-label-v4",
+          "prompt": "Localized edits to this DRAW pixel-art game result graphic. On the far LEFT outer edge of the gold cuff delete both sideways-pointing spikes and the narrow protruding strip behind them (roughly x40-105 y365-620 in source). On the far RIGHT outer edge of the navy gauntlet's silver cuff delete both sideways-pointing spikes and the narrow gold protruding wrist strip behind them (roughly x875-937 y365-620). These deleted areas become transparent; finish both cuffs with clean dark outer contour. Preserve the top and bottom upright spikes attached to each cuff, the broad riveted cuff faces, both fists, laces, colors and anatomy exactly. Move the entire unchanged silver DRAW word LEFT to sit close beside the cleaned silver cuff of the navy gauntlet, leaving only a narrow transparent gap, about one outline thickness. Do not overlap or resize letters. No equals sign. Everything else unchanged: lettering styling, composition height, palette, retro pixel texture, outlines. Genuine transparent background, full artwork inside safe margins.",
+          "source": "C:\\Users\\Jay\\.codex\\generated_images\\01a07978-92fd-7f03-ae12-07f78a6b8772\\exec-53f04e93-b424-4d68-918f-86aa99239b19.png",
+          "status": "user-approved-for-handoff",
+          "master": "draw-label-v4.png",
+          "imageCheck": {
+            "width": 1774,
+            "height": 887,
+            "hasAlpha": true,
+            "alphaMin": 0
+          },
+          "exports": [
+            "draw-label-v4-32.png",
+            "draw-label-v4-48.png",
+            "draw-label-v4-64.png",
+            "draw-label-v4-128.png"
+          ]
+        }
+      ],
+      "currentHandoff": "handoff-manifest.json"
+    }
+  },
   "assets": [
     {
       "name": "win-label",
-      "master": "win-label-v1.png",
-      "masterSha256": "58d31893b8ab1a58e406bb58cdb7b1130bba5607f760e861e5d376adbe864fe7",
-      "cssSize": [
-        129,
-        61
+      "master": "win-label-v4.png",
+      "masterSha256": "34c265c74bea5e26f040d24aceefb315711865f60f0207d24be2a7064c01a67b",
+      "trimBox": [
+        46,
+        72,
+        1604,
+        791
       ],
+      "cssSize": [
+        157,
+        73
+      ],
+      "textCenterX": 117.3,
       "exports": [
         {
           "file": "win-label-1x.png",
           "size": [
-            129,
-            61
+            157,
+            73
           ]
         },
         {
           "file": "win-label-2x.png",
           "size": [
-            258,
-            122
+            314,
+            146
           ]
         },
         {
           "file": "win-label-3x.png",
           "size": [
-            387,
-            183
+            471,
+            219
           ]
         }
-      ],
-      "prompt": "Create a horizontal WIN match-result graphic using this exact gold trophy as the visual reference. Trophy on the LEFT and large uppercase text WIN directly to its RIGHT, vertically centered, clean transparent gap separating them. Preserve the trophy's squat shape, star, handles, gold palette, thick near-black outline and chunky retro 16-bit pixel art. WIN uses bold compact arcade block lettering, gold/yellow faces, cream highlights, amber beveled shadows and thick near-black outline matching the trophy. Text cap height about two-thirds trophy height. Compact horizontal lockup, excellent small homepage UI readability, entire silhouette and text inside safe margins. No extra symbols, background, panel or badge. Genuine transparent alpha background. One individual asset."
+      ]
     },
     {
       "name": "loss-label",
-      "master": "loss-label-v1.png",
-      "masterSha256": "63db30a2766dcb98a3d9f01863a41cb681744b535801b8aec79395ee265afbdc",
-      "cssSize": [
-        141,
-        68
+      "master": "loss-label-v2.png",
+      "masterSha256": "1dc435a633b853e87b512fe1ed0a9e19ce9412184e44f8ad2adcddab4e4007e1",
+      "trimBox": [
+        85,
+        98,
+        1708,
+        784
       ],
+      "cssSize": [
+        170,
+        72
+      ],
+      "textCenterX": 125.1,
       "exports": [
         {
           "file": "loss-label-1x.png",
           "size": [
-            141,
-            68
+            170,
+            72
           ]
         },
         {
           "file": "loss-label-2x.png",
           "size": [
-            282,
-            136
+            340,
+            144
           ]
         },
         {
           "file": "loss-label-3x.png",
           "size": [
-            423,
-            204
+            510,
+            216
           ]
         }
-      ],
-      "prompt": "Create a horizontal LOSS match-result graphic. Image 1 is the exact red cracked shield symbol reference, image 2 is matching WIN layout and lettering style reference. Place red cracked shield on LEFT, large uppercase LOSS on RIGHT, vertically centered and separated by a small transparent gap. Preserve simple shield silhouette, large jagged black center crack, red face, pale highlights, deep crimson shadow, chunky stepped pixel edges. LOSS uses same bold compact retro arcade block type style as WIN, but red faces with pale warm highlights, crimson bevel shadows, thick near-black outlines. Text cap height about two-thirds shield height. Match visual weight and spacing of WIN. Compact horizontal transparent UI asset readable at small size, clean color clusters, no fine detail, no background, panel, extra symbols or badge. Entire artwork within safe margins. Genuine transparent alpha."
+      ]
     },
     {
       "name": "draw-label",
-      "master": "draw-label-v1.png",
-      "masterSha256": "0f7d9bfe95679eb250cd4810ad91b1187d94edc14598797364a31fab41ba561f",
-      "cssSize": [
-        146,
-        55
+      "master": "draw-label-v4.png",
+      "masterSha256": "66c5828643e1b9f092017f24fa110f4223d14dc1014d4061b5226f29e35d2d4b",
+      "trimBox": [
+        89,
+        278,
+        1685,
+        699
       ],
+      "cssSize": [
+        186,
+        49
+      ],
+      "textCenterX": 140.3,
       "exports": [
         {
           "file": "draw-label-1x.png",
           "size": [
-            146,
-            55
+            186,
+            49
           ]
         },
         {
           "file": "draw-label-2x.png",
           "size": [
-            292,
-            110
+            372,
+            98
           ]
         },
         {
           "file": "draw-label-3x.png",
           "size": [
-            438,
-            165
+            558,
+            147
           ]
         }
-      ],
-      "prompt": "Create a horizontal DRAW match-result graphic. Image 1 is the exact silver equals sign reference, image 2 is matching WIN layout and lettering style reference. Place silver EQUALS SIGN on LEFT, large uppercase DRAW on RIGHT, vertically centered and separated by a small transparent gap. Preserve exactly two broad parallel horizontal silver bars and transparent gap between bars. DRAW uses same bold compact retro arcade block type style as WIN, but silver-white faces with icy blue highlights, steel-blue bevel shadows, thick near-black outlines. Text cap height roughly two-thirds symbol total height. Match visual weight and spacing of WIN. Compact horizontal transparent UI asset readable at small size, chunky stepped pixels, clean color clusters, no fine detail, no background, panel, extra symbols or badge. Entire artwork within safe margins. Genuine transparent alpha."
+      ]
     }
   ]
 }

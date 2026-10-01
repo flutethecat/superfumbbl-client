@@ -427,11 +427,12 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
             <span class="row-text">
               <strong class="row-name">{{ game.home.name }}</strong>
               <small class="row-meta row-coach">{{ game.home.coach }}</small>
+              <small v-if="game.home.race" class="row-meta row-race">{{ game.home.race }}</small>
               <small v-if="formatTeamValue(game.home.tv)" class="row-meta">{{ formatTeamValue(game.home.tv) }}</small>
             </span>
           </div>
           <div class="row-centre">
-            <span class="row-score">{{ game.home.score }} &ndash; {{ game.away.score }}</span>
+            <span class="row-score"><span class="row-score-n">{{ game.home.score }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ game.away.score }}</span></span>
             <span class="row-phase">{{ phaseLabel(game) }}</span>
           </div>
           <div class="row-right">
@@ -441,6 +442,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
               <span class="row-text">
                 <strong class="row-name">{{ game.away.name }}</strong>
                 <small class="row-meta row-coach">{{ game.away.coach }}</small>
+              <small v-if="game.away.race" class="row-meta row-race">{{ game.away.race }}</small>
                 <small v-if="formatTeamValue(game.away.tv)" class="row-meta">{{ formatTeamValue(game.away.tv) }}</small>
               </span>
             </div>
@@ -477,6 +479,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
               <span class="row-text">
                 <strong class="row-name">{{ row.myTeam }}</strong>
                 <small class="row-meta row-coach">{{ coach }}</small>
+                <small v-if="row.myRace" class="row-meta row-race">{{ row.myRace }}</small>
                 <small v-if="formatTeamValue(row.myTv)" class="row-meta">{{ formatTeamValue(row.myTv) }}</small>
               </span>
             </div>
@@ -485,8 +488,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
                    WIN / LOSS / DRAW label art (alt text names it), from MY side of the match. -->
               <img class="row-result-art" :data-result="myRecent(row)" :src="matchResultArt(myRecent(row)).src" :srcset="matchResultArt(myRecent(row)).srcset"
                 :width="matchResultArt(myRecent(row)).width" :height="matchResultArt(myRecent(row)).height" :alt="matchResultArt(myRecent(row)).alt" />
-              <span class="row-score">{{ row.myScore }} &ndash; {{ row.opponentScore }}</span>
-              <span class="row-phase">{{ relativeTime(row.when) }}</span>
+              <span class="row-score"><span class="row-score-n">{{ row.myScore }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ row.opponentScore }}</span></span>
             </div>
             <div class="row-right">
               <div class="row-team away">
@@ -495,6 +497,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
                 <span class="row-text">
                   <strong class="row-name">{{ row.opponentTeam }}</strong>
                   <small class="row-meta row-coach">{{ row.opponentCoach }}</small>
+                  <small v-if="row.opponentRace" class="row-meta row-race">{{ row.opponentRace }}</small>
                   <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
                 </span>
               </div>
@@ -502,6 +505,8 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
               <div class="row-actions">
                 <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
                 <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+                <!-- Owner 10-01 (S78): when it was played sits under the buttons, not in the result box. -->
+                <span class="row-when">{{ relativeTime(row.when) }}</span>
               </div>
             </div>
           </article>
@@ -656,7 +661,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 /* Owner 10-01 (S77): a game row is THREE boxes - my team | result | opponent - each bevelled and lifted off the row
    so it reads as its own panel. The left and right COLUMNS are equal, so the result box (and its icon) sits on the
    row's centre line; the right column holds the opponent box and the action buttons (.row-right). */
-.game-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .34fr) minmax(0, 1fr); align-items: stretch; gap: 12px; padding: 12px 14px; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
+.game-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .34fr) minmax(0, 1fr); align-items: stretch; gap: 12px; padding: 12px 14px; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
 .row-team, .row-centre { box-sizing: border-box; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px;
   background: var(--ui-old-lace, #F8F5E7);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 3px 7px rgba(26, 64, 28, .24); }
@@ -666,17 +671,21 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-right > .bevel { align-self: center; flex: none; }
 .row-team.away { flex-direction: row-reverse; text-align: right; }
 .row-logo { flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
-.row-text { display: grid; gap: 8px; min-width: 0; } /* owner 10-01 (S76): room around the coach name (was 2px) */
+.row-text { display: grid; gap: 6px; min-width: 0; } /* owner 10-01 (S76/S79): name / coach / race / TV, evenly spaced */
 .row-name { color: var(--pb-text); font-size: 24px; font-weight: 500; line-height: 1.15; overflow-wrap: break-word; }
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
 .row-coach { color: var(--pb-text); } /* owner 09-25: coach names in the darker green */
 .row-centre { display: grid; justify-items: center; align-content: center; gap: 6px; min-width: 0; }
-.row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 27px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap; }
+.row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 42px; /* owner 10-01 (S78): larger, the time left this box (was 27px) */ font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap;
+  display: grid; grid-template-columns: 1fr auto 1fr; column-gap: .35em; align-items: baseline; justify-self: stretch; }
+.row-score-n:first-child { text-align: right; }
+.row-score-n:last-child { text-align: left; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
 /* Owner 10-01 (S77): the result label art at its own CSS size (1x/2x/3x sources, never stretched). */
-.row-result-art { display: block; flex: none; max-width: 100%; height: auto; image-rendering: auto; }
+.row-result-art { display: block; flex: none; max-width: 100%; height: auto; image-rendering: auto; } /* S79: the IMAGE's centre sits over the score's dash */
 .resume-button, .play-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
-.row-actions { display: grid; gap: 8px; align-content: center; align-self: center; } /* grid: both buttons take the wider one's width */
+.row-actions { display: grid; gap: 8px; align-content: center; align-self: center; justify-items: stretch; }
+.row-when { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-align: center; text-transform: uppercase; white-space: nowrap; } /* grid: both buttons take the wider one's width */
 .play-button { font-size: 24px; }
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
