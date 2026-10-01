@@ -1032,17 +1032,25 @@ const NAME_STYLE = new TextStyle({
 /** Owner 10-01 (S88): a Shift+clicked player shows its label only, no overhead arrow. */
 const PLAYER_MARK_DRAWS_ARROW: boolean = false;
 /** Owner 10-01: Shift+click square-mark label — the player-number face, size and outline (NAME_STYLE), lines centred. */
+/** Owner 10-01 (S89): "adjust text size for the square markings so it fits 6 letters across". Measured with Pixi's own
+ *  text bounds (Nuffle bold, 3-unit outline included): at the player-number size (9) a six-letter word is 43-47 units
+ *  wide against a 44-unit tile (CORNER broke as CORN / ER); at 7 ordinary six-letter words are 34.5-38.3 (MARKED is
+ *  the widest tried) and fit the 40 units left by a 2-unit inset. Runs of the widest capitals (WWWWWW = 51.6) still
+ *  break across lines. */
+const SQUARE_MARK_LABEL_FONT_SIZE = 7;
 const SQUARE_MARK_LABEL_STYLE = new TextStyle({
   fontFamily: NAME_STYLE.fontFamily,
-  fontSize: NAME_STYLE.fontSize,
+  fontSize: SQUARE_MARK_LABEL_FONT_SIZE,
   fontWeight: NAME_STYLE.fontWeight,
   fill: 0xffffff,
   stroke: { color: 0x14161a, width: 3 },
   align: 'center',
-  lineHeight: Math.round(NAME_STYLE.fontSize * 1.15),
+  lineHeight: Math.round(SQUARE_MARK_LABEL_FONT_SIZE * 1.15),
 });
 /** Inner margin (world units at the near edge, each side; stroke included) a square label keeps from the tile edge. */
-const SQUARE_MARK_LABEL_INSET = 4;
+const SQUARE_MARK_LABEL_INSET = 2;
+/** Square labels sort above every mark column in the marks layer (columns use the depth z, well under this). */
+const SQUARE_MARK_LABEL_Z = 1_000_000;
 /** Owner 10-01: the player label sits on the token's TOP z-level (above every state marker / badge / marking). */
 const PLAYER_MARK_LABEL_Z = 10_000;
 /** Owner 09-15: the Checkers position letter — large and heavily outlined so it survives the disc's gloss highlight. */
@@ -12715,7 +12723,9 @@ export class PitchRenderer {
       const text = label ? this.buildSquareMarkLabel(label, s) : null;
       if (text) {
         text.position.set(a.x, a.y);
-        text.zIndex = col.zIndex + 0.5;
+        // S89: above EVERY column, not just its own - a nearer square's column rises over the squares behind it and
+        // washed their labels red.
+        text.zIndex = SQUARE_MARK_LABEL_Z + col.zIndex;
         this.marksLayer.addChild(text);
       }
     }
