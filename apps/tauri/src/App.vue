@@ -32,6 +32,7 @@ import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { playerSkillCategory } from './game/skillCategory';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
 import { clearConfigWebToken } from './game/configWebAuth';
 import {
@@ -980,7 +981,11 @@ function removeMarkingRule(index: number) {
 // A menu over EVERY skill in the game (skillNames.json), grouped
 // into "Skill Icons" and "Skill Markers". Each skill has a MY TEAM (home coach)
 // and OPPOSITION (away coach) behaviour dropdown; Markers add a per-skill glyph.
-const allSkills = [...(skillNames as string[])].sort((a, b) => a.localeCompare(b));
+// Owner 10-01 (S90): Team Captain (a BB2025 roster trait the server sends as a skill) is listed so its icon can be set
+// to Never; it sits in the SKILL list. Every other trait is listed under its own "Traits" subheading.
+const SKILL_CONFIG_EXTRA = ['Team Captain'];
+const SKILL_CONFIG_AS_SKILL = new Set(['Team Captain']);
+const allSkills = [...new Set([...(skillNames as string[]), ...SKILL_CONFIG_EXTRA])].sort((a, b) => a.localeCompare(b));
 const skillConfigGroup = ref<'icons' | 'markers'>('icons');
 const skillFilter = ref('');
 const showImportInstructions = ref(false);
@@ -989,6 +994,9 @@ const filteredSkills = computed(() => {
   const q = skillFilter.value.trim().toLowerCase();
   return q ? allSkills.filter((s) => s.toLowerCase().includes(q)) : allSkills;
 });
+const isConfigTrait = (skill: string): boolean => !SKILL_CONFIG_AS_SKILL.has(skill) && playerSkillCategory(skill) === 'trait';
+const filteredSkillRows = computed(() => filteredSkills.value.filter((skill) => !isConfigTrait(skill)));
+const filteredTraitRows = computed(() => filteredSkills.value.filter(isConfigTrait));
 const skillKind = computed<'icon' | 'marker'>(() => (skillConfigGroup.value === 'icons' ? 'icon' : 'marker'));
 /** Render position for the CURRENT group (owner 2026-07-03 r6f): icons default to
  *  'head', markers to 'feet'; either can be switched to the other. */
@@ -2414,7 +2422,24 @@ function captureKey(event: KeyboardEvent) {
                   <span>My team</span>
                   <span>Opposition</span>
                 </div>
-                <div v-for="skill in filteredSkills" :key="skill" class="sc-trow">
+                <div v-for="skill in filteredSkillRows" :key="skill" class="sc-trow">
+                  <span class="sc-skill" :title="skill">{{ skill }}</span>
+                  <input v-if="skillConfigGroup === 'markers'" class="sc-glyph"
+                    :value="skillMarkerText(skill)"
+                    @input="setSkillMarkerText(skill, ($event.target as HTMLInputElement).value)"
+                    maxlength="6" spellcheck="false" placeholder="glyph" />
+                  <select :value="skillBehaviour(skill, skillKind, 'Mine')"
+                    @change="setSkillBehaviour(skill, skillKind, 'Mine', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <select :value="skillBehaviour(skill, skillKind, 'Opp')"
+                    @change="setSkillBehaviour(skill, skillKind, 'Opp', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                </div>
+                <!-- Owner 10-01 (S90): traits under their own subheading (Team Captain stays in the skill list above). -->
+                <div v-if="filteredTraitRows.length" class="sc-subhead" role="heading" aria-level="4">Traits</div>
+                <div v-for="skill in filteredTraitRows" :key="skill" class="sc-trow sc-trow-trait">
                   <span class="sc-skill" :title="skill">{{ skill }}</span>
                   <input v-if="skillConfigGroup === 'markers'" class="sc-glyph"
                     :value="skillMarkerText(skill)"
@@ -4151,6 +4176,8 @@ textarea:focus-visible,
 }
 .sc-thead { position: sticky; top: 0; background: var(--ui-surface-2); color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.68rem); font-weight: 700; z-index: 1; }
 .sc-trow { font-size: max(var(--ui-min-text-size, 12px), 0.74rem); border-top: 1px solid var(--ui-border); }
+/* Owner 10-01 (S90): the Traits subheading - a band across the table, sticky under the column header. */
+.sc-subhead { position: sticky; top: 1.6em; z-index: 1; padding: 0.3rem 0.5rem; border-top: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-heading); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .sc-trow:nth-child(odd) { background: var(--ui-surface-2); }
 .sc-skill { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-trow select, .sc-glyph {

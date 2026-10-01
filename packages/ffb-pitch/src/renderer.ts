@@ -1043,7 +1043,9 @@ const SQUARE_MARK_LABEL_STYLE = new TextStyle({
   fontSize: SQUARE_MARK_LABEL_FONT_SIZE,
   fontWeight: NAME_STYLE.fontWeight,
   fill: 0xffffff,
-  stroke: { color: 0x14161a, width: 3 },
+  // Owner 10-01 (S90, "4x and mip-mapped for clarity"): the text already rasterises at 4x with mipmaps; what blurred it
+  // was the player-number outline (3 units, mitred) on a 7-unit font - spikes and a heavy black halo. Thinner, rounded.
+  stroke: { color: 0x14161a, width: 2, join: 'round' },
   align: 'center',
   lineHeight: Math.round(SQUARE_MARK_LABEL_FONT_SIZE * 1.15),
 });
