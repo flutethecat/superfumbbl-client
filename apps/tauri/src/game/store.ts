@@ -20,6 +20,7 @@ import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, e
 import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, solidDefenceWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
+import { inducementChoiceLabel } from './inducementChoiceLabel';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
@@ -15330,14 +15331,6 @@ function clearYesNo() {
 }
 
 let liveUseInducementOffer: UseInducementOffer | null = null;
-
-function inducementChoiceLabel(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/^./, (character) => character.toUpperCase())
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function answerUseInducement(choice: UseInducementChoice): void {
   const offer = liveUseInducementOffer;
