@@ -138,6 +138,23 @@ export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   return { message: `${subject} is selecting players for the Charge!` };
 }
 
+/** Owner 10-01 (S62): Solid Defence - the kicking coach first PICKS up to D3+3 players (`playerChoice` mode `solidDefence`,
+ *  teamId = the kicking team; corpus-soliddefence cmd 41), then RE-SETS them in turn mode `solidDefence` (cmd 42-49; the
+ *  answered dialog stays in the model until cmd 51). Every other seat is told who is choosing / repositioning. */
+export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  const pickDialog = dialog?.dialogId === 'playerChoice' && dialog.playerChoiceMode === 'solidDefence';
+  const repositioning = g.turnMode === 'solidDefence';
+  const picking = !repositioning && g.turnMode === 'kickoff' && pickDialog;
+  if (!picking && !repositioning) return null;
+  const dialogTeamId = pickDialog ? String(dialog!.teamId ?? '') : '';
+  const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === dialogTeamId) ?? (g.homePlaying ? g.teamHome : g.teamAway);
+  const teamId = String(team?.teamId ?? '');
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
+  return { message: repositioning ? `${subject} is repositioning players for the Solid Defence!` : `${subject} is selecting players for the Solid Defence!` };
+}
+
 /** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
  *  RECEIVING coach - the side NOT playing (upstream DialogTouchbackHandler:25, StepApplyKickoffResult skips the flip) - who
  *  nominates the player who takes the ball. Every other seat is told who is choosing. The dialog carries no teamId. */
@@ -198,6 +215,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     // Existing On-the-Ball copy is opponent-player-only; spectators have no owned reaction turn.
     chargeWaiting: chargeWaitingFromGame(g, null),
     touchbackWaiting: touchbackWaitingFromGame(g, null),
+    solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),

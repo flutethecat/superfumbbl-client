@@ -17,7 +17,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, solidDefenceWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
@@ -1154,6 +1154,8 @@ const legacyState = reactive({
   chargeWaiting: null as { message: string } | null,
   /** S57: '<Coach> is choosing who takes the touchback' for every seat but the receiving coach. */
   touchbackWaiting: null as { message: string } | null,
+  /** S62: '<Coach> is selecting / repositioning players for the Solid Defence!' for every seat but the kicking coach. */
+  solidDefenceWaiting: null as { message: string } | null,
   /** Owner 07-03: TURNOVER splash (failed action only — not TD/voluntary/drive change), raised after a real non-TD turnEnd and other anims settle. */
   turnover: null as { side: 'home' | 'away'; coach: string; teamName: string; logo: string | null; seq: number } | null,
   /** Owner 07-05: turn-START splash ("«Coach»'s turn") — voluntary ends only (turnover keeps its own; a TD transitions to kickoff). */
@@ -1237,6 +1239,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     onTheBallWaiting: passive.onTheBallWaiting,
     chargeWaiting: passive.chargeWaiting,
     touchbackWaiting: passive.touchbackWaiting,
+    solidDefenceWaiting: passive.solidDefenceWaiting,
     followupChoice: null,
     skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
     reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
@@ -1288,7 +1291,7 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'solidDefenceWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -8540,7 +8543,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
@@ -8676,7 +8679,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -17456,6 +17459,7 @@ function syncOnTheBallWaiting(g: GameJson): void {
   const myTeamId = play.active ? String((myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? '') || null : null;
   state.chargeWaiting = playback.catchingUp ? null : chargeWaitingFromGame(g, myTeamId);
   state.touchbackWaiting = playback.catchingUp ? null : touchbackWaitingFromGame(g, myTeamId);
+  state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
   state.onTheBallWaiting = playback.catchingUp ? null : projectOnTheBallWaiting({
     audience: frame.audience,
     turnMode: frame.turnMode,
@@ -17496,7 +17500,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -17820,7 +17824,7 @@ function setPregameWait(text: string): void {
 }
 function drivePregameStep() {
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -18896,7 +18900,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -20615,7 +20619,7 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
@@ -20949,7 +20953,7 @@ export const gameStore = {
       if (thisSession !== session) return;
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null;
       clearSendOffWaiting();
       if (officialStatusTerminal) {
         expectingGame = false;
@@ -23332,7 +23336,7 @@ export const gameStore = {
     clearSetupLoop();
     play.active = false;
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null;
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.solidDefenceWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

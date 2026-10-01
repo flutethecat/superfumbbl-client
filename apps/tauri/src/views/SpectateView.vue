@@ -12791,6 +12791,11 @@ function sendChat() {
           :message="gameStore.state.chargeWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- S62 (owner 10-01): Solid Defence — the kicking coach picks, then repositions; every other seat waits on them. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.solidDefenceWaiting" title="Solid Defence" notice-id="solid-defence-waiting"
+          :message="gameStore.state.solidDefenceWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S57 (owner 09-30): Touchback — the receiving coach nominates the ball carrier; every other seat waits on them. -->
         <OnTheBallWaitingModal v-if="gameStore.state.touchbackWaiting" title="Touchback" notice-id="touchback-waiting"
           :message="gameStore.state.touchbackWaiting.message"
@@ -14517,8 +14522,10 @@ function sendChat() {
 .pitch-host > .induce-phase.ind-grid {
   position: absolute;
   /* Owner UAT: the pane occupies the middle two-thirds of the pitch host. The
-     shader remains full-host; only this scroll container is shortened. */
-  inset: 16.6667% 0;
+     shader remains full-host; only this scroll container is shortened.
+     Owner 10-01 ("a bit small on this page"): the middle 84% now, and the whole pane scales up on large windows
+     (below) - its columns top out at 300 / 760 / 300 px with 12-16 px text, which read tiny at 1440p and up. */
+  inset: 8% 0;
   z-index: 47;
   width: 100%;
   height: auto;
@@ -14528,6 +14535,13 @@ function sendChat() {
   overscroll-behavior: contain;
   background: transparent;
 }
+/* Owner 10-01: uniform scale of the inducements pane by window width (percent insets are unaffected by zoom, so the
+   pane still fills the host; only its px-sized columns, icons and text grow). 1390 px of columns x zoom stays inside
+   each breakpoint's width. */
+@media (min-width: 1700px) { .pitch-host > .induce-phase.ind-grid { zoom: 1.15; } }
+@media (min-width: 2100px) { .pitch-host > .induce-phase.ind-grid { zoom: 1.25; } }
+@media (min-width: 2500px) { .pitch-host > .induce-phase.ind-grid { zoom: 1.35; } }
+@media (min-width: 3200px) { .pitch-host > .induce-phase.ind-grid { zoom: 1.7; } }
 /* the two reveal panels — grounded CENTER-LEFT / CENTER-RIGHT, mirrored. */
 .induce-reveal {
   position: absolute; z-index: 46; top: 50%; transform: translateY(-50%);
