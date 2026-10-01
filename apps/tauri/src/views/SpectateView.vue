@@ -11575,7 +11575,7 @@ function sendChat() {
         <!-- BB3-style config buttons (owner 2026-07-02); positioned under the
              top-left coach panel + matched to its width (owner 2026-07-03) -->
         <nav class="config-bar ui-panel"
-          :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['config-bar'], 'bar-right': settings.bottomBarsSwapped, 'bar-left': !settings.bottomBarsSwapped }"
+          :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['config-bar'], 'bar-right': settings.bottomBarsSwapped, 'bar-left': !settings.bottomBarsSwapped, 'endgame-front': endGameFront }"
           :style="configBarStyle">
           <template v-if="settings.uiCustomize">
             <span class="ui-grip" title="Drag to move" @pointerdown="startPanelMove('config-bar', $event)">⠿</span>
@@ -17354,6 +17354,8 @@ function sendChat() {
 }
 /* Owner 09-06: above the end-game result window (50) and the MVP nominate overlay (55), interactive. */
 .chat-toast-stack.endgame-front, .log-panel.endgame-front { z-index: 57; pointer-events: auto; }
+/* Owner 10-01: the config bar (Report an issue) is lifted over the end-game screens too - the button must always be clickable. */
+.config-bar.endgame-front { z-index: 57; pointer-events: auto; }
 .chat-toast-stack.endgame-front {
   display: flex;
   flex-direction: column;

@@ -5361,8 +5361,14 @@ function fenceMovementPresentation(
 function releaseDeferredFailedFence(publish: boolean): void {
   const held = deferredFailedFence;
   deferredFailedFence = null;
+  const wasHolding = !!state.failedActionHold;
   if (state.failedActionHold) state.failedActionHold = null;
   if (held && publish) publishMovementPresentationFence(held.playerId, held.occurrenceId, held.phase);
+  // Owner 10-01 P0 (FUMBBL g1948818 cmd 3553/3978, mudarra93): a dodge that FAILS and is rescued by the Dodge
+  // re-roll in the SAME frame leaves the plan parked behind this hold; the hold used to release without waking the
+  // planner, so the next square was never sent, the server waited on the client, and the coach ended the activation
+  // by hand ("player staying in place"). The release is a planner trigger like an applied frame.
+  if (wasHolding && publish && plannerPlan) plannerAdvance();
 }
 function publishMovementPresentationFence(
   playerId: string,
