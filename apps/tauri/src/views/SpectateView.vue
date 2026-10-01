@@ -7561,6 +7561,17 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     ctxMenu.visible = false;
     return;
   }
+  // Owner 10-01 (S64): "A right click at 'Choose a blitz target' should cancel the blitz flow, currently we require
+  // users to declare a target". While the server waits in selectBlitzTarget for MY blitzer, a right-click anywhere on
+  // the pitch is the cancel: gameStore.endActivation() sends the self-target (the same wire the End Activation button
+  // uses there; a declared-but-unactivated blitz is refunded). Runs before any menu so it cannot also open one.
+  if (contextGame && String(contextGame.turnMode ?? '') === 'selectBlitzTarget' && actingId && gameStore.iControl(actingId)
+      && deriveClientState(contextGame, o66Ctx()) === 'SELECT_BLITZ_TARGET') {
+    gameStore.endActivation();
+    clearO66Arms();
+    ctxMenu.visible = false;
+    return;
+  }
   // StepInitBlocking accepts CLIENT_ACTING_PLAYER{null} while waiting for Fury's
   // optional second target. Consume right-click here so it cannot also open a menu.
   if (furySecondBlockTargeting.value) {
