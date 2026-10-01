@@ -278,7 +278,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                          re-roll, blue = passed after a re-roll, red = failed even after a re-roll; the outline is every attempt
                          (its empty part failed with no re-roll); dashed = expected passes. -->
                     <template v-if="row.key === 'dodge' && side.dodgeTargets">
-                      <h4>Dodges by target <span class="pg-dice-n">{{ side.dodgeTargets.passed }} / {{ side.dodgeTargets.attempts }} passed</span></h4>
+                      <h4>Dodges by target <span class="pg-dice-n">{{ side.dodgeTargets.passed }} / {{ side.dodgeTargets.attempts }} passed · expected <b>{{ side.dodgeTargets.expected.toFixed(1) }}</b></span></h4>
                       <svg class="pg-dice-chart pg-dodge-targets" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" aria-label="Dodges by target number">
                         <g v-for="(b, i) in side.dodgeTargets.bars" :key="i">
                           <rect :x="b.x" :y="b.yAttempts" :width="b.w" :height="b.hAttempts" class="pg-dodge-attempts" />
@@ -289,6 +289,9 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                           <text :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
                           <text :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 6, b.yAttempts - 3)" class="pg-dice-count">{{ b.attempts ? `${b.passed}/${b.attempts}` : '—' }}</text>
                         </g>
+                        <!-- owner 10-01 r2: the value of each colour field, centred in it (beside it when the field is too thin) -->
+                        <text v-for="(l, i) in side.dodgeTargets.labels" :key="'s' + i" :x="l.x" :y="l.y"
+                          class="pg-dodge-seg-n" :class="[l.inside ? 'pg-dodge-seg-in' : `pg-dodge-seg-out pg-dodge-seg-${l.kind}`]">{{ l.n }}</text>
                       </svg>
                       <p class="pg-dodge-legend"><span class="pg-dodge-key pg-dodge-key-first" />passed <span class="pg-dodge-key pg-dodge-key-reroll" />passed after re-roll <span class="pg-dodge-key pg-dodge-key-fail" />failed after re-roll <span class="pg-dodge-key pg-dodge-key-none" />failed, no re-roll <span class="pg-dodge-key pg-dodge-key-exp" />expected</p>
                     </template>
@@ -826,6 +829,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dodge-first { fill: #2fae5a; }
 .pg-dodge-reroll { fill: #3d7cff; }
 .pg-dodge-fail { fill: #e5484d; }
+.pg-dodge-seg-n { font-size: 7px; font-weight: 700; font-variant-numeric: tabular-nums; pointer-events: none; }
+.pg-dodge-seg-in { fill: #fff; text-anchor: middle; paint-order: stroke; stroke: rgba(0, 0, 0, 0.45); stroke-width: 0.8px; }
+.pg-dodge-seg-out { text-anchor: start; }
+.pg-dodge-seg-first { fill: #2fae5a; } .pg-dodge-seg-reroll { fill: #6f9bff; } .pg-dodge-seg-fail { fill: #e5484d; }
 .pg-dodge-legend { margin: 2px 0 8px; font-size: max(var(--ui-min-text-size, 12px), 10px); color: var(--ui-muted); display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
 .pg-dodge-key { display: inline-block; width: 10px; height: 8px; margin-right: 4px; vertical-align: middle; box-sizing: border-box; }
 .pg-dodge-key-first { background: #2fae5a; }

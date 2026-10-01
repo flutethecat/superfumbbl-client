@@ -208,7 +208,10 @@ export interface PgDodgeTargetBar {
   x: number; w: number; yAttempts: number; hAttempts: number; yFirst: number; hFirst: number; yReroll: number; hReroll: number;
   yFail: number; hFail: number; ey: number;
 }
-export interface PgDodgeTargetChart { bars: PgDodgeTargetBar[]; attempts: number; passed: number }
+/** One number per colour field (owner 10-01 r2): centred in the field when it is tall enough, else beside it. */
+export interface PgDodgeSegLabel { n: number; kind: 'first' | 'reroll' | 'fail'; x: number; y: number; inside: boolean }
+export const PG_DODGE_LABEL_MIN_H = 7;
+export interface PgDodgeTargetChart { bars: PgDodgeTargetBar[]; attempts: number; passed: number; expected: number; labels: PgDodgeSegLabel[] }
 export function pgDodgeTargetChart(byTarget: DiceTally['dodgeByTarget']): PgDodgeTargetChart | null {
   const rows = [2, 3, 4, 5, 6].map((target) => ({ target, ...(byTarget?.[target] ?? { attempts: 0, passFirst: 0, passReroll: 0, failReroll: 0 }) }));
   const attempts = rows.reduce((n, r) => n + r.attempts, 0);
@@ -227,7 +230,15 @@ export function pgDodgeTargetChart(byTarget: DiceTally['dodgeByTarget']): PgDodg
       ey: PG_CHART_BASE - expected * scale,
     };
   });
-  return { bars, attempts, passed: bars.reduce((n, b) => n + b.passed, 0) };
+  const labels: PgDodgeSegLabel[] = [];
+  for (const b of bars) {
+    for (const [kind, n, y, h] of [['first', b.passFirst, b.yFirst, b.hFirst], ['reroll', b.passReroll, b.yReroll, b.hReroll], ['fail', b.failReroll, b.yFail, b.hFail]] as const) {
+      if (n <= 0) continue;
+      const inside = h >= PG_DODGE_LABEL_MIN_H;
+      labels.push({ n, kind, inside, x: inside ? b.x + b.w / 2 : b.x + b.w + 2, y: y + h / 2 + 2.5 });
+    }
+  }
+  return { bars, attempts, passed: bars.reduce((n, b) => n + b.passed, 0), expected: bars.reduce((n, b) => n + b.expected, 0), labels };
 }
 export interface PgDiceSide {
   team: string; logo: string; charts: PgDiceChartRow[]; oneNinth: number; oneThirtySixth: number;
