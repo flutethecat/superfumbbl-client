@@ -138,6 +138,19 @@ export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   return { message: `${subject} is selecting players for the Charge!` };
 }
 
+/** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
+ *  RECEIVING coach - the side NOT playing (upstream DialogTouchbackHandler:25, StepApplyKickoffResult skips the flip) - who
+ *  nominates the player who takes the ball. Every other seat is told who is choosing. The dialog carries no teamId. */
+export function touchbackWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (dialog?.dialogId !== 'touchback') return null;
+  const team = g.homePlaying ? g.teamAway : g.teamHome;
+  const teamId = String(team?.teamId ?? '');
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
+  return { message: `${subject} is choosing who takes the touchback` };
+}
+
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
  *  fallback the live applier uses (store: dp.playerId ?? dp.playerIds[0]). */
 function shadowingPlayerId(dialog: Record<string, unknown> | null): string | null {
@@ -184,6 +197,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
       : followupWaiting || blastinWaiting ? String(g.actingPlayer?.playerId ?? '') || null : null,
     // Existing On-the-Ball copy is opponent-player-only; spectators have no owned reaction turn.
     chargeWaiting: chargeWaitingFromGame(g, null),
+    touchbackWaiting: touchbackWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),
