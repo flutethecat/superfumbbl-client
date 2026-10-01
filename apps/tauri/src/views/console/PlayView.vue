@@ -650,7 +650,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .row-team.away { flex-direction: row-reverse; text-align: right; }
 .row-logo { flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
-.row-text { display: grid; gap: 2px; min-width: 0; }
+.row-text { display: grid; gap: 8px; min-width: 0; } /* owner 10-01 (S76): room around the coach name (was 2px) */
 .row-name { color: var(--pb-text); font-size: 24px; font-weight: 500; line-height: 1.15; overflow-wrap: break-word; }
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
 .row-coach { color: var(--pb-text); } /* owner 09-25: coach names in the darker green */
