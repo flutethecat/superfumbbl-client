@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
+import { matchResultArt } from '../../game/matchResultArt';
 import {
   clearFumbblLobby,
   fumbblJoinByName,
@@ -433,22 +434,24 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
             <span class="row-score">{{ game.home.score }} &ndash; {{ game.away.score }}</span>
             <span class="row-phase">{{ phaseLabel(game) }}</span>
           </div>
-          <div class="row-team away">
-            <img v-if="crest(game.away)" class="row-logo" :src="crest(game.away)!" alt="" />
-            <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.away.name) }}</span>
-            <span class="row-text">
-              <strong class="row-name">{{ game.away.name }}</strong>
-              <small class="row-meta row-coach">{{ game.away.coach }}</small>
-              <small v-if="formatTeamValue(game.away.tv)" class="row-meta">{{ formatTeamValue(game.away.tv) }}</small>
-            </span>
+          <div class="row-right">
+            <div class="row-team away">
+              <img v-if="crest(game.away)" class="row-logo" :src="crest(game.away)!" alt="" />
+              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.away.name) }}</span>
+              <span class="row-text">
+                <strong class="row-name">{{ game.away.name }}</strong>
+                <small class="row-meta row-coach">{{ game.away.coach }}</small>
+                <small v-if="formatTeamValue(game.away.tv)" class="row-meta">{{ formatTeamValue(game.away.tv) }}</small>
+              </span>
+            </div>
+            <button
+              class="bevel resume-button"
+              type="button"
+              :disabled="!canResume || (pendingResume?.id === game.id)"
+              :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to resume from here'"
+              @click="resumeGame(game)"
+            >{{ pendingResume?.id === game.id ? 'Connecting…' : 'Resume' }}</button>
           </div>
-          <button
-            class="bevel resume-button"
-            type="button"
-            :disabled="!canResume || (pendingResume?.id === game.id)"
-            :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to resume from here'"
-            @click="resumeGame(game)"
-          >{{ pendingResume?.id === game.id ? 'Connecting…' : 'Resume' }}</button>
         </article>
 
         <p v-if="activeError" class="load-error" role="alert">{{ activeError }}</p>
@@ -478,24 +481,28 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
               </span>
             </div>
             <div class="row-centre">
-              <!-- Owner 09-25: W/L/D above the score, the relative time under it (no separator dot). -->
-              <b class="row-result" :data-result="myRecent(row)">{{ myRecent(row) }}</b>
+              <!-- Owner 09-25: the result above the score, the relative time under it. Owner 10-01 (S77): the result is the
+                   WIN / LOSS / DRAW label art (alt text names it), from MY side of the match. -->
+              <img class="row-result-art" :data-result="myRecent(row)" :src="matchResultArt(myRecent(row)).src" :srcset="matchResultArt(myRecent(row)).srcset"
+                :width="matchResultArt(myRecent(row)).width" :height="matchResultArt(myRecent(row)).height" :alt="matchResultArt(myRecent(row)).alt" />
               <span class="row-score">{{ row.myScore }} &ndash; {{ row.opponentScore }}</span>
               <span class="row-phase">{{ relativeTime(row.when) }}</span>
             </div>
-            <div class="row-team away">
-              <img v-if="recentCrest(row, 'opponent')" class="row-logo" :src="recentCrest(row, 'opponent')!" alt="" />
-              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.opponentTeam) }}</span>
-              <span class="row-text">
-                <strong class="row-name">{{ row.opponentTeam }}</strong>
-                <small class="row-meta row-coach">{{ row.opponentCoach }}</small>
-                <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
-              </span>
-            </div>
-            <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
-            <div class="row-actions">
-              <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
-              <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+            <div class="row-right">
+              <div class="row-team away">
+                <img v-if="recentCrest(row, 'opponent')" class="row-logo" :src="recentCrest(row, 'opponent')!" alt="" />
+                <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.opponentTeam) }}</span>
+                <span class="row-text">
+                  <strong class="row-name">{{ row.opponentTeam }}</strong>
+                  <small class="row-meta row-coach">{{ row.opponentCoach }}</small>
+                  <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
+                </span>
+              </div>
+              <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
+              <div class="row-actions">
+                <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
+                <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+              </div>
             </div>
           </article>
         </div>
@@ -534,7 +541,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
    uses (theme.ts --ui-eggshell / --ui-old-lace / --ui-forest; carmine #790004 stays the action accent). Cards stack:
    My Active Games, then My Recent Games in the same card/row design. Crests are the 128 px masters at 1:1. */
 .play-view { --pb-text: var(--ui-forest, #1A401C); --pb-muted: color-mix(in srgb, var(--ui-forest, #1A401C) 62%, transparent); --pb-line: color-mix(in srgb, var(--ui-forest, #1A401C) 28%, transparent); --pb-carmine: #790004;
-  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: 1440px; min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
+  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: min(2200px, 94vw); min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
 h1, h2, p { margin: 0; }
 .play-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .22); }
@@ -646,32 +653,34 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .game-entry-action { color: var(--pb-muted); white-space: nowrap; }
 
 /* Game rows (active + recent share the design) */
-.game-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 14px 18px; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
+/* Owner 10-01 (S77): a game row is THREE boxes - my team | result | opponent - each bevelled and lifted off the row
+   so it reads as its own panel. The left and right COLUMNS are equal, so the result box (and its icon) sits on the
+   row's centre line; the right column holds the opponent box and the action buttons (.row-right). */
+.game-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .34fr) minmax(0, 1fr); align-items: stretch; gap: 12px; padding: 12px 14px; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
+.row-team, .row-centre { box-sizing: border-box; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px;
+  background: var(--ui-old-lace, #F8F5E7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 3px 7px rgba(26, 64, 28, .24); }
 .row-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.row-right { display: flex; align-items: stretch; gap: 12px; min-width: 0; }
+.row-right > .row-team { flex: 1 1 0; }
+.row-right > .bevel { align-self: center; flex: none; }
 .row-team.away { flex-direction: row-reverse; text-align: right; }
 .row-logo { flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
 .row-text { display: grid; gap: 8px; min-width: 0; } /* owner 10-01 (S76): room around the coach name (was 2px) */
 .row-name { color: var(--pb-text); font-size: 24px; font-weight: 500; line-height: 1.15; overflow-wrap: break-word; }
 .row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; }
 .row-coach { color: var(--pb-text); } /* owner 09-25: coach names in the darker green */
-.row-centre { display: grid; justify-items: center; gap: 4px; }
+.row-centre { display: grid; justify-items: center; align-content: center; gap: 6px; min-width: 0; }
 .row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 27px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
-/* Owner 10-01 (S75): the W / L / D is larger and reads as a STENCIL - a bridge is cut through the middle of the letter
-   (a mask, so the row shows through; no extra font). Colours unchanged: W green, L red, D amber. */
-.row-result { font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: 0;
-  --cut: 45%; /* where the stencil bridge falls: the middle of W and D, the foot of L */
-  -webkit-mask-image: linear-gradient(to right, #000 0 var(--cut), transparent var(--cut) calc(var(--cut) + 10%), #000 calc(var(--cut) + 10%));
-  mask-image: linear-gradient(to right, #000 0 var(--cut), transparent var(--cut) calc(var(--cut) + 10%), #000 calc(var(--cut) + 10%)); }
-.row-result[data-result="W"] { color: #2f8f46; }
-.row-result[data-result="L"] { color: #8f111b; --cut: 58%; }
-.row-result[data-result="D"] { color: #b5741a; }
+/* Owner 10-01 (S77): the result label art at its own CSS size (1x/2x/3x sources, never stretched). */
+.row-result-art { display: block; flex: none; max-width: 100%; height: auto; image-rendering: auto; }
 .resume-button, .play-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
-.row-actions { display: grid; gap: 8px; align-content: center; } /* grid: both buttons take the wider one's width */
+.row-actions { display: grid; gap: 8px; align-content: center; align-self: center; } /* grid: both buttons take the wider one's width */
 .play-button { font-size: 24px; }
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
-.recent-list { display: grid; align-content: start; gap: 10px; flex: 1 1 0; min-height: 0; overflow-y: auto; padding-right: 4px; }
+.recent-list { display: grid; align-content: start; gap: 10px; flex: 1 1 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable both-edges; }
 /* owner 09-25: every Details is the carmine bevel (the green "no stored details" variant read as a different action); the popup says when nothing is stored */
 
 /* Owner 09-25: Details popup — large, centred; the pane inside keeps its own look (PostGamePanel embedded). */
@@ -694,6 +703,8 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
   h1 { font-size: 32px; }
   .bevel { font-size: 18px; padding: 10px 18px; }
   .match-grid, .game-row { grid-template-columns: 1fr; }
+  .row-right { flex-direction: column; }
+  .row-right > .bevel { align-self: stretch; }
   .row-logo, .race-logo, .logo-fallback, .team-logo-frame { width: 64px; height: 64px; flex-basis: 64px; }
   .team-side { grid-template-columns: 64px auto auto auto minmax(0, 1fr); }
   [data-team-side="opponent"] { grid-template-columns: minmax(0, 1fr) auto auto auto 64px; }

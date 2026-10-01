@@ -1,0 +1,107 @@
+{
+  "source": "owner handoff 2026-10-01: Super FUMBBL Team Icons/action-icons/match-results (HANDOFF-WIN-LOSS-DRAW.md)",
+  "tool": "built-in image_gen",
+  "generated": "2026-10-01",
+  "note": "Label masters (1774x887) trimmed to content and Lanczos-resampled to 1x/2x/3x of the CSS size so the letters of all three labels share one height (30 CSS px). Original artwork, no third-party or GW-derived imagery.",
+  "assets": [
+    {
+      "name": "win-label",
+      "master": "win-label-v1.png",
+      "masterSha256": "58d31893b8ab1a58e406bb58cdb7b1130bba5607f760e861e5d376adbe864fe7",
+      "cssSize": [
+        129,
+        61
+      ],
+      "exports": [
+        {
+          "file": "win-label-1x.png",
+          "size": [
+            129,
+            61
+          ]
+        },
+        {
+          "file": "win-label-2x.png",
+          "size": [
+            258,
+            122
+          ]
+        },
+        {
+          "file": "win-label-3x.png",
+          "size": [
+            387,
+            183
+          ]
+        }
+      ],
+      "prompt": "Create a horizontal WIN match-result graphic using this exact gold trophy as the visual reference. Trophy on the LEFT and large uppercase text WIN directly to its RIGHT, vertically centered, clean transparent gap separating them. Preserve the trophy's squat shape, star, handles, gold palette, thick near-black outline and chunky retro 16-bit pixel art. WIN uses bold compact arcade block lettering, gold/yellow faces, cream highlights, amber beveled shadows and thick near-black outline matching the trophy. Text cap height about two-thirds trophy height. Compact horizontal lockup, excellent small homepage UI readability, entire silhouette and text inside safe margins. No extra symbols, background, panel or badge. Genuine transparent alpha background. One individual asset."
+    },
+    {
+      "name": "loss-label",
+      "master": "loss-label-v1.png",
+      "masterSha256": "63db30a2766dcb98a3d9f01863a41cb681744b535801b8aec79395ee265afbdc",
+      "cssSize": [
+        141,
+        68
+      ],
+      "exports": [
+        {
+          "file": "loss-label-1x.png",
+          "size": [
+            141,
+            68
+          ]
+        },
+        {
+          "file": "loss-label-2x.png",
+          "size": [
+            282,
+            136
+          ]
+        },
+        {
+          "file": "loss-label-3x.png",
+          "size": [
+            423,
+            204
+          ]
+        }
+      ],
+      "prompt": "Create a horizontal LOSS match-result graphic. Image 1 is the exact red cracked shield symbol reference, image 2 is matching WIN layout and lettering style reference. Place red cracked shield on LEFT, large uppercase LOSS on RIGHT, vertically centered and separated by a small transparent gap. Preserve simple shield silhouette, large jagged black center crack, red face, pale highlights, deep crimson shadow, chunky stepped pixel edges. LOSS uses same bold compact retro arcade block type style as WIN, but red faces with pale warm highlights, crimson bevel shadows, thick near-black outlines. Text cap height about two-thirds shield height. Match visual weight and spacing of WIN. Compact horizontal transparent UI asset readable at small size, clean color clusters, no fine detail, no background, panel, extra symbols or badge. Entire artwork within safe margins. Genuine transparent alpha."
+    },
+    {
+      "name": "draw-label",
+      "master": "draw-label-v1.png",
+      "masterSha256": "0f7d9bfe95679eb250cd4810ad91b1187d94edc14598797364a31fab41ba561f",
+      "cssSize": [
+        146,
+        55
+      ],
+      "exports": [
+        {
+          "file": "draw-label-1x.png",
+          "size": [
+            146,
+            55
+          ]
+        },
+        {
+          "file": "draw-label-2x.png",
+          "size": [
+            292,
+            110
+          ]
+        },
+        {
+          "file": "draw-label-3x.png",
+          "size": [
+            438,
+            165
+          ]
+        }
+      ],
+      "prompt": "Create a horizontal DRAW match-result graphic. Image 1 is the exact silver equals sign reference, image 2 is matching WIN layout and lettering style reference. Place silver EQUALS SIGN on LEFT, large uppercase DRAW on RIGHT, vertically centered and separated by a small transparent gap. Preserve exactly two broad parallel horizontal silver bars and transparent gap between bars. DRAW uses same bold compact retro arcade block type style as WIN, but silver-white faces with icy blue highlights, steel-blue bevel shadows, thick near-black outlines. Text cap height roughly two-thirds symbol total height. Match visual weight and spacing of WIN. Compact horizontal transparent UI asset readable at small size, chunky stepped pixels, clean color clusters, no fine detail, no background, panel, extra symbols or badge. Entire artwork within safe margins. Genuine transparent alpha."
+    }
+  ]
+}
