@@ -549,14 +549,13 @@ onBeforeUnmount(() => {
   --pb-muted: color-mix(in srgb, var(--ui-forest, #1A401C) 62%, transparent);
   --pb-line: color-mix(in srgb, var(--ui-forest, #1A401C) 28%, transparent);
   --pb-carmine: #790004;
-  /* S84: equal team panels, the centre the smallest; the Spectate column is mirrored by left padding so the
-     centre panel stays on the page's centre line. */
-  --row-actions-w: 170px;
+  /* S85: as on the Play blade - the centre panel is the smallest and on the page's centre line; the right column is
+     shared by the away panel and the Spectate button (.row-right). */
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(170px, .26fr) minmax(0, 1fr) var(--row-actions-w);
+  grid-template-columns: minmax(0, 1fr) minmax(170px, .26fr) minmax(0, 1fr);
   align-items: stretch;
   gap: 12px;
-  padding: 12px 14px 12px calc(14px + var(--row-actions-w) + 12px);
+  padding: 12px 14px;
   border: 1px solid var(--pb-line);
   border-radius: 4px;
   color: var(--pb-text);
@@ -571,8 +570,9 @@ onBeforeUnmount(() => {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 3px 7px rgba(26, 64, 28, .24);
 }
 .row-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.row-right { display: contents; } /* the away panel and the Spectate button are grid items of the row itself */
-.row-right > .bevel { align-self: center; }
+.row-right { display: flex; align-items: stretch; gap: 12px; min-width: 0; }
+.row-right > .row-team { flex: 1 1 0; }
+.row-right > .bevel { align-self: center; flex: none; }
 .row-team.away { flex-direction: row-reverse; text-align: right; }
 .row-logo { box-sizing: border-box; flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
 .logo-fallback { display: grid; place-items: center; border: 1px solid var(--pb-line); border-radius: 4px; color: var(--pb-text); background: var(--ui-old-lace, #F8F5E7); font-size: 28px; letter-spacing: .06em; }
@@ -637,7 +637,6 @@ onBeforeUnmount(() => {
 /* Windows under ~1500px: the away panel shares its column with the Spectate button, so shrink the crest, the centre
    panel and the team name rather than wrap names letter by letter. */
 @media (max-width: 1500px) {
-  .game-row { --row-actions-w: 150px; }
   .spectate-button { font-size: 20px; padding: 10px 12px; }
   .row-logo { flex-basis: 88px; width: 88px; height: 88px; }
   .row-name { font-size: 20px; }
@@ -650,7 +649,8 @@ onBeforeUnmount(() => {
   .toolbar-spacer { display: none; }
   .live-indicator { margin-left: auto; }
   .bevel { font-size: 18px; padding: 10px 18px; }
-  .game-row { grid-template-columns: 1fr; padding: 12px 14px; }
+  .game-row { grid-template-columns: 1fr; }
+  .row-right { flex-direction: column; }
   .row-right > .bevel { align-self: stretch; }
   .row-logo { width: 64px; height: 64px; flex-basis: 64px; }
   .logo-fallback { font-size: 18px; }

@@ -661,16 +661,17 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 /* Owner 10-01 (S77): a game row is THREE boxes - my team | result | opponent - each bevelled and lifted off the row
    so it reads as its own panel. The left and right COLUMNS are equal, so the result box (and its icon) sits on the
    row's centre line; the right column holds the opponent box and the action buttons (.row-right). */
-/* Owner 10-01 (S84): the two TEAM panels are the same width and the centre panel is the smallest of the three.
-   The action column sits outside them on the right; the row is padded on the left by the same amount (column +
-   gap), so the centre panel - and the score's dash / result image - still sits on the page's centre line. */
-.game-row { --row-actions-w: 170px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(214px, .3fr) minmax(0, 1fr) var(--row-actions-w); align-items: stretch; gap: 12px; padding: 12px 14px 12px calc(14px + var(--row-actions-w) + 12px); border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
+/* Owner 10-01 (S85, after S84 was tried and withdrawn): the layout the owner confirmed - the centre panel is the
+   smallest of the three and sits on the page's centre line; my-team panel fills the left column, and the right
+   column is shared by the opponent panel and the action column (.row-right), so my-team's panel is the wider. */
+.game-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(214px, .3fr) minmax(0, 1fr); align-items: stretch; gap: 12px; padding: 12px 14px; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
 .row-team, .row-centre { box-sizing: border-box; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px;
   background: var(--ui-old-lace, #F8F5E7);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 3px 7px rgba(26, 64, 28, .24); }
 .row-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.row-right { display: contents; } /* the opponent panel and the action column are grid items of the row itself */
-.row-right > .bevel { align-self: center; }
+.row-right { display: flex; align-items: stretch; gap: 12px; min-width: 0; }
+.row-right > .row-team { flex: 1 1 0; }
+.row-right > .bevel { align-self: center; flex: none; }
 .row-team.away { flex-direction: row-reverse; text-align: right; }
 .row-logo { flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
 .row-text { display: grid; gap: 6px; min-width: 0; } /* owner 10-01 (S76/S79): name / coach / race / TV, evenly spaced */
@@ -713,7 +714,6 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 
 /* Windows under ~1500px: smaller crests and names, so the equal team panels keep room for their text. */
 @media (max-width: 1500px) {
-  .game-row { --row-actions-w: 150px; }
   .row-logo, .game-row .logo-fallback { flex-basis: 88px; width: 88px; height: 88px; }
   .row-name { font-size: 20px; }
   .resume-button { font-size: 20px; padding: 10px 12px; }
@@ -724,7 +724,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
   h1 { font-size: 32px; }
   .bevel { font-size: 18px; padding: 10px 18px; }
   .match-grid, .game-row { grid-template-columns: 1fr; }
-  .game-row { padding: 12px 14px; }
+  .row-right { flex-direction: column; }
   .row-right > .bevel { align-self: stretch; }
   .row-logo, .race-logo, .logo-fallback, .team-logo-frame { width: 64px; height: 64px; flex-basis: 64px; }
   .team-side { grid-template-columns: 64px auto auto auto minmax(0, 1fr); }
