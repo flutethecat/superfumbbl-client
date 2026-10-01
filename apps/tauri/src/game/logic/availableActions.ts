@@ -1633,7 +1633,7 @@ function playerMovement(game: GameJson, playerId: string): number {
 }
 
 /** True if `playerId` carries `skill` (name-normalized: lowercase, alpha-only). "No Hands" → "nohands". */
-function hasSkill(game: GameJson, playerId: string, skill: string): boolean {
+export function hasSkill(game: GameJson, playerId: string, skill: string): boolean {
   const norm = skill.toLowerCase().replace(/[^a-z]/g, '');
   return findSkillArray(game, playerId).some((s) => s.toLowerCase().replace(/[^a-z]/g, '') === norm);
 }

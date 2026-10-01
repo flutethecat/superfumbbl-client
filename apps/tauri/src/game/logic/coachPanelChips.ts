@@ -76,14 +76,14 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
   const chips: InducementChip[] = [{
     icon: 're_roll',
     count: Math.max(0, remaining(turnData.reRolls) - driveTotal),
-    label: 'Base team re-rolls',
+    label: 'Base team rerolls',
     pool: 'base',
   }];
   for (const pool of drivePools) {
     if (pool.count > 0) chips.push({
       icon: 're_roll',
       count: pool.count,
-      label: `${pool.source} re-roll — expires at the end of the following drive`,
+      label: `${pool.source} reroll — expires at the end of the following drive`,
       pool: 'drive',
       badge: pool.badge,
     });
@@ -92,7 +92,7 @@ export function buildInducementChips(turnData: CoachPanelTurnData): InducementCh
   if (singleUse > 0) chips.push({
     icon: 're_roll',
     count: singleUse,
-    label: 'Single-use re-rolls',
+    label: 'Single-use rerolls',
     pool: 'single-use',
     badge: '1×',
   });

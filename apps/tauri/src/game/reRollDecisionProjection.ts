@@ -36,8 +36,8 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
   const action = reRollActionName(dialog.reRolledAction);
   const name = playerName(game, playerId);
   const label = /foul ?appearance/i.test(String(dialog.reRolledAction ?? ''))
-    ? (mine ? `${name} failed their Foul Appearance roll. Use a re-roll?` : `${name} is deciding whether to re-roll…`)
-    : `Re-roll ${action}${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
+    ? (mine ? `${name} failed their Foul Appearance roll. Use a reroll?` : `${name} is deciding whether to reroll…`)
+    : `Reroll ${action}${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
   const rulesVersion = game.gameOptions.gameOptionArray.find((o) => o.gameOptionId === 'rulesVersion')?.gameOptionValue;
   const roll = presentation.roll ?? d6RerollRoll(prior?.roll ?? undefined, rulesVersion, dialog.reRolledAction);
   const needed = passTruth ? presentation.needed : presentation.needed ?? d6RerollNeeded(dialog.minimumRoll, prior?.needed ?? undefined, rulesVersion, dialog.reRolledAction, presentation.thresholdless);
@@ -239,7 +239,7 @@ export function reRollPromptPresentation(
   const isBncDirection = String(dp.reRolledAction ?? '').trim() === 'Direction';
   const question = isBncDirection
     ? 'Reroll direction?'
-    : `Do you want to re-roll the ${failed ? 'failed ' : ''}${action}`
+    : `Do you want to reroll the ${failed ? 'failed ' : ''}${action}`
       + `${modifier ? ` or use ${prettySkillName(modifier)}` : ''}?`;
   let needed = thresholdless ? undefined : dialogNeeded;
   if (passTruth?.reportId === 'passRoll') needed = passTruth.minimumRoll;
@@ -292,10 +292,10 @@ export function offeredReRollOptions(
   if (specialTeamLabel && specialTeamSource) {
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
   } else if (hasMascot) {
-    options.push({ label: 'Team Mascot (no re-roll if it fails)', source: 'Team Mascot', response: 'reroll', role: 'source' });
-    if (hasTeam) options.push({ label: 'Team Mascot, then Team Re-roll', source: 'Mascot TRR', response: 'reroll', role: 'source' });
+    options.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', response: 'reroll', role: 'source' });
+    if (hasTeam) options.push({ label: 'Team Mascot, then Team Reroll', source: 'Mascot TRR', response: 'reroll', role: 'source' });
   } else if (hasTeam) {
-    options.push({ label: 'Team Re-roll', source: 'Team ReRoll', response: 'reroll', role: 'source' });
+    options.push({ label: 'Team Reroll', source: 'Team ReRoll', response: 'reroll', role: 'source' });
   }
   return options;
 }
@@ -306,10 +306,10 @@ export function proCompositeReRollOptions(rrProps: string[]): { label: string; s
   const hasTeam = rrProps.some((property) =>
     ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property));
   const options: { label: string; source: string }[] = [];
-  if (hasTeam) options.push({ label: 'Pro, then Team Re-roll', source: 'Pro TRR' });
+  if (hasTeam) options.push({ label: 'Pro, then Team Reroll', source: 'Pro TRR' });
   if (hasMascot) options.push({ label: 'Pro, then Team Mascot', source: 'Pro Mascot' });
   if (hasMascot && hasTeam) {
-    options.push({ label: 'Pro, then Team Mascot, then Team Re-roll', source: 'Pro Mascot TRR' });
+    options.push({ label: 'Pro, then Team Mascot, then Team Reroll', source: 'Pro Mascot TRR' });
   }
   return options;
 }

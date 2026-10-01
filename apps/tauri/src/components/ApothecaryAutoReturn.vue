@@ -49,7 +49,7 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
         <small v-if="result.oldRoll != null">D16 · {{ result.oldRoll }}</small>
       </div>
       <div class="apo-auto-result rerolled" :class="{ selected: result.selected === 'new' }">
-        <span>Re-Rolled</span><strong>{{ result.newInjury }}</strong>
+        <span>Rerolled</span><strong>{{ result.newInjury }}</strong>
         <small v-if="result.newRoll != null">D16 · {{ result.newRoll }}</small>
         <small v-if="result.newInjuryDie != null">Injury D6 · {{ result.newInjuryDie }}</small>
       </div>

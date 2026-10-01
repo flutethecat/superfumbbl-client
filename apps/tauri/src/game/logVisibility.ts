@@ -13,7 +13,7 @@ export function sequencingCategory(
     'server resolves',
     'server-sequenced',
     'server confirms',
-    'server re-rolls + re-presents',
+    'server rerolls + re-presents',
     'server scatters',
     'server rolls confuse',
     'awaiting server',

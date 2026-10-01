@@ -202,41 +202,71 @@ export function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rol
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
 /** Owner 10-01 (S67): dodges BY TARGET (2+..6+). Per column, bottom to top: GREEN = passed without a re-roll, BLUE =
  *  passed after a re-roll, RED = failed even after a re-roll; the outline is every attempt (its empty part = failed
- *  with no re-roll); `ey` = expected passes (attempts x (7 - target) / 6, no re-roll). */
+ *  with no re-roll); `ey` = expected passes WITH re-rolls (owner 10-01 r4):
+ *  with p = (7 - target) / 6 and q = 1 - p, an attempt with the Dodge skill re-roll BUILT IN (used or not) expects
+ *  1 - q x q (a 3+ = 89%, a 2+ = 97%); any other attempt expects p + q x R x p, R = the side's other re-rolls taken /
+ *  other first rolls failed (team re-rolls are a choice, seen only when a dodge fails). A re-roll is never an attempt:
+ *  it only decides which field its attempt lands in. */
 export interface PgDodgeTargetBar {
   label: string; attempts: number; passed: number; passFirst: number; passReroll: number; failReroll: number; expected: number;
   x: number; w: number; yAttempts: number; hAttempts: number; yFirst: number; hFirst: number; yReroll: number; hReroll: number;
   yFail: number; hFail: number; ey: number;
+  /** Baseline of the expected NUMBER (left of the line): `ey + 2.5`, moved clear of the previous column's outside labels. */
+  eny: number;
 }
 /** One number per colour field (owner 10-01 r2): centred in the field when it is tall enough, else beside it. */
 export interface PgDodgeSegLabel { n: number; kind: 'first' | 'reroll' | 'fail'; x: number; y: number; inside: boolean }
 export const PG_DODGE_LABEL_MIN_H = 7;
+/** Vertical room one 7px number needs; outside labels closer than this are staggered upward (S67 r5, review). */
+export const PG_DODGE_LABEL_GAP = 7;
 export interface PgDodgeTargetChart { bars: PgDodgeTargetBar[]; attempts: number; passed: number; expected: number; labels: PgDodgeSegLabel[] }
 export function pgDodgeTargetChart(byTarget: DiceTally['dodgeByTarget']): PgDodgeTargetChart | null {
   const rows = [2, 3, 4, 5, 6].map((target) => ({ target, ...(byTarget?.[target] ?? { attempts: 0, passFirst: 0, passReroll: 0, failReroll: 0 }) }));
   const attempts = rows.reduce((n, r) => n + r.attempts, 0);
   if (attempts === 0) return null;
+  const builtFails = rows.reduce((n, r) => n + (r.builtFails ?? 0), 0);
+  const otherFirstFails = rows.reduce((n, r) => n + Math.max(0, r.attempts - r.passFirst), 0) - builtFails;
+  const otherRerolls = rows.reduce((n, r) => n + r.passReroll + r.failReroll, 0) - builtFails;
+  const rerollRate = otherFirstFails > 0 ? Math.min(1, Math.max(0, otherRerolls / otherFirstFails)) : 0;
   const peak = Math.max(1, ...rows.map((r) => r.attempts));
   const slot = PG_CHART_W / rows.length;
   const scale = (PG_CHART_BASE - PG_CHART_TOP - 10) / peak; // 10 units of headroom for the "passed/attempts" caption
   const bars = rows.map((r, i) => {
     const w = slot * 0.62; const x = i * slot + (slot - w) / 2;
     const hAttempts = r.attempts * scale, hFirst = r.passFirst * scale, hReroll = r.passReroll * scale, hFail = r.failReroll * scale;
-    const expected = r.attempts * (7 - r.target) / 6;
+    const p = (7 - r.target) / 6; const q = 1 - p;
+    const built = Math.min(r.attempts, r.built ?? 0);
+    const expected = built * (1 - q * q) + (r.attempts - built) * (p + q * rerollRate * p);
     return {
       label: `${r.target}+`, attempts: r.attempts, passed: r.passFirst + r.passReroll, passFirst: r.passFirst, passReroll: r.passReroll, failReroll: r.failReroll, expected,
       x, w, yAttempts: PG_CHART_BASE - hAttempts, hAttempts, yFirst: PG_CHART_BASE - hFirst, hFirst,
       yReroll: PG_CHART_BASE - hFirst - hReroll, hReroll, yFail: PG_CHART_BASE - hFirst - hReroll - hFail, hFail,
-      ey: PG_CHART_BASE - expected * scale,
+      ey: PG_CHART_BASE - expected * scale, eny: PG_CHART_BASE - expected * scale + 2.5,
     };
   });
   const labels: PgDodgeSegLabel[] = [];
+  let prevOutside: number[] = [];
   for (const b of bars) {
+    // the expected number sits in the gap LEFT of the bar, where the previous column's outside labels are: step it clear
+    for (let pass = 0; pass < prevOutside.length; pass++) {
+      const clash = prevOutside.find((y) => Math.abs(y - b.eny) < PG_DODGE_LABEL_GAP);
+      if (clash == null) break;
+      b.eny = clash - PG_DODGE_LABEL_GAP;
+    }
+    const outside: number[] = [];
     for (const [kind, n, y, h] of [['first', b.passFirst, b.yFirst, b.hFirst], ['reroll', b.passReroll, b.yReroll, b.hReroll], ['fail', b.failReroll, b.yFail, b.hFail]] as const) {
       if (n <= 0) continue;
       const inside = h >= PG_DODGE_LABEL_MIN_H;
-      labels.push({ n, kind, inside, x: inside ? b.x + b.w / 2 : b.x + b.w + 2, y: y + h / 2 + 2.5 });
+      let ly = y + h / 2 + 2.5;
+      if (!inside) {
+        // fields stack upward, so a thin field's number is never closer than one line to the one beneath it
+        const below = outside[outside.length - 1];
+        if (below != null && below - ly < PG_DODGE_LABEL_GAP) ly = below - PG_DODGE_LABEL_GAP;
+        outside.push(ly);
+      }
+      labels.push({ n, kind, inside, x: inside ? b.x + b.w / 2 : b.x + b.w + 2, y: ly });
     }
+    prevOutside = outside;
   }
   return { bars, attempts, passed: bars.reduce((n, b) => n + b.passed, 0), expected: bars.reduce((n, b) => n + b.expected, 0), labels };
 }

@@ -1823,7 +1823,7 @@ function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = t
     ? { side, coach, logo, source: 'Leader', isTeam: true, skill: 'Leader', text: `${coach} uses their Leader reroll!`, playerId, seq }
     : isTeam ? { side, coach, logo, source, isTeam, playerId, seq }
       // Owner 09-19: a SKILL re-roll (Dodge, Sure Feet, Pro, …) rides the same toast — the skill's icon, the player's name.
-      : { side, coach, logo, source, isTeam, skill: source, text: `${playerName(g, playerId)} uses ${source} to re-roll!`, playerId, seq };
+      : { side, coach, logo, source, isTeam, skill: source, text: `${playerName(g, playerId)} uses ${source} to reroll!`, playerId, seq };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
@@ -1840,7 +1840,7 @@ function showLonerFailedSplash(playerId: string) {
   if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
   state.rerollSplash = {
     side, coach: (team.coach as string | null) ?? '', logo, source: 'Loner', isTeam: false,
-    text: `${playerName(g, playerId)} is a Loner — re-roll lost!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+    text: `${playerName(g, playerId)} is a Loner — reroll lost!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
@@ -3283,7 +3283,7 @@ function surfaceAutoAcceptedApothecaryReturn(
   const oldInjury = liveChoice?.oldInjury ?? pending?.oldInjury
     ?? old?.injury ?? (oldRoll != null ? casualtyRollLabel(oldRoll) : 'Original injury');
   const newTier = autoReturn ? casualtyTierLabel(String(roll?.seriousInjury ?? ''), 0x06) : null;
-  const newInjury = liveChoice?.newInjury ?? pending?.newInjury ?? newTier?.label ?? 'Re-Rolled injury';
+  const newInjury = liveChoice?.newInjury ?? pending?.newInjury ?? newTier?.label ?? 'Rerolled injury';
   const raw = pending ?? (apoChoiceRaw ? {
     oldState: apoChoiceRaw.playerStateOld, newState: apoChoiceRaw.playerStateNew,
     oldSerious: apoChoiceRaw.seriousInjuryOld, newSerious: apoChoiceRaw.seriousInjuryNew,
@@ -3316,7 +3316,7 @@ function surfaceAutoAcceptedApothecaryReturn(
     selected,
     outcome: autoReturn
       ? `${liveChoice?.player ?? pending?.player ?? playerName(g, playerId)} returns to the bench.`
-      : `Kept ${selected === 'old' ? 'Original' : 'Re-Rolled'}: ${selected === 'old' ? oldInjury : newInjury}`,
+      : `Kept ${selected === 'old' ? 'Original' : 'Rerolled'}: ${selected === 'old' ? oldInjury : newInjury}`,
     mine: play.active && myPlayIds(g).has(playerId),
     audience,
     seq: ++apothecaryAutoReturnSeq,
@@ -14922,8 +14922,8 @@ export function logUnrecognizedReRollOffer(dp: Record<string, unknown>): void {
   const details = unrecognizedReRollFields(dp)
     .map(({ key, value }) => `${key}=${reRollDiagnosticValue(value)}`)
     .join(', ');
-  console.warn('[re-roll] unrecognized server offer; no answer sent', dp);
-  log('system', `play: stalled unrecognized re-roll offer (${details}; reRolledAction=${reRollDiagnosticValue(dp.reRolledAction)})`);
+  console.warn('[reroll] unrecognized server offer; no answer sent', dp);
+  log('system', `play: stalled unrecognized reroll offer (${details}; reRolledAction=${reRollDiagnosticValue(dp.reRolledAction)})`);
 }
 
 export function emitReRollAnswer(
@@ -15008,7 +15008,7 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
         playerId,
         reRolledAction: String(dp.reRolledAction ?? ''),
       });
-      log('system', `play: auto Dodge re-roll used (${playerName(game.value, playerId)})`);
+      log('system', `play: auto Dodge reroll used (${playerName(game.value, playerId)})`);
       return;
     }
   }
@@ -15769,10 +15769,10 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
   if (specialTeamLabel) {
     opts.push({ label: specialTeamLabel, source: 'Team ReRoll', kind: 'team' });
   } else if (hasMascot) {
-    opts.push({ label: 'Team Mascot (no re-roll if it fails)', source: 'Team Mascot', kind: 'team' });
-    if (hasTeam) opts.push({ label: 'Team Mascot, then Team Re-roll', source: 'Mascot TRR', kind: 'team' });
+    opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team' });
+    if (hasTeam) opts.push({ label: 'Team Mascot, then Team Reroll', source: 'Mascot TRR', kind: 'team' });
   } else if (hasTeam) {
-    opts.push({ label: 'Team re-roll', source: 'Team ReRoll', kind: 'team' });
+    opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
   }
   return opts;
 }
@@ -16006,8 +16006,8 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
               key,
-              prompt: 'Re-roll one of these Regeneration rolls?',
-              declineLabel: 'No Re-Roll',
+              prompt: 'Reroll one of these Regeneration rolls?',
+              declineLabel: 'No Reroll',
               options,
               seq: (state.inducementUse?.seq ?? 0) + 1,
             };
@@ -20002,7 +20002,7 @@ export const gameStore = {
     } else if (selected?.response === 'skill') {
       log('system', `play: skill ${selected.source} used (${playerName(game.value, p.playerId)})`);
     } else {
-      log('system', `play: re-roll ${source ? (selected?.label ?? source) + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`); // owner 09-19: the option's label — the wire source is 'Team ReRoll' for Brilliant Coaching too
+      log('system', `play: reroll ${source ? (selected?.label ?? source) + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`); // owner 09-19: the option's label — the wire source is 'Team ReRoll' for Brilliant Coaching too
     }
     state.reRollPrompt = null;
   },
@@ -20291,7 +20291,7 @@ export const gameStore = {
     if (!dialogInstanceLive(b.instanceKey)) { state.bloodlust = null; return; } // R-E1
     latchAnsweredDialogInstance(b.instanceKey ?? null, game.value?.dialogParameter as object | null);
     sendCommand({ netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: b.reRolledAction, reRollSource: source });
-    log('system', `play: bloodlust re-roll ${source ? `via ${source}` : 'declined'} (${b.vampire})`);
+    log('system', `play: bloodlust reroll ${source ? `via ${source}` : 'declined'} (${b.vampire})`);
     state.bloodlust = null;
   },
   resolveBloodlustDecision(changeToMove: boolean) {
@@ -20448,7 +20448,7 @@ export const gameStore = {
     if (cmd) sendCommand(cmd);
     state.blockPartial = null;
     blockChoiceEpoch++; // g313: the NEXT block-choice offer gets a fresh de-dup key even on identical dice
-    log('system', `play: block partial re-roll — ${kind}`);
+    log('system', `play: block partial reroll — ${kind}`);
   },
 
   async connect(params: { url: string; coach: string; password: string; gameId: number; compression?: boolean }, preserveReview = false) {
@@ -22392,7 +22392,7 @@ export const gameStore = {
     };
     if (reRolledDice && reRolledDice.length) cmd.reRolledDice = reRolledDice;
     sendCommand(cmd);
-    log('system', `play: multi-block choice → ${playerName(game.value, targetId)} die #${diceIndex}${reRollSource ? ' (re-roll)' : ''} (server resolves)`);
+    log('system', `play: multi-block choice → ${playerName(game.value, targetId)} die #${diceIndex}${reRollSource ? ' (reroll)' : ''} (server resolves)`);
   },
 
   /**
@@ -22405,14 +22405,14 @@ export const gameStore = {
     if (!play.active || !game.value
       || (!localOwnsCurrentBlockDialog() && !localOwnsCurrentMultiBlockDialog())) return;
     sendCommand({ netCommandId: NetCommandId.CLIENT_USE_MULTI_BLOCK_DICE_RE_ROLL, blockDiceIndexes: diceIndexes });
-    log('system', `play: multi-block dice re-roll (${diceIndexes.length}) (server resolves)`);
+    log('system', `play: multi-block dice reroll (${diceIndexes.length}) (server resolves)`);
   },
 
   /** Brawler rerolls one synchronous multi-block target via CLIENT_USE_BRAWLER; other sources use the per-target choice command. */
   sendMultiBlockBrawler(targetId: string) {
     if (!play.active || !game.value || !localOwnsCurrentMultiBlockDialog()) return;
     sendCommand({ netCommandId: NetCommandId.CLIENT_USE_BRAWLER, playerId: targetId });
-    log('system', `play: multi-block BRAWLER re-roll → ${playerName(game.value, targetId)} (server re-rolls + re-presents)`);
+    log('system', `play: multi-block BRAWLER reroll → ${playerName(game.value, targetId)} (server rerolls + re-presents)`);
   },
 
   /** Hatred rerolls one synchronous multi-block target's Single Skull via CLIENT_USE_HATRED. Unlike the
@@ -22421,7 +22421,7 @@ export const gameStore = {
   sendMultiBlockHatred(targetId: string) {
     if (!play.active || !game.value || !localOwnsCurrentMultiBlockDialog()) return;
     sendCommand({ netCommandId: NetCommandId.CLIENT_USE_HATRED, playerId: targetId });
-    log('system', `play: multi-block HATRED re-roll → ${playerName(game.value, targetId)} (server re-rolls + re-presents)`);
+    log('system', `play: multi-block HATRED reroll → ${playerName(game.value, targetId)} (server rerolls + re-presents)`);
   },
 
   // Cancel an unconfirmed Blitz with self-target, await the server state, then declare Move.

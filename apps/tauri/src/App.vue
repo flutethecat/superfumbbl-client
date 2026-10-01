@@ -2498,7 +2498,7 @@ function captureKey(event: KeyboardEvent) {
             <!-- owner 2026-07-07: toggle the on-pitch turn/score/re-roll tracks -->
             <label class="row">
               <input v-model="settings.turnTrack" type="checkbox" />
-              <span>On-pitch turn/score/re-roll tracks</span>
+              <span>On-pitch turn/score/reroll tracks</span>
             </label>
           </fieldset>
 

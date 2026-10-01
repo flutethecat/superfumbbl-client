@@ -380,7 +380,7 @@ const fantasyNames = [
 ];
 
 const staffRows: Array<{ key: StaffKey; label: string; min: number; max: number; cost: number }> = [
-  { key: 'reRolls', label: 'Re-rolls', min: 0, max: 8, cost: 0 },
+  { key: 'reRolls', label: 'Rerolls', min: 0, max: 8, cost: 0 },
   { key: 'assistantCoaches', label: 'Assistant Coaches', min: 0, max: 6, cost: 10_000 },
   { key: 'cheerleaders', label: 'Cheerleaders', min: 0, max: 12, cost: 10_000 },
   { key: 'dedicatedFans', label: 'Dedicated Fans', min: 0, max: 7, cost: 10_000 },
@@ -2347,7 +2347,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="value-line"><span>Race</span><strong>{{ selectedLibraryTeamDetail.race }}</strong></div>
                 <div v-if="isResurrectionTeam" class="value-line"><span>Progression</span><strong title="Earned SPP is suppressed for this team.">Resurrection</strong></div>
-                <div class="value-line"><span>Re-rolls</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="canRemoveReroll ? 'Remove a re-roll' : 'Re-rolls can only be removed at redraft or by an admin.'" :disabled="managementBusy || !selectedLibraryTeamDetail.rerolls || !canRemoveReroll" @click="adjustRerolls(-1)">−</button>{{ selectedLibraryTeamDetail.rerolls }}<button class="mgmt-step" type="button" title="Buy a re-roll" :disabled="managementBusy" @click="adjustRerolls(1)">+</button></strong></div>
+                <div class="value-line"><span>Rerolls</span><strong class="mgmt-value"><button class="mgmt-step" type="button" :title="canRemoveReroll ? 'Remove a reroll' : 'Rerolls can only be removed at redraft or by an admin.'" :disabled="managementBusy || !selectedLibraryTeamDetail.rerolls || !canRemoveReroll" @click="adjustRerolls(-1)">−</button>{{ selectedLibraryTeamDetail.rerolls }}<button class="mgmt-step" type="button" title="Buy a reroll" :disabled="managementBusy" @click="adjustRerolls(1)">+</button></strong></div>
                 <div class="value-line"><span>Assistant coaches</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Remove an assistant coach" :disabled="managementBusy || !selectedLibraryTeamDetail.assistantCoaches" @click="adjustAssistantCoaches(-1)">−</button>{{ selectedLibraryTeamDetail.assistantCoaches }}<button class="mgmt-step" type="button" title="Hire an assistant coach" :disabled="managementBusy" @click="adjustAssistantCoaches(1)">+</button></strong></div>
                 <div class="value-line"><span>Cheerleaders</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Remove a cheerleader" :disabled="managementBusy || !selectedLibraryTeamDetail.cheerleaders" @click="adjustCheerleaders(-1)">−</button>{{ selectedLibraryTeamDetail.cheerleaders }}<button class="mgmt-step" type="button" title="Hire a cheerleader" :disabled="managementBusy" @click="adjustCheerleaders(1)">+</button></strong></div>
                 <div class="value-line"><span>Fan factor</span><strong class="mgmt-value"><button class="mgmt-step" type="button" title="Reduce dedicated fans" :disabled="managementBusy || !selectedLibraryTeamDetail.fanFactor" @click="adjustDedicatedFans(-1)">−</button>{{ selectedLibraryTeamDetail.fanFactor }}<button class="mgmt-step" type="button" title="Increase dedicated fans" :disabled="managementBusy" @click="adjustDedicatedFans(1)">+</button></strong></div>

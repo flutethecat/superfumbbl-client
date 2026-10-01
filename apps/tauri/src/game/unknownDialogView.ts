@@ -33,17 +33,17 @@ export const UNKNOWN_DIALOG_TITLE = 'The server is asking something this client 
 export const UNKNOWN_DIALOG_WORDS: Readonly<Record<string, { what: string; source: string }>> = {
   information: { what: 'The server is showing a notice and waiting for it to be closed.', source: 'DialogInformation.java' },
   teamChoice: { what: 'The server wants a team picked from a list.', source: 'DialogTeamChoice.java ("Select Team")' },
-  reRollForTargets: { what: 'The server asks whether to use a re-roll on the failed rolls against one or more targets.', source: 'DialogReRollForTargets.java ("Use a Re-roll")' },
-  reRollBlockForTargets: { what: 'The server asks whether to re-roll the block dice against one or more targets.', source: 'DialogReRollBlockForTargets.java ("Block Roll")' },
-  useIgors: { what: 'The server asks for which of your players an Igor should re-roll a failed Regeneration.', source: 'DialogUseIgorsHandler.java ("Select players to use igor for")' },
-  useMortuaryAssistants: { what: 'The server asks for which of your players a Mortuary Assistant (or Plague Doctor) should re-roll a failed Regeneration.', source: 'DialogUseMortuaryAssistantsHandler.java' },
+  reRollForTargets: { what: 'The server asks whether to use a reroll on the failed rolls against one or more targets.', source: 'DialogReRollForTargets.java ("Use a Re-roll")' },
+  reRollBlockForTargets: { what: 'The server asks whether to reroll the block dice against one or more targets.', source: 'DialogReRollBlockForTargets.java ("Block Roll")' },
+  useIgors: { what: 'The server asks for which of your players an Igor should reroll a failed Regeneration.', source: 'DialogUseIgorsHandler.java ("Select players to use igor for")' },
+  useMortuaryAssistants: { what: 'The server asks for which of your players a Mortuary Assistant (or Plague Doctor) should reroll a failed Regeneration.', source: 'DialogUseMortuaryAssistantsHandler.java' },
   winningsReRoll: { what: 'The server asks whether to keep the winnings roll or roll it again.', source: 'DialogWinningsReRoll.java ("Re-roll Winnings")' },
-  pilingOn: { what: 'The server asks whether a player should use Piling On to re-roll an armour or injury roll.', source: 'DialogPilingOn.java ("Use Piling On")' },
-  useIgor: { what: 'The server asks whether to use your Igor to re-roll a failed Regeneration.', source: 'DialogUseIgor.java ("Use Igor")' },
-  useMortuaryAssistant: { what: 'The server asks whether to use your Mortuary Assistant (or Plague Doctor) to re-roll a failed Regeneration.', source: 'DialogUseMortuaryAssistant.java' },
+  pilingOn: { what: 'The server asks whether a player should use Piling On to reroll an armour or injury roll.', source: 'DialogPilingOn.java ("Use Piling On")' },
+  useIgor: { what: 'The server asks whether to use your Igor to reroll a failed Regeneration.', source: 'DialogUseIgor.java ("Use Igor")' },
+  useMortuaryAssistant: { what: 'The server asks whether to use your Mortuary Assistant (or Plague Doctor) to reroll a failed Regeneration.', source: 'DialogUseMortuaryAssistant.java' },
   opponentBlockSelection: { what: 'The server asks a coach to pick the block dice results for one or more targets.', source: 'DialogOpponentBlockSelectionHandler.java ("Select Block Results")' },
   useChainsaw: { what: 'The server asks whether to use the chainsaw on the foul.', source: 'DialogUseChainsaw.java ("Use Chainsaw")' },
-  briberyAndCorruptionReRoll: { what: 'The server asks whether to use Bribery and Corruption to re-roll a natural 1 on Argue the Call.', source: 'DialogBriberyAndCorruption.java' },
+  briberyAndCorruptionReRoll: { what: 'The server asks whether to use Bribery and Corruption to reroll a natural 1 on Argue the Call.', source: 'DialogBriberyAndCorruption.java' },
   penaltyShootout: { what: 'The server is showing the penalty shootout and waiting for it to be closed.', source: 'DialogPenaltyShootout.java ("Penalty Shootout")' },
   opponentBlockSelectionProperties: { what: 'The server asks a coach to pick the block dice results for one or more targets.', source: 'DialogOpponentBlockSelectionPropertiesHandler.java ("Select Block Results")' },
   pickUpChoice: { what: 'The server asks whether to attempt to pick up the ball.', source: 'DialogPickUpChoice.java ("Attempt to pick up the ball?")' },
@@ -53,7 +53,7 @@ export const UNKNOWN_DIALOG_WORDS: Readonly<Record<string, { what: string; sourc
 /** `reRollModifierChoice` -> "Re-roll modifier choice". */
 export function readableDialogName(id: string): string {
   const words = id.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toLowerCase();
-  const text = words.replace(/\bre roll\b/g, 're-roll');
+  const text = words.replace(/\bre roll\b/g, 'reroll');
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : id;
 }
 
@@ -61,7 +61,7 @@ const LABELS: Readonly<Record<string, string>> = {
   teamId: 'Team', choosingTeamId: 'Team', playerId: 'Player', playerIds: 'Players',
   skill: 'Skill', modifyingSkill: 'Modifying skill', minimumRoll: 'Roll needed',
   roll: 'Roll', rolls: 'Rolls', oldRoll: 'Current roll', rollsHome: 'Home rolls', rollsAway: 'Away rolls',
-  reRolledAction: 'Re-rolled action', reRollSource: 'Re-roll source', nrOfDice: 'Number of dice',
+  reRolledAction: 'Rerolled action', reRollSource: 'Reroll source', nrOfDice: 'Number of dice',
   blockRoll: 'Block roll', blockRolls: 'Block rolls',
 };
 const RAW_MAX = 140;

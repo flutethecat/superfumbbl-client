@@ -14,7 +14,7 @@ export interface RerollOptionLike {
  *  internal kind token it used to interpolate. `action` covers the single-die and multi-die-select wordings
  *  (Owner 09-28: the multiBlockDice hint names its source too, e.g. `Savage Blow - select one or more dice to
  *  re-roll`). Returns null when there is nothing armed to name. */
-export function armedRerollHintText(label: string | null | undefined, action = 'click a die to re-roll it'): string | null {
+export function armedRerollHintText(label: string | null | undefined, action = 'click a die to reroll it'): string | null {
   const name = label?.trim();
   return name ? `${name} - ${action}` : null;
 }

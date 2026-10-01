@@ -30,7 +30,7 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
     test-id="apothecary-result-choice" @drag-start="$emit('dragStart', $event)">
     <div class="apo-result-head">
       <span class="apo-result-icon"><img :src="iconUrl" alt="" /></span>
-      <span><span class="apo-result-kicker">{{ choice.mine ? 'Your apothecary re-roll' : 'Opposition apothecary re-roll' }}</span><strong>{{ choice.player }}</strong></span>
+      <span><span class="apo-result-kicker">{{ choice.mine ? 'Your apothecary reroll' : 'Opposition apothecary reroll' }}</span><strong>{{ choice.player }}</strong></span>
     </div>
     <div class="apo-results">
       <!-- Owner: the D16 roll values are gone (the injury names carry the choice); names render one-line. -->
@@ -41,7 +41,7 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
       </button>
       <button type="button" class="apo-result rerolled" :disabled="!choice.mine"
         @pointerdown.stop @click.stop="$emit('choose', 'new')">
-        <span class="apo-result-label">Re-Rolled</span>
+        <span class="apo-result-label">Rerolled</span>
         <strong>{{ choice.newInjury }}</strong>
       </button>
     </div>

@@ -531,7 +531,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
    uses (theme.ts --ui-eggshell / --ui-old-lace / --ui-forest; carmine #790004 stays the action accent). Cards stack:
    My Active Games, then My Recent Games in the same card/row design. Crests are the 128 px masters at 1:1. */
 .play-view { --pb-text: var(--ui-forest, #1A401C); --pb-muted: color-mix(in srgb, var(--ui-forest, #1A401C) 62%, transparent); --pb-line: color-mix(in srgb, var(--ui-forest, #1A401C) 28%, transparent); --pb-carmine: #790004;
-  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1; width: 100%; max-width: 1440px; min-height: calc(100vh - 95px); margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
+  box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; width: 100%; max-width: 1440px; min-height: 0; overflow-y: auto; margin: 0 auto; padding: 18px 20px; color: var(--pb-text); background: var(--ui-eggshell, #E7DDC7); }
 h1, h2, p { margin: 0; }
 .play-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
 h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .22); }
@@ -575,7 +575,12 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
 .link { padding: 0; color: var(--pb-carmine); border: 0; background: none; font: inherit; text-decoration: underline; cursor: pointer; }
 .link:disabled { opacity: .5; cursor: default; }
 
-.play-body { display: grid; grid-template-columns: 1fr; gap: 14px; align-items: start; }
+/* Owner 10-01 (S68): the blade fills the window and never scrolls itself; My Recent Games takes the rest of the
+   height and its LIST scrolls. (A window too short for the list's floor falls back to the blade scrolling.) */
+.play-body { display: flex; flex-direction: column; flex: 1 0 auto; gap: 14px; min-height: 0; }
+.play-body > .card { flex: 0 0 auto; }
+/* the card keeps a floor and always encloses its list; a window too short for it scrolls the blade (review r6) */
+.play-body > .recent-card { flex: 1 1 0; min-height: 300px; }
 .card { box-sizing: border-box; min-width: 0; border: 1px solid var(--pb-text); border-radius: 6px; background: var(--ui-old-lace, #F8F5E7); box-shadow: 0 4px 14px rgba(26, 64, 28, .18); }
 .list-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; }
 h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
@@ -657,7 +662,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .play-button { font-size: 24px; }
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
-.recent-list { display: grid; gap: 10px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
+.recent-list { display: grid; align-content: start; gap: 10px; flex: 1 1 0; min-height: 0; overflow-y: auto; padding-right: 4px; }
 /* owner 09-25: every Details is the carmine bevel (the green "no stored details" variant read as a different action); the popup says when nothing is stored */
 
 /* Owner 09-25: Details popup — large, centred; the pane inside keeps its own look (PostGamePanel embedded). */

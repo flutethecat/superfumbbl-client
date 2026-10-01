@@ -312,7 +312,7 @@ function gameOption(game: GameJson | null, id: string): string | undefined {
  *  clause ("— succeeds" suppressed; a re-rolled note survives as ", re-rolled"); a FAIL
  *  stays explicit ("— fails" / "— fails, re-rolled"). */
 function outcomeSuffix(successful: unknown, reRolled: unknown): string {
-  const rerolled = reRolled ? ', re-rolled' : '';
+  const rerolled = reRolled ? ', rerolled' : '';
   return successful ? rerolled : ` | ${FAILS}${rerolled}`;
 }
 
@@ -347,7 +347,7 @@ function namedSkillRoll(label: string) {
   return (report: Report, game: GameJson | null): string => {
     const min = report.minimumRoll != null ? ` (${d6(report.minimumRoll, 'target')}+)` : '';
     const rollPart = report.roll != null ? ` ${hiddenTag('rolls ')}${d6(report.roll)}` : '';
-    const rerolled = report.reRolled === true ? ', re-rolled' : '';
+    const rerolled = report.reRolled === true ? ', rerolled' : '';
     const outcome = report.successful === false
       ? ` | ${FAILS}${rerolled}`
       : report.successful === true ? rerolled : '';
@@ -614,7 +614,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     // ffb-common/src/main/java/com/fumbbl/ffb/report/mixed/ReportBlockReRoll.java:22-24,59-73 carries replacement dice.
     const dice = Array.isArray(r.blockRoll) ? blockDieList(r.blockRoll) : '?';
     const source = r.reRollSource ? ` (${humanize(String(r.reRollSource))})` : '';
-    return `${pn(g, r.playerId)} re-rolls block dice${source}: ${dice}`;
+    return `${pn(g, r.playerId)} rerolls block dice${source}: ${dice}`;
   },
   pushback: (r, g) => `${pn(g, r.defenderId)} is pushed back`,
 
@@ -645,7 +645,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   masterChefRoll: (r, g) => {
     const rolls = Array.isArray(r.masterChefRoll) ? d6List(r.masterChefRoll) : '?';
     const stolen = Number(r.reRollsStolen ?? 0);
-    return `${teamName(g, r.teamId)} | Master Chef: ${hiddenTag('rolls ')}${rolls} | steals ${stolen} re-roll${stolen === 1 ? '' : 's'}`;
+    return `${teamName(g, r.teamId)} | Master Chef: ${hiddenTag('rolls ')}${rolls} | steals ${stolen} reroll${stolen === 1 ? '' : 's'}`;
   },
   // #139 ② (GAP-WAVE-2): purchase-confirmation reports. The interactive `inducementReveal` cine covers the
   // VISUAL for the buying coach, but it only fires in interactive play — a SPECTATOR / fast-pregame viewer gets
@@ -695,7 +695,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // PlayerState 0x40000 via the renderer — this is the log half.)
   chompRoll: (r, g) => {
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';
-    const rerolled = r.reRolled ? ', re-rolled' : '';
+    const rerolled = r.reRolled ? ', rerolled' : '';
     const chomper = String(r.chomper ?? r.attackerId ?? r.playerId ?? '');
     const chompeeId = r.chompee ?? r.defenderId;
     const victim = chompeeId ? ` on ${pn(g, String(chompeeId))}` : '';
@@ -781,8 +781,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // brilliantCoachingReRoll were initially deferred here but their classes DID exist — built in tranche 4 below.)
   indomitable: (r, g) => `${pn(g, r.playerId)} stays up (Indomitable)`,
   oldPro: (r, g) => r.selfInflicted
-    ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to re-roll ${d6(r.oldRoll)} into ${d6(r.roll)}`
-    : `${pn(g, r.playerId)} uses Old Pro: re-rolls ${d6(r.oldRoll)} into ${d6(r.roll)}`,
+    ? `${pn(g, r.playerId)} uses Old Pro: forces the opponent to reroll ${d6(r.oldRoll)} into ${d6(r.roll)}`
+    : `${pn(g, r.playerId)} uses Old Pro: rerolls ${d6(r.oldRoll)} into ${d6(r.roll)}`,
   pickMeUp: (r, g) => `${pn(g, r.playerId)} | Pick Me Up: ${hiddenTag('rolls ')}${d6(r.roll)}${outcomeSuffix(r.successful, r.reRolled)}`,
   raidingParty: (r, g) => `${pn(g, r.playerId)} uses Raiding Party`,
   thrownKeg: (r, g) =>
@@ -791,9 +791,9 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   teamCaptainRoll: (r, g) => `${teamName(g, r.teamId)} | Team Captain: ${hiddenTag('rolls ')}${d6(r.roll)}${r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : ''}${outcomeSuffix(r.successful, r.reRolled)}`,
   weatherMageRoll: (r) => `Weather Mage: ${hiddenTag('rolls ')}${d6List(r.weatherRoll)}`,
   weatherMageResult: () => 'Weather Mage alters the weather',
-  pumpUpTheCrowdReRoll: (r, g) => `${pn(g, r.playerId)} earns a Pump Up The Crowd re-roll`,
-  showStarReRoll: (r, g) => `${pn(g, r.playerId)} earns a Show Star re-roll`,
-  briberyAndCorruptionReRoll: (r, g) => `${teamName(g, r.teamId)} | Bribery & Corruption re-roll`,
+  pumpUpTheCrowdReRoll: (r, g) => `${pn(g, r.playerId)} earns a Pump Up The Crowd reroll`,
+  showStarReRoll: (r, g) => `${pn(g, r.playerId)} earns a Show Star reroll`,
+  briberyAndCorruptionReRoll: (r, g) => `${teamName(g, r.teamId)} | Bribery & Corruption reroll`,
   biasedRef: (r) => `Biased Ref: ${hiddenTag('rolls ')}${d6(r.roll)} | ${r.foulSpotted ? 'foul spotted' : 'foul not spotted'}`,
   // Prayer handlers use playerEvent for their authoritative per-player effect copy (for example
   // Bad Habits: " gains Loner (2+)"). Keep the server wording and add the structured player name.
@@ -833,7 +833,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   },
   catchOfTheDay: skillRoll('uses Catch of the Day'),
   allYouCanEat: skillRoll('uses All You Can Eat'),
-  brilliantCoachingReRoll: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollBrilliantCoachingOneDrive ?? '?'} Brilliant Coaching re-roll(s)`,
+  brilliantCoachingReRoll: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollBrilliantCoachingOneDrive ?? '?'} Brilliant Coaching reroll(s)`,
   // COMPLETENESS SWEEP · doubleHired pair (Yularen returned it after Thrawn's literal-vs-constant scan
   // correction). RE-VERIFIED bb2025: `bb2025/start/StepBuyInducements` EMITS both reports ⇒ REAL gaps, not
   // by-design (my #139 by-design ruling under-verified). ReportDoubleHiredStarPlayer{starPlayerName} +
@@ -866,8 +866,8 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       ? `Secret Weapon${flagged.length > 1 ? 's' : ''} up for send-off: ${flagged.join(', ')}`
       : 'no Secret Weapon send-off this drive';
   },
-  pumpUpTheCrowdReRollLost: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollPumpUpTheCrowdOneDrive ?? '?'} Pump Up The Crowd re-roll(s)`,
-  showStarReRollLost: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollShowStarOneDrive ?? '?'} Show Star re-roll(s)`,
+  pumpUpTheCrowdReRollLost: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollPumpUpTheCrowdOneDrive ?? '?'} Pump Up The Crowd reroll(s)`,
+  showStarReRollLost: (r, g) => `${teamName(g, r.teamId)} loses ${r.rerollShowStarOneDrive ?? '?'} Show Star reroll(s)`,
   prayersAndInducementsBought: (r, g) => boughtLine(r, g),
   prayerRoll: (r) => {
     const prayer = prayerForRoll(r.roll);
@@ -903,13 +903,13 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // the wire carries a gating roll (roll>0). Plain team/skill rerolls carry no gate (roll 0, always successful) →
   // byte-unchanged. ⚖: displays sent data only (no target derivation — ReportReRoll carries no minimumRoll).
   reRoll: (r, g) => {
-    const src = humanize(String(r.reRollSource ?? 'team re-roll'));
+    const src = humanize(String(r.reRollSource ?? 'team reroll'));
     const roll = r.roll;
     if (typeof roll === 'number' && Number.isInteger(roll) && roll > 0) {
-      const outcome = r.successful === false ? 'FAILED | no re-roll' : 'passed';
-      return `${pn(g, r.playerId)} re-rolls (${src}) | rolled ${d6(roll)}, ${outcome}`;
+      const outcome = r.successful === false ? 'FAILED | no reroll' : 'passed';
+      return `${pn(g, r.playerId)} rerolls (${src}) | rolled ${d6(roll)}, ${outcome}`;
     }
-    return `${pn(g, r.playerId)} re-rolls (${src})`;
+    return `${pn(g, r.playerId)} rerolls (${src})`;
   },
   cardEffectRoll: (r) => `${humanize(String((r.card as { name?: unknown } | null)?.name ?? r.card ?? 'card'))}: ${hiddenTag('rolls ')}${d6(r.roll)}${r.cardEffect ? ` | ${humanize(String(r.cardEffect))}` : ''}`,
   foul: (r, g) => `${pn(g, r.playerId ?? r.attackerId)} fouls ${pn(g, r.defenderId)}`,
@@ -1079,7 +1079,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       winner = r.homeGainsReRoll && r.awayGainsReRoll ? 'both teams'
         : r.homeGainsReRoll ? home : r.awayGainsReRoll ? away : 'neither team';
     }
-    return `Brilliant Coaching | ${home} ${roll(r.rollHome)}, ${away} ${roll(r.rollAway)} | ${winner} gain a re-roll`;
+    return `Brilliant Coaching | ${home} ${roll(r.rollHome)}, ${away} ${roll(r.rollAway)} | ${winner} gain a reroll`;
   },
   cheeringFans: (r, g) => {
     const home = g?.teamHome.teamName ?? 'Home';
@@ -1092,7 +1092,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       : '';
     return `Cheering Fans | ${home} ${d6(r.rollHome)}, ${away} ${d6(r.rollAway)}`
       + (winners ? ` | ${winners} gain an offensive assist` : ' | no team gains an assist')
-      + (rerolled ? ` (${rerolled} re-rolled)` : '');
+      + (rerolled ? ` (${rerolled} rerolled)` : '');
   },
   kickoffDodgySnack: (r, g) => {
     const home = g?.teamHome.teamName ?? 'Home';
@@ -1150,7 +1150,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     const home = g?.teamHome.teamName ?? 'home team';
     const away = g?.teamAway.teamName ?? 'away team';
     const round = r.rollCount ? `round ${r.rollCount}` : 'shootout';
-    const outcome = r.homeTeam == null ? 'tie | re-roll' : `${r.homeTeam ? home : away} scores`;
+    const outcome = r.homeTeam == null ? 'tie | reroll' : `${r.homeTeam ? home : away} scores`;
     const decided = typeof r.teamId === 'string' && r.teamId
       ? ` | ${teamName(g, r.teamId)} wins the shootout` : '';
     return `penalty shootout ${round}: ${home} ${d6(r.rollHome)}, ${away} ${d6(r.rollAway)} | ${outcome} (${r.penaltyScoreHome ?? 0}–${r.penaltyScoreAway ?? 0})${decided}`;

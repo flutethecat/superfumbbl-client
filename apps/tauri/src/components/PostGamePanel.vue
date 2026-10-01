@@ -286,6 +286,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                           <rect :x="b.x" :y="b.yReroll" :width="b.w" :height="b.hReroll" class="pg-dodge-reroll" />
                           <rect :x="b.x" :y="b.yFail" :width="b.w" :height="b.hFail" class="pg-dodge-fail" />
                           <line v-if="b.attempts > 0" :x1="b.x - 4" :x2="b.x + b.w + 4" :y1="b.ey" :y2="b.ey" class="pg-dice-expected" />
+                          <!-- owner 10-01: the expected passes as a number at the left end of its dashed line (the thin-field counts sit on the right) -->
+                          <text v-if="b.attempts > 0" :x="b.x - 5" :y="b.eny" class="pg-dodge-exp-n">{{ b.expected.toFixed(1) }}</text>
                           <text :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
                           <text :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 6, b.yAttempts - 3)" class="pg-dice-count">{{ b.attempts ? `${b.passed}/${b.attempts}` : '—' }}</text>
                         </g>
@@ -293,7 +295,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                         <text v-for="(l, i) in side.dodgeTargets.labels" :key="'s' + i" :x="l.x" :y="l.y"
                           class="pg-dodge-seg-n" :class="[l.inside ? 'pg-dodge-seg-in' : `pg-dodge-seg-out pg-dodge-seg-${l.kind}`]">{{ l.n }}</text>
                       </svg>
-                      <p class="pg-dodge-legend"><span class="pg-dodge-key pg-dodge-key-first" />passed <span class="pg-dodge-key pg-dodge-key-reroll" />passed after re-roll <span class="pg-dodge-key pg-dodge-key-fail" />failed after re-roll <span class="pg-dodge-key pg-dodge-key-none" />failed, no re-roll <span class="pg-dodge-key pg-dodge-key-exp" />expected</p>
+                      <p class="pg-dodge-legend"><span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-first" />passed</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-reroll" />after reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-fail" />failed w/ reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-none" />no reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-exp" />expected</span></p>
                     </template>
                     <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ side.blocks === 1 ? 'block' : 'blocks' }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? 'rolls' : 'dice' }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
                     <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
@@ -826,6 +828,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-count { fill: var(--ui-text); font-size: 9px; text-anchor: middle; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* Owner 10-01 (S67): dodges by target - the three fills mean the same on both sides (not the team colours). */
 .pg-dodge-attempts { fill: none; stroke: var(--ui-muted); stroke-width: 1; }
+.pg-dodge-targets { overflow: visible; } /* the first column's expected number may sit in the left gutter */
+.pg-dodge-exp-n { fill: var(--ui-text); font-size: 7px; font-weight: 700; text-anchor: end; font-variant-numeric: tabular-nums; }
 .pg-dodge-first { fill: #2fae5a; }
 .pg-dodge-reroll { fill: #3d7cff; }
 .pg-dodge-fail { fill: #e5484d; }
@@ -834,6 +838,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dodge-seg-out { text-anchor: start; }
 .pg-dodge-seg-first { fill: #2fae5a; } .pg-dodge-seg-reroll { fill: #6f9bff; } .pg-dodge-seg-fail { fill: #e5484d; }
 .pg-dodge-legend { margin: 2px 0 8px; font-size: max(var(--ui-min-text-size, 12px), 10px); color: var(--ui-muted); display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+.pg-dodge-entry { white-space: nowrap; } /* a swatch never wraps away from its word */
 .pg-dodge-key { display: inline-block; width: 10px; height: 8px; margin-right: 4px; vertical-align: middle; box-sizing: border-box; }
 .pg-dodge-key-first { background: #2fae5a; }
 .pg-dodge-key-reroll { background: #3d7cff; }

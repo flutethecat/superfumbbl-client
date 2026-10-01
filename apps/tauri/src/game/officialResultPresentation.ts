@@ -83,7 +83,7 @@ export function apothecaryOutcomePresentation(
   const oldInjury = previousCard?.oldInjury ?? original?.injury
     ?? (oldRoll == null ? 'Original injury' : casualtyRollLabel(oldRoll));
   const newInjury = previousCard?.newInjury
-    ?? (newRoll == null ? 'Re-Rolled injury' : casualtyRollLabel(newRoll));
+    ?? (newRoll == null ? 'Rerolled injury' : casualtyRollLabel(newRoll));
   const side: 'home' | 'away' = game.teamHome.playerArray.some((player) => player.playerId === playerId) ? 'home' : 'away';
   const teamResult = side === 'home' ? game.gameResult.teamResultHome : game.gameResult.teamResultAway;
   const modelSerious = teamResult.playerResults.find((result) => result.playerId === playerId)?.seriousInjury;
@@ -105,7 +105,7 @@ export function apothecaryOutcomePresentation(
     key: `${String(game.gameId ?? 'unknown')}:${commandNr ?? 'unknown'}:${playerId}:${newRoll ?? 'choice'}`,
     playerId, player, side, square, oldInjury, newInjury, oldRoll, newRoll, newInjuryDie, selected, autoReturn,
     outcome: autoReturn ? `${player} returns to the bench.`
-      : `Kept ${selected === 'old' ? 'Original' : 'Re-Rolled'}: ${selected === 'old' ? oldInjury : newInjury}`,
+      : `Kept ${selected === 'old' ? 'Original' : 'Rerolled'}: ${selected === 'old' ? oldInjury : newInjury}`,
   };
 }
 

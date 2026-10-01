@@ -8,13 +8,20 @@
 // log formatter does); dodge / rush / pickup / catch rolls belong to their playerId.
 import { reactive } from 'vue';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { dodgeSkillCancelledAt, hasSkill as hasSkillWithGrants } from './logic/availableActions';
 
 export type D6 = 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Owner 10-01 (S67): dodge ATTEMPTS grouped by the number they needed. `attempts` counts first rolls; a re-roll
  *  resolves its attempt as passed-after-re-roll or failed-after-re-roll. Failures with no re-roll = attempts - the
  *  other three. */
-export interface DodgeTargetTally { attempts: number; passFirst: number; passReroll: number; failReroll: number }
+export interface DodgeTargetTally {
+  attempts: number; passFirst: number; passReroll: number; failReroll: number;
+  /** Owner 10-01 r4: attempts with the Dodge SKILL re-roll BUILT IN (the player had Dodge, unused this turn and not
+   *  cancelled by Tackle) - whether or not it was needed; `builtFails` = those whose first roll failed (and so were
+   *  re-rolled by the skill). Absent on rows tallied before r4. */
+  built?: number; builtFails?: number;
+}
 export interface DiceTally {
   /** Face counts, index 1..6 (index 0 unused). Every D6 the side rolled: dodge, rush, pickup, catch, pass, armour, injury… */
   d6: number[];
@@ -65,6 +72,11 @@ export interface DiceStats {
   /** Report-stream context that spans reports: the attacker of the block sequence in progress. */
   lastBlockAttacker: string | null;
   lastFailedDodge: { playerId: string; teamId: string } | null;
+  /** Owner 10-01 r4: the source of the last `reRoll` report per player (a re-rolled dodge reads whether the Dodge skill paid for it). */
+  lastRerollSource?: { playerId: string; source: string } | null;
+  /** S67 r5 (review): the dodge attempt a reroll belongs to - ONE attempt lands in ONE field of the column of its
+   *  FIRST roll, whatever the rerolled roll's own target or command. `passed`/`built` = what the first roll tallied. */
+  openDodges?: Record<string, { target: number | null; passed: boolean; built: boolean }>;
   lastFailedPickup: { playerId: string; teamId: string } | null;
   lastFailedRush: { playerId: string; teamId: string } | null;
   /** Owner 09-25: the turn in progress per team — the distinct players activated so far (not serialised). */
@@ -106,6 +118,22 @@ function hasSkill(team: TeamLike | null, playerId: string | null, ...names: stri
   const position = team.roster?.positionArray?.find((p) => p.positionId === player.positionId);
   const skills = [...(player.skillArray ?? []), ...(position?.skillArray ?? [])].map((s) => String(s).toLowerCase());
   return names.some((n) => skills.includes(n.toLowerCase()));
+}
+
+/** Owner 10-01 r4: was the Dodge skill re-roll BUILT IN to this dodge? The player has Dodge, has not used it this turn
+ *  (`usedSkills`), and no opposing Tackle stood next to the square dodged FROM (the last track number; unknown = not
+ *  cancelled). Read at the roll's own frame, so a dodge that passed first time is still counted. */
+function dodgeRerollBuiltIn(game: GameJson | null, team: TeamLike | null, playerId: string | null): boolean {
+  // r5 (review): a Dodge GRANTED for the game (prayer, card) counts - the server's own check reads the union
+  if (!game || !team || !playerId || !(hasSkill(team, playerId, 'Dodge') || hasSkillWithGrants(game, playerId, 'Dodge'))) return false;
+  const player = team.playerArray.find((p) => p.playerId === playerId) as { usedSkills?: unknown } | undefined;
+  const used = Array.isArray(player?.usedSkills) ? (player!.usedSkills as unknown[]).map((s) => String(s).toLowerCase()) : [];
+  if (used.includes('dodge')) return false;
+  const track = ((game.fieldModel as unknown as { trackNumberArray?: { number?: unknown; coordinate?: unknown }[] } | undefined)?.trackNumberArray ?? [])
+    .filter((t) => typeof t?.number === 'number' && Array.isArray(t.coordinate))
+    .sort((a, b) => Number(b.number) - Number(a.number))[0];
+  const origin = track ? (track.coordinate as [number, number]) : null;
+  return !(origin && dodgeSkillCancelledAt(game, playerId, [Number(origin[0]), Number(origin[1])]));
 }
 
 function tallyFor(stats: DiceStats, teamId: string | null, playerId: string | null): DiceTally[] {
@@ -160,7 +188,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     const fresh = emptyDiceStats(gameId);
     stats.gameId = fresh.gameId; stats.seen = fresh.seen; stats.teams = fresh.teams; stats.players = fresh.players;
     stats.lastBlockAttacker = null; stats.lastFailedDodge = null; stats.lastFailedPickup = null; stats.lastFailedRush = null;
-    stats.activeTurn = {};
+    stats.activeTurn = {}; stats.lastRerollSource = null; stats.openDodges = {};
   }
   if (commandNr != null) {
     if (stats.seen.has(commandNr)) return;
@@ -168,6 +196,8 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
   }
   const actingId = typeof game?.actingPlayer?.playerId === 'string' ? game.actingPlayer.playerId : null;
   for (const r of reports) {
+    // r4: remember who paid for a re-roll; the re-rolled roll that follows reads it (falls through: nothing else consumes it)
+    if (String(r.reportId ?? '') === 'reRoll' && typeof r.playerId === 'string') stats.lastRerollSource = { playerId: r.playerId, source: String(r.reRollSource ?? '') };
     const id = String(r.reportId ?? '');
     const playerId = typeof r.playerId === 'string' ? r.playerId : null;
 
@@ -223,21 +253,46 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       const reRolled = r.reRolled === true;
       const successful = r.successful === true;
       const need = Number(r.minimumRoll);
-      if (Number.isFinite(need)) {
-        const target = Math.min(6, Math.max(2, Math.round(need)));
+      const builtIn = !reRolled && successful && dodgeRerollBuiltIn(game, team, playerId);
+      const skillRerolled = reRolled && stats.lastRerollSource?.playerId === playerId && stats.lastRerollSource.source.toLowerCase() === 'dodge';
+      if (reRolled) stats.lastRerollSource = null;
+      // r5 (review): a reroll resolves the player's OPEN attempt - it files under that attempt's column and REPLACES
+      // its first outcome. (Diving Tackle: the first roll is reported passed, the tackle fails it, then it is rerolled.)
+      // r6 (review): one open attempt PER PLAYER, so another player's dodge in between cannot orphan a reroll
+      const opens = (stats.openDodges ??= {});
+      const open = reRolled && playerId ? opens[playerId] ?? null : null;
+      const ownTarget = Number.isFinite(need) ? Math.min(6, Math.max(2, Math.round(need))) : null;
+      const target = open ? open.target ?? ownTarget : ownTarget;
+      // r6 (review): a reroll whose first roll was never seen (joined mid-attempt) is not charted - the Dodges row
+      // does not count it either, so the two always agree
+      if (target != null && (!reRolled || open)) {
         for (const t of tallies) {
           const by = (t.dodgeByTarget ??= {});
           const row = (by[target] ??= { attempts: 0, passFirst: 0, passReroll: 0, failReroll: 0 });
-          if (!reRolled) { row.attempts += 1; if (successful) row.passFirst += 1; }
-          else if (successful) row.passReroll += 1;
-          else row.failReroll += 1;
+          if (!reRolled) {
+            row.attempts += 1;
+            // r4: a first-time pass still had the skill re-roll built in if the player could have used it
+            if (successful) { row.passFirst += 1; if (builtIn) row.built = (row.built ?? 0) + 1; }
+          } else {
+            if (open?.passed) row.passFirst = Math.max(0, row.passFirst - 1);
+            if (successful) row.passReroll += 1; else row.failReroll += 1;
+            // r4: a first roll re-rolled BY THE DODGE SKILL was a built-in re-roll. r6 (review): `built` is about the
+            // skill being AVAILABLE - an attempt counted built stays built whichever source the coach then picked
+            if (skillRerolled) { if (!open?.built) row.built = (row.built ?? 0) + 1; row.builtFails = (row.builtFails ?? 0) + 1; }
+          }
         }
+      }
+      if (!reRolled && playerId) opens[playerId] = { target, passed: successful, built: builtIn };
+      else if (open) {
+        // the reroll failed an attempt whose first roll was reported passed: it now counts as failed
+        if (open.passed && !successful) for (const t of tallies) t.failedDodges += 1;
+        delete opens[playerId!];
       }
       if (!reRolled) {
         for (const t of tallies) t.dodges += 1;
         if (!successful) { for (const t of tallies) t.failedDodges += 1; stats.lastFailedDodge = playerId && team ? { playerId, teamId: team.teamId } : null; }
         else stats.lastFailedDodge = null;
-      } else if (successful && stats.lastFailedDodge?.playerId === playerId) {
+      } else if (successful && open && !open.passed) { // r6: keyed on the player's own open attempt, not a single last-failed slot
         // The failed attempt was re-rolled into a success: it no longer counts as failed.
         for (const t of tallies) t.failedDodges = Math.max(0, t.failedDodges - 1);
         stats.lastFailedDodge = null;

@@ -55,7 +55,7 @@ const SKILLS: Record<string, string[]> = {
 };
 const SPECIAL: Record<string, string> = {
   'star:M1': 'The Ballista: +1 to injury with Mighty Blow',
-  'star:M2': 'Indomitable: re-roll a failed Dauntless roll',
+  'star:M2': 'Indomitable: reroll a failed Dauntless roll',
   'star:M3': 'Excuse Me, Are You a Zoat?',
   'star:M4': 'The Death of Kings',
   'star:M5': 'Two for One: hired with Crumbleberry',

@@ -47,7 +47,7 @@ export function findBlockRerollReport(reports: readonly Record<string, unknown>[
  *  contains a space before "ReRoll"), so it is special-cased to the spelling used elsewhere on this panel
  *  ("Team Re-roll"). Every other source (skill names) is already coach-facing as reported by the server. */
 function prettyBlockRerollSourceName(raw: string): string {
-  if (raw === 'Team ReRoll') return 'Team Re-roll';
+  if (raw === 'Team ReRoll') return 'Team Reroll';
   return valuedSkillLabel(raw, undefined);
 }
 

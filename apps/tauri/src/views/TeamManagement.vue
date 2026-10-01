@@ -148,7 +148,7 @@ const counts = ref<Record<string, number>>({});
 const staff = reactive({ reRolls: 0, assistantCoaches: 0, cheerleaders: 0, dedicatedFans: 1, apothecary: 0 });
 type StaffKey = keyof typeof staff;
 const STAFF_BOUNDS: Record<StaffKey, { min: number; max: number; label: string }> = {
-  reRolls: { min: 0, max: 8, label: 'Re-rolls' },
+  reRolls: { min: 0, max: 8, label: 'Rerolls' },
   assistantCoaches: { min: 0, max: 6, label: 'Asst. coaches' },
   cheerleaders: { min: 0, max: 12, label: 'Cheerleaders' },
   dedicatedFans: { min: 1, max: 7, label: 'Dedicated fans' },

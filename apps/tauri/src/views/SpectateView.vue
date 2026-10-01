@@ -2331,7 +2331,7 @@ const bpArmedHintText = computed(() => armedRerollHintText(rerollOptionLabelForK
 // generic "Select one or more dice." — it never named the source either (e.g. Savage Blow).
 const bpMultiSelectHintText = computed(() => armedRerollHintText(
   rerollOptionLabelForKind('multiBlockDice', blockPartialOptions.value),
-  'select one or more dice to re-roll',
+  'select one or more dice to reroll',
 ));
 
 // Resolve synchronous multi-block per target; rerolls re-present before the coach makes the plain die choice.
@@ -12664,11 +12664,11 @@ function sendChat() {
               <div class="rr-prompt-line rr-question bl-reroll-row">
                 <span>Reroll?</span>
                 <button v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source" class="bl-opt"
-                  :title="'Re-roll: ' + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
-                  <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" alt="Team re-roll" />
+                  :title="'Reroll: ' + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
+                  <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" alt="Team reroll" />
                   <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
                     :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                  <span>{{ opt.label.replaceAll('Re-roll', 'Reroll').replaceAll('re-roll', 'Reroll') }}</span>
+                  <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
                 </button>
                 <button class="bl-opt bl-decline rr-decline-chip" title="Keep the roll"
                   @click="gameStore.resolveBloodlustReroll(null)">✕</button>
@@ -13258,7 +13258,7 @@ function sendChat() {
           class="masterchef-splash">
           <span class="masterchef-icon">🍲</span>
           <span class="masterchef-head">{{ gameStore.state.masterChefSplash.team }}'s Master Chef steals
-            {{ gameStore.state.masterChefSplash.stolen }} re-roll{{ gameStore.state.masterChefSplash.stolen === 1 ? '' : 's' }}!</span>
+            {{ gameStore.state.masterChefSplash.stolen }} reroll{{ gameStore.state.masterChefSplash.stolen === 1 ? '' : 's' }}!</span>
         </div>
 
         <!-- owner ruling 08-17: Riotous Rookies splash — mirrors the Master Chef splash above (same component/style,
@@ -13340,7 +13340,7 @@ function sendChat() {
               :aria-pressed="bpDieMode === 'multiBlockDice' ? bpSelectedDice.has(i) : undefined"
               :data-readonly="!blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
               :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
-              :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? 'Remove this die' : 'Select this die') : (bpDieMode ? 'Re-roll this die' : (bpUphillDecision ? blockFaceLabel(d) + ' — awaiting the chooser' : (settings.order66 ? blockFaceLabel(d) : 'Keep this die')))"
+              :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? 'Remove this die' : 'Select this die') : (bpDieMode ? 'Reroll this die' : (bpUphillDecision ? blockFaceLabel(d) + ' — awaiting the chooser' : (settings.order66 ? blockFaceLabel(d) : 'Keep this die')))"
               @click="clickBlockPartialDie(i)">
               <img v-if="settings.order66" :src="blockFaceUrl(d)" :alt="blockFaceLabel(d)" />
               <template v-else>{{ blockFaceLabel(d) }}</template>
@@ -13352,9 +13352,9 @@ function sendChat() {
           <!-- Owner 09-07: watcher-side cue — the chooser still holds a TEAM re-roll (same art as the live button,
                display-only), so a spectator/opponent reads a pause as a re-roll debate. -->
           <div v-if="!blockDialogMine && gameStore.state.blockPartial.chooserTeamRerollAvailable" class="bp-actions bp-actions--watch"
-            title="The choosing coach may still use a team re-roll">
+            title="The choosing coach may still use a team reroll">
             <span class="bp-team bp-team--watch">
-              <img :src="resourceIcon('re_roll')" alt="Team re-roll available" />
+              <img :src="resourceIcon('re_roll')" alt="Team reroll available" />
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num">{{ blockPartialTeamReRolls }}</span>
             </span>
           </div>
@@ -13372,37 +13372,37 @@ function sendChat() {
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
             <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot"
-              class="bp-team" title="Team re-roll" @click="gameStore.resolveBlockPartial('team')">
-              <img :src="resourceIcon('re_roll')" alt="Team re-roll" />
+              class="bp-team" title="Team reroll" @click="gameStore.resolveBlockPartial('team')">
+              <img :src="resourceIcon('re_roll')" alt="Team reroll" />
               <!-- #205: acting coach's team-reroll count, immediately beside the die icon (owner idiom).
                    Display-only chip; the resolve('team') answer path is untouched. -->
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                :title="`Team re-rolls available: ${blockPartialTeamReRolls}`">{{ blockPartialTeamReRolls }}</span>
+                :title="`Team rerolls available: ${blockPartialTeamReRolls}`">{{ blockPartialTeamReRolls }}</span>
             </button>
             <!-- Owner 2026-07-12: distinct Team Mascot re-roll (own art) + the Mascot-then-TRR variant. -->
             <button v-if="gameStore.state.blockPartial.mascot" class="bp-team bp-mascot"
-              title="Team Mascot (no re-roll if it fails)" @click="gameStore.resolveBlockPartial('mascot')">
+              title="Team Mascot (no reroll if it fails)" @click="gameStore.resolveBlockPartial('mascot')">
               <img :src="resourceIcon('team_mascot')" alt="Team Mascot" />
               <span class="bp-sub">No TRR</span>
             </button>
             <button v-if="gameStore.state.blockPartial.mascotTrr" class="bp-opt"
-              title="Team Mascot, then Team Re-roll if it fails" @click="gameStore.resolveBlockPartial('mascotTrr')">
+              title="Team Mascot, then Team Reroll if it fails" @click="gameStore.resolveBlockPartial('mascotTrr')">
               <span>Mascot + RR</span>
             </button>
             <!-- Owner 2026-07-12 (bug, upstream-client-verified): o66 uphill phase-1 — the attacker declines the
                  re-roll; upstream's "No Re-Roll" sends sendUseReRoll(BLOCK, null), then the SERVER flips the pick
                  to the defender (DialogBlockRollProperties buttonNoReRoll → the null-source branch). -->
             <button v-if="bpUphillDecision" class="bp-opt bp-decline"
-              title="Decline re-roll — the chooser then picks the block die" @click="gameStore.resolveBlockPartial('declineReroll')">
-              <span>Decline re-roll</span>
+              title="Decline reroll — the chooser then picks the block die" @click="gameStore.resolveBlockPartial('declineReroll')">
+              <span>Decline reroll</span>
             </button>
           </div>
           <div v-if="blockDialogMine && bpDieMode === 'multiBlockDice'" class="bp-hint bp-multi-select">
             <span>{{ bpMultiSelectHintText ?? 'Select one or more dice.' }}</span>
-            <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">Re-roll selected</button>
+            <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">Reroll selected</button>
           </div>
           <div v-else-if="blockDialogMine && bpDieMode" class="bp-hint">{{ bpArmedHintText }}</div>
-          <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">Uphill block — use a re-roll or decline; the chooser picks the die.</div>
+          <div v-else-if="blockDialogMine && bpUphillDecision" class="bp-hint">Uphill block — use a reroll or decline; the chooser picks the die.</div>
         </div>
 
         <PrayerPresentation :announcement="null" :wait="gameStore.state.prayerChoiceWait" />
@@ -13426,7 +13426,7 @@ function sendChat() {
                 :data-armed="mbrDieMode?.targetId === row.targetId"
                 :data-readonly="!multiBlockDialogMine || row.isOwnChoice !== true || (!row.pickable && mbrDieMode?.targetId !== row.targetId)"
                 :disabled="!multiBlockDialogMine || (mbrDieMode?.targetId !== row.targetId && (row.isOwnChoice !== true || !row.pickable))"
-                :title="mbrDieMode?.targetId === row.targetId ? 'Re-roll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
+                :title="mbrDieMode?.targetId === row.targetId ? 'Reroll this die' : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + ' — not selectable in this phase')"
                 @click="multiBlockPickDie(row.targetId, i, row.isOwnChoice === true && row.pickable)">
                 <img v-if="settings.order66" :src="blockFaceUrl(d)" :alt="blockFaceLabel(d)" />
                 <template v-else>{{ blockFaceLabel(d) }}</template>
@@ -13464,22 +13464,22 @@ function sendChat() {
                    Owner 09-28 (Spec S8): the source's NAME is visible text too — the "ALL" badge alone did not
                    name the rule, only the icon and hover title did. -->
               <button v-if="row.multiBlockDiceLabel" class="bp-opt bp-savage bp-opt-icon-label"
-                :title="`${row.multiBlockDiceLabel} — re-roll ALL dice`"
+                :title="`${row.multiBlockDiceLabel} — reroll ALL dice`"
                 @click="multiBlockRerollAllDice(row.targetId, row.multiBlockDice, row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)"
                   :src="skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)!" :alt="row.multiBlockDiceLabel" />
-                <img v-else :src="resourceIcon('re_roll')" alt="re-roll" />
+                <img v-else :src="resourceIcon('re_roll')" alt="reroll" />
                 <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
                 <span class="bp-sub">ALL</span>
               </button>
-              <button v-if="row.teamRR && !row.mascot" class="bp-team" title="Team re-roll" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
-                <img :src="resourceIcon('re_roll')" alt="Team re-roll" />
+              <button v-if="row.teamRR && !row.mascot" class="bp-team" title="Team reroll" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+                <img :src="resourceIcon('re_roll')" alt="Team reroll" />
                 <!-- #205: acting coach's team-reroll count beside the die icon (owner idiom). Display-only;
                      the multiBlockReroll('team') answer path is untouched. -->
                 <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                  :title="`Team re-rolls available: ${multiBlockTeamReRolls}`">{{ multiBlockTeamReRolls }}</span>
+                  :title="`Team rerolls available: ${multiBlockTeamReRolls}`">{{ multiBlockTeamReRolls }}</span>
               </button>
-              <button v-if="row.mascot" class="bp-team bp-mascot" title="Team Mascot (no re-roll if it fails)" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
+              <button v-if="row.mascot" class="bp-team bp-mascot" title="Team Mascot (no reroll if it fails)" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
                 <img :src="resourceIcon('team_mascot')" alt="Team Mascot" />
                 <span class="bp-sub">No TRR</span>
               </button>
@@ -13597,12 +13597,12 @@ function sendChat() {
                   <img :src="resourceIcon('re_roll')" :alt="opt.label" />
                   <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. -->
                   <span v-if="rerollPromptTeamReRolls !== null" class="rr-trr-num bp-trr-num"
-                    :title="`Team re-rolls available: ${rerollPromptTeamReRolls}`">{{ rerollPromptTeamReRolls }}</span>
+                    :title="`Team rerolls available: ${rerollPromptTeamReRolls}`">{{ rerollPromptTeamReRolls }}</span>
                 </button>
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
                 <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(opt.source, effectiveIconStyle) }"
-                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Re-roll with ${opt.label}`"
+                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? `Use ${opt.label}` : `Reroll with ${opt.label}`"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
                   <img v-if="skillIconUrl(opt.source, effectiveIconStyle)"
@@ -13612,12 +13612,12 @@ function sendChat() {
                        same count, inline (it's the mascot art, not the plain re-roll die). Plain 'Team Mascot'
                        (no TRR) is excluded (#188 FR-1). -->
                   <span v-if="opt.source === 'Mascot TRR' && rerollPromptTeamReRolls !== null" class="rr-trr-inline"
-                    :title="`Team re-rolls available: ${rerollPromptTeamReRolls}`">
-                    <img :src="resourceIcon('re_roll')" alt="Team re-rolls" />{{ rerollPromptTeamReRolls }}
+                    :title="`Team rerolls available: ${rerollPromptTeamReRolls}`">
+                    <img :src="resourceIcon('re_roll')" alt="Team rerolls" />{{ rerollPromptTeamReRolls }}
                   </span>
                 </button>
               </template>
-              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" title="No re-roll"
+              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" title="No reroll"
                 @click="gameStore.resolveReRoll(null)">✕</button>
             </div>
           </div>
