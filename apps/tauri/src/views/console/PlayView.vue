@@ -142,7 +142,6 @@ const detailsKeys = ref<Set<string>>(new Set());
 const detailsRow = ref<FumbblRecentMatch | null>(null);
 const detailsSnapshot = ref<PostGameSnapshot | null>(null);
 const detailsLoading = ref(false);
-const detailsPanel = ref<InstanceType<typeof PostGamePanel> | null>(null);
 function detailsKeyFor(row: FumbblRecentMatch): string { return postGameKey('fumbbl', row.replayId); }
 function hasDetails(row: FumbblRecentMatch): boolean { return detailsKeys.value.has(detailsKeyFor(row)); }
 async function refreshDetailsKeys(): Promise<void> { detailsKeys.value = await postGameSnapshotKeys(); }
@@ -509,14 +508,14 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
         </header>
         <div class="details-body">
           <p v-if="detailsLoading" class="empty">Loading&hellip;</p>
-          <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
             <p class="empty">No details stored for this game.</p>
             <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>
           </div>
         </div>
         <footer class="details-foot">
-          <button v-if="detailsSnapshot" class="plain" type="button" @click="detailsPanel?.openDice()">Dice</button>
+          <!-- Owner 10-01 (S73): no Dice button here - the pane's own Dice tab opens it. -->
           <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)">Replay</button>
         </footer>
       </div>
