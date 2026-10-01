@@ -687,7 +687,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 /* Owner 10-01 (S80): the action column fills the row's height - Details at the top, Replay in the middle, and the
    time's bottom edge on the panels' bottom edge. */
 .row-actions { display: grid; gap: 8px; align-content: space-between; align-self: stretch; justify-items: stretch; }
-.row-when { color: var(--pb-text); font-size: 14px; line-height: 1; letter-spacing: .12em; text-align: center; text-transform: uppercase; white-space: nowrap; } /* grid: both buttons take the wider one's width */
+.row-when { color: var(--pb-text); font-size: 20px; font-weight: 700; line-height: 1; letter-spacing: .08em; /* owner 10-01 (S81): larger, to balance the buttons (was 14px) */ text-align: center; text-transform: uppercase; white-space: nowrap; } /* grid: both buttons take the wider one's width */
 .play-button { font-size: 24px; }
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
