@@ -311,7 +311,7 @@ import {
   type BrowserMatch,
 } from '../game/jnlpRouting';
 import { generateAllMarkings } from '../game/markings';
-import { computeIconSkills, effectiveMarkingConfig, markerGlyph, jumpUpMenuPresentation, playerDetailSkills } from '../game/skillDisplay';
+import { computeIconSkills, effectiveMarkingConfig, markerGlyph, jumpUpMenuPresentation, playerCardSkills, playerDetailSkills } from '../game/skillDisplay';
 import type { PlayerDetailSkill } from '../game/skillDisplay';
 import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
@@ -3704,7 +3704,8 @@ function refreshApothecarySubject(): void {
   const injury = gameStore.state.apothecaryChoice?.injuries[0];
   const entry = playerSideById(injury?.playerId);
   apoChoicePortrait.value = injury?.playerId && renderer ? renderer.playerPortrait(injury.playerId) : null;
-  apoChoiceSkills.value = entry ? playerDetailSkills(entry.player) : [];
+  const apoTeam = entry ? (entry.side === 'home' ? gameStore.game.value?.teamHome : gameStore.game.value?.teamAway) : null;
+  apoChoiceSkills.value = entry && apoTeam ? playerCardSkills(apoTeam, entry.player) : [];
   apoChoicePositionId.value = entry?.player.positionId ?? null;
   apoChoiceSide.value = entry?.side ?? injury?.side ?? null;
 }
@@ -6818,8 +6819,8 @@ const popupInfo = computed(() => {
       { label: 'AV', value: `${effAv}+`, reduced: reduced('AV') || effAv < player.armour, increased: better(effAv, pos?.armour, false) },
     ],
     // Preserve the raw key for icons/rules text while the shared Modern/Classic
-    // projection labels valued temporary Hatred as e.g. `Hatred (Orc)`.
-    skills: playerDetailSkills(player),
+    // projection labels valued temporary Hatred as e.g. `Hatred (Orc)`. S87: `added` is judged against the position.
+    skills: playerCardSkills(team, player),
     spp,
     sppEarned,
     // Owner 2026-07-08: current location/injury status (KO'd / Badly Hurt / Seriously Hurt /
@@ -11946,7 +11947,7 @@ function sendChat() {
                     <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ induceRosterCard.spp }}</span></div>
                     <div v-if="induceRosterCard.advancement" class="pg-mvp-advance">{{ induceRosterCard.advancement.text }}</div>
                     <PlayerDetailSkillList v-if="induceRosterCard.skills.length" :skills="induceRosterCard.skills" :mode="skillMode"
-                      :icon-style="effectiveIconStyle" :position-id="induceRosterCard.positionId" :side="induceRosterSide" />
+                      :icon-style="effectiveIconStyle" :position-id="induceRosterCard.positionId" :side="induceRosterSide" mark-added />
                   </div>
                 </div>
               </div>
@@ -13671,7 +13672,7 @@ function sendChat() {
             </div>
           </div>
           <PlayerDetailSkillList v-if="popupInfo.skills.length" :skills="popupInfo.skills" :mode="skillMode" :icon-style="effectiveIconStyle"
-            :position-id="popupPlayer?.player.positionId" :side="popupInfo.side"
+            :position-id="popupPlayer?.player.positionId" :side="popupInfo.side" mark-added
             />
         </div>
       </div>

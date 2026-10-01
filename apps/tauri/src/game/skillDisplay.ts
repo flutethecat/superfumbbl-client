@@ -122,6 +122,21 @@ export function playerDetailSkills(
   });
 }
 
+/** Owner 10-01 (S87): a player CARD's skills with `added` judged against the player's own roster position - the
+ *  profile popup and the apothecary card called `playerDetailSkills(player)` with no baseline, which marks EVERY
+ *  skill as added. A position the roster does not list (no baseline to compare with) marks nothing as added. */
+export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDetailSkill[] {
+  const roster = team.roster as { positionArray?: PositionLike[] } | undefined;
+  const position = roster?.positionArray?.find((p) => p.positionId === player.positionId);
+  if (!position) return playerDetailSkills(player).map((skill) => ({ ...skill, added: false }));
+  return playerDetailSkills(player, new Set(position.skillArray ?? []));
+}
+
+/** Owner 10-01 (S87): added skills go to the END of a card's list; the order inside each group is kept. */
+export function addedSkillsLast<T extends { added: boolean }>(skills: readonly T[]): T[] {
+  return [...skills.filter((skill) => !skill.added), ...skills.filter((skill) => skill.added)];
+}
+
 /** The glyph a marker shows for a skill — the user text if set, else the skill's
  *  short initials (upstream markings use the config text; JSON pre-fill fills it).
  *  Owner 2026-07-08: exported — the reroll menu (markings mode) shows each skill

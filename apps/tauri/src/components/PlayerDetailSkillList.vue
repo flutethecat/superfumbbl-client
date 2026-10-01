@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref } from 'vue';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { reactiveSkillIconLarge, reactiveSkillIconUrl } from '../game/assetModUi';
 import { playerSkillCategoryClass } from '../game/skillCategory';
-import type { PlayerDetailSkill } from '../game/skillDisplay';
+import { addedSkillsLast, type PlayerDetailSkill } from '../game/skillDisplay';
 
 const props = withDefaults(defineProps<{
   skills: readonly PlayerDetailSkill[];
@@ -11,11 +11,17 @@ const props = withDefaults(defineProps<{
   iconStyle?: SkillIconStyle;
   positionId?: string | null;
   side?: 'home' | 'away' | null;
+  /** Owner 10-01 (S87): Modern player cards put ADDED skills last and ring their icons in gold. Opt-in, so a caller
+   *  that does not ask for it (Classic) keeps its own order and look. */
+  markAdded?: boolean;
 }>(), {
   iconStyle: 'bb3',
   positionId: null,
   side: null,
+  markAdded: false,
 });
+
+const shownSkills = computed(() => (props.markAdded ? addedSkillsLast(props.skills) : props.skills));
 
 const iconContext = computed(() => ({ positionId: props.positionId, side: props.side }));
 
@@ -76,9 +82,10 @@ function hideTip(): void { tip.skill = null; }
 
 <template>
   <div class="card-skills" role="list" aria-label="Player skills">
-    <span v-for="skill in skills" :key="`${skill.name}:${skill.label}`"
+    <span v-for="skill in shownSkills" :key="`${skill.name}:${skill.label}`"
       class="skill-chip" :class="mode === 'markings' ? playerSkillCategoryClass(skill.name) : undefined"
-      :data-display="mode" :aria-label="skill.label" role="listitem"
+      :data-display="mode" :data-added="markAdded && skill.added ? 'true' : undefined"
+      :aria-label="skill.label" role="listitem"
       :data-tooltip="mode === 'icons' ? tooltipText(skill) : undefined"
       :title="mode === 'icons' ? undefined : skill.label"
       :tabindex="mode === 'icons' ? 0 : undefined"
@@ -129,6 +136,9 @@ function hideTip(): void { tip.skill = null; }
   cursor: help;
 }
 .skill-chip:hover, .skill-chip:focus-visible { border-color: var(--ui-accent); outline: none; }
+/* Owner 10-01 (S87): an ADDED skill's icon wears a gold outline (icons mode; the text chips keep their colours). */
+.skill-chip[data-display='icons'][data-added='true'] { border-color: #e6b422; box-shadow: 0 0 0 1px #e6b422, inset 0 0 0 1px rgb(0 0 0 / 55%); }
+.skill-chip[data-display='icons'][data-added='true']:hover, .skill-chip[data-display='icons'][data-added='true']:focus-visible { border-color: #ffd75e; box-shadow: 0 0 0 1px #ffd75e, inset 0 0 0 1px rgb(0 0 0 / 55%); }
 .skill-chip img { width: 42.67px; height: 42.67px; image-rendering: pixelated; }
 .skill-chip img.chip-master { image-rendering: auto; } /* a minified illustration: smooth, not decimated */
 .skill-initials { font-size: max(var(--ui-min-text-size, 12px), 0.87em); font-weight: bold; color: var(--ui-text); }

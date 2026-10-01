@@ -70,7 +70,7 @@ defineEmits<{
         <strong class="apo-player-name">{{ subjectName }}</strong>
         <PlayerDetailSkillList v-if="skills?.length" class="apo-skills" :skills="skills"
           :mode="skillMode ?? 'markings'" :icon-style="skillIconStyle ?? 'bb3'"
-          :position-id="positionId" :side="playerSide ?? prompt.side" />
+          :position-id="positionId" :side="playerSide ?? prompt.side" mark-added />
       </aside>
       <div class="apo-treatment">
         <span v-if="prompt.mine" class="apo-kicker">Choose treatment</span>

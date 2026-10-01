@@ -192,7 +192,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                   <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ card.spp }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span></div>
                   <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
                   <PlayerDetailSkillList v-if="card.skills.length" :skills="card.skills" :mode="skillMode" :icon-style="iconStyle"
-                    :position-id="card.positionId" :side="side.which" />
+                    :position-id="card.positionId" :side="side.which" mark-added />
                 </div>
               </div>
             </template>
