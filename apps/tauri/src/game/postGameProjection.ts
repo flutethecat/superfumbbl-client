@@ -211,12 +211,15 @@ export interface PgDodgeTargetBar {
   label: string; attempts: number; passed: number; passFirst: number; passReroll: number; failReroll: number; expected: number;
   x: number; w: number; yAttempts: number; hAttempts: number; yFirst: number; hFirst: number; yReroll: number; hReroll: number;
   yFail: number; hFail: number; ey: number;
-  /** Baseline of the expected NUMBER (left of the line): `ey + 2.5`, moved clear of the previous column's outside labels. */
+  /** Baseline of the expected NUMBER: it sits ABOVE the left end of its line (`ey + PG_DODGE_EXP_DY`, owner 10-01),
+   *  moved clear of the previous column's outside labels. */
   eny: number;
 }
 /** One number per colour field (owner 10-01 r2): centred in the field when it is tall enough, else beside it. */
 export interface PgDodgeSegLabel { n: number; kind: 'first' | 'reroll' | 'fail'; x: number; y: number; inside: boolean }
 export const PG_DODGE_LABEL_MIN_H = 7;
+/** Owner 10-01: the expected number rests on top of its line's left end, not beside the line. */
+export const PG_DODGE_EXP_DY = -2;
 /** Vertical room one 7px number needs; outside labels closer than this are staggered upward (S67 r5, review). */
 export const PG_DODGE_LABEL_GAP = 7;
 export interface PgDodgeTargetChart { bars: PgDodgeTargetBar[]; attempts: number; passed: number; expected: number; labels: PgDodgeSegLabel[] }
@@ -241,7 +244,7 @@ export function pgDodgeTargetChart(byTarget: DiceTally['dodgeByTarget']): PgDodg
       label: `${r.target}+`, attempts: r.attempts, passed: r.passFirst + r.passReroll, passFirst: r.passFirst, passReroll: r.passReroll, failReroll: r.failReroll, expected,
       x, w, yAttempts: PG_CHART_BASE - hAttempts, hAttempts, yFirst: PG_CHART_BASE - hFirst, hFirst,
       yReroll: PG_CHART_BASE - hFirst - hReroll, hReroll, yFail: PG_CHART_BASE - hFirst - hReroll - hFail, hFail,
-      ey: PG_CHART_BASE - expected * scale, eny: PG_CHART_BASE - expected * scale + 2.5,
+      ey: PG_CHART_BASE - expected * scale, eny: PG_CHART_BASE - expected * scale + PG_DODGE_EXP_DY,
     };
   });
   const labels: PgDodgeSegLabel[] = [];

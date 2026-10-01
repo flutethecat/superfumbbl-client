@@ -829,7 +829,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 /* Owner 10-01 (S67): dodges by target - the three fills mean the same on both sides (not the team colours). */
 .pg-dodge-attempts { fill: none; stroke: var(--ui-muted); stroke-width: 1; }
 .pg-dodge-targets { overflow: visible; } /* the first column's expected number may sit in the left gutter */
-.pg-dodge-exp-n { fill: var(--ui-text); font-size: 7px; font-weight: 700; text-anchor: end; font-variant-numeric: tabular-nums; }
+.pg-dodge-exp-n { fill: var(--ui-text); font-size: 6px; font-weight: 700; text-anchor: end; font-variant-numeric: tabular-nums; }
 .pg-dodge-first { fill: #2fae5a; }
 .pg-dodge-reroll { fill: #3d7cff; }
 .pg-dodge-fail { fill: #e5484d; }
