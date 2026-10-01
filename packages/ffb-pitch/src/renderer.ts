@@ -1029,6 +1029,8 @@ const NAME_STYLE = new TextStyle({
   fill: 0xffffff,
   stroke: { color: 0x14161a, width: 3 },
 });
+/** Owner 10-01 (S88): a Shift+clicked player shows its label only, no overhead arrow. */
+const PLAYER_MARK_DRAWS_ARROW: boolean = false;
 /** Owner 10-01: Shift+click square-mark label — the player-number face, size and outline (NAME_STYLE), lines centred. */
 const SQUARE_MARK_LABEL_STYLE = new TextStyle({
   fontFamily: NAME_STYLE.fontFamily,
@@ -10718,6 +10720,9 @@ export class PitchRenderer {
     if (!this.game) return;
     for (const playerId of this.persistentPlayerArrowIds) {
       this.drawPlayerMarkLabel(playerId);
+      // Owner 10-01 (S88): "remove the arrow from the shift click on a player" - the Shift+click mark on a player is
+      // its LABEL only. The id set still tracks which players are marked; no overhead arrow is built for it.
+      if (PLAYER_MARK_DRAWS_ARROW === false) continue;
       if (this.hasOwnedPlayerArrow(playerId)) continue;
       const token = this.tokensById.get(playerId);
       const data = this.game.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
@@ -10785,7 +10790,9 @@ export class PitchRenderer {
     if (!this.persistentPlayerArrowIds.has(playerId)) return;
     const lines = shapePlayerMarkLabel(text);
     if (lines.length > 0) this.playerMarkLabels.set(playerId, lines.join('\n'));
-    else this.playerMarkLabels.delete(playerId);
+    // S88: with no arrow, a player mark IS its label - blank text un-marks the player (nothing would show otherwise,
+    // and the next Shift+click must open the field again instead of silently toggling an invisible mark off).
+    else { this.playerMarkLabels.delete(playerId); this.persistentPlayerArrowIds.delete(playerId); }
     this.refresh();
   }
 
@@ -10845,24 +10852,30 @@ export class PitchRenderer {
       resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     group.addChild(text);
+    // Owner 10-01 (S88): "Text size should match the current markings size". A walker token scales its decorations
+    // itself (walkers.ts decor scale): a skill marking is built WITH the token and scaled in that first pass, but the
+    // label is added later, so it stayed at scale 1 - about 1.7x a real marking at the fit zoom. A late child has to
+    // be PLACED at the walker's current decoration scale (placeWalkerDecor, in decor-1 units); the overlay pass must
+    // not overwrite that scale, so walker labels are not registered with it (the walker keeps them scaled on zoom).
+    const walker = isWalkerToken(token);
     if (this.playerMarkLabelAnchor() === 'centre') {
       text.anchor.set(0.5, 0.5);
-      if (isWalkerToken(token)) {
-        this.placeChestMarker(token, group, PLAYER_MARK_LABEL_Z);
-      } else {
-        group.position.set(0, this.markingCentreY(token));
-        group.zIndex = PLAYER_MARK_LABEL_Z;
-      }
+      if (walker) this.placeChestMarker(token, group, PLAYER_MARK_LABEL_Z);
+      else group.position.set(0, this.markingCentreY(token));
     } else {
       text.anchor.set(0.5, 0);
-      group.position.set(0, this.markingFeetY(token, playerId, isDown(data.playerState)));
-      group.zIndex = PLAYER_MARK_LABEL_Z;
+      const feetY = this.markingFeetY(token, playerId, isDown(data.playerState));
+      if (walker) placeWalkerDecor(token, group, 0, feetY, 1);
+      else group.position.set(0, feetY);
     }
+    group.zIndex = PLAYER_MARK_LABEL_Z;
     token.sortableChildren = true;
     token.addChild(group);
     this.markingLayer.attach(group);
-    this.overlayScaleGroups.push(group);
-    this.applyOverlayScale(group, this.overlayZoomFactor());
+    if (!walker) {
+      this.overlayScaleGroups.push(group);
+      this.applyOverlayScale(group, this.overlayZoomFactor());
+    }
     this.playerMarkLabelNodes.push(group);
   }
 

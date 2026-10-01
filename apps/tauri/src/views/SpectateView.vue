@@ -467,6 +467,12 @@ function closeMarkLabelField(): void {
   window.removeEventListener('wheel', commitMarkLabelField, true);
   window.removeEventListener('resize', commitMarkLabelField);
 }
+/** Escape: a square keeps its bare mark; a player (S88: no arrow, the label IS the mark) is un-marked. */
+function cancelMarkLabelField(): void {
+  const field = markLabelField.value;
+  closeMarkLabelField();
+  if (field?.request.kind === 'player') renderer?.setPlayerMarkLabel(field.request.playerId, '');
+}
 function commitMarkLabelField(): void {
   const field = markLabelField.value;
   if (!field) return;
@@ -478,7 +484,7 @@ function commitMarkLabelField(): void {
 function onMarkLabelKeydown(event: KeyboardEvent): void {
   event.stopPropagation(); // never a game hotkey or the chat
   if (event.key === 'Enter') { event.preventDefault(); commitMarkLabelField(); }
-  else if (event.key === 'Escape') { event.preventDefault(); closeMarkLabelField(); }
+  else if (event.key === 'Escape') { event.preventDefault(); cancelMarkLabelField(); }
 }
 function onMarkLabelOutsidePointer(event: PointerEvent): void {
   if (event.target !== markLabelInputEl.value) commitMarkLabelField();
