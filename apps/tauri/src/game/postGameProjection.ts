@@ -200,10 +200,41 @@ export function pgOdds(like: Likelihood): string {
 }
 export function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rolls' : Math.abs(like.z) < 0.05 ? 'dead average' : like.z > 0 ? 'this lucky' : 'this unlucky'; }
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
+/** Owner 10-01 (S67): dodges BY TARGET (2+..6+). Per column, bottom to top: GREEN = passed without a re-roll, BLUE =
+ *  passed after a re-roll, RED = failed even after a re-roll; the outline is every attempt (its empty part = failed
+ *  with no re-roll); `ey` = expected passes (attempts x (7 - target) / 6, no re-roll). */
+export interface PgDodgeTargetBar {
+  label: string; attempts: number; passed: number; passFirst: number; passReroll: number; failReroll: number; expected: number;
+  x: number; w: number; yAttempts: number; hAttempts: number; yFirst: number; hFirst: number; yReroll: number; hReroll: number;
+  yFail: number; hFail: number; ey: number;
+}
+export interface PgDodgeTargetChart { bars: PgDodgeTargetBar[]; attempts: number; passed: number }
+export function pgDodgeTargetChart(byTarget: DiceTally['dodgeByTarget']): PgDodgeTargetChart | null {
+  const rows = [2, 3, 4, 5, 6].map((target) => ({ target, ...(byTarget?.[target] ?? { attempts: 0, passFirst: 0, passReroll: 0, failReroll: 0 }) }));
+  const attempts = rows.reduce((n, r) => n + r.attempts, 0);
+  if (attempts === 0) return null;
+  const peak = Math.max(1, ...rows.map((r) => r.attempts));
+  const slot = PG_CHART_W / rows.length;
+  const scale = (PG_CHART_BASE - PG_CHART_TOP - 10) / peak; // 10 units of headroom for the "passed/attempts" caption
+  const bars = rows.map((r, i) => {
+    const w = slot * 0.62; const x = i * slot + (slot - w) / 2;
+    const hAttempts = r.attempts * scale, hFirst = r.passFirst * scale, hReroll = r.passReroll * scale, hFail = r.failReroll * scale;
+    const expected = r.attempts * (7 - r.target) / 6;
+    return {
+      label: `${r.target}+`, attempts: r.attempts, passed: r.passFirst + r.passReroll, passFirst: r.passFirst, passReroll: r.passReroll, failReroll: r.failReroll, expected,
+      x, w, yAttempts: PG_CHART_BASE - hAttempts, hAttempts, yFirst: PG_CHART_BASE - hFirst, hFirst,
+      yReroll: PG_CHART_BASE - hFirst - hReroll, hReroll, yFail: PG_CHART_BASE - hFirst - hReroll - hFail, hFail,
+      ey: PG_CHART_BASE - expected * scale,
+    };
+  });
+  return { bars, attempts, passed: bars.reduce((n, b) => n + b.passed, 0) };
+}
 export interface PgDiceSide {
   team: string; logo: string; charts: PgDiceChartRow[]; oneNinth: number; oneThirtySixth: number;
   /** Owner 10-01: blocks thrown (the Block Dice header shows this, not the number of dice rolled). */
   blocks: number;
+  /** Owner 10-01 (S67): dodges by target, above the Dodge dice chart; null when the side never dodged. */
+  dodgeTargets: PgDodgeTargetChart | null;
   /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. */
   likelihoods: { label: string; like: Likelihood }[];
   facts: DiceFact[];
@@ -226,7 +257,7 @@ export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; lo
   ];
   return {
     team: surface?.team ?? fallbackTeam, logo: surface?.logo ?? '', charts,
-    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth, blocks: t.blocks ?? 0,
+    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth, blocks: t.blocks ?? 0, dodgeTargets: pgDodgeTargetChart(t.dodgeByTarget),
     likelihoods: [
       { label: 'All dice', like: d6Likelihood(t) }, { label: 'Armour', like: armourLikelihood(t) },
       { label: 'Injury', like: injuryLikelihood(t) }, { label: 'Block dice', like: blockLikelihood(t) },

@@ -11,6 +11,10 @@ import type { GameJson } from '@fumbbl40k/ffb-protocol';
 
 export type D6 = 1 | 2 | 3 | 4 | 5 | 6;
 
+/** Owner 10-01 (S67): dodge ATTEMPTS grouped by the number they needed. `attempts` counts first rolls; a re-roll
+ *  resolves its attempt as passed-after-re-roll or failed-after-re-roll. Failures with no re-roll = attempts - the
+ *  other three. */
+export interface DodgeTargetTally { attempts: number; passFirst: number; passReroll: number; failReroll: number }
 export interface DiceTally {
   /** Face counts, index 1..6 (index 0 unused). Every D6 the side rolled: dodge, rush, pickup, catch, pass, armour, injury… */
   d6: number[];
@@ -22,6 +26,8 @@ export interface DiceTally {
   /** Owner 09-17: dodge-die face counts (index 1..6); "action" dice = every other D6 that is not an armour,
    *  injury or dodge die (see actionFaces). */
   dodgeFaces: number[];
+  /** Owner 10-01 (S67): dodge attempts by target number (keys 2..6; absent on tallies cached before this field). */
+  dodgeByTarget?: Record<number, DodgeTargetTally>;
   /** Armour and injury FACE counts (index 1..6) so actionFaces can subtract them from the all-D6 tally. */
   armourFaces: number[];
   injuryFaces: number[];
@@ -216,6 +222,17 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
       pushTest(tallies, r);
       const reRolled = r.reRolled === true;
       const successful = r.successful === true;
+      const need = Number(r.minimumRoll);
+      if (Number.isFinite(need)) {
+        const target = Math.min(6, Math.max(2, Math.round(need)));
+        for (const t of tallies) {
+          const by = (t.dodgeByTarget ??= {});
+          const row = (by[target] ??= { attempts: 0, passFirst: 0, passReroll: 0, failReroll: 0 });
+          if (!reRolled) { row.attempts += 1; if (successful) row.passFirst += 1; }
+          else if (successful) row.passReroll += 1;
+          else row.failReroll += 1;
+        }
+      }
       if (!reRolled) {
         for (const t of tallies) t.dodges += 1;
         if (!successful) { for (const t of tallies) t.failedDodges += 1; stats.lastFailedDodge = playerId && team ? { playerId, teamId: team.teamId } : null; }
