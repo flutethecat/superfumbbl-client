@@ -7,6 +7,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import D6Face from './D6Face.vue';
+import { blockDieFaceUrl } from '../game/blockDieFaceArt';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
 import { gameStatRows } from '../game/gameStatRows';
 import { playerSkillCategoryClass } from '../game/skillCategory';
@@ -18,6 +19,9 @@ import {
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
 
+/** S71: block-die face label size (chart units) and the extra chart height it needs below the axis. */
+const PG_BLOCK_FACE = 18;
+const PG_BLOCK_FACE_EXTRA = 10;
 const props = withDefaults(defineProps<{
   snapshot: PostGameSnapshot;
   /** the Stats/MVP window (finalPostGameVisible in SpectateView); false = the spectate seat's MVP-pending slot */
@@ -298,10 +302,17 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                       <p class="pg-dodge-legend"><span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-first" />passed</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-reroll" />after reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-fail" />failed w/ reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-none" />no reroll</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-exp" />expected</span></p>
                     </template>
                     <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ side.blocks === 1 ? 'block' : 'blocks' }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? 'rolls' : 'dice' }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
-                    <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
+                    <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${row.block ? PG_CHART_H + PG_BLOCK_FACE_EXTRA : PG_CHART_H}`" role="img" :aria-label="`${row.title} distribution`">
                       <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
                       <path :d="row.chart.expectedPath" class="pg-dice-expected" />
-                      <text v-for="(b, i) in row.chart.bars" :key="'l' + i" :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
+                      <!-- Owner 10-01 (S71): the Block dice columns are labelled with the client's block-die FACES, not words. -->
+                      <template v-if="row.block">
+                        <image v-for="(b, i) in row.chart.bars" :key="'f' + i" :href="blockDieFaceUrl(i + 1) ?? undefined" :x="b.x + b.w / 2 - PG_BLOCK_FACE / 2" :y="PG_CHART_BASE + 3"
+                          :width="PG_BLOCK_FACE" :height="PG_BLOCK_FACE" class="pg-dice-face"><title>{{ b.label }}</title></image>
+                      </template>
+                      <template v-else>
+                        <text v-for="(b, i) in row.chart.bars" :key="'l' + i" :x="b.x + b.w / 2" :y="PG_CHART_BASE + 10" class="pg-dice-label">{{ b.label }}</text>
+                      </template>
                       <text v-for="(b, i) in row.chart.bars" :key="'c' + i" :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 8, b.y - 3)" class="pg-dice-count">{{ b.count }}</text>
                     </svg>
                   </div>
@@ -788,7 +799,14 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-cols-charts .pg-dice-col { display: flex; flex-direction: column; }
 .pg-dice-right { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
 .pg-dice-right-top { min-height: 0; }
-.pg-dice-right-bottom { min-height: 0; overflow: auto; }
+/* Owner 10-01 (S70): the Fun facts header stays put; only the facts under it scroll. */
+.pg-dice-right-bottom { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.pg-dice-right-bottom > h3 { flex: 0 0 auto; }
+.pg-dice-right-bottom > .pg-dice-cols { flex: 1 1 0; min-height: 0; overflow: auto; }
+/* the side-colour rule under the header is part of the locked row: it rides the scroller's top edge, not the block */
+.pg-dice-right-bottom > .pg-dice-cols { border-top: 3px solid #3d7cff; }
+.pg-dice-right-bottom > .pg-dice-cols:has([data-side='away']) { border-top-color: #f2363c; }
+.pg-dice-right-bottom .pg-dice-col-single .pg-dice-block { border-top: 0; }
 /* Owner 09-17 (r5): likelihood + fun facts follow the selector (one coach), so everything can come up a size. */
 .pg-dice-cols.pg-dice-cols-single { grid-template-columns: 1fr; }
 .pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 0.6em 1em 0.5em; }
@@ -824,6 +842,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-col[data-side='away'] .pg-dice-bar { fill: #f2363c; }
 .pg-dice-bar-block { opacity: 0.75; }
 .pg-dice-expected { fill: none; stroke: var(--ui-text); stroke-width: 1.4; stroke-dasharray: 3 3; opacity: 0.9; }
+.pg-dice-face { image-rendering: auto; } /* smooth minification of the 64 px face, as in the log */
 .pg-dice-label { fill: var(--ui-muted); font-size: 9px; text-anchor: middle; font-family: 'Nuffle', sans-serif; }
 .pg-dice-count { fill: var(--ui-text); font-size: 9px; text-anchor: middle; font-weight: 700; font-variant-numeric: tabular-nums; }
 /* Owner 10-01 (S67): dodges by target - the three fills mean the same on both sides (not the team colours). */
