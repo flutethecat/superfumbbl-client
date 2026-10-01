@@ -492,7 +492,11 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
                 <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
               </span>
             </div>
-            <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
+            <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
+            <div class="row-actions">
+              <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
+              <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+            </div>
           </article>
         </div>
       </section>
@@ -658,6 +662,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-result[data-result="L"] { color: #8f111b; }
 .row-result[data-result="D"] { color: #b5741a; }
 .resume-button, .play-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
+.row-actions { display: grid; gap: 8px; align-content: center; } /* grid: both buttons take the wider one's width */
 .play-button { font-size: 24px; }
 
 /* Recent games: same card; the list scrolls once it outgrows the viewport share */
