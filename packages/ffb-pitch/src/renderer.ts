@@ -10812,7 +10812,7 @@ export class PitchRenderer {
     for (let i = 1; i < chain.length; i++) {
       if (!isOnPitch(chain[i - 1]!) || !isOnPitch(chain[i]!)) continue;
       const arrow = this.pushArrowGraphic(chain[i - 1]!, chain[i]!, { color });
-      arrow.alpha = 0.5;
+      arrow.alpha = 0.85; // owner 09-30: "unaware what they are" - the 0.5 arrows vanished on a busy pitch
       arrow.label = `hmp-scatter-arrow-${i}`;
       arrow.eventMode = 'none';
       this.pathLayer.addChild(arrow);
@@ -10830,20 +10830,24 @@ export class PitchRenderer {
   private buildHmpScatterBadge(square: Square, text: string, active: boolean, label: string): Container {
     const a = this.tokenPos(square[0], square[1]);
     const depth = depthScale(square[0], square[1]);
-    const r = TILE_W * 0.12 * depth;
+    // Owner 09-30 (live g1948690, an inaccurate pass scattering three times into a Diving Catch: "3 tokens ... unaware
+    // what they are"): the plates were 0.12 of a tile with a 1x caption. Now 0.17 of a tile, a 4x raster with linear
+    // filtering + mipmaps (marking-text rule), and the AIM plate reads as a word.
+    const r = TILE_W * 0.17 * depth;
     const wide = text.length > 1;
     const badge = new Container();
     badge.label = label;
     badge.eventMode = 'none';
     const plate = new Graphics();
-    if (wide) plate.roundRect(-r * 1.7, -r, r * 3.4, r * 2, r).fill({ color: 0x081218, alpha: 0.8 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.4 * depth), alpha: 0.85 });
-    else plate.circle(0, 0, r).fill({ color: active ? 0x22d3ee : 0x081218, alpha: active ? 0.95 : 0.85 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.4 * depth), alpha: 0.9 });
+    if (wide) plate.roundRect(-r * 1.7, -r, r * 3.4, r * 2, r).fill({ color: 0x081218, alpha: 0.88 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.6 * depth), alpha: 0.95 });
+    else plate.circle(0, 0, r).fill({ color: active ? 0x22d3ee : 0x081218, alpha: active ? 0.95 : 0.88 }).stroke({ color: 0x22d3ee, width: Math.max(1, 1.6 * depth), alpha: 0.95 });
     const caption = new Text({
       text,
       style: new TextStyle({
-        fontFamily: 'system-ui, sans-serif', fontWeight: '800', fontSize: Math.max(8, Math.round(TILE_W * 0.15 * depth)),
+        fontFamily: 'system-ui, sans-serif', fontWeight: '800', fontSize: Math.max(8, Math.round(TILE_W * 0.2 * depth)),
         fill: active ? 0x081218 : 0xe6fbff, align: 'center',
       }),
+      resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
     });
     caption.anchor.set(0.5);
     badge.addChild(plate, caption);
