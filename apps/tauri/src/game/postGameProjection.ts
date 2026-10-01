@@ -202,6 +202,8 @@ export function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rol
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
 export interface PgDiceSide {
   team: string; logo: string; charts: PgDiceChartRow[]; oneNinth: number; oneThirtySixth: number;
+  /** Owner 10-01: blocks thrown (the Block Dice header shows this, not the number of dice rolled). */
+  blocks: number;
   /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. */
   likelihoods: { label: string; like: Likelihood }[];
   facts: DiceFact[];
@@ -224,7 +226,7 @@ export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; lo
   ];
   return {
     team: surface?.team ?? fallbackTeam, logo: surface?.logo ?? '', charts,
-    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth,
+    oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth, blocks: t.blocks ?? 0,
     likelihoods: [
       { label: 'All dice', like: d6Likelihood(t) }, { label: 'Armour', like: armourLikelihood(t) },
       { label: 'Injury', like: injuryLikelihood(t) }, { label: 'Block dice', like: blockLikelihood(t) },
