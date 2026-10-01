@@ -7,6 +7,7 @@ import { FUMBBL_SITE, applyServerTarget } from '../../game/settings';
 import { botGet } from '../../game/forkChallenge';
 import { deriveForkGameRows, routeForkSpectate, type ForkGameRow } from '../../game/forkGames';
 import { competitionLabel, groupByCompetition, missingCompetitionIds, type CompetitionNames } from '../../game/spectateCompetition';
+import { teamLogoUrl } from '../../game/teamLogos';
 
 interface BrowserMatch {
   id: number;
@@ -16,7 +17,8 @@ interface BrowserMatch {
   division?: string | null;
   scheduler?: string | null;
   tournament?: { id?: number | string; group?: number | string } | null;
-  teams: { side: string; name: string; coach: string; race: string; score: number }[];
+  /** `tv` rides /api/match/current as a string of gold pieces (e.g. "1490000"). */
+  teams: { side: string; name: string; coach: string; race: string; score: number; tv?: string | number }[];
 }
 
 // Owner 09-07: group / tournament NAMES, cached for the app's life (module scope survives remounts); the public
@@ -95,6 +97,24 @@ function team(match: BrowserMatch, index: number): BrowserMatch['teams'][number]
 
 function phase(match: { half: number; turn: number }): string {
   return match.half === 0 ? 'Pre-kick' : `H${match.half} T${match.turn}`;
+}
+
+// Owner 10-01: rows mirror the Play blade's game rows - crest / name / coach / race / TV | phase over score | away.
+// Crests are ours (teamLogoUrl, bundled/local) - never FUMBBL's CDN; no race => null => the initials box.
+function crest(race: string | undefined, side: 'home' | 'away'): string | null {
+  return race ? teamLogoUrl({ race, side }) : null;
+}
+function initials(name: string | undefined): string {
+  const words = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '—';
+  return words.length === 1 ? words[0]!.slice(0, 2).toUpperCase() : words.slice(0, 2).map((word) => word[0]!.toUpperCase()).join('');
+}
+/** Same formatting as PlayView's formatTeamValue; the FUMBBL API sends tv as a numeric string. */
+function formatTeamValue(raw: string | number | undefined): string | undefined {
+  const value = Number(raw);
+  if (!value || !Number.isFinite(value)) return undefined;
+  const thousands = value >= 10_000 ? Math.round(value / 1_000) : Math.round(value);
+  return `TV ${thousands.toLocaleString()}k`;
 }
 
 function onFilterEnter(): void {
@@ -285,19 +305,30 @@ onBeforeUnmount(() => {
       <section class="game-list super-list" aria-label="Super FUMBBL live games" aria-live="polite">
         <div v-if="forkStatus" class="list-status">{{ forkStatus }}</div>
         <div v-else class="rows">
+          <!-- Owner 10-01: the fork's /games feed carries no race, TV or score - crests fall back to initials,
+               the race/TV lines are omitted and the centre keeps its truthful "vs". -->
           <article v-for="match in forkGames" :key="match.gameId" class="game-row">
-            <span class="game-id">{{ match.gameId }}</span>
-            <div class="team-cell">
-              <strong>{{ match.homeTeam || '—' }}</strong>
-              <small>({{ match.homeCoach || '—' }})</small>
+            <div class="row-team home">
+              <span class="row-logo logo-fallback" aria-hidden="true">{{ initials(match.homeTeam) }}</span>
+              <span class="row-text">
+                <strong class="row-name">{{ match.homeTeam || '—' }}</strong>
+                <small class="row-meta row-coach">{{ match.homeCoach || '—' }}</small>
+              </span>
             </div>
-            <span class="score">vs</span>
-            <div class="team-cell">
-              <strong>{{ match.awayTeam || '—' }}</strong>
-              <small>({{ match.awayCoach || '—' }})</small>
+            <div class="row-centre">
+              <span class="row-phase">{{ phase(match) }}</span>
+              <span class="row-score row-score-vs">vs</span>
             </div>
-            <span class="phase-chip">{{ phase(match) }}</span>
-            <button class="spectate-button" type="button" @click="spectateFork(match.gameId)">Spectate</button>
+            <div class="row-right">
+              <div class="row-team away">
+                <span class="row-logo logo-fallback" aria-hidden="true">{{ initials(match.awayTeam) }}</span>
+                <span class="row-text">
+                  <strong class="row-name">{{ match.awayTeam || '—' }}</strong>
+                  <small class="row-meta row-coach">{{ match.awayCoach || '—' }}</small>
+                </span>
+              </div>
+              <button class="bevel spectate-button" type="button" @click="spectateFork(match.gameId)">Spectate</button>
+            </div>
           </article>
         </div>
       </section>
@@ -312,18 +343,33 @@ onBeforeUnmount(() => {
           <template v-for="group in groupedMatches" :key="group.key">
           <h3 class="competition-heading" :title="group.label">{{ group.label }} <span class="competition-count">{{ group.matches.length }}</span></h3>
           <article v-for="match in group.matches" :key="match.id" class="game-row">
-            <span class="game-id">{{ match.id }}</span>
-            <div class="team-cell">
-              <strong>{{ team(match, 0)?.name || '—' }}</strong>
-              <small>({{ team(match, 0)?.coach || '—' }}, {{ team(match, 0)?.race || '—' }})</small>
+            <div class="row-team home">
+              <img v-if="crest(team(match, 0)?.race, 'home')" class="row-logo" :src="crest(team(match, 0)?.race, 'home')!" alt="" />
+              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(team(match, 0)?.name) }}</span>
+              <span class="row-text">
+                <strong class="row-name">{{ team(match, 0)?.name || '—' }}</strong>
+                <small class="row-meta row-coach">{{ team(match, 0)?.coach || '—' }}</small>
+                <small v-if="team(match, 0)?.race" class="row-meta row-race">{{ team(match, 0)?.race }}</small>
+                <small v-if="formatTeamValue(team(match, 0)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 0)?.tv) }}</small>
+              </span>
             </div>
-            <span class="score">{{ team(match, 0)?.score ?? 0 }}–{{ team(match, 1)?.score ?? 0 }}</span>
-            <div class="team-cell">
-              <strong>{{ team(match, 1)?.name || '—' }}</strong>
-              <small>({{ team(match, 1)?.coach || '—' }}, {{ team(match, 1)?.race || '—' }})</small>
+            <div class="row-centre">
+              <span class="row-phase">{{ phase(match) }}</span>
+              <span class="row-score"><span class="row-score-n">{{ team(match, 0)?.score ?? 0 }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ team(match, 1)?.score ?? 0 }}</span></span>
             </div>
-            <span class="phase-chip">{{ phase(match) }}</span>
-            <button class="spectate-button" type="button" @click="spectate(match.id)">Spectate</button>
+            <div class="row-right">
+              <div class="row-team away">
+                <img v-if="crest(team(match, 1)?.race, 'away')" class="row-logo" :src="crest(team(match, 1)?.race, 'away')!" alt="" />
+                <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(team(match, 1)?.name) }}</span>
+                <span class="row-text">
+                  <strong class="row-name">{{ team(match, 1)?.name || '—' }}</strong>
+                  <small class="row-meta row-coach">{{ team(match, 1)?.coach || '—' }}</small>
+                  <small v-if="team(match, 1)?.race" class="row-meta row-race">{{ team(match, 1)?.race }}</small>
+                  <small v-if="formatTeamValue(team(match, 1)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 1)?.tv) }}</small>
+                </span>
+              </div>
+              <button class="bevel spectate-button" type="button" @click="spectate(match.id)">Spectate</button>
+            </div>
           </article>
           </template>
         </div>
@@ -379,15 +425,6 @@ onBeforeUnmount(() => {
   background: var(--ui-eggshell);
   box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
 }
-.theme-fumbbl .game-row {
-  border-bottom-color: color-mix(in srgb, var(--ui-forest) 30%, transparent);
-  background: var(--ui-eggshell);
-}
-.theme-fumbbl .game-row:nth-child(even) { background: var(--ui-old-lace); }
-.theme-fumbbl .game-id { color: color-mix(in srgb, var(--ui-forest) 65%, transparent); }
-.theme-fumbbl .team-cell strong { color: var(--ui-forest); }
-.theme-fumbbl .team-cell small { color: color-mix(in srgb, var(--ui-forest) 65%, transparent); }
-.theme-fumbbl .phase-chip { color: var(--ui-forest); }
 .theme-fumbbl .list-status { color: color-mix(in srgb, var(--ui-forest) 65%, transparent); }
 
 .browser-toolbar {
@@ -462,8 +499,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.refresh-button:hover,
-.spectate-button:hover { filter: brightness(1.25); }
+.refresh-button:hover { filter: brightness(1.25); }
 
 .group-heading {
   margin: 0;
@@ -491,6 +527,7 @@ onBeforeUnmount(() => {
 .game-list {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable both-edges; /* the scroll bar must not push the rows (and the score) off the centre line */
   border: 1px solid var(--ui-border);
   border-radius: 6px;
   background: var(--ui-surface);
@@ -502,71 +539,88 @@ onBeforeUnmount(() => {
 .super-list,
 .testbed-list { flex: 1 1 auto; }
 
-.rows { min-width: 760px; }
+.rows { display: grid; align-content: start; gap: 10px; padding: 10px; }
+/* Owner 10-01: game rows speak the Play blade's language (PlayView.vue .game-row / .row-* / .bevel, duplicated here -
+   no shared extraction). THREE bevelled panels lifted off an eggshell row: home | phase over score | away; the right
+   column holds the away panel AND the Spectate button (.row-right) so the outer columns are equal and the centre
+   panel sits on the row's centre line. The Play palette applies to the rows in both lists. */
 .game-row {
+  --pb-text: var(--ui-forest, #1A401C);
+  --pb-muted: color-mix(in srgb, var(--ui-forest, #1A401C) 62%, transparent);
+  --pb-line: color-mix(in srgb, var(--ui-forest, #1A401C) 28%, transparent);
+  --pb-carmine: #790004;
+  /* S84: equal team panels, the centre the smallest; the Spectate column is mirrored by left padding so the
+     centre panel stays on the page's centre line. */
+  --row-actions-w: 170px;
   display: grid;
-  grid-template-columns:
-    clamp(56px, 4vw, 84px)
-    minmax(0, 1.2fr)
-    clamp(40px, 3vw, 60px)
-    minmax(0, 1.2fr)
-    clamp(64px, 4.5vw, 92px)
-    clamp(96px, 6.5vw, 132px);
-  gap: clamp(12px, 0.9vw, 18px);
-  align-items: center;
-  padding: clamp(11px, 0.8vw, 16px) clamp(14px, 1vw, 20px);
-  border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-surface);
-}
-.game-row:nth-child(even) { background: var(--ui-surface-2); }
-.game-row:last-child { border-bottom: 0; }
-
-.game-id { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), clamp(12px, 0.85vw, 15px)); }
-.team-cell { min-width: 0; line-height: 1.35; }
-.team-cell strong {
-  display: block;
-  overflow: hidden;
-  color: var(--ui-eggshell);
-  font-size: max(var(--ui-min-primary-text-size, 16px), clamp(13px, 1.1vw, 20px));
-  font-weight: 500;
-  letter-spacing: .03em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.team-cell small {
-  display: block;
-  overflow: hidden;
-  color: var(--ui-muted);
-  font-size: max(var(--ui-min-text-size, 12px), clamp(11px, 0.8vw, 15px));
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.score {
-  color: var(--ui-skill-strength);
-  font-size: max(var(--ui-min-primary-text-size, 16px), clamp(14px, 1.1vw, 20px));
-  text-align: center;
-  white-space: nowrap;
-}
-.phase-chip {
-  color: var(--ui-eggshell);
-  font-size: max(var(--ui-min-text-size, 12px), clamp(12px, 0.9vw, 16px));
-  letter-spacing: .08em;
-  white-space: nowrap;
-}
-.spectate-button {
-  box-sizing: border-box;
-  width: clamp(96px, 6.5vw, 132px);
-  padding: clamp(6px, 0.5vw, 10px) clamp(10px, 0.8vw, 16px);
-  border: 2px outset color-mix(in srgb, var(--ui-forest) 64%, var(--ui-text));
+  grid-template-columns: minmax(0, 1fr) minmax(170px, .26fr) minmax(0, 1fr) var(--row-actions-w);
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 14px 12px calc(14px + var(--row-actions-w) + 12px);
+  border: 1px solid var(--pb-line);
   border-radius: 4px;
-  color: var(--ui-text);
-  background: var(--ui-forest);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, .5);
-  font: inherit;
-  font-size: max(var(--ui-min-text-size, 12px), clamp(12px, 0.85vw, 15px));
-  letter-spacing: .08em;
+  color: var(--pb-text);
+  background: var(--ui-eggshell, #E7DDC7);
+}
+.row-team, .row-centre {
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent);
+  border-radius: 6px;
+  background: var(--ui-old-lace, #F8F5E7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 3px 7px rgba(26, 64, 28, .24);
+}
+.row-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.row-right { display: contents; } /* the away panel and the Spectate button are grid items of the row itself */
+.row-right > .bevel { align-self: center; }
+.row-team.away { flex-direction: row-reverse; text-align: right; }
+.row-logo { box-sizing: border-box; flex: 0 0 128px; width: 128px; height: 128px; object-fit: contain; image-rendering: pixelated; }
+.logo-fallback { display: grid; place-items: center; border: 1px solid var(--pb-line); border-radius: 4px; color: var(--pb-text); background: var(--ui-old-lace, #F8F5E7); font-size: 28px; letter-spacing: .06em; }
+.row-text { display: grid; gap: 6px; min-width: 0; } /* name / coach / race / TV, evenly spaced */
+.row-name { color: var(--pb-text); font-size: 24px; font-weight: 500; line-height: 1.15; overflow-wrap: break-word; }
+.row-meta { color: var(--pb-muted); font-size: 18px; line-height: 1.2; overflow-wrap: break-word; }
+.row-coach { color: var(--pb-text); } /* coach names in the darker green */
+.row-centre { display: grid; justify-items: center; align-content: center; gap: 6px; min-width: 0; }
+.row-phase { color: var(--pb-text); font-size: 18px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+.row-score {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  column-gap: .35em;
+  align-items: baseline;
+  justify-self: stretch;
+  color: var(--pb-carmine);
+  font-family: 'Nuffle', system-ui, sans-serif;
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 2px 2px 0 rgba(26, 64, 28, .18);
+  white-space: nowrap;
+}
+.row-score-n:first-child { text-align: right; }
+.row-score-n:last-child { text-align: left; }
+/* Fork rows: no score on the wire - the truthful "vs", centred in the score's style. */
+.row-score.row-score-vs { display: block; justify-self: center; }
+
+/* The Play blade's Black/Red action button (PlayView .bevel + .resume-button sizing). */
+.bevel {
+  padding: 12px 26px;
+  border: 2px outset #a83236;
+  border-radius: 4px;
+  color: #fff;
+  background: var(--pb-carmine, #790004);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+  font-family: 'Nuffle', system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow: 2px 2px 0 #000;
   cursor: pointer;
 }
+.bevel:hover:not(:disabled) { filter: brightness(1.25); }
+.bevel:disabled { opacity: .45; cursor: default; filter: none; }
+.spectate-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
 
 .list-status {
   padding: 20px;
@@ -580,10 +634,26 @@ onBeforeUnmount(() => {
   50% { opacity: .35; }
 }
 
+/* Windows under ~1500px: the away panel shares its column with the Spectate button, so shrink the crest, the centre
+   panel and the team name rather than wrap names letter by letter. */
+@media (max-width: 1500px) {
+  .game-row { --row-actions-w: 150px; }
+  .spectate-button { font-size: 20px; padding: 10px 12px; }
+  .row-logo { flex-basis: 88px; width: 88px; height: 88px; }
+  .row-name { font-size: 20px; }
+  .row-score { font-size: 34px; }
+}
+
 @media (max-width: 640px) {
   .spectate-browser { padding: 12px; }
   .browser-filter { order: 2; max-width: none; width: 100%; }
   .toolbar-spacer { display: none; }
   .live-indicator { margin-left: auto; }
+  .bevel { font-size: 18px; padding: 10px 18px; }
+  .game-row { grid-template-columns: 1fr; padding: 12px 14px; }
+  .row-right > .bevel { align-self: stretch; }
+  .row-logo { width: 64px; height: 64px; flex-basis: 64px; }
+  .logo-fallback { font-size: 18px; }
+  .row-team.away { flex-direction: row; text-align: left; }
 }
 </style>
