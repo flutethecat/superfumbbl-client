@@ -657,9 +657,14 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-centre { display: grid; justify-items: center; gap: 4px; }
 .row-score { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 27px; font-weight: 800; line-height: 1; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); white-space: nowrap; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
-.row-result { font-family: 'Nuffle', system-ui, sans-serif; font-size: 22px; font-weight: 800; line-height: 1; letter-spacing: .08em; }
+/* Owner 10-01 (S75): the W / L / D is larger and reads as a STENCIL - a bridge is cut through the middle of the letter
+   (a mask, so the row shows through; no extra font). Colours unchanged: W green, L red, D amber. */
+.row-result { font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: 0;
+  --cut: 45%; /* where the stencil bridge falls: the middle of W and D, the foot of L */
+  -webkit-mask-image: linear-gradient(to right, #000 0 var(--cut), transparent var(--cut) calc(var(--cut) + 10%), #000 calc(var(--cut) + 10%));
+  mask-image: linear-gradient(to right, #000 0 var(--cut), transparent var(--cut) calc(var(--cut) + 10%), #000 calc(var(--cut) + 10%)); }
 .row-result[data-result="W"] { color: #2f8f46; }
-.row-result[data-result="L"] { color: #8f111b; }
+.row-result[data-result="L"] { color: #8f111b; --cut: 58%; }
 .row-result[data-result="D"] { color: #b5741a; }
 .resume-button, .play-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
 .row-actions { display: grid; gap: 8px; align-content: center; } /* grid: both buttons take the wider one's width */
