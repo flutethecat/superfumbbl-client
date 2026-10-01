@@ -29,6 +29,8 @@ import {
   type SetupTemplate,
   type BlockDiceRow,
   bundledStadiumPacks,
+  type MarkLabelRequest,
+  PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
   PLACEMENT_TURN_MODES, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -436,6 +438,52 @@ function onChatKeydown(e: KeyboardEvent) {
  *  full-host shader, z 43 < 44) — Enter must reach a chat you can see and type into at any point of the game. */
 const chatFocused = ref(false);
 const pitchHost = ref<HTMLDivElement | null>(null);
+// Owner 10-01: the Shift+click mark-label field — a small input over the pitch for the square / player the coach just
+// marked. Client-local only: the text goes to the renderer (setSquareMarkLabel / setPlayerMarkLabel) and nowhere else —
+// never the wire, the chat or the game log. Enter / blur / a click elsewhere commit; Escape cancels (the mark stays).
+const markLabelField = ref<{ request: MarkLabelRequest; left: number; top: number; value: string } | null>(null);
+const markLabelInputEl = ref<HTMLInputElement | null>(null);
+function openMarkLabelField(request: MarkLabelRequest): void {
+  commitMarkLabelField(); // one field at a time: opening another commits the first
+  const host = pitchHost.value;
+  if (!host) return;
+  const canvas = host.querySelector(':scope > canvas');
+  const hostRect = host.getBoundingClientRect();
+  const canvasRect = canvas?.getBoundingClientRect();
+  const left = request.screenX + (canvasRect ? canvasRect.left - hostRect.left : 0);
+  const top = request.screenY + (canvasRect ? canvasRect.top - hostRect.top : 0);
+  markLabelField.value = { request, left, top, value: '' };
+  // Review r1: the field takes the keyboard, so a pan key held at this moment would never see its keyup - release it.
+  clearPan();
+  window.addEventListener('pointerdown', onMarkLabelOutsidePointer, true);
+  // Review r1: the field is placed once; a zoom, pan-wheel or resize moves the mark from under it, so those commit it.
+  window.addEventListener('wheel', commitMarkLabelField, true);
+  window.addEventListener('resize', commitMarkLabelField);
+  void nextTick(() => markLabelInputEl.value?.focus());
+}
+function closeMarkLabelField(): void {
+  markLabelField.value = null;
+  window.removeEventListener('pointerdown', onMarkLabelOutsidePointer, true);
+  window.removeEventListener('wheel', commitMarkLabelField, true);
+  window.removeEventListener('resize', commitMarkLabelField);
+}
+function commitMarkLabelField(): void {
+  const field = markLabelField.value;
+  if (!field) return;
+  closeMarkLabelField();
+  // An empty commit leaves the mark without a label (the renderer clears on blank text).
+  if (field.request.kind === 'square') renderer?.setSquareMarkLabel(field.request.square, field.value);
+  else renderer?.setPlayerMarkLabel(field.request.playerId, field.value);
+}
+function onMarkLabelKeydown(event: KeyboardEvent): void {
+  event.stopPropagation(); // never a game hotkey or the chat
+  if (event.key === 'Enter') { event.preventDefault(); commitMarkLabelField(); }
+  else if (event.key === 'Escape') { event.preventDefault(); closeMarkLabelField(); }
+}
+function onMarkLabelOutsidePointer(event: PointerEvent): void {
+  if (event.target !== markLabelInputEl.value) commitMarkLabelField();
+}
+onBeforeUnmount(closeMarkLabelField);
 // defaults per owner 2026-07-02: Grass 1 turf, FUMBBL Classic sprites
 // (HD-2D "New" set parked — see upgrades_parkinglot.md). The turf theme now
 // lives in the shared settings store (owner 2026-07-03: moved off the quick
@@ -6523,7 +6571,12 @@ watch(
 function applyMarkings() {
   if (!renderer) return;
   // B2-17: icons XOR markings — the renderer shows exactly one system
-  renderer.showSkillIcons = settings.skillDisplay === 'icons';
+  // Review r1 (S86): a player mark label is anchored by this mode (feet in icons, centre in markings); the setters
+  // below return early on unchanged maps, so redraw explicitly when the mode itself flips.
+  const showIcons = settings.skillDisplay === 'icons';
+  const skillModeFlipped = renderer.showSkillIcons !== showIcons;
+  renderer.showSkillIcons = showIcons;
+  if (skillModeFlipped) renderer.refresh();
   renderer.setSkillIconStyle(effectiveIconStyle.value); // compatibility signature; snapshot owns the pack
   void renderer.setBundledSkillBadgeFamily(settings.skillBadgeFamily); // owner 09-09: "Illustrated - Default" (no-op when unchanged)
   renderer.actionDecorationStyle = settings.actionDecorations; // owner 09-06: artwork | emoji
@@ -9388,6 +9441,7 @@ onMounted(async () => {
   // Owner 2026-07-13: BALL & CHAIN aim — a tap on an orthogonal arrow tip is a single AIM step (facing). Send
   // one stepMove (CLIENT_MOVE from→aim); the server rolls the throw-in template and scatters (phase 2 surfaces
   // the d6 + destination). No preview / optimistic placement — the token renders from the server's scatter sync.
+  renderer.onMarkLabelRequest = (request) => openMarkLabelField(request); // owner 10-01: Shift+click mark labels
   renderer.onBncAim = (coord) => {
     const g = gameStore.game.value;
     if (!g || !settings.order66 || !gameStore.isPlaying.value) return;
@@ -11445,6 +11499,15 @@ function sendChat() {
       <div ref="pitchHost" class="pitch-host"
         :class="settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
         :style="hudAccessibilityStyle">
+        <input v-if="markLabelField" ref="markLabelInputEl" v-model="markLabelField.value"
+          class="mark-label-field" :class="`mark-label-${markLabelField.request.kind}`" type="text"
+          aria-label="Mark label" autocomplete="off" spellcheck="false"
+          :maxlength="markLabelField.request.kind === 'player' ? PLAYER_MARK_LABEL_MAX_CHARS : SQUARE_MARK_LABEL_MAX_CHARS"
+          :placeholder="markLabelField.request.kind === 'player' ? 'Label' : 'Label (Enter)'"
+          :style="{ left: `${markLabelField.left}px`, top: `${markLabelField.top}px` }"
+          @keydown="onMarkLabelKeydown" @keyup.stop @keypress.stop
+          @pointerdown.stop @pointerup.stop @click.stop @contextmenu.stop @wheel.stop
+          @blur="commitMarkLabelField" />
         <ReplayTelestrator
           :enabled="true"
           :toolbar-bottom="telestratorBottom"
@@ -17874,6 +17937,26 @@ function sendChat() {
   min-width: 0;
   position: relative;
 }
+/* Owner 10-01: the Shift+click mark-label field — styled like the chat entry (same surface, border and face). */
+.mark-label-field {
+  position: absolute;
+  z-index: 40;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: 9.5em;
+  background: var(--ui-surface);
+  color: inherit;
+  font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: max(var(--ui-min-text-size, 12px), 0.72rem);
+  line-height: 1.35;
+  border: 1px solid var(--ui-border);
+  border-radius: 3px;
+  padding: 0.2rem 0.4rem;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.mark-label-field.mark-label-player { width: 5em; transform: translate(-50%, -100%); }
+.mark-label-field:focus { outline: 1px solid var(--ui-accent, var(--ui-border)); }
 .hotbar {
   position: absolute;
   z-index: 11;

@@ -1,7 +1,7 @@
 export { bundledTurfOptions, PLACEMENT_TURN_MODES } from './renderer';
 export { configurePixiAssetOrigin } from './assetOrigin';
 export { installArtPack, artUrl, artBlobUrl, artPackActive, artPackHas, textureParserFor, ART_PACK_PARSER, type ArtPackFileRef, type ArtPackSource } from './artPack';
-export { KICK_ARC_GATE_CAP_MS, KICK_ARC_LONGEST_LEGIT_MS, KICK_FLYIN_MS, KICKOFF_CINE_MS, PUNT_BALL_ARC_MS, TTM_THROW_MS, activePlayerAuraVisible, ballThrowArcMs, isServerKickoffScatterTransition, kickArcGateCapMs, kickArcLongestLegitMs, setFumbblPitchFallbacks, staticSelectionHaloVisible, PitchRenderer, type ActionMode, type StadiumStandStyle, type BoardPresentationFence, type ContextTarget, type MovementPresentationFence, type MovementPresentationRecovery, type HmpScatterMarksState, type PassDestinationKind, type ServerKickoffScatterOccurrence } from './renderer';
+export { KICK_ARC_GATE_CAP_MS, KICK_ARC_LONGEST_LEGIT_MS, KICK_FLYIN_MS, KICKOFF_CINE_MS, PUNT_BALL_ARC_MS, TTM_THROW_MS, activePlayerAuraVisible, ballThrowArcMs, isServerKickoffScatterTransition, kickArcGateCapMs, kickArcLongestLegitMs, setFumbblPitchFallbacks, staticSelectionHaloVisible, PitchRenderer, type ActionMode, type StadiumStandStyle, type BoardPresentationFence, type ContextTarget, type MovementPresentationFence, type MovementPresentationRecovery, type HmpScatterMarksState, type MarkLabelRequest, type PassDestinationKind, type ServerKickoffScatterOccurrence } from './renderer';
 export { blockDicePreview, type BlockPreview } from './blocks';
 export { BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, HALF_BEAT_MS, type StageSpec, type PipelineTier, type PipelineHooks } from './blockPipeline';
 export { bundledFumbblAsset, cachedBundledFumbblAsset, knockdownFrameInfo, loadIconsetManifest, loadShadowlessManifest, setClassicIconTextureResolver, setClassicIconUrlRewriter } from './classicIcons';
@@ -33,6 +33,7 @@ export {
   type SkillIconStyle,
 } from './skillIcons';
 export * from './actions';
+export * from './markLabels';
 export * from './geometry';
 export * from './movement';
 export * from './passing';

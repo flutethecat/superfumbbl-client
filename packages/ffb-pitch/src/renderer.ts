@@ -1,5 +1,5 @@
 import { textureParserFor } from './artPack';
-import { Application, Assets, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
+import { Application, Assets, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
@@ -107,6 +107,7 @@ import {
 } from './d6';
 import { ACTION_DIE_TUMBLE_MS, nextTumbleFace, type ActionDiceLayer, type ActionDieFaceSource, type ActionDieSlot } from './actionDice3d';
 import { presentationMs, setPresentationMode as configurePresentationMode, type PresentationMode } from './presentationTiming';
+import { SQUARE_MARK_LABEL_MAX_CHARS, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { rushTargetForPlayer } from './rushTarget';
@@ -116,6 +117,11 @@ import { broadcastCameraPlacements } from './stadiumProps';
 
 /** O4/O5: declared-action modes gating what clicks do for the selected player. */
 export type StadiumStandStyle = 'crowd' | 'classic';
+/** Owner 10-01: a plain Shift+click just added a square mark / player arrow — the host may open a text field for its
+ *  label at (screenX, screenY), canvas-relative CSS px. Client-local only: labels never reach the wire, chat or log. */
+export type MarkLabelRequest =
+  | { kind: 'square'; square: [number, number]; screenX: number; screenY: number }
+  | { kind: 'player'; playerId: string; screenX: number; screenY: number };
 export type ActionMode = 'auto' | 'move' | 'blitz' | 'foul' | 'pass' | 'handoff' | 'bomb';
 
 function isMovingPlayerAction(action: string | null | undefined): boolean {
@@ -1023,6 +1029,20 @@ const NAME_STYLE = new TextStyle({
   fill: 0xffffff,
   stroke: { color: 0x14161a, width: 3 },
 });
+/** Owner 10-01: Shift+click square-mark label — the player-number face, size and outline (NAME_STYLE), lines centred. */
+const SQUARE_MARK_LABEL_STYLE = new TextStyle({
+  fontFamily: NAME_STYLE.fontFamily,
+  fontSize: NAME_STYLE.fontSize,
+  fontWeight: NAME_STYLE.fontWeight,
+  fill: 0xffffff,
+  stroke: { color: 0x14161a, width: 3 },
+  align: 'center',
+  lineHeight: Math.round(NAME_STYLE.fontSize * 1.15),
+});
+/** Inner margin (world units at the near edge, each side; stroke included) a square label keeps from the tile edge. */
+const SQUARE_MARK_LABEL_INSET = 4;
+/** Owner 10-01: the player label sits on the token's TOP z-level (above every state marker / badge / marking). */
+const PLAYER_MARK_LABEL_Z = 10_000;
 /** Owner 09-15: the Checkers position letter — large and heavily outlined so it survives the disc's gloss highlight. */
 /** Owner 09-15 (r3): fraction of the letter's text-box height the anchor drops so the capital's INK is centred.
  *  Measured on the dev page (extract diff): Arial bold caps land within 0.01 of the disc centre with NO drop, so
@@ -2847,6 +2867,11 @@ export class PitchRenderer {
   /** Owner 2026-07-04f: mark light-column colour (accessibility; default red). */
   markColor = 0xe03030;
   setMarkColor(color: number): void { this.markColor = color; this.drawMarks(); }
+  /** Owner 10-01: client-local square mark labels keyed like `marks` (markKey). A label lives and dies with its mark:
+   *  drawMarks prunes any label whose mark is gone, so every path that clears `marks` clears the label too. */
+  private markLabels = new Map<string, string>();
+  /** Owner 10-01: fired after a plain Shift+click ADDS a square mark or player arrow (never row/column marks). */
+  onMarkLabelRequest: ((request: MarkLabelRequest) => void) | null = null;
   /** B2-11: screen-space night-sky backdrop behind the stadium bowl. */
   private backdropLayer = new Container();
   /** Owner 2026-07-06: painted night parking-lot/skyline backdrop image. When loaded
@@ -3165,6 +3190,10 @@ export class PitchRenderer {
    *  Kept separate from server player-pick arrows so dialog lifecycle can never dismiss a user's marker. */
   private persistentPlayerArrowIds = new Set<string>();
   private persistentPlayerArrows: { playerId: string; node: Container; offsetY: number; scale: number }[] = [];
+  /** Owner 10-01: client-local player labels (2 lines x 3 chars) for players wearing a persistent arrow; pruned with
+   *  the arrow id. The drawn nodes are token children rebuilt by drawPersistentPlayerArrows on every refresh. */
+  private playerMarkLabels = new Map<string, string>();
+  private playerMarkLabelNodes: Container[] = [];
   /** Owner ruling 08-17 (touchback confirm-flow): optional override narrowing the bobbing arrow to a
    *  subset of friendly playerPickIds (the nominee) — hit-testing stays the FULL eligible set and opposition
    *  crosshairs are unaffected. null = no override, arrows mirror every friendly eligible player. */
@@ -4775,6 +4804,7 @@ export class PitchRenderer {
     this.onPushChoice = null;
     this.onBncAim = null;
     this.onPuntReaim = null;
+    this.onMarkLabelRequest = null;
     this.onPlayerPick = null;
     this.onPlayerDoubleClick = null;
     this.onTilePick = null;
@@ -5019,7 +5049,8 @@ export class PitchRenderer {
     this.activationFades.clear(); this.activationFadePaint.clear(); // item3
     this.pushOptionPulse = []; this.pushCrosshairs = []; this.pushOptionCoords = []; this.pickCrosshairs = []; this.quickSnapCrosshairs = []; this.pickArrows = [];
     this.persistentPlayerArrowIds.clear(); this.persistentPlayerArrows = [];
-    this.marks.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
+    this.playerMarkLabels.clear(); this.destroyPlayerMarkLabelNodes();
+    this.marks.clear(); this.markLabels.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
     // reset movement/ball baselines so the new game doesn't tween from stale squares
     this.lastSquares.clear();
     this.lastBallSquare = null; this.lastBallOnPitch = false; this.ballEverRendered = false;
@@ -10680,8 +10711,13 @@ export class PitchRenderer {
    *  than the model square, so a marker remains bound to a walking/tweening player instead of jumping ahead. */
   private drawPersistentPlayerArrows(): void {
     this.persistentPlayerArrows = [];
+    this.destroyPlayerMarkLabelNodes();
+    for (const playerId of [...this.playerMarkLabels.keys()]) {
+      if (!this.persistentPlayerArrowIds.has(playerId)) this.playerMarkLabels.delete(playerId);
+    }
     if (!this.game) return;
     for (const playerId of this.persistentPlayerArrowIds) {
+      this.drawPlayerMarkLabel(playerId);
       if (this.hasOwnedPlayerArrow(playerId)) continue;
       const token = this.tokensById.get(playerId);
       const data = this.game.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
@@ -10734,10 +10770,105 @@ export class PitchRenderer {
     return tokenSx === sx && tokenSy === sy ? squarePlayer : null;
   }
 
-  private togglePersistentPlayerArrow(playerId: string): void {
-    if (this.persistentPlayerArrowIds.has(playerId)) this.persistentPlayerArrowIds.delete(playerId);
-    else this.persistentPlayerArrowIds.add(playerId);
+  /** Returns true when the arrow was ADDED (false = removed, its label with it). */
+  private togglePersistentPlayerArrow(playerId: string): boolean {
+    const added = !this.persistentPlayerArrowIds.has(playerId);
+    if (added) this.persistentPlayerArrowIds.add(playerId);
+    else { this.persistentPlayerArrowIds.delete(playerId); this.playerMarkLabels.delete(playerId); }
     this.refresh();
+    return added;
+  }
+
+  /** Owner 10-01: set (or, with blank text, clear) the label of a player wearing a persistent Shift+click arrow.
+   *  Ignored when the player has no arrow. Client-local only. */
+  setPlayerMarkLabel(playerId: string, text: string): void {
+    if (!this.persistentPlayerArrowIds.has(playerId)) return;
+    const lines = shapePlayerMarkLabel(text);
+    if (lines.length > 0) this.playerMarkLabels.set(playerId, lines.join('\n'));
+    else this.playerMarkLabels.delete(playerId);
+    this.refresh();
+  }
+
+  /** Owner 10-01: the player label shown for a player (2 lines joined by a newline), or null. */
+  playerMarkLabel(playerId: string): string | null { return this.playerMarkLabels.get(playerId) ?? null; }
+
+  private requestPlayerMarkLabel(playerId: string): void {
+    if (!this.onMarkLabelRequest) return;
+    const token = this.tokensById.get(playerId);
+    const at = token && !token.destroyed
+      ? this.tokenLayer.toGlobal({ x: token.position.x, y: token.position.y - 18 * Math.abs(token.scale.y || 1) })
+      : null;
+    this.onMarkLabelRequest({ kind: 'player', playerId, screenX: at?.x ?? 0, screenY: at?.y ?? 0 });
+  }
+
+  private requestSquareMarkLabel(square: [number, number]): void {
+    if (!this.onMarkLabelRequest) return;
+    const a = squareAnchor(square[0], square[1]);
+    const at = this.marksLayer.toGlobal({ x: a.x, y: a.y });
+    this.onMarkLabelRequest({ kind: 'square', square: [square[0], square[1]], screenX: at.x, screenY: at.y });
+  }
+
+  private destroyPlayerMarkLabelNodes(): void {
+    for (const node of this.playerMarkLabelNodes) {
+      if (node.destroyed) continue;
+      this.markingLayer.detach(node);
+      node.parent?.removeChild(node);
+      node.destroy({ children: true });
+    }
+    this.playerMarkLabelNodes = [];
+  }
+
+  /** Owner 10-01 (amended): the player label at the skill-markings font/size/colour, top-most on the token (and in the
+   *  marking render layer, painted above every token). Skill MARKINGS mode pins it to the CENTRE of the figure (the
+   *  shared chest mount); skill ICONS mode pins it to the FEET, exactly where the skill markings would hang. */
+  private drawPlayerMarkLabel(playerId: string): void {
+    const label = this.playerMarkLabels.get(playerId);
+    const token = this.tokensById.get(playerId);
+    const data = this.game?.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
+    if (!label || !token || token.destroyed || !data) return;
+    const coordinate = this.effectiveCoordinate(data);
+    if (!coordinate || !isOnPitch(coordinate)) return;
+    const group = new Container();
+    group.label = 'playerMarkLabel';
+    const text = new Text({
+      text: label,
+      style: new TextStyle({
+        fontFamily: this.skillMarkingFontFamily,
+        fontSize: this.skillMarkingFontSize,
+        fontWeight: 'bold',
+        fill: this.skillMarkingColor,
+        stroke: { color: 0x14161a, width: 2 },
+        align: 'center',
+        wordWrap: false,
+        breakWords: false,
+      }),
+      resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true,
+    });
+    group.addChild(text);
+    if (this.playerMarkLabelAnchor() === 'centre') {
+      text.anchor.set(0.5, 0.5);
+      if (isWalkerToken(token)) {
+        this.placeChestMarker(token, group, PLAYER_MARK_LABEL_Z);
+      } else {
+        group.position.set(0, this.markingCentreY(token));
+        group.zIndex = PLAYER_MARK_LABEL_Z;
+      }
+    } else {
+      text.anchor.set(0.5, 0);
+      group.position.set(0, this.markingFeetY(token, playerId, isDown(data.playerState)));
+      group.zIndex = PLAYER_MARK_LABEL_Z;
+    }
+    token.sortableChildren = true;
+    token.addChild(group);
+    this.markingLayer.attach(group);
+    this.overlayScaleGroups.push(group);
+    this.applyOverlayScale(group, this.overlayZoomFactor());
+    this.playerMarkLabelNodes.push(group);
+  }
+
+  /** Owner 10-01 (amended): skill markings mode -> centre of the player; skill icons mode -> the feet. */
+  private playerMarkLabelAnchor(): 'centre' | 'feet' {
+    return this.showSkillIcons ? 'feet' : 'centre';
   }
 
   /** A small gold crosshair reticle centred in a square (fits inside the tile),
@@ -12499,7 +12630,7 @@ export class PitchRenderer {
   /** Toggle a single square mark (owner: Mark Square / Shift-click). */
   toggleMarkSquare(square: [number, number]): void {
     const k = this.markKey(square[0], square[1]);
-    if (this.marks.has(k)) this.marks.delete(k); else this.marks.add(k);
+    if (this.marks.has(k)) { this.marks.delete(k); this.markLabels.delete(k); } else this.marks.add(k);
     this.drawMarks();
   }
   /** Owner 2026-07-08: toggle a mark, tolerating a click on the MARK'S LIGHT COLUMN.
@@ -12508,9 +12639,9 @@ export class PitchRenderer {
    *  pitch — the old exact-square toggle then couldn't find the mark and ADDED a new one
    *  ("shift-click a marked square doesn't clear it"). So: exact square marked → clear it;
    *  else a click inside any existing mark's column → clear THAT mark; else add here. */
-  toggleMarkNear(worldX: number, worldY: number, square: [number, number]): void {
+  toggleMarkNear(worldX: number, worldY: number, square: [number, number]): boolean {
     const exact = this.markKey(square[0], square[1]);
-    if (this.marks.has(exact)) { this.marks.delete(exact); this.drawMarks(); return; }
+    if (this.marks.has(exact)) { this.marks.delete(exact); this.markLabels.delete(exact); this.drawMarks(); return false; }
     for (const key of this.marks) {
       const [mx, my] = key.split(',').map(Number) as [number, number];
       const a = squareAnchor(mx, my);
@@ -12519,13 +12650,27 @@ export class PitchRenderer {
       const halfW = TILE_W * 0.3 * s; // a touch wider than the column base for an easy hit
       if (worldX >= a.x - halfW && worldX <= a.x + halfW && worldY <= a.y + halfW && worldY >= a.y - height) {
         this.marks.delete(key);
+        this.markLabels.delete(key);
         this.drawMarks();
-        return;
+        return false;
       }
     }
     this.marks.add(exact);
     this.drawMarks();
+    return true;
   }
+  /** Owner 10-01: set (or, with blank text, clear) the label of a marked square. Ignored for an unmarked square.
+   *  Client-local only. */
+  setSquareMarkLabel(square: [number, number], text: string): void {
+    const key = this.markKey(square[0], square[1]);
+    if (!this.marks.has(key)) return;
+    const trimmed = text.trim().slice(0, SQUARE_MARK_LABEL_MAX_CHARS);
+    if (trimmed) this.markLabels.set(key, trimmed);
+    else this.markLabels.delete(key);
+    this.drawMarks();
+  }
+  /** Owner 10-01: the raw label text of a marked square, or null. */
+  squareMarkLabel(square: [number, number]): string | null { return this.markLabels.get(this.markKey(square[0], square[1])) ?? null; }
   /** Owner 09-05: row/column marks TOGGLE — a second Ctrl+Shift / Alt+Shift click on a fully marked line clears
    *  it; a partially marked line fills in. */
   private toggleMarkLine(squares: [number, number][]): void {
@@ -12538,11 +12683,12 @@ export class PitchRenderer {
   markRow(target: [number, number]): void { this.toggleMarkLine(this.rowSquares(target)); }
   /** Mark (or clear) the visual COLUMN through `target` (Mark Column / Alt+Shift-click). */
   markColumn(target: [number, number]): void { this.toggleMarkLine(this.colSquares(target)); }
-  clearMarks(): void { this.marks.clear(); this.drawMarks(); }
+  clearMarks(): void { this.marks.clear(); this.markLabels.clear(); this.drawMarks(); }
   hasMarks(): boolean { return this.marks.size > 0; }
   /** Redraw the mark light columns (persistent; re-run on refresh/orientation). */
   private drawMarks(): void {
     for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
+    for (const key of [...this.markLabels.keys()]) if (!this.marks.has(key)) this.markLabels.delete(key);
     for (const key of this.marks) {
       const [x, y] = key.split(',').map(Number) as [number, number];
       if (!isOnPitch([x, y])) continue;
@@ -12552,7 +12698,32 @@ export class PitchRenderer {
       col.position.set(a.x, a.y);
       col.zIndex = this.depthZ(x, y);
       this.marksLayer.addChild(col);
+      const label = this.markLabels.get(key);
+      const text = label ? this.buildSquareMarkLabel(label, s) : null;
+      if (text) {
+        text.position.set(a.x, a.y);
+        text.zIndex = col.zIndex + 0.5;
+        this.marksLayer.addChild(text);
+      }
     }
+  }
+  /** Owner 10-01: a square mark's label — block capitals in the player-number font and size (NAME_STYLE), centred on
+   *  the square's centre (the mark column's base), word-wrapped inside the tile, at most 3 lines, depth-scaled with
+   *  the column exactly like the mark. Null when nothing fits. */
+  private buildSquareMarkLabel(label: string, scale: number): Text | null {
+    const style = SQUARE_MARK_LABEL_STYLE;
+    const fontSize = Number(style.fontSize);
+    // Pixi's exact metrics need a browser canvas; renderer unit tests run without a DOM, so estimate there.
+    const measure = typeof document === 'undefined'
+      ? (line: string) => line.length * fontSize * 0.62
+      : (line: string) => CanvasTextMetrics.measureText(line, style).width;
+    const lines = shapeSquareMarkLabel(label, measure, TILE_W - SQUARE_MARK_LABEL_INSET * 2);
+    if (lines.length === 0) return null;
+    const text = new Text({ text: lines.join('\n'), style, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    text.anchor.set(0.5, 0.5);
+    text.scale.set(scale);
+    text.label = 'squareMarkLabel';
+    return text;
   }
   /** A static GOLD light column marking a square (mirrors the ball's cyan column). */
   private buildMarkColumn(scale: number): Graphics {
@@ -15946,6 +16117,25 @@ export class PitchRenderer {
     return false;
   }
 
+  /** Owner 09-15: the 'centre' marking anchor — ON the token: the checker chip's face or the sprite's visual centre.
+   *  Shared with the Shift+click player label (owner 10-01). */
+  private markingCentreY(token: Container): number {
+    const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+    const bounds = token.getLocalBounds() as unknown as { minY: number; maxY: number };
+    return chip ? chip.y : (bounds.minY + bounds.maxY) / 2;
+  }
+
+  /** The 'feet' marking anchor (text hangs below it, anchor y 0). Shared with the Shift+click player label (owner 10-01). */
+  private markingFeetY(token: Container, playerId: string, down: boolean): number {
+    // Owner 09-15 (upstream target): on a checker disc the feet markings hang directly under the disc's rim.
+    const chipBelow = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+    // Owner 09-15 (r2): TIGHT against the feet — the text top rides up into the boots (was a clear gap below).
+    // Owner 09-15 (r3): DODGES a feet word-art state marker (ROOTED / DODGY SNACK / CHOMPED) by shifting UP the
+    // token so the two never overlap — the marking stays the top-most layer either way.
+    const lift = this.hasFeetWordArt(playerId) ? FEET_ART_MARKING_LIFT : 0;
+    return (chipBelow ? chipBelow.y + chipBelow.r - 3 : down ? 3 : -2) - lift;
+  }
+
   private addMarkingText(token: Container, player: PlayerJson, down: boolean): void {
     // Markings are compact skill glyphs. Strip separators/newlines from both
     // current per-skill settings and legacy/imported FUMBBL marking payloads.
@@ -15974,22 +16164,13 @@ export class PitchRenderer {
     // render OVER THE HEAD (text sits above) like the icons.
     const markerPosition = this.resolvedMarkerPosition();
     if (markerPosition === 'centre') {
-      // Owner 09-15: ON the token — the checker chip's face or the sprite's visual centre.
-      const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
-      const bounds = token.getLocalBounds() as unknown as { minY: number; maxY: number };
-      group.position.set(0, chip ? chip.y : (bounds.minY + bounds.maxY) / 2);
+      group.position.set(0, this.markingCentreY(token));
       tag.anchor.set(0.5, 0.5);
     } else if (markerPosition === 'head') {
       group.position.set(0, down ? -30 : -46);
       tag.anchor.set(0.5, 1);
     } else {
-      // Owner 09-15 (upstream target): on a checker disc the feet markings hang directly under the disc's rim.
-      const chipBelow = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
-      // Owner 09-15 (r2): TIGHT against the feet — the text top rides up into the boots (was a clear gap below).
-      // Owner 09-15 (r3): DODGES a feet word-art state marker (ROOTED / DODGY SNACK / CHOMPED) by shifting UP the
-      // token so the two never overlap — the marking stays the top-most layer either way.
-      const lift = this.hasFeetWordArt(player.playerId) ? FEET_ART_MARKING_LIFT : 0;
-      group.position.set(0, (chipBelow ? chipBelow.y + chipBelow.r - 3 : down ? 3 : -2) - lift);
+      group.position.set(0, this.markingFeetY(token, player.playerId, down));
       tag.anchor.set(0.5, 0);
     }
     group.label = 'skillMarkings'; // owner 09-05: the BALL marker checks for feet markings by label
@@ -18084,8 +18265,11 @@ export class PitchRenderer {
           else if (event.altKey) this.markColumn([sx, sy]); // Alt+Shift = column
           else {
             const playerId = this.playerTokenAtWorld(worldX, worldY);
-            if (playerId) this.togglePersistentPlayerArrow(playerId);
-            else this.toggleMarkNear(worldX, worldY, [sx, sy]); // empty Shift = single square (column-aware clear)
+            if (playerId) {
+              if (this.togglePersistentPlayerArrow(playerId)) this.requestPlayerMarkLabel(playerId); // owner 10-01: label field
+            } else if (this.toggleMarkNear(worldX, worldY, [sx, sy])) { // empty Shift = single square (column-aware clear)
+              this.requestSquareMarkLabel([sx, sy]); // owner 10-01: a NEW mark opens its label field
+            }
           }
           return;
         }
