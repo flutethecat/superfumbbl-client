@@ -149,6 +149,9 @@ export interface AppSettings {
   /** Owner 2026-07-08: swap the bottom bars — Quick bar to the bottom-RIGHT, Log to
    *  the bottom-LEFT (Log leads, matching left-to-right reading). Default true. */
   bottomBarsSwapped: boolean;
+  /** Owner 10-02: the roster moved to the Helmet quick-bar pop-out; true brings the old Roster tab back to the
+   *  Log | Chat dock. Default false. */
+  chatDockRosterTab: boolean;
   // B2-13: skill-description text styling
   /** B3-8: UI-wide font choice (Settings pane always Arial/Helvetica). */
   uiFont: 'nuffle' | 'system' | 'arial';
@@ -496,6 +499,7 @@ const DEFAULTS: AppSettings = {
   logNeededAsNumbers: false,
   showServerSequencingEvents: false,
   logPos: null,
+  chatDockRosterTab: false, // owner 10-02: roster lives in the Helmet pop-out; Settings > UI brings the dock tab back
   bottomBarsSwapped: true, // owner 2026-07-08: Log bottom-left, Quick bar bottom-right (default)
   logSize: null,
   setupBrowserPos: null,
@@ -886,6 +890,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.useFantasyCursor = raw.useFantasyCursor !== false;
     // fail-closed: pop-out resolves to DOCKED unless the stored value is literally true.
     merged.chatPoppedOut = raw.chatPoppedOut === true;
+    // Owner 10-02: the dock's Roster tab is off unless the stored value is literally true.
+    merged.chatDockRosterTab = raw.chatDockRosterTab === true;
     const installedIdentity = (value: unknown) => typeof value === 'string'
       && (/^[a-f0-9]{32}$/.test(value) || value === '')
       ? value : '';

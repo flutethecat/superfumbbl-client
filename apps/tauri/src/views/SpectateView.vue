@@ -84,6 +84,7 @@ import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
 import { teamDiceTally, teamLogo } from '../game/gameStatRows';
 import PostGamePanel from '../components/PostGamePanel.vue';
+import RosterPopout from '../components/RosterPopout.vue';
 import { mvpCardFor, mvpConcededSides, postGameKey, postGamePublic, type PgMvpCard, type PostGameSnapshot } from '../game/postGameProjection';
 import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
@@ -498,6 +499,22 @@ const spriteSet = ref<AppSettings['spriteSet']>(settings.spriteSet);
 /** Floating WoW-style panel (owner 2026-07-02): Log | Chat | Roster tabs. */
 const panelTab = ref<'log' | 'chat' | 'roster'>('log');
 const rosterSide = ref<'home' | 'away'>('home');
+// Owner 10-02: the dock's Roster tab is opt-in (Settings > UI); turning it off while it is showing falls back to Log.
+watch(() => settings.chatDockRosterTab, (on) => { if (!on && panelTab.value === 'roster') panelTab.value = 'log'; });
+// Owner 10-02: the Helmet quick-bar button pops out the END-GAME roster (PostGameRoster via RosterPopout) for the
+// game the store holds right now — live play, spectate or replay. It projects the LIVE model each render (never a
+// cached end-game snapshot), so SPP and added skills track the match as it goes. Defaults to the viewer's side.
+const rosterPopoutOpen = ref(false);
+const rosterPopoutSide = ref<'home' | 'away'>('home');
+const rosterPopoutTeams = computed(() => {
+  const game = gameStore.game.value;
+  if (!game?.gameResult?.teamResultHome || !game.gameResult.teamResultAway) return null;
+  return postGamePublic(game);
+});
+function toggleRosterPopout(): void {
+  if (!rosterPopoutOpen.value) rosterPopoutSide.value = gameStore.myTeamIsHome.value ? 'home' : 'away';
+  rosterPopoutOpen.value = !rosterPopoutOpen.value;
+}
 const panelCollapsed = ref(false);
 let renderer: PitchRenderer | null = null;
 /** Bumped once the pitch renderer has mounted and loaded its assets — computeds that read `renderer` (a plain module
@@ -8444,6 +8461,8 @@ function onKeydown(event: KeyboardEvent) {
   }
   if (event.target instanceof HTMLInputElement) return;
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
+  // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else).
+  if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); rosterPopoutOpen.value = false; return; }
   if (event.key === 'Escape') {
     // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
     // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
@@ -10177,7 +10196,7 @@ async function openJnlpFile(event: Event) {
 // panels, and the Log/Chat/Roster tabs, before opening a player card in-game.
 interface TourStep { sel: string; text: string; place: 'above' | 'below' | 'left' | 'right'; }
 const TOUR_STEPS: TourStep[] = [
-  { sel: '.config-bar', text: 'Quick bar — settings, tackle zones, sprite style, skill display, stadium, Auto Director, and report a bug.', place: 'above' },
+  { sel: '.config-bar', text: 'Quick bar — settings, tackle zones, sprite style, skill display, stadium, Auto Director, the roster (helmet), and report a bug.', place: 'above' },
   { sel: '.director-btn', text: '🎬 Auto Director — auto-zoom + track the action (the camera follows the ball & the acting player). Toggle it off for a calm, static camera you pan yourself.', place: 'above' },
   { sel: '.end-turn', text: 'End Turn — ends the active turn. (In the demo it advances play.)', place: 'below' },
   { sel: '.coach-panel.home', text: "Coach panels — each side's team, coach, score, inducements and turn number. The ACTIVE coach's panel grows.", place: 'below' },
@@ -11688,6 +11707,11 @@ function sendChat() {
           <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector"
             :title="`Auto Director — auto zoom + track the action: ${settings.autoDirector ? 'ON (click to calm the camera)' : 'OFF'}`"
             @click="settings.autoDirector = !settings.autoDirector">🎬</QuickBarButton>
+          <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
+               opt-in via Settings > UI. -->
+          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn"
+            title="Roster — every player with their added skills" aria-label="Roster"
+            @click="toggleRosterPopout()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
           <QuickBarButton class="report-btn" title="Report an issue — sends your description with the wire log"
             @click="openReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
           <div class="quick-brand-menu">
@@ -11761,7 +11785,8 @@ function sendChat() {
             <button class="stencil-tab" title="Log" :data-active="panelTab === 'log'"
               @click="panelTab = 'log'; panelCollapsed = false"><span class="tab-emoji">📋</span><span class="tab-stencil">LOG</span></button>
             <!-- Owner 08-19 (2nd): ROSTER before CHAT in the tab row. -->
-            <button class="stencil-tab roster-tab" title="Roster" :data-active="panelTab === 'roster'" :disabled="!gameStore.game.value"
+            <!-- Owner 10-02: opt-in (Settings > UI › Roster tab in the chat dock); the Helmet pop-out is the default. -->
+            <button v-if="settings.chatDockRosterTab" class="stencil-tab roster-tab" title="Roster" :data-active="panelTab === 'roster'" :disabled="!gameStore.game.value"
               @click="panelTab = 'roster'; panelCollapsed = false"><img class="tab-icon" :src="helmetIconUrl"
                 alt="Roster" title="American football icons created by justicon — Flaticon (flaticon.com/free-icons/american-football)" /><span class="tab-stencil">ROSTER</span></button>
             <!-- Owner 08-19: while chat is POPPED OUT the tab leaves the row entirely (the old
@@ -11812,7 +11837,7 @@ function sendChat() {
               </button>
             </div>
 
-            <template v-else-if="panelTab === 'roster' && gameStore.game.value">
+            <template v-else-if="panelTab === 'roster' && settings.chatDockRosterTab && gameStore.game.value">
               <nav class="subtabs">
                 <button :data-active="rosterSide === 'home'" :title="gameStore.game.value.teamHome.teamName" @click="rosterSide = 'home'">{{ rosterTabLabel(gameStore.game.value.teamHome.teamName) }}</button>
                 <button :data-active="rosterSide === 'away'" :title="gameStore.game.value.teamAway.teamName" @click="rosterSide = 'away'">{{ rosterTabLabel(gameStore.game.value.teamAway.teamName) }}</button>
@@ -12050,12 +12075,19 @@ function sendChat() {
           </template>
         </PostGamePanel>
 
+        <!-- Owner 10-02: the Helmet quick-bar pop-out — the end-game roster (shared PostGameRoster) on the live model.
+             Teleports to body; closed = not mounted, so nothing sits over the pitch. -->
+        <RosterPopout v-if="rosterPopoutOpen" v-model:side="rosterPopoutSide" :teams="rosterPopoutTeams"
+          :portrait="pgRosterPortrait" :helmet-icon="helmetIconUrl" :opacity="settings.logOpacity"
+          @close="rosterPopoutOpen = false" />
+
         <!-- Owner 2026-07-06: DODGY SNACK — each coach's d6 thrown from a side
              (home north / away south); the lower-rolling team's
              random player is affected. Plays AFTER the kick-off event splash. -->
-        <div v-if="gameStore.state.weatherCine" class="weather-cine" :class="{ 'cine-hold': settings.clickDismissCinematics }">
-          <div class="wc-title">Weather Roll</div>
-          <div class="wc-dice">
+        <div v-if="gameStore.state.weatherCine" class="weather-cine" :class="{ 'cine-hold': settings.clickDismissCinematics, 'wc-changing': gameStore.state.weatherCine.changing }">
+          <!-- Owner 10-02 (S97): the Changing Weather kick-off event shows only the new weather - no dice throw. -->
+          <div class="wc-title">{{ gameStore.state.weatherCine.changing ? 'Changing Weather' : 'Weather Roll' }}</div>
+          <div v-if="!gameStore.state.weatherCine.changing" class="wc-dice">
             <D6Face class="wc-die from-north" :value="gameStore.state.weatherCine.roll[0] ?? 0" :label="`Weather die ${gameStore.state.weatherCine.roll[0] ?? 0}`" />
             <D6Face class="wc-die from-south" :value="gameStore.state.weatherCine.roll[1] ?? 0" :label="`Weather die ${gameStore.state.weatherCine.roll[1] ?? 0}`" />
           </div>
@@ -12879,6 +12911,11 @@ function sendChat() {
         <!-- S62 (owner 10-01): Solid Defence — the kicking coach picks, then repositions; every other seat waits on them. -->
         <OnTheBallWaitingModal v-if="gameStore.state.solidDefenceWaiting" title="Solid Defence" notice-id="solid-defence-waiting"
           :message="gameStore.state.solidDefenceWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- S99 (owner 10-02): Pick-Me-Up - the coach with prone players is choosing who stands; every other seat waits on them. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.pickMeUpWaiting" title="Pick-Me-Up" notice-id="pick-me-up-waiting"
+          :message="gameStore.state.pickMeUpWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S57 (owner 09-30): Touchback — the receiving coach nominates the ball carrier; every other seat waits on them. -->
@@ -15404,6 +15441,8 @@ function sendChat() {
   opacity: 0;
   animation: coin-caption-in var(--p-400) ease-out var(--p-1000) forwards;
 }
+/* S97: no dice to wait for on the Changing Weather card - the new weather comes in with the title. */
+.weather-cine.wc-changing .wc-caption { animation-delay: var(--p-150); }
 .dice-title,
 .wc-title {
   font-family: 'Nuffle', system-ui, sans-serif;
@@ -17845,6 +17884,8 @@ function sendChat() {
 .tab-emoji { font-size: max(var(--ui-min-text-size, 12px), 0.72rem); line-height: 1; flex: none; }
 /* Roster helmet icon (owner 2026-07-03): the football-helmet.png sized like the
    Log/Chat emoji (justicon / Flaticon — attribution on hover + in Settings). */
+/* Owner 10-02: the Helmet roster button's icon on the quick bar. */
+.config-bar button .quick-helmet { width: 24px; height: 24px; object-fit: contain; image-rendering: auto; }
 .tab-icon { width: 0.9rem; height: 0.9rem; object-fit: contain; flex: none; image-rendering: auto; }
 .tab-stencil {
   font-family: 'Nuffle', system-ui, sans-serif;

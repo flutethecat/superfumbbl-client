@@ -33,6 +33,7 @@ import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
+import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
 import { clearConfigWebToken } from './game/configWebAuth';
 import {
@@ -997,6 +998,11 @@ const filteredSkills = computed(() => {
 const isConfigTrait = (skill: string): boolean => !SKILL_CONFIG_AS_SKILL.has(skill) && playerSkillCategory(skill) === 'trait';
 const filteredSkillRows = computed(() => filteredSkills.value.filter((skill) => !isConfigTrait(skill)));
 const filteredTraitRows = computed(() => filteredSkills.value.filter(isConfigTrait));
+// Owner 10-02 (S94): an Injuries group - Niggling Injury and every stat bust - so they can be shown, hidden or marked.
+const filteredInjuryRows = computed(() => {
+  const q = skillFilter.value.trim().toLowerCase();
+  return INJURY_CONFIG_KEYS.filter((row) => !q || row.label.toLowerCase().includes(q) || row.key.toLowerCase().includes(q));
+});
 const skillKind = computed<'icon' | 'marker'>(() => (skillConfigGroup.value === 'icons' ? 'icon' : 'marker'));
 /** Render position for the CURRENT group (owner 2026-07-03 r6f): icons default to
  *  'head', markers to 'feet'; either can be switched to the other. */
@@ -2454,6 +2460,23 @@ function captureKey(event: KeyboardEvent) {
                     <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
                 </div>
+                <!-- Owner 10-02 (S94): injuries (Niggling Injury, stat busts) - shown / hidden / marked like a skill. -->
+                <div v-if="filteredInjuryRows.length" class="sc-subhead" role="heading" aria-level="4">Injuries</div>
+                <div v-for="row in filteredInjuryRows" :key="row.key" class="sc-trow sc-trow-injury">
+                  <span class="sc-skill" :title="row.label">{{ row.label }}</span>
+                  <input v-if="skillConfigGroup === 'markers'" class="sc-glyph"
+                    :value="skillMarkerText(row.key)"
+                    @input="setSkillMarkerText(row.key, ($event.target as HTMLInputElement).value)"
+                    maxlength="6" spellcheck="false" placeholder="glyph" />
+                  <select :value="skillBehaviour(row.key, skillKind, 'Mine')"
+                    @change="setSkillBehaviour(row.key, skillKind, 'Mine', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                  <select :value="skillBehaviour(row.key, skillKind, 'Opp')"
+                    @change="setSkillBehaviour(row.key, skillKind, 'Opp', ($event.target as HTMLSelectElement).value as SkillBehaviour)">
+                    <option v-for="o in BEHAVIOUR_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                </div>
               </div>
               <div class="actions" style="justify-content: flex-start">
                 <button type="button" @click="resetSkillConfig">Reset per-skill config</button>
@@ -2586,6 +2609,12 @@ function captureKey(event: KeyboardEvent) {
             <p class="hint">Puts the Log window at the bottom-left and the Quick bar (settings, tackle
               zones, skill icons, …) at the bottom-right, so the Log leads in reading order. On by
               default; uncheck to swap them back (Quick bar left, Log right).</p>
+            <label class="row">
+              <input v-model="settings.chatDockRosterTab" type="checkbox" />
+              <span>Roster tab in the chat dock</span>
+            </label>
+            <p class="hint">The roster opens from the helmet button on the Quick bar. Tick this to also keep the old
+              Roster tab next to Log and Chat.</p>
             <label class="row">
               <input v-model="settings.uiCustomize" type="checkbox" />
               <span>Customize UI layout (move / resize panels)</span>
@@ -4176,8 +4205,8 @@ textarea:focus-visible,
 }
 .sc-thead { position: sticky; top: 0; background: var(--ui-surface-2); color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.68rem); font-weight: 700; z-index: 1; }
 .sc-trow { font-size: max(var(--ui-min-text-size, 12px), 0.74rem); border-top: 1px solid var(--ui-border); }
-/* Owner 10-01 (S90): the Traits subheading - a band across the table, sticky under the column header. */
-.sc-subhead { position: sticky; top: 1.6em; z-index: 1; padding: 0.3rem 0.5rem; border-top: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-heading); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+/* Owner 10-01 (S90/S94): the Traits / Injuries subheadings - a band across the table (not sticky: two stacked). */
+.sc-subhead { padding: 0.3rem 0.5rem; border-top: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-heading); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
 .sc-trow:nth-child(odd) { background: var(--ui-surface-2); }
 .sc-skill { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-trow select, .sc-glyph {

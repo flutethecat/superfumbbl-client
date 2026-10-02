@@ -38,8 +38,14 @@ export function pushPresentation(previous: ReadonlyMap<string, PendingPush>, rep
         arrowedThisFrame.add(pid);
         lastPushFrom.set(pid, entry.from); // the vacated square, for followupChoice
         pendingPushes.delete(pid);
-      } else if (!to || !onPitch(to) || ++entry.age > maxAge) {
-        pendingPushes.delete(pid); // pushed off pitch / removed, or aged out
+      } else if (!to || !onPitch(to)) {
+        // Owner 10-02 (S100, g1949262 cmd 3406-3410): a crowd-surfed defender still VACATES its square and the server
+        // offers the follow-up into it - record it (no arrow), or the follow-up card never arms and the headless
+        // fallback declines the choice for the coach.
+        lastPushFrom.set(pid, entry.from);
+        pendingPushes.delete(pid); // pushed off pitch / removed
+      } else if (++entry.age > maxAge) {
+        pendingPushes.delete(pid); // aged out
       }
     }
     // 2b. CHAIN pushes (07-08): BB2025 emits NO report for the chain victim — detect by RULE (whoever stood on a pushed player's destination is chain-pushed); the growing loop resolves multi-link chains.

@@ -187,6 +187,18 @@ export function kickoffWaitingFromGame(g: GameJson, myTeamId: string | null): { 
   return { message: `${subject} is choosing the kick-off destination` };
 }
 
+/** Owner 10-02 (S99): Pick-Me-Up - the standing `playerChoice` dialog with mode `pickMeUp` (wire g1919953 cmd 1278:
+ *  teamId = the team whose prone players may stand, answered by that coach) - every other seat is told who is choosing. */
+export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (dialog?.dialogId !== 'playerChoice' || dialog.playerChoiceMode !== 'pickMeUp') return null;
+  const teamId = String(dialog.teamId ?? '');
+  const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The other coach');
+  return { message: `${subject} is selecting players for Pick-Me-Up` };
+}
+
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
  *  fallback the live applier uses (store: dp.playerId ?? dp.playerIds[0]). */
 function shadowingPlayerId(dialog: Record<string, unknown> | null): string | null {
@@ -236,6 +248,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     touchbackWaiting: touchbackWaitingFromGame(g, null),
     kickoffWaiting: kickoffWaitingFromGame(g, null),
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
+    pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),

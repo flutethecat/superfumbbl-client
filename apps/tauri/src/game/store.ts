@@ -17,7 +17,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { inducementChoiceLabel } from './inducementChoiceLabel';
@@ -932,7 +932,8 @@ const legacyState = reactive({
   /** Upstream AnimationType.SPELL_FIREBALL → the exact 13-frame square-centred fireball sequence. */
   fireballAnim: null as { square: [number, number]; seq: number; sound?: string } | null,
   /** B8-2: weather kickoff dice cinematic — two d6 (one per end) + result. */
-  weatherCine: null as { roll: number[]; weather: string } | null,
+  /** `changing`: the Changing Weather KICK-OFF event - owner 10-02 (S97): show only the new weather, no dice. */
+  weatherCine: null as { roll: number[]; weather: string; changing?: boolean } | null,
   /** S38: fed for ClassicView only (its dice cine); the main view shows the yellow splash (`dodgySnackAnnouncement`) instead. */
   dodgySnackCine: null as { rollHome: number; rollAway: number; seq: number } | null,
   /** S38: the one yellow splash — affected names plus the sent-off names (effect roll of 1 = reserves for the drive), report order. */
@@ -1159,6 +1160,8 @@ const legacyState = reactive({
   kickoffWaiting: null as { message: string } | null,
   /** S62: '<Coach> is selecting / repositioning players for the Solid Defence!' for every seat but the kicking coach. */
   solidDefenceWaiting: null as { message: string } | null,
+  /** Owner 10-02 (S99): "<who> is selecting players for Pick-Me-Up" for every seat but the choosing coach. */
+  pickMeUpWaiting: null as { message: string } | null,
   /** Owner 07-03: TURNOVER splash (failed action only — not TD/voluntary/drive change), raised after a real non-TD turnEnd and other anims settle. */
   turnover: null as { side: 'home' | 'away'; coach: string; teamName: string; logo: string | null; seq: number } | null,
   /** Owner 07-05: turn-START splash ("«Coach»'s turn") — voluntary ends only (turnover keeps its own; a TD transitions to kickoff). */
@@ -1244,6 +1247,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     touchbackWaiting: passive.touchbackWaiting,
     kickoffWaiting: passive.kickoffWaiting,
     solidDefenceWaiting: passive.solidDefenceWaiting,
+    pickMeUpWaiting: passive.pickMeUpWaiting,
     followupChoice: null,
     skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
     reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
@@ -1295,7 +1299,7 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -1921,10 +1925,10 @@ interface FanFactorRoll {
 
 // Wire kick-off result name → redesigned splash banner stem (normalized key match).
 let weatherTimer: ReturnType<typeof setTimeout> | null = null;
-function showWeather(roll: number[], weather: string, dwellMs = presentationMs(WEATHER_CINE_MS)) {
+function showWeather(roll: number[], weather: string, dwellMs = presentationMs(WEATHER_CINE_MS), changing = false) {
   // The legacy o66 caller remains suppressed; the authoritative o66 FIFO path below owns live weather presentation.
   if (settings.order66) return;
-  state.weatherCine = { roll, weather };
+  state.weatherCine = { roll, weather, changing };
   if (weatherTimer) cancelGameTimeout(weatherTimer);
   weatherTimer = settings.clickDismissCinematics
     ? null
@@ -2798,13 +2802,13 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       // Owner 09-09: a weather roll in the KICK-OFF frame is the Changing Weather event -> the shorter card.
       enqueueFifoCine(
         'weatherChange',
-        () => { state.weatherCine = { roll: wRoll, weather: wName }; },
+        () => { state.weatherCine = { roll: wRoll, weather: wName, changing: !!kickoff }; },
         () => { state.weatherCine = null; },
         presentationMs(kickoff ? WEATHER_CHANGE_CINE_MS : WEATHER_CINE_MS),
       );
     } else {
       const weatherDwell = presentationMs(kickoff ? WEATHER_CHANGE_CINE_MS : WEATHER_CINE_MS);
-      enqueuePregameCine(() => showWeather(weather!.roll, weather!.weather, weatherDwell), weatherDwell, 'weather');
+      enqueuePregameCine(() => showWeather(weather!.roll, weather!.weather, weatherDwell, !!kickoff), weatherDwell, 'weather');
     }
   }
   if (weatherMageResult && !playback.catchingUp) {
@@ -8547,7 +8551,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
@@ -8683,7 +8687,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -15839,6 +15843,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // S37: a concede confirmation card dies with its server dialog (cleared / replaced / game over). Sends nothing.
   if (state.yesNo?.key === 'concedeGame'
     && (game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId !== 'concedeGame') clearYesNo();
+  // S100: the Follow up / Stay fallback card dies with its followupChoice dialog - before any dialog handler can return early.
+  if (state.yesNo?.key.startsWith('followupAsk:')
+    && (game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId !== 'followupChoice') clearYesNo();
   if (!play.active) return;
   const g = game.value;
   if (!g) return;
@@ -16618,6 +16625,26 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       // frame (idempotent — same followup = same key); once the dialog clears, the key stops updating and the send
       // guard drops a stale click.
       state.followupChoice.instanceKey = dialogInstanceKey(g);
+      return;
+    }
+    // S100 (owner 10-02 + Astra review): the client never answers this for an interactive coach. When the chip could not
+    // arm (no vacated square derivable - e.g. a rejoin while the dialog is open after a crowd surf), ask in the generic
+    // yes/no card instead of the headless auto-decline below.
+    if (interactiveReRolls && followupForMe && actingIsMine && !followupHandled.has('followup')) {
+      const instanceKey = dialogInstanceKey(g);
+      const instanceRef = g.dialogParameter as object | null;
+      askYesNo({
+        key: `followupAsk:${instanceKey ?? ''}`,
+        text: `Follow up with ${playerName(g, followupAttacker) || 'the blocker'}?`,
+        yesLabel: 'Follow up', noLabel: 'Stay',
+        onAnswer: (follow) => {
+          if (followupHandled.has('followup') || !dialogInstanceLive(instanceKey)) return;
+          // Latch only a send that left: a refused send leaves the question to be asked again on the next frame.
+          if (!sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: follow }, instanceKey, instanceRef)) return;
+          followupHandled.add('followup');
+          log('system', `play: follow up ${follow ? 'TAKEN' : 'declined'} (${playerName(game.value, followupAttacker)})`);
+        },
+      });
       return;
     }
     return once('followup', { netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: false });
@@ -17457,6 +17484,7 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.touchbackWaiting = playback.catchingUp ? null : touchbackWaitingFromGame(g, myTeamId);
   state.kickoffWaiting = playback.catchingUp ? null : kickoffWaitingFromGame(g, myTeamId);
   state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
+  state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.onTheBallWaiting = playback.catchingUp ? null : projectOnTheBallWaiting({
     audience: frame.audience,
     turnMode: frame.turnMode,
@@ -17497,7 +17525,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -17821,7 +17849,7 @@ function setPregameWait(text: string): void {
 }
 function drivePregameStep() {
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -18897,7 +18925,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -20330,6 +20358,7 @@ export const gameStore = {
     if (!dialogInstanceLive(fc.instanceKey)) { state.followupChoice = null; return; }
     // blocks resolvePlayFollowups' no-chip fallback from double-answering while the dialog lingers a frame; cleared with the dialog (followupHandled reset).
     followupHandled.add('followup');
+    if (state.yesNo?.key.startsWith('followupAsk:')) clearYesNo(); // S100
     sendCommand({ netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: follow });
     log('system', `play: follow up ${follow ? 'TAKEN' : 'declined'} (${playerName(game.value, fc.playerId)})`);
     state.followupChoice = null; // pendingFollowup still resolves the arrival flash
@@ -20616,7 +20645,7 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
@@ -20950,7 +20979,7 @@ export const gameStore = {
       if (thisSession !== session) return;
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
       clearSendOffWaiting();
       if (officialStatusTerminal) {
         expectingGame = false;
@@ -23333,7 +23362,7 @@ export const gameStore = {
     clearSetupLoop();
     play.active = false;
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null;
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

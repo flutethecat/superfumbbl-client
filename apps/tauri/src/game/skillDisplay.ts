@@ -67,6 +67,19 @@ function displayedSkills(player: PlayerJson): string[] {
   return playerSkillNames(player);
 }
 
+/** Owner 10-02 (S94): the INJURY rows of the per-skill table - a niggling injury and every stat bust. Their keys are
+ *  the status tokens the icon rail and the marking generator already use, so one setting drives both views. */
+export const INJURY_CONFIG_KEYS: readonly { key: string; label: string }[] = [
+  { key: 'NI', label: 'Niggling Injury' },
+  { key: '-MA', label: 'Movement reduction (-MA)' },
+  { key: '-ST', label: 'Strength reduction (-ST)' },
+  { key: '-AG', label: 'Agility reduction (-AG)' },
+  { key: '-PA', label: 'Passing reduction (-PA)' },
+  { key: '-AV', label: 'Armour reduction (-AV)' },
+];
+const INJURY_KEYS = new Set(INJURY_CONFIG_KEYS.map((entry) => entry.key));
+export function isInjuryConfigKey(key: string): boolean { return INJURY_KEYS.has(key); }
+
 /** Permanent characteristic changes and niggling injuries are status icons, not
  * configurable skills. Keep them at the front of the four-icon rail so a lasting
  * injury cannot be hidden behind ordinary skill badges. */
@@ -162,7 +175,10 @@ export function computeIconSkills(game: GameJson): Map<string, string[]> {
       const skills = displayedSkills(player).filter((s) => shows(iconBehaviour(s, mine), baseline.has(s)));
       // Owner 09-06: a stat increase already arrives as a '+ST'/'+AG'/… SKILL in skillArray AND as a characteristic
       // diff vs the roster position — one icon, not two (Set keeps first-seen order: characteristic icons lead).
-      out.set(player.playerId, [...new Set([...characteristicStatusIcons(team, player), ...skills])]);
+      // S94: an injury icon (NI / a stat bust) follows its row in the table - shown unless set to Never (an injury is
+      // never part of the position, so All the time and Gained both show it). Stat INCREASES are unaffected.
+      const status = characteristicStatusIcons(team, player).filter((icon) => !INJURY_KEYS.has(icon) || iconBehaviour(icon, mine) !== 'never');
+      out.set(player.playerId, [...new Set([...status, ...skills])]);
     }
   }
   return out;
@@ -237,8 +253,11 @@ export function perSkillMarkingRecords(config: Record<string, SkillConfigEntry> 
     const opp = entry.markerOpp ?? 'never';
     if (mine === 'never' && opp === 'never') continue;
     const marking = markerGlyphFor(skill, config);
-    const rec = (applyTo: AutoMarkingRecord['applyTo'], behaviour: SkillBehaviour): AutoMarkingRecord =>
-      ({ skillArray: [skill], injuryAttributes: [], marking, gainedOnly: behaviour === 'added', applyTo, applyRepeatedly: false });
+    // S94: an injury row matches the player's injury attributes (one marking per bust, like FUMBBL's own rules)
+    const injury = INJURY_KEYS.has(skill);
+    const rec = (applyTo: AutoMarkingRecord['applyTo'], behaviour: SkillBehaviour): AutoMarkingRecord => injury
+      ? { skillArray: [], injuryAttributes: [skill], marking, gainedOnly: false, applyTo, applyRepeatedly: true }
+      : { skillArray: [skill], injuryAttributes: [], marking, gainedOnly: behaviour === 'added', applyTo, applyRepeatedly: false };
     if (mine === opp) out.push(rec('BOTH', mine));
     else {
       if (mine !== 'never') out.push(rec('OWN', mine));
@@ -250,6 +269,7 @@ export function perSkillMarkingRecords(config: Record<string, SkillConfigEntry> 
 function markerGlyphFor(skill: string, config: Record<string, SkillConfigEntry>): string {
   const text = config[skill]?.markerText;
   if (text && text.trim()) return text.trim();
+  if (INJURY_KEYS.has(skill)) return skill; // S94: '-MA', 'NI' read as themselves
   return skill.split(/\s+/).map((w) => w[0]?.toUpperCase() ?? '').join('').slice(0, 3);
 }
 export function effectiveMarkingConfig(rawJson: string, config: Record<string, SkillConfigEntry> = settings.skillConfig): AutoMarkingConfig | null {
