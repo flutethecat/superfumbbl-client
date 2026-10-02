@@ -7627,7 +7627,11 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // uses there; a declared-but-unactivated blitz is refunded). Runs before any menu so it cannot also open one.
   if (contextGame && String(contextGame.turnMode ?? '') === 'selectBlitzTarget' && actingId && gameStore.iControl(actingId)
       && deriveClientState(contextGame, o66Ctx()) === 'SELECT_BLITZ_TARGET') {
-    gameStore.endActivation();
+    // Owner 10-02 (S95): the store's Blitz guard dropped this as an unconfirmed end ("Blitz end blocked"), so the
+    // right-click did nothing. This gesture IS the owner-ruled cancel, and at this step the server keeps its own
+    // safeguard (StepSelectBlitzTarget: a self-target after the blitzer has acted raises its confirm-end dialog;
+    // before that it just cancels the target selection) - so it carries the confirmation token.
+    gameStore.endActivation({ blitzConfirmed: true });
     clearO66Arms();
     ctxMenu.visible = false;
     return;
