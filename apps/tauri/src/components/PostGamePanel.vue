@@ -30,13 +30,15 @@ const props = withDefaults(defineProps<{
   mvpRoll?: { home: MvpRoll; away: MvpRoll } | null;
   /** #235: roster is a one-team view, defaulted to the viewer's own side */
   defaultRosterSide?: Side;
+  /** Owner 10-02: the local coach's side ("(You)" on the roster team switch); null for a spectator / replay */
+  localSide?: Side | null;
   /** live renderer portraits; falls back to the snapshot's captured ones */
   portraitFor?: ((playerId: string) => string | null) | null;
   skillMode?: 'icons' | 'markings';
   iconStyle?: SkillIconStyle;
   /** inside a blade popup: no viewport overlay / zoom ladder, the windows stack in normal flow */
   embedded?: boolean;
-}>(), { showStats: true, mvpRoll: null, defaultRosterSide: 'home', portraitFor: null, skillMode: 'icons', iconStyle: 'bb3', embedded: false });
+}>(), { showStats: true, mvpRoll: null, defaultRosterSide: 'home', localSide: null, portraitFor: null, skillMode: 'icons', iconStyle: 'bb3', embedded: false });
 
 const game = computed(() => props.snapshot.game);
 const stats = computed(() => props.snapshot.endGameStats);
@@ -222,7 +224,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
       </section>
 
       <!-- Owner 10-02: the end-game roster lives in PostGameRoster.vue (shared with the in-game Helmet pop-out). -->
-      <PostGameRoster v-else v-model:side="selectedRosterTeam" :teams="pg" :portrait="portrait" />
+      <PostGameRoster v-else v-model:side="selectedRosterTeam" :teams="pg" :portrait="portrait" :local-side="localSide" :skill-mode="skillMode" :icon-style="iconStyle" />
     </div>
 
     <!-- Owner 08-19: spectate-seat MVP-PENDING placeholder — sits exactly where the Statistics & MVP window will land. -->

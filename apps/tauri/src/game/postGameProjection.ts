@@ -7,10 +7,13 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
 import { TWO_D6_SHARE, actionFaces, armourLikelihood, blockLikelihood, d6Likelihood, diceFacts, emptyTally, injuryLikelihood, oneInGames, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
-import { playerDetailSkills, type PlayerDetailSkill } from './skillDisplay';
+import { addedSkillsLast, playerDetailSkills, type PlayerDetailSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
 import type { EndGameStatsProjection } from './endGameHudProjection';
+import { playerProgress, type ValuePosition } from './playerValue';
+import { casualtyTierLabel } from './injuryOutcomeProjection';
+import type { RosterInjuryBadge } from './rosterLevelArt';
 
 export type Side = 'home' | 'away';
 
@@ -35,11 +38,25 @@ export function postGameKey(server: string, gameId: string | number): string { r
 
 // B9-12 G7: full post-game panel — Result / MVP / Statistics phases.
 export type PostGameMvp = { name: string; position: string; awards: number; playerId: string }; // #44: playerId → renderer.playerPortrait (no new fetch)
-export type PostGamePlayer = { playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[] }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills, 09-15 player number)
+export type PostGamePlayer = {
+  playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[];
+  /** Owner 10-02: EVERY skill, sorted like the player portrait (base first, added last; `added` rings the icon gold). */
+  skillList?: { name: string; label: string; added: boolean }[];
+  /** Owner 10-02: current value in gold (playerValue.ts, the team builder's formula); null = position not on the roster */
+  value: number | null;
+  /** For the skill-icon lookup (pack icons can be per position). */
+  positionId?: string | null;
+  /** Owner 10-02: the injury this player suffered this game (or MNG when sitting one out) - replaces the LVL badge. */
+  injury?: RosterInjuryBadge | null;
+  /** Owner 10-02: advancements taken (the "LVL n" badge; 0 = rookie, no badge) */
+  advancements: number;
+}; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills, 09-15 player number)
 export interface PostGameSide {
   which: Side;
   team: string;
   coach: string;
+  /** Owner 10-02: the team's race (GameJson team.race), the roster team switch's subtext */
+  race: string;
   logo: string | null;
   score: number;
   mvps: PostGameMvp[];
@@ -47,6 +64,9 @@ export interface PostGameSide {
   players: string[];
   // #25-v2: per-player roster/SPP summary (name·position·SPP-gained this game), SPP-desc.
   roster: PostGamePlayer[];
+  /** Owner 10-02: players still available (isEligibleState) / players on the roster - the team switch's "11/13". */
+  eligible?: number;
+  rosterSize?: number;
   totals: Record<string, number>;
 }
 export interface PostGamePublic { home: PostGameSide; away: PostGameSide; winner: PostGameSide | null; draw: boolean }
@@ -58,7 +78,61 @@ const sppEarned = (r: Record<string, unknown>) =>
   num(r, 'interceptions') * 2 + num(r, 'completions') + num(r, 'deflections') +
   num(r, 'completionsWithAdditionalSpp') + num(r, 'casualtiesWithAdditionalSpp') + num(r, 'catchesWithAdditionalSpp');
 
-type Roster = { positionArray?: { positionId: string; positionName?: string; skillArray?: string[] }[]; logoUrl?: string; baseIconPath?: string };
+type Roster = { positionArray?: ({ positionId: string; positionName?: string; skillArray?: string[] } & ValuePosition)[]; logoUrl?: string; baseIconPath?: string };
+
+const LINEMAN_WORD = /^(?:line(?:man|men|woman|women|person|people|player|players|orc|orcs))$/i;
+/**
+ * Owner 10-02: the roster's position label. (a) An exact team-race prefix is dropped ("Dark Elf Blitzer" -> "Blitzer"
+ * on a Dark Elf team); (b) then a "<Word(s)> Lineman" (Linewoman / Lineperson / Lineplayer / Linemen ... as the LAST
+ * word) renders only the words before it ("Zombie Lineman" -> "Zombie", "Human Lineman" on a non-Human team ->
+ * "Human"). A bare "Lineman" stays; other roles ("Wight Blitzer") are untouched. Never empty: falls back to the full name.
+ */
+export function rosterPositionLabel(positionName: string, race: string | null | undefined): string {
+  const full = positionName.trim();
+  const r = race?.trim();
+  let name = full;
+  if (r && name.toLowerCase().startsWith(r.toLowerCase() + ' ')) name = name.slice(r.length + 1).trim() || full;
+  const words = name.split(/\s+/);
+  if (words.length > 1 && LINEMAN_WORD.test(words[words.length - 1]!)) name = words.slice(0, -1).join(' ');
+  return name || full;
+}
+
+
+/** Owner 10-02: the roster's injury badge - the casualty this player is carrying out of this game (the end-of-game
+ *  field state, so an apothecary-saved player shows none), most severe first: RIP > lasting stat > NI > SH > BH;
+ *  a player who sat this game out on a Miss Next Game shows MNG. KO / stun are not injuries. */
+/** Owner 10-02: a player available to this team right now - not knocked out (owner: KO'd players do not count),
+ *  not a casualty (BH / SI / RIP), not sitting the game out (MISSING), not sent off (BANNED). */
+// Astra review: + EXHAUSTED (0x0e, Sweltering Heat - boxed for the drive, upstream StepEndTurn).
+const INELIGIBLE_BASES = new Set([0x05, 0x06, 0x07, 0x08, 0x0a, 0x0d, 0x0e]);
+export function isEligibleState(game: GameJson, playerId: string): boolean {
+  const data = game.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId);
+  return !INELIGIBLE_BASES.has(Number(data?.playerState ?? 0) & 0xff);
+}
+
+export function rosterInjuryBadge(game: GameJson, playerId: string, result: Record<string, unknown> | undefined): RosterInjuryBadge | null {
+  const data = game.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId);
+  const base = Number(data?.playerState ?? 0) & 0xff;
+  if (base === 0x0a) return 'mng'; // MISSING: carrying a Miss Next Game into this one
+  if (base === 0x05) return 'ko'; // owner 10-02: KO'd players are tracked too (yellow plate)
+  if (base < 0x06 || base > 0x08) return null;
+  // Astra re-review: a Decay player carries a SECOND casualty (seriousInjuryDecay) - classify both, keep the worst.
+  const badges = [result?.seriousInjury, result?.seriousInjuryDecay]
+    .map((s) => casualtyTierLabel(s == null ? null : String(s), base))
+    .filter((t): t is NonNullable<typeof t> => !!t)
+    .map(injuryBadgeForTier);
+  if (!badges.length) return null;
+  return badges.sort((a, b) => INJURY_SEVERITY.indexOf(a) - INJURY_SEVERITY.indexOf(b))[0]!;
+}
+/** Most severe first: RIP, a lasting stat loss, NI, SH, BH. */
+const INJURY_SEVERITY: readonly RosterInjuryBadge[] = ['rip', 'ma', 'st', 'ag', 'pa', 'av', 'ni', 'sh', 'bh', 'mng'];
+function injuryBadgeForTier(tier: NonNullable<ReturnType<typeof casualtyTierLabel>>): RosterInjuryBadge {
+  if (tier.tier === 'DEAD') return 'rip';
+  if (tier.tier === 'LASTING_INJURY') return (tier.stat ? tier.stat.slice(1).toLowerCase() : 'ni') as RosterInjuryBadge;
+  if (tier.tier === 'SERIOUS_INJURY') return 'ni';
+  if (tier.tier === 'SERIOUSLY_HURT') return 'sh';
+  return 'bh';
+}
 
 export function postGameSide(game: GameJson, side: Side): PostGameSide {
   const team = side === 'home' ? game.teamHome : game.teamAway;
@@ -80,28 +154,55 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
     });
   // #25-v2: per-player roster — name · position · SPP-gained (same server-authoritative sppEarned as the
   // team total), sorted SPP-desc so the game's standouts head the list.
-  const rosterRows: PostGamePlayer[] = results
-    .map((r) => {
-      const p = team.playerArray.find((pl) => pl.playerId === r.playerId);
+  // Owner 10-02: EVERY roster player (a Miss-Next-Game player has no playing result but still belongs on the list,
+  // showing MNG); the game result supplies the SPP. Players killed in an earlier game are not on the roster at all.
+  const resultById = new Map(results.map((r) => [String(r.playerId ?? ''), r]));
+  const rosterRows: PostGamePlayer[] = [...team.playerArray]
+    .sort((a, b) => (a.playerNr ?? 0) - (b.playerNr ?? 0))
+    .map((p) => {
+      const r = resultById.get(p.playerId) ?? { playerId: p.playerId };
       // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
       // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
-      const posSkills = new Set(roster.positionArray?.find((q) => q.positionId === p?.positionId)?.skillArray ?? []);
-      const addedSkillList = p ? playerDetailSkills(p, posSkills).filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label })) : [];
+      const position = roster.positionArray?.find((q) => q.positionId === p?.positionId);
+      const posSkills = new Set(position?.skillArray ?? []);
+      const detail = p ? playerDetailSkills(p, posSkills) : [];
+      const addedSkillList = detail.filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
+      const skillList = addedSkillsLast(detail).map((sk) => ({ name: sk.name, label: sk.label, added: sk.added }));
       const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
-      return { playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)', position: posName(p?.positionId as string | undefined), spp: sppEarned(r), addedSkills, addedSkillList };
+      const progress = p ? playerProgress(p, position) : { value: null, advancements: 0 };
+      return {
+        playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)',
+        position: rosterPositionLabel(posName(p?.positionId as string | undefined), (team as { race?: string }).race),
+        spp: sppEarned(r), addedSkills, addedSkillList, skillList, value: progress.value, advancements: progress.advancements,
+        injury: rosterInjuryBadge(game, String(r.playerId ?? ''), r),
+        positionId: (p?.positionId as string | undefined) ?? null,
+      };
     })
-    .sort((a, b) => b.spp - a.spp);
+    .sort((a, b) => b.spp - a.spp); // stable: equal SPP keeps roster-number order
+  const eligible = team.playerArray.filter((pl) => isEligibleState(game, pl.playerId)).length;
   return {
     which: side,
     team: team.teamName,
     coach: team.coach,
+    race: String((team as { race?: string }).race ?? ''),
     logo: teamLogo(team, side),
     score: tr.score,
     mvps,
     players: team.playerArray.map((pl) => pl.playerName).filter((n): n is string => !!n),
     roster: rosterRows,
+    eligible,
+    rosterSize: team.playerArray.length,
     totals,
   };
+}
+
+/**
+ * Owner 10-02: the roster team switch's subtext — "<Race> · (You)" on the local coach's team, "<Race> · <Coach>" on
+ * the other one; with no local seat (spectate / replay) both read "<Race> · <Coach>".
+ */
+export function rosterTeamSubtext(team: Pick<PostGameSide, 'which' | 'race' | 'coach'>, localSide: Side | null | undefined): string {
+  const who = localSide && team.which === localSide ? '(You)' : team.coach?.trim();
+  return [team.race?.trim(), who].filter((part) => !!part).join(' · ');
 }
 
 export function postGamePublic(game: GameJson | null | undefined): PostGamePublic | null {

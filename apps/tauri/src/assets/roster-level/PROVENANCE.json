@@ -1,0 +1,1848 @@
+{
+  "date": "2026-10-02",
+  "tool": "built-in image_gen",
+  "source": {
+    "original_path": "C:\\Users\\Jay\\.codex\\generated_images\\01a0fe5f-841c-73f1-9997-2d0c57d2f7a3\\exec-3022581a-2927-43af-8794-81e61e3d4b03.png",
+    "preserved_copy": "roster-level-master-generated.png",
+    "sha256": "9b913a0e2079caa17856f5d8541d94c88ccf6d0687bedd868b2f5f1927e1a778",
+    "dimensions": [
+      1996,
+      788
+    ],
+    "mode": "RGBA"
+  },
+  "exact_prompt": "Use case: stylized-concept\nAsset type: original retro SNES RPG interface badge master, intended for exact 46 by 14 logical pixel export.\nCreate ONE horizontal compact pixel-art badge reading exactly \"LVL 1\". Genuine transparent alpha outside the badge. A small deep navy/charcoal plate with stepped rounded pixel corners, thin dark outer outline and a restrained slate upper-left bevel. Center chunky gold/amber bitmap lettering with ivory top highlights, amber lower shading and a dark one-logical-pixel outline. Uppercase L V L, a clear space, then numeral 1. Lettering is identical in scale across all glyphs, 7 logical pixels tall, approximately 5 logical pixels wide per glyph, with sturdy strokes. Badge width-to-height ratio exactly 46:14 (about 3.29:1). Design as a tiny 46x14-pixel sprite enlarged using nearest-neighbor blocks: each logical pixel should be a uniform square, hard edges only, a small deliberate palette. Plate and lettering fully visible, centered, with ample transparent margins around the badge. Simple flat 16-bit videogame UI sprite, readable at 14 pixels tall; no tiny texture, no speckle, no glow, no blur, no antialiasing, no perspective, no decorations, no other words, no logos, no third-party or Games Workshop imagery. This is the one master style from which matching LVL 2 through LVL 6 badges will be derived.",
+  "originality_note": "Original artwork (built-in image generation); no third-party or GW-derived imagery.",
+  "production_notes": [
+    "The generated alpha silhouette was cropped at (374, 224, 1623, 548) and normalized to 46x14 with nearest-neighbor sampling.",
+    "The plate alpha mask and all plate/letter palette colors are derived from the generated master.",
+    "The plate bevel geometry was procedurally redrawn on the source-derived alpha mask with source-derived palette colors for a clean one-logical-pixel edge.",
+    "The generated LVL lettering guided the final shapes, but the shared 5x7 LVL glyphs and numerals 1-6 were manually normalized as bitmap masks for consistent legibility.",
+    "A deterministic 1-logical-pixel 8-neighbor dark outline and source-derived ivory/gold/amber row shading were applied to the normalized glyph masks.",
+    "The 2x and 3x files are exact nearest-neighbor integer replications of each 46x14 logical image; no blur or antialiasing was used.",
+    "The preserved generated master is unchanged and byte-identical to its source under ~/.codex/generated_images."
+  ],
+  "palette_rgba": {
+    "plate_outline": [
+      2,
+      2,
+      10,
+      255
+    ],
+    "plate_body": [
+      23,
+      31,
+      53,
+      255
+    ],
+    "plate_highlight": [
+      79,
+      96,
+      132,
+      255
+    ],
+    "plate_lowlight": [
+      42,
+      54,
+      82,
+      255
+    ],
+    "corner_glint": [
+      160,
+      192,
+      236,
+      255
+    ],
+    "letter_outline": [
+      7,
+      4,
+      3,
+      255
+    ],
+    "ivory": [
+      253,
+      239,
+      197,
+      255
+    ],
+    "gold": [
+      252,
+      201,
+      66,
+      255
+    ],
+    "amber": [
+      238,
+      162,
+      6,
+      255
+    ],
+    "gold_shadow": [
+      204,
+      125,
+      4,
+      255
+    ]
+  },
+  "logical_masters": [
+    {
+      "file": "roster-level-master-lvl-1.png",
+      "level": 1,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "932bda9aa9aad955cf0be3a50d3c63554c1de681f2ff771f0064a671bfd13c1f"
+    },
+    {
+      "file": "roster-level-master-lvl-2.png",
+      "level": 2,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "1510ff42c66bed165994581f897feda2d4348565bd8a124854107a05c0ee04e9"
+    },
+    {
+      "file": "roster-level-master-lvl-3.png",
+      "level": 3,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "9836f59820e73b0980a56c6eb9a60032550d0c3b8f1a7f981f2a48134c123d54"
+    },
+    {
+      "file": "roster-level-master-lvl-4.png",
+      "level": 4,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "fe83b412e6ac501df566cea7681a74ae768b7f69370773c1f3372ae2042c3904"
+    },
+    {
+      "file": "roster-level-master-lvl-5.png",
+      "level": 5,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "9ca68182baa8f72101812888e0325fd064668963f39f90640bc7181066d395fd"
+    },
+    {
+      "file": "roster-level-master-lvl-6.png",
+      "level": 6,
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "67dea8fdfa3ac029ac56befdb79c2ded4ee11372bb73acd5632c2f38eab21285"
+    }
+  ],
+  "exports": [
+    {
+      "file": "lvl-1-1x.png",
+      "level": 1,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "932bda9aa9aad955cf0be3a50d3c63554c1de681f2ff771f0064a671bfd13c1f"
+    },
+    {
+      "file": "lvl-1-2x.png",
+      "level": 1,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "09bfef82ad6a2c324fb2f4e10930912274470f003ea46fc2e8dd10a3309d497d"
+    },
+    {
+      "file": "lvl-1-3x.png",
+      "level": 1,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "7dc8bc40cb7d58fd18b170aceba38695619630192a4cee6cd1b35d231de129a9"
+    },
+    {
+      "file": "lvl-2-1x.png",
+      "level": 2,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "1510ff42c66bed165994581f897feda2d4348565bd8a124854107a05c0ee04e9"
+    },
+    {
+      "file": "lvl-2-2x.png",
+      "level": 2,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "4776d0807235059555ff780a81bc91bf286f7001801e89b6af97eb14868d209f"
+    },
+    {
+      "file": "lvl-2-3x.png",
+      "level": 2,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "d32924a29c24860c756bb64994f34b70d62718b5a8660e0cb52edc8d32d5bf79"
+    },
+    {
+      "file": "lvl-3-1x.png",
+      "level": 3,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "9836f59820e73b0980a56c6eb9a60032550d0c3b8f1a7f981f2a48134c123d54"
+    },
+    {
+      "file": "lvl-3-2x.png",
+      "level": 3,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "4e1e2246a1264303f5870cdda626f07226f61762fdb20b86bb47c2a31142b28a"
+    },
+    {
+      "file": "lvl-3-3x.png",
+      "level": 3,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "c3b46c0c1b5c969174cb0f17f12f884df4139e1e81ac190ce527b663ecd0bfb4"
+    },
+    {
+      "file": "lvl-4-1x.png",
+      "level": 4,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "fe83b412e6ac501df566cea7681a74ae768b7f69370773c1f3372ae2042c3904"
+    },
+    {
+      "file": "lvl-4-2x.png",
+      "level": 4,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "ccb0ba353465ffb8b00c3d563cd90cdd965aaf04c0ad72af6dee61ffb79c7b0f"
+    },
+    {
+      "file": "lvl-4-3x.png",
+      "level": 4,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "dbb9b5999a07e63be35b7b53e8a956bec835ee0a61f1fa05b146f055db872ad0"
+    },
+    {
+      "file": "lvl-5-1x.png",
+      "level": 5,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "9ca68182baa8f72101812888e0325fd064668963f39f90640bc7181066d395fd"
+    },
+    {
+      "file": "lvl-5-2x.png",
+      "level": 5,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "bb9faa4b3065b020a02432241b205117a19b1adc178189cb252951592b354186"
+    },
+    {
+      "file": "lvl-5-3x.png",
+      "level": 5,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "2e35a35d59add172e1a53ebdd3d785c90c2fb08eb65a2191d8352d713dd1bde8"
+    },
+    {
+      "file": "lvl-6-1x.png",
+      "level": 6,
+      "scale": 1,
+      "dimensions": [
+        46,
+        14
+      ],
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "sha256": "67dea8fdfa3ac029ac56befdb79c2ded4ee11372bb73acd5632c2f38eab21285"
+    },
+    {
+      "file": "lvl-6-2x.png",
+      "level": 6,
+      "scale": 2,
+      "dimensions": [
+        92,
+        28
+      ],
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "sha256": "9ad1de867abe89541e0a9d24bf6a8046125bdaa24581ccdde2807132c5cad04e"
+    },
+    {
+      "file": "lvl-6-3x.png",
+      "level": 6,
+      "scale": 3,
+      "dimensions": [
+        138,
+        42
+      ],
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "sha256": "ddfa2419387eb3e925eaaa0ebbcc6537bd93feca3288e47992f82e5b9fd3f2c8"
+    }
+  ],
+  "png_inventory": [
+    {
+      "file": "lvl-1-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "932bda9aa9aad955cf0be3a50d3c63554c1de681f2ff771f0064a671bfd13c1f"
+    },
+    {
+      "file": "lvl-1-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "09bfef82ad6a2c324fb2f4e10930912274470f003ea46fc2e8dd10a3309d497d"
+    },
+    {
+      "file": "lvl-1-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "7dc8bc40cb7d58fd18b170aceba38695619630192a4cee6cd1b35d231de129a9"
+    },
+    {
+      "file": "lvl-2-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "1510ff42c66bed165994581f897feda2d4348565bd8a124854107a05c0ee04e9"
+    },
+    {
+      "file": "lvl-2-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "4776d0807235059555ff780a81bc91bf286f7001801e89b6af97eb14868d209f"
+    },
+    {
+      "file": "lvl-2-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "d32924a29c24860c756bb64994f34b70d62718b5a8660e0cb52edc8d32d5bf79"
+    },
+    {
+      "file": "lvl-3-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "9836f59820e73b0980a56c6eb9a60032550d0c3b8f1a7f981f2a48134c123d54"
+    },
+    {
+      "file": "lvl-3-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "4e1e2246a1264303f5870cdda626f07226f61762fdb20b86bb47c2a31142b28a"
+    },
+    {
+      "file": "lvl-3-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "c3b46c0c1b5c969174cb0f17f12f884df4139e1e81ac190ce527b663ecd0bfb4"
+    },
+    {
+      "file": "lvl-4-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "fe83b412e6ac501df566cea7681a74ae768b7f69370773c1f3372ae2042c3904"
+    },
+    {
+      "file": "lvl-4-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "ccb0ba353465ffb8b00c3d563cd90cdd965aaf04c0ad72af6dee61ffb79c7b0f"
+    },
+    {
+      "file": "lvl-4-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "dbb9b5999a07e63be35b7b53e8a956bec835ee0a61f1fa05b146f055db872ad0"
+    },
+    {
+      "file": "lvl-5-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "9ca68182baa8f72101812888e0325fd064668963f39f90640bc7181066d395fd"
+    },
+    {
+      "file": "lvl-5-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "bb9faa4b3065b020a02432241b205117a19b1adc178189cb252951592b354186"
+    },
+    {
+      "file": "lvl-5-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "2e35a35d59add172e1a53ebdd3d785c90c2fb08eb65a2191d8352d713dd1bde8"
+    },
+    {
+      "file": "lvl-6-1x.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "67dea8fdfa3ac029ac56befdb79c2ded4ee11372bb73acd5632c2f38eab21285"
+    },
+    {
+      "file": "lvl-6-2x.png",
+      "location": "roster-level",
+      "width": 92,
+      "height": 28,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "9ad1de867abe89541e0a9d24bf6a8046125bdaa24581ccdde2807132c5cad04e"
+    },
+    {
+      "file": "lvl-6-3x.png",
+      "location": "roster-level",
+      "width": 138,
+      "height": 42,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "ddfa2419387eb3e925eaaa0ebbcc6537bd93feca3288e47992f82e5b9fd3f2c8"
+    },
+    {
+      "file": "roster-level-master-generated.png",
+      "location": "roster-level",
+      "width": 1996,
+      "height": 788,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 247,
+      "sha256": "9b913a0e2079caa17856f5d8541d94c88ccf6d0687bedd868b2f5f1927e1a778"
+    },
+    {
+      "file": "roster-level-master-lvl-1.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "932bda9aa9aad955cf0be3a50d3c63554c1de681f2ff771f0064a671bfd13c1f"
+    },
+    {
+      "file": "roster-level-master-lvl-2.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "1510ff42c66bed165994581f897feda2d4348565bd8a124854107a05c0ee04e9"
+    },
+    {
+      "file": "roster-level-master-lvl-3.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "9836f59820e73b0980a56c6eb9a60032550d0c3b8f1a7f981f2a48134c123d54"
+    },
+    {
+      "file": "roster-level-master-lvl-4.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "fe83b412e6ac501df566cea7681a74ae768b7f69370773c1f3372ae2042c3904"
+    },
+    {
+      "file": "roster-level-master-lvl-5.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "9ca68182baa8f72101812888e0325fd064668963f39f90640bc7181066d395fd"
+    },
+    {
+      "file": "roster-level-master-lvl-6.png",
+      "location": "roster-level",
+      "width": 46,
+      "height": 14,
+      "mode": "RGBA",
+      "alpha_min": 0,
+      "alpha_max": 255,
+      "alpha_value_count": 2,
+      "sha256": "67dea8fdfa3ac029ac56befdb79c2ded4ee11372bb73acd5632c2f38eab21285"
+    },
+    {
+      "file": "lvl-contact-sheet.png",
+      "location": "scratchpad",
+      "width": 892,
+      "height": 120,
+      "mode": "RGBA",
+      "alpha_min": 255,
+      "alpha_max": 255,
+      "alpha_value_count": 1,
+      "sha256": "937e737a8159ed2e04fb65e2faed0dc2f081240b87ca9fcf251c24b99ffae80e"
+    }
+  ],
+  "contact_sheet": {
+    "file": "lvl-contact-sheet.png",
+    "order": [
+      "LVL 1",
+      "LVL 2",
+      "LVL 3",
+      "LVL 4",
+      "LVL 5",
+      "LVL 6"
+    ],
+    "scale": 3,
+    "row_backgrounds": [
+      "#14161a",
+      "#f3efe2"
+    ],
+    "dimensions": [
+      892,
+      120
+    ],
+    "width": 892,
+    "height": 120
+  },
+  "injuryBadges": {
+    "date": "2026-10-02",
+    "derived_plate": {
+      "description": "Exact plate rebuilt through the existing build_roster_levels.py code path.",
+      "preserved_copy": "roster-level-master-generated.png",
+      "sha256": "9b913a0e2079caa17856f5d8541d94c88ccf6d0687bedd868b2f5f1927e1a778",
+      "source_crop_xyxy": [
+        374,
+        224,
+        1623,
+        548
+      ],
+      "logical_dimensions": [
+        46,
+        14
+      ]
+    },
+    "base_script": {
+      "path": "C:\\Users\\Jay\\AppData\\Local\\Temp\\claude\\C--Users-Jay-Documents-Claude\\e9806d4b-013f-4337-ba56-d3ec3ef2743b\\scratchpad\\build_roster_levels.py",
+      "sha256": "adad7b26881e6d705f1c86ece9f9d695316d4194249bc316889273e61478bbb2",
+      "imported_functions": [
+        "derive_palette",
+        "build_plate",
+        "dilate_8"
+      ],
+      "bytecode_writes_disabled": true
+    },
+    "script_path": "C:\\Users\\Jay\\AppData\\Local\\Temp\\claude\\C--Users-Jay-Documents-Claude\\e9806d4b-013f-4337-ba56-d3ec3ef2743b\\scratchpad\\build_roster_injuries.py",
+    "script_sha256": "a629e86690a6b279734d8c2c24c99fe180e338dcf70f4567d8d1e8b58471ed67",
+    "originality_note": "Original artwork; no third-party or GW-derived imagery.",
+    "production_notes": [
+      "The exact generated source crop, normalized alpha mask, plate palette, stepped transparent corners, and bevel code path are shared with the LVL badges.",
+      "All injury glyphs are hand-normalized 5x7 bitmap masks; L and V are copied unchanged from the LVL glyph table.",
+      "Characters use the LVL text's six-logical-pixel advance and y=3 baseline; the minus is a centered three-pixel bar on the middle glyph row.",
+      "Each label is centered from its actual ink-plus-8-neighbour-outline extent against the plate's opaque horizontal extent.",
+      "The original letter_outline color is retained, with a four-band pink/crimson/deep-crimson row ramp for the glyph face.",
+      "The 2x and 3x exports are exact nearest-neighbor integer replications of the 46x14 master."
+    ],
+    "glyph_metrics": {
+      "cell_dimensions": [
+        5,
+        7
+      ],
+      "character_advance_px": 6,
+      "text_y_px": 3,
+      "outline": "1-pixel 8-neighbour"
+    },
+    "glyph_bitmaps_5x7": {
+      "L": [
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "10000",
+        "11111"
+      ],
+      "V": [
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "01010",
+        "00100"
+      ],
+      "B": [
+        "11110",
+        "10001",
+        "10001",
+        "11110",
+        "10001",
+        "10001",
+        "11110"
+      ],
+      "H": [
+        "10001",
+        "10001",
+        "10001",
+        "11111",
+        "10001",
+        "10001",
+        "10001"
+      ],
+      "S": [
+        "01111",
+        "10000",
+        "10000",
+        "01110",
+        "00001",
+        "00001",
+        "11110"
+      ],
+      "N": [
+        "10001",
+        "11001",
+        "11001",
+        "10101",
+        "10011",
+        "10011",
+        "10001"
+      ],
+      "I": [
+        "11111",
+        "00100",
+        "00100",
+        "00100",
+        "00100",
+        "00100",
+        "11111"
+      ],
+      "M": [
+        "10001",
+        "11011",
+        "10101",
+        "10101",
+        "10001",
+        "10001",
+        "10001"
+      ],
+      "G": [
+        "01110",
+        "10001",
+        "10000",
+        "10111",
+        "10001",
+        "10001",
+        "01110"
+      ],
+      "R": [
+        "11110",
+        "10001",
+        "10001",
+        "11110",
+        "10100",
+        "10010",
+        "10001"
+      ],
+      "P": [
+        "11110",
+        "10001",
+        "10001",
+        "11110",
+        "10000",
+        "10000",
+        "10000"
+      ],
+      "A": [
+        "01110",
+        "10001",
+        "10001",
+        "11111",
+        "10001",
+        "10001",
+        "10001"
+      ],
+      "T": [
+        "11111",
+        "00100",
+        "00100",
+        "00100",
+        "00100",
+        "00100",
+        "00100"
+      ],
+      "-": [
+        "00000",
+        "00000",
+        "00000",
+        "01110",
+        "00000",
+        "00000",
+        "00000"
+      ]
+    },
+    "palette_rgba": {
+      "letter_outline": [
+        7,
+        4,
+        3,
+        255
+      ],
+      "light_red_pink_highlight": [
+        255,
+        196,
+        202,
+        255
+      ],
+      "light_crimson": [
+        238,
+        94,
+        111,
+        255
+      ],
+      "crimson_fill": [
+        190,
+        27,
+        50,
+        255
+      ],
+      "deep_crimson_lower_shade": [
+        105,
+        9,
+        29,
+        255
+      ]
+    },
+    "labels": {
+      "BH": {
+        "stem": "inj-bh",
+        "meaning": "Badly Hurt",
+        "x_start": 17,
+        "ink_outline_bbox_xyxy_inclusive": [
+          16,
+          2,
+          28,
+          10
+        ],
+        "left_margin_px": 16,
+        "right_margin_px": 17,
+        "center_offset_px": -0.5
+      },
+      "SH": {
+        "stem": "inj-sh",
+        "meaning": "Seriously Hurt",
+        "x_start": 17,
+        "ink_outline_bbox_xyxy_inclusive": [
+          16,
+          2,
+          28,
+          10
+        ],
+        "left_margin_px": 16,
+        "right_margin_px": 17,
+        "center_offset_px": -0.5
+      },
+      "MNG": {
+        "stem": "inj-mng",
+        "meaning": "Miss Next Game",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          13,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 13,
+        "right_margin_px": 14,
+        "center_offset_px": -0.5
+      },
+      "NI": {
+        "stem": "inj-ni",
+        "meaning": "Niggling Injury",
+        "x_start": 17,
+        "ink_outline_bbox_xyxy_inclusive": [
+          16,
+          2,
+          28,
+          10
+        ],
+        "left_margin_px": 16,
+        "right_margin_px": 17,
+        "center_offset_px": -0.5
+      },
+      "RIP": {
+        "stem": "inj-rip",
+        "meaning": "Dead",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          13,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 13,
+        "right_margin_px": 14,
+        "center_offset_px": -0.5
+      },
+      "-MA": {
+        "stem": "inj-ma",
+        "meaning": "Lasting Injury: -1 Movement Allowance",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          14,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 14,
+        "right_margin_px": 14,
+        "center_offset_px": 0.0
+      },
+      "-ST": {
+        "stem": "inj-st",
+        "meaning": "Lasting Injury: -1 Strength",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          14,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 14,
+        "right_margin_px": 14,
+        "center_offset_px": 0.0
+      },
+      "-AG": {
+        "stem": "inj-ag",
+        "meaning": "Lasting Injury: -1 Agility",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          14,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 14,
+        "right_margin_px": 14,
+        "center_offset_px": 0.0
+      },
+      "-PA": {
+        "stem": "inj-pa",
+        "meaning": "Lasting Injury: -1 Passing Ability",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          14,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 14,
+        "right_margin_px": 14,
+        "center_offset_px": 0.0
+      },
+      "-AV": {
+        "stem": "inj-av",
+        "meaning": "Lasting Injury: -1 Armour Value",
+        "x_start": 14,
+        "ink_outline_bbox_xyxy_inclusive": [
+          14,
+          2,
+          31,
+          10
+        ],
+        "left_margin_px": 14,
+        "right_margin_px": 14,
+        "center_offset_px": 0.0
+      }
+    },
+    "outputs": [
+      {
+        "file": "roster-injury-master-inj-bh.png",
+        "kind": "logical_master",
+        "label": "BH",
+        "stem": "inj-bh",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "05d8bed1407de72a1c9a5cba0edef6d3b9b15955712a55278faada27102ed1cd"
+      },
+      {
+        "file": "inj-bh-1x.png",
+        "kind": "export",
+        "label": "BH",
+        "stem": "inj-bh",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "05d8bed1407de72a1c9a5cba0edef6d3b9b15955712a55278faada27102ed1cd"
+      },
+      {
+        "file": "inj-bh-2x.png",
+        "kind": "export",
+        "label": "BH",
+        "stem": "inj-bh",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "28d4934363a82c20dad55c11a303d624e712a17164f0129349da4cda070b758a"
+      },
+      {
+        "file": "inj-bh-3x.png",
+        "kind": "export",
+        "label": "BH",
+        "stem": "inj-bh",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "bd001dbab3a92eedfbe53319ad5ce33df5886f8ad8bc0e9c729c3a138619de65"
+      },
+      {
+        "file": "roster-injury-master-inj-sh.png",
+        "kind": "logical_master",
+        "label": "SH",
+        "stem": "inj-sh",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "e831b24088ba088408c9bce2c11266925d47b34573a10c0006151b8e8b4a43c2"
+      },
+      {
+        "file": "inj-sh-1x.png",
+        "kind": "export",
+        "label": "SH",
+        "stem": "inj-sh",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "e831b24088ba088408c9bce2c11266925d47b34573a10c0006151b8e8b4a43c2"
+      },
+      {
+        "file": "inj-sh-2x.png",
+        "kind": "export",
+        "label": "SH",
+        "stem": "inj-sh",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "b48bf09e12a080532ddcfd84b6ffafab5c0796fb95b14d345ad206db8966a1d9"
+      },
+      {
+        "file": "inj-sh-3x.png",
+        "kind": "export",
+        "label": "SH",
+        "stem": "inj-sh",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "804686b0b3243ff691f1cc0b5210137116bb8a134a5bc145cd56e6df9f093e15"
+      },
+      {
+        "file": "roster-injury-master-inj-mng.png",
+        "kind": "logical_master",
+        "label": "MNG",
+        "stem": "inj-mng",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "503d8339464c07a8195164c184504ad298023f9576afc2711b371a36cee76e1c"
+      },
+      {
+        "file": "inj-mng-1x.png",
+        "kind": "export",
+        "label": "MNG",
+        "stem": "inj-mng",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "503d8339464c07a8195164c184504ad298023f9576afc2711b371a36cee76e1c"
+      },
+      {
+        "file": "inj-mng-2x.png",
+        "kind": "export",
+        "label": "MNG",
+        "stem": "inj-mng",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "8c4a567f538a6b2096280820d9ea986076c4cfc3fb1d0a0dbdb51a760b528bc0"
+      },
+      {
+        "file": "inj-mng-3x.png",
+        "kind": "export",
+        "label": "MNG",
+        "stem": "inj-mng",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "56ea10b2750ce0a1b05f2baa6caf73229876cdec61b2d9199afebd04718c383a"
+      },
+      {
+        "file": "roster-injury-master-inj-ni.png",
+        "kind": "logical_master",
+        "label": "NI",
+        "stem": "inj-ni",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "026920b81ba5eb0cc75a1399c92300429df6ff7488570c0d3672428b457a1800"
+      },
+      {
+        "file": "inj-ni-1x.png",
+        "kind": "export",
+        "label": "NI",
+        "stem": "inj-ni",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "026920b81ba5eb0cc75a1399c92300429df6ff7488570c0d3672428b457a1800"
+      },
+      {
+        "file": "inj-ni-2x.png",
+        "kind": "export",
+        "label": "NI",
+        "stem": "inj-ni",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "e5786995d58dc4eb672089bcd09ca65059f3894e90ca92d5ad2a33d3ab760fa5"
+      },
+      {
+        "file": "inj-ni-3x.png",
+        "kind": "export",
+        "label": "NI",
+        "stem": "inj-ni",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "3adcb9a05348f22e2819681362416956fce58ee79390514f14d462ff61fca696"
+      },
+      {
+        "file": "roster-injury-master-inj-rip.png",
+        "kind": "logical_master",
+        "label": "RIP",
+        "stem": "inj-rip",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "64366ed1bbcfb7847495db8f8b614927300f4363cb51d19a56f40f31106f5140"
+      },
+      {
+        "file": "inj-rip-1x.png",
+        "kind": "export",
+        "label": "RIP",
+        "stem": "inj-rip",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "64366ed1bbcfb7847495db8f8b614927300f4363cb51d19a56f40f31106f5140"
+      },
+      {
+        "file": "inj-rip-2x.png",
+        "kind": "export",
+        "label": "RIP",
+        "stem": "inj-rip",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "bfbdd10855f2bac5755b31f01d3407db53500824a835e15329bee00f0e24c80b"
+      },
+      {
+        "file": "inj-rip-3x.png",
+        "kind": "export",
+        "label": "RIP",
+        "stem": "inj-rip",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "5df4fcb896e1368b5357cfa678ded65c4cea63ec2089788c0d227b16d70205be"
+      },
+      {
+        "file": "roster-injury-master-inj-ma.png",
+        "kind": "logical_master",
+        "label": "-MA",
+        "stem": "inj-ma",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "830854e4972d7948261db81633ca799ee46cf97cc73646fb7254109ebec630f4"
+      },
+      {
+        "file": "inj-ma-1x.png",
+        "kind": "export",
+        "label": "-MA",
+        "stem": "inj-ma",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "830854e4972d7948261db81633ca799ee46cf97cc73646fb7254109ebec630f4"
+      },
+      {
+        "file": "inj-ma-2x.png",
+        "kind": "export",
+        "label": "-MA",
+        "stem": "inj-ma",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "be0ee803aeacfb910e46edeb6e260352bacbb20c110c7095a6126ba659bd68eb"
+      },
+      {
+        "file": "inj-ma-3x.png",
+        "kind": "export",
+        "label": "-MA",
+        "stem": "inj-ma",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "32de5e2e56a5cb3672888ef98bf19c23e393c3152d7e8537bb46aacf04bbdf82"
+      },
+      {
+        "file": "roster-injury-master-inj-st.png",
+        "kind": "logical_master",
+        "label": "-ST",
+        "stem": "inj-st",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "7a64c0fec68c94e4754a9e86e1b64c2d160fffd57e54d295a56868f6849cfb2a"
+      },
+      {
+        "file": "inj-st-1x.png",
+        "kind": "export",
+        "label": "-ST",
+        "stem": "inj-st",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "7a64c0fec68c94e4754a9e86e1b64c2d160fffd57e54d295a56868f6849cfb2a"
+      },
+      {
+        "file": "inj-st-2x.png",
+        "kind": "export",
+        "label": "-ST",
+        "stem": "inj-st",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "c422c32581dd35a13af94c22c53f9e3b805038924c3ddfba328d9971874008f8"
+      },
+      {
+        "file": "inj-st-3x.png",
+        "kind": "export",
+        "label": "-ST",
+        "stem": "inj-st",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "18e552c736806fbd93875ed24bd95795da33a0497d30663c5712f89861cb82ee"
+      },
+      {
+        "file": "roster-injury-master-inj-ag.png",
+        "kind": "logical_master",
+        "label": "-AG",
+        "stem": "inj-ag",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "89d4da6ce8086913318c8a7c3420329931f167cf78974f58db57fb92d0e006aa"
+      },
+      {
+        "file": "inj-ag-1x.png",
+        "kind": "export",
+        "label": "-AG",
+        "stem": "inj-ag",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "89d4da6ce8086913318c8a7c3420329931f167cf78974f58db57fb92d0e006aa"
+      },
+      {
+        "file": "inj-ag-2x.png",
+        "kind": "export",
+        "label": "-AG",
+        "stem": "inj-ag",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "12be320651cb4f7369d22a46e1137b82de96e676980b927fc664fa669c2607b6"
+      },
+      {
+        "file": "inj-ag-3x.png",
+        "kind": "export",
+        "label": "-AG",
+        "stem": "inj-ag",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "232b3283f8bb29ccedc024f8ca40884fbe1b9cf42c4687f69e10f1e0c06313e7"
+      },
+      {
+        "file": "roster-injury-master-inj-pa.png",
+        "kind": "logical_master",
+        "label": "-PA",
+        "stem": "inj-pa",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "f5981c0f68ae2de58775bb51931672aa623ee69bf21a9295928c58cd9970a519"
+      },
+      {
+        "file": "inj-pa-1x.png",
+        "kind": "export",
+        "label": "-PA",
+        "stem": "inj-pa",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "f5981c0f68ae2de58775bb51931672aa623ee69bf21a9295928c58cd9970a519"
+      },
+      {
+        "file": "inj-pa-2x.png",
+        "kind": "export",
+        "label": "-PA",
+        "stem": "inj-pa",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "25e98fce8c89e11de7f0ec50e565238f2028c5d14f39a2d9da9afb0d32ceb4c5"
+      },
+      {
+        "file": "inj-pa-3x.png",
+        "kind": "export",
+        "label": "-PA",
+        "stem": "inj-pa",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "559309205d1e17f8f6106719d7c76fe75cef1f8b5cf00ed4ec48546c99604771"
+      },
+      {
+        "file": "roster-injury-master-inj-av.png",
+        "kind": "logical_master",
+        "label": "-AV",
+        "stem": "inj-av",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "8965684506044428098da2964e8c450266c4e717778aaa1315102e6fa28f8b89"
+      },
+      {
+        "file": "inj-av-1x.png",
+        "kind": "export",
+        "label": "-AV",
+        "stem": "inj-av",
+        "scale": 1,
+        "dimensions": [
+          46,
+          14
+        ],
+        "mode": "RGBA",
+        "sha256": "8965684506044428098da2964e8c450266c4e717778aaa1315102e6fa28f8b89"
+      },
+      {
+        "file": "inj-av-2x.png",
+        "kind": "export",
+        "label": "-AV",
+        "stem": "inj-av",
+        "scale": 2,
+        "dimensions": [
+          92,
+          28
+        ],
+        "mode": "RGBA",
+        "sha256": "f3356b5cbfbefe7a6dcc3cd4386b10553ef9e0608138ac43e9db9d12bc794ba0"
+      },
+      {
+        "file": "inj-av-3x.png",
+        "kind": "export",
+        "label": "-AV",
+        "stem": "inj-av",
+        "scale": 3,
+        "dimensions": [
+          138,
+          42
+        ],
+        "mode": "RGBA",
+        "sha256": "e9ac85fe4e8d857f7aefcfb5af88b93d20660f4d34bdd8ea6f832937c7a276bd"
+      }
+    ],
+    "contact_sheet": {
+      "file": "inj-contact-sheet.png",
+      "location": "scratchpad",
+      "order": [
+        "BH",
+        "SH",
+        "MNG",
+        "NI",
+        "RIP",
+        "-MA",
+        "-ST",
+        "-AG",
+        "-PA",
+        "-AV",
+        "LVL 1",
+        "LVL 6"
+      ],
+      "scale": 3,
+      "row_backgrounds": [
+        "#14161a",
+        "#f3efe2"
+      ],
+      "dimensions": [
+        1768,
+        120
+      ],
+      "mode": "RGBA",
+      "sha256": "4f8763db6e0077438e30ad48eeec602c23421bd5b8e1650382de7807b8823486"
+    }
+  },
+  "koBadge": {
+    "date": "2026-10-02",
+    "request": "Owner: KO label, retro like the injury indicator, yellow lettering.",
+    "method": "build_roster_injuries.py (the injury-badge builder above) reused unchanged: same plate derived from roster-level-master-generated.png, same 5x7 glyph grid and centring; new hand-drawn K and O glyphs; the lettering ramp swapped for yellow.",
+    "glyphs_5x7": {
+      "K": [
+        "10001",
+        "10010",
+        "10100",
+        "11000",
+        "10100",
+        "10010",
+        "10001"
+      ],
+      "O": [
+        "01110",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "10001",
+        "01110"
+      ]
+    },
+    "yellow_ramp_rgba": {
+      "highlight": [
+        255,
+        252,
+        196,
+        255
+      ],
+      "light": [
+        255,
+        238,
+        92,
+        255
+      ],
+      "fill": [
+        244,
+        210,
+        24,
+        255
+      ],
+      "lower_shade": [
+        150,
+        112,
+        8,
+        255
+      ]
+    },
+    "files_sha256": {
+      "roster-injury-master-inj-ko.png": "020c7748db45910a90bb9253513956e6aefa8dd89ef6a18a2968e0aedd94e7a3",
+      "inj-ko-1x.png": "020c7748db45910a90bb9253513956e6aefa8dd89ef6a18a2968e0aedd94e7a3",
+      "inj-ko-2x.png": "b644706e0e6008be4a8f32cf00026107d804e5c1f7f176a9b2b41c5f3436d08b",
+      "inj-ko-3x.png": "e699df6fab3f056025b903da256fc7ca4c151bcea9d6b6800bc5f7492ba1987d"
+    },
+    "originality_note": "Original artwork; no third-party or GW-derived imagery."
+  },
+  "injuryTextArt": {
+    "date": "2026-10-02",
+    "request": "Owner: drop the badge styling for injuries (too close to LVL); retro text art instead. KO in yellow.",
+    "supersedes": "the plated injuryBadges / koBadge exports of the same file names",
+    "method": "build_roster_injuries.py glyphs + outline + colour ramp unchanged; plate pixels made transparent; cropped to the ink bbox; 1x/2x/3x nearest-neighbour.",
+    "ramps": {
+      "injuries": {
+        "light_red_pink_highlight": [
+          255,
+          196,
+          202,
+          255
+        ],
+        "light_crimson": [
+          238,
+          94,
+          111,
+          255
+        ],
+        "crimson_fill": [
+          190,
+          27,
+          50,
+          255
+        ],
+        "deep_crimson_lower_shade": [
+          105,
+          9,
+          29,
+          255
+        ]
+      },
+      "KO": {
+        "light_red_pink_highlight": [
+          255,
+          252,
+          196,
+          255
+        ],
+        "light_crimson": [
+          255,
+          238,
+          92,
+          255
+        ],
+        "crimson_fill": [
+          244,
+          210,
+          24,
+          255
+        ],
+        "deep_crimson_lower_shade": [
+          150,
+          112,
+          8,
+          255
+        ]
+      }
+    },
+    "labels": {
+      "inj-bh": {
+        "label": "BH",
+        "size_1x": [
+          13,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-bh.png": "1860a4eddafc89db1a4cd68e72920972302ae8245a63300810521f18619e6300",
+          "inj-bh-1x.png": "1860a4eddafc89db1a4cd68e72920972302ae8245a63300810521f18619e6300",
+          "inj-bh-2x.png": "9bea68b8ba383e8fada65d200a1047f7ce0e02dcbe7e51d9ba546066c8a9d4f6",
+          "inj-bh-3x.png": "01c303ffcca46e7be62b271a5a47ae543bd26e2f75d6d7b3c796c81ec39168cd"
+        }
+      },
+      "inj-sh": {
+        "label": "SH",
+        "size_1x": [
+          13,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-sh.png": "4d12daf85c34a6bfa80c95e836bd392ee46f808bf2720ff7ae8a2f5f483b3033",
+          "inj-sh-1x.png": "4d12daf85c34a6bfa80c95e836bd392ee46f808bf2720ff7ae8a2f5f483b3033",
+          "inj-sh-2x.png": "2e10c30358158b99f2ec8478dbb1605ebf66a3b94b3545f61ef30e6c9774a2aa",
+          "inj-sh-3x.png": "a75068bd593af833f90198d2b0eae9cef075b88231a5c35ef3004bd604f0d316"
+        }
+      },
+      "inj-mng": {
+        "label": "MNG",
+        "size_1x": [
+          19,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-mng.png": "46ad067ceb2646db491aea346b10ea0bbcf60dd93f22950d7bae53a4df6a8373",
+          "inj-mng-1x.png": "46ad067ceb2646db491aea346b10ea0bbcf60dd93f22950d7bae53a4df6a8373",
+          "inj-mng-2x.png": "b38f2078a92dd13ef660f9b9946eea0edf44bcac69820b9157c3d940a7c3dfbf",
+          "inj-mng-3x.png": "c7e9015491639bb8afe362b39a8adf0722226d0f8a8fa5d7e0234d09c7b70f02"
+        }
+      },
+      "inj-ni": {
+        "label": "NI",
+        "size_1x": [
+          13,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-ni.png": "740ef01f3be732bef1ed341e973ad3aea53bafc6becd9753f2be3788e7fc10eb",
+          "inj-ni-1x.png": "740ef01f3be732bef1ed341e973ad3aea53bafc6becd9753f2be3788e7fc10eb",
+          "inj-ni-2x.png": "bd4d7ea26bfb17aabc380224e2faff50d617c74fc84d1b9d5c27b6eee6e5bfb5",
+          "inj-ni-3x.png": "ae4f057012bdf5043a9f5629d2c84067af2313759a7d311ccb7eb82f15210c03"
+        }
+      },
+      "inj-rip": {
+        "label": "RIP",
+        "size_1x": [
+          19,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-rip.png": "67c979aca469e16145369431279f215421ed17a58f1371697b7403549def1c31",
+          "inj-rip-1x.png": "67c979aca469e16145369431279f215421ed17a58f1371697b7403549def1c31",
+          "inj-rip-2x.png": "1325cad388ebca203224ab15e6cfe79c01c98aaae4087d550f671c41c16d64d9",
+          "inj-rip-3x.png": "c7784d68768ce18b8caf4627ede11f2c8775979e82f8c960cb99fdf50169543e"
+        }
+      },
+      "inj-ma": {
+        "label": "-MA",
+        "size_1x": [
+          18,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-ma.png": "28d52c0daf2b6ff52187c647fc3c63123fe306a87e5e2f9350251319c7cffb94",
+          "inj-ma-1x.png": "28d52c0daf2b6ff52187c647fc3c63123fe306a87e5e2f9350251319c7cffb94",
+          "inj-ma-2x.png": "db7c4b7ce5dd952092d7294d8f087bb67e571af4d1de3fd9ffb1b86c8ed11fe7",
+          "inj-ma-3x.png": "200613d7bcefabfdafcd677f841ea4e63ccd5d4312e7dd3be07d1d1701fee830"
+        }
+      },
+      "inj-st": {
+        "label": "-ST",
+        "size_1x": [
+          18,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-st.png": "4b0cec7cd30f686dfe484fdb91566c07afe0fb13a5aed0f3519d78478bac3650",
+          "inj-st-1x.png": "4b0cec7cd30f686dfe484fdb91566c07afe0fb13a5aed0f3519d78478bac3650",
+          "inj-st-2x.png": "5d432bbe9408fbfa0a1d4da8894adeb1710a9fb355d8d665ed5d8f4041e4349e",
+          "inj-st-3x.png": "960bb6d2a74388a3c071d7135302dd4bd360ddf17e02cec394fd7f2a0f7655bd"
+        }
+      },
+      "inj-ag": {
+        "label": "-AG",
+        "size_1x": [
+          18,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-ag.png": "18c67aed9252bae476cf488421e221610131ae32a7ff4e4a0bec099af7d6a54a",
+          "inj-ag-1x.png": "18c67aed9252bae476cf488421e221610131ae32a7ff4e4a0bec099af7d6a54a",
+          "inj-ag-2x.png": "675287b204bf03bb0b6a9f006dd18f09295043ca0694b67ded22ec17b6c282e3",
+          "inj-ag-3x.png": "e91393f2c6a75fa0259242d416220d3eb4dfa052da67b8c272d82eb0df9a38f0"
+        }
+      },
+      "inj-pa": {
+        "label": "-PA",
+        "size_1x": [
+          18,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-pa.png": "c51d2fd95c69c46b18e1ae50345150f0863cdc24f8a44449f695a906ceae5711",
+          "inj-pa-1x.png": "c51d2fd95c69c46b18e1ae50345150f0863cdc24f8a44449f695a906ceae5711",
+          "inj-pa-2x.png": "88e96152e12b28c865ab39114f13b7bb3016c4e907145358000be46c38853536",
+          "inj-pa-3x.png": "e8a5f023fe46551ee05e37cf93e0606f1dbd3cf340b9568a16a4b71355b5c5de"
+        }
+      },
+      "inj-av": {
+        "label": "-AV",
+        "size_1x": [
+          18,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-av.png": "9d20273b9fae3fa11721c3f6902c69862c0b4f707d92e143e97d30f52646ca1b",
+          "inj-av-1x.png": "9d20273b9fae3fa11721c3f6902c69862c0b4f707d92e143e97d30f52646ca1b",
+          "inj-av-2x.png": "c1a3f22700a23c48dee27d4adb2eb0bad2ccb14a59f7af777c51956b5b6e1598",
+          "inj-av-3x.png": "2220ce50317583241565cfe8bbfd33a5737f844d21fd8978b70733dcd977a715"
+        }
+      },
+      "inj-ko": {
+        "label": "KO",
+        "size_1x": [
+          13,
+          9
+        ],
+        "files_sha256": {
+          "roster-injury-master-inj-ko.png": "e370313e2d8a9a5163b3093309ef9ed8d21babd4d53732da6dd9e0cc9b2f58ed",
+          "inj-ko-1x.png": "e370313e2d8a9a5163b3093309ef9ed8d21babd4d53732da6dd9e0cc9b2f58ed",
+          "inj-ko-2x.png": "6ced81630b054124276a15583eed037c4bee3cd60ff1b59d50ef6267baf63021",
+          "inj-ko-3x.png": "39e72f8309c0069fa9a14d4866de55066dfd5782062c3410d6e2b73dcfabbaed"
+        }
+      }
+    },
+    "originality_note": "Original artwork; no third-party or GW-derived imagery."
+  }
+}

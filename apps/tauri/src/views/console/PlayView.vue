@@ -524,7 +524,7 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
         </header>
         <div class="details-body">
           <p v-if="detailsLoading" class="empty">Loading&hellip;</p>
-          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
             <p class="empty">No details stored for this game.</p>
             <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>

@@ -48,9 +48,21 @@ export const FORK_SERVER_HOST = 'superfumbbltest.duckdns.org';
 export const FORK_WS_URL = `ws://${FORK_SERVER_HOST}:22227/command`;
 export const FUMBBL_WS_URL = 'ws://fumbbl.com:22223/command';
 
+/** Owner 10-02: keys the fixed shortcuts already own - a rebindable hotkey may not take one (or the other rebindable key). */
+// Defined before load() runs at module init (the loader validates rosterKey with hotkeyConflict).
+export const FIXED_SHORTCUT_CODES: readonly string[] = [
+  'Escape', 'Enter', 'F11', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'Backquote',
+];
+/** Astra review: keys a rebindable hotkey may never take - focus movement and modifiers (a modifier binding could never
+ *  fire: the handlers ignore modified presses). */
+const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OSLeft', 'OSRight', 'ContextMenu', 'CapsLock', 'NumLock', 'ScrollLock', 'Fn'];
+
 export interface AppSettings {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
+  /** Owner 10-02: toggles the Helmet roster pop-out (KeyboardEvent.code; default H). */
+  rosterKey: string;
   /** Owner 09-05: WASD camera glide speed, screen px per frame (2-30, 9 = original). */
   cameraPanSpeed: number;
   // markings
@@ -455,6 +467,7 @@ export interface SkillConfigEntry {
 
 const DEFAULTS: AppSettings = {
   confirmKey: 'Space', // owner 2026-07-02: Space confirms queued moves
+  rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
   cameraPanSpeed: 9,
   tackleZoneMode: 'opposition',
   showDefaultSkills: false,
@@ -892,6 +905,10 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.chatPoppedOut = raw.chatPoppedOut === true;
     // Owner 10-02: the dock's Roster tab is off unless the stored value is literally true.
     merged.chatDockRosterTab = raw.chatDockRosterTab === true;
+    // Owner 10-02: default H - but never the confirm key (a coach who already bound Confirm to H gets R, then J).
+    // Astra review: a hand-edited / stale value goes through the same rules as a rebind in Settings.
+    merged.rosterKey = typeof raw.rosterKey === 'string' && !hotkeyConflict('rosterKey', raw.rosterKey, merged)
+      ? raw.rosterKey : (['KeyH', 'KeyR', 'KeyJ'].find((k) => !hotkeyConflict('rosterKey', k, merged)) ?? 'KeyH');
     const installedIdentity = (value: unknown) => typeof value === 'string'
       && (/^[a-f0-9]{32}$/.test(value) || value === '')
       ? value : '';
@@ -1541,6 +1558,17 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 }
 
 /** Human-readable label for a KeyboardEvent.code binding. */
+export type RebindableKey = 'confirmKey' | 'rosterKey';
+/** Null when `code` may be bound to `which`; otherwise why not. */
+export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey>): string | null {
+  if (!code) return 'No key pressed';
+  if (UNBINDABLE_CODES.includes(code)) return `${keyLabel(code)} can't be used as a shortcut`;
+  if (FIXED_SHORTCUT_CODES.includes(code)) return `${keyLabel(code)} is already a fixed shortcut`;
+  const other: RebindableKey = which === 'confirmKey' ? 'rosterKey' : 'confirmKey';
+  if (current[other] === code) return `${keyLabel(code)} is already bound to ${other === 'confirmKey' ? 'Confirm move / pass target' : 'Roster pop-out'}`;
+  return null;
+}
+
 export function keyLabel(code: string): string {
   if (code === 'Space') return '␣ Space';
   return code.replace(/^Key/, '').replace(/^Digit/, '');

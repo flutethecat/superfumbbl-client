@@ -42,6 +42,9 @@ export interface WalkerAsset {
   /** Owner 09-05 (round 17): measured on the S idle frame, in 64-unit space — the rings/shadows key to these. */
   figureWidth?: number;
   feetWidth?: number;
+  /** Owner 10-02: height of the figure measured down its CENTRE line (feet to the top of the head), ignoring raised
+   *  fists / horn tips / weapons at the sides - the chest mount keys to this (64-unit space). */
+  headHeight?: number;
   /** Owner 09-05: optional HALF-resolution frames (32 px art per 64-unit frame, exact 2x2 box average, source.resolution 1/2) — drawn
    *  1:1 with nearest sampling at the default zoom so the pixel detail survives; the full frames serve zoom-in. */
   displayFrames?: Texture[][];
@@ -364,7 +367,7 @@ function sourcePixels(source: TextureSource, sourceRow: number, frame: number): 
   return null;
 }
 
-export interface FigureMetrics { height: number; width: number; feetWidth: number }
+export interface FigureMetrics { height: number; width: number; feetWidth: number; headHeight?: number }
 /** Figure metrics of the S idle frame in 64-UNIT space: height, widest span, and the span of the bottom ~8% of the
  *  figure (the FEET). The standing ring/shadow is keyed to the feet, the prone ring to height x width. */
 function measureFigure(source: TextureSource, sourceRow: number, frame = 64): FigureMetrics {
@@ -390,13 +393,24 @@ function measureFigure(source: TextureSource, sourceRow: number, frame = 64): Fi
   let fl = px, fr = -1;
   for (let y = bottom - feetRows + 1; y <= bottom; y++) { if (rowMax[y]! >= 0) { fl = Math.min(fl, rowMin[y]!); fr = Math.max(fr, rowMax[y]!); } }
   const feet = fr >= fl ? fr - fl + 1 : right - left + 1;
-  return { height: Math.round(height / res), width: Math.round((right - left + 1) / res), feetWidth: Math.round(feet / res) };
+  // Owner 10-02: the head's top = the first opaque row in a narrow band around the FEET's centre (the body's axis), so
+  // a fist raised above the head or horn tips flaring out to the sides do not stretch the chest mount up to the face.
+  const axis = fr >= fl ? (fl + fr) / 2 : (left + right) / 2;
+  const band = Math.max(2, Math.round((right - left + 1) * 0.12));
+  let head = bottom;
+  for (let y = top; y <= bottom && head === bottom; y++) {
+    for (let x = Math.max(0, Math.floor(axis - band)); x <= Math.min(px - 1, Math.ceil(axis + band)); x++) {
+      if (pixels[(y * px + x) * 4 + 3]! > 0) { head = y; break; }
+    }
+  }
+  const headHeight = bottom - head + 1;
+  return { height: Math.round(height / res), width: Math.round((right - left + 1) / res), feetWidth: Math.round(feet / res), headHeight: Math.round(headHeight / res) };
 }
 function measureFigureHeight(source: TextureSource, sourceRow: number, frame = 64): number {
   return measureFigure(source, sourceRow, frame).height;
 }
-function figureFields(m: FigureMetrics): { figureHeight: number; figureWidth: number; feetWidth: number } {
-  return { figureHeight: m.height, figureWidth: m.width, feetWidth: m.feetWidth };
+function figureFields(m: FigureMetrics): { figureHeight: number; figureWidth: number; feetWidth: number; headHeight?: number } {
+  return { figureHeight: m.height, figureWidth: m.width, feetWidth: m.feetWidth, headHeight: m.headHeight };
 }
 
 /** Owner 09-05 (round 3): sampling follows the EFFECTIVE on-screen scale — NEAREST when the sheet is magnified (hi-DPI
@@ -1085,6 +1099,15 @@ export function walkerDrawnFigureHeight(token: Container): number | null {
 /** Owner 09-06: the walker's figure HEIGHT relative to the 53 px reference lineman (1 = lineman, ~0.6 snotling,
  *  1.3+ big guys). The carried ball keys its size to this — the ring/feet width shrank the ball on figures that
  *  stand with their feet together (a Str 4 carrier lost its ball). */
+/** Owner 10-02: the CHEST mount ratio - like walkerFigureRatio but from the centre-line height (headHeight), so a big
+ *  guy with a raised fist or tall horns wears chest markers on the chest, not the face. Falls back to the full height. */
+export function walkerChestRatio(token: Container): number | null {
+  const record = walkerTokens.get(token);
+  if (!record) return null;
+  const h = record.asset.headHeight && record.asset.headHeight > 0 ? Math.min(record.asset.headHeight, record.asset.figureHeight) : record.asset.figureHeight;
+  return (h * record.asset.spec.visualScale) / WALKER_REFERENCE_FIGURE_PX;
+}
+
 export function walkerFigureRatio(token: Container): number | null {
   const record = walkerTokens.get(token);
   if (!record) return null;

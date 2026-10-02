@@ -31,7 +31,7 @@ import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
-import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, keyLabel, settings, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
@@ -893,7 +893,9 @@ const themePreview = computed(() => {
   return deriveTheme(primary, secondary);
 });
 /** When set, the next keydown rebinds this hotkey. */
-const capturingKey = ref<'confirmKey' | null>(null);
+const capturingKey = ref<RebindableKey | null>(null);
+/** Owner 10-02: why the last rebind was refused (a key another shortcut owns); cleared on the next capture. */
+const keybindRefusal = ref('');
 // JLeav 09-23 (#5): a slider at its maximum looked like it could go further — the default track has no fill.
 // v-fill-range paints the track up to the thumb (`--fill`), so the end of the range reads as full.
 const vFillRange = {
@@ -1523,7 +1525,12 @@ function captureKey(event: KeyboardEvent) {
   if (!capturingKey.value) return;
   event.preventDefault();
   event.stopPropagation();
-  if (event.code !== 'Escape') settings[capturingKey.value] = event.code;
+  keybindRefusal.value = '';
+  if (event.code !== 'Escape') {
+    const refusal = hotkeyConflict(capturingKey.value, event.code, settings);
+    if (refusal) keybindRefusal.value = refusal;
+    else settings[capturingKey.value] = event.code;
+  }
   capturingKey.value = null;
 }
 </script>
@@ -1910,20 +1917,33 @@ function captureKey(event: KeyboardEvent) {
 
           <fieldset class="settings-group">
             <legend>Keyboard</legend>
-            <p class="hint">Only the confirm key can be changed; the other shortcuts are fixed.</p>
-            <label class="row">
-              <span>Confirm move / pass target</span>
-              <button class="keybind" @click="capturingKey = 'confirmKey'">
-                {{ capturingKey === 'confirmKey' ? 'press a key…' : keyLabel(settings.confirmKey) }}
-              </button>
-            </label>
-            <div class="row"><span>Clear selection / close</span><span class="keybind static">Esc</span></div>
-            <div class="row"><span>Pick action 1–6 (selected player)</span><span class="keybind static">1 – 6</span></div>
-            <div class="row"><span>Camera pan</span><span class="keybind static">W A S D</span></div>
-            <div class="row"><span>Open chat</span><span class="keybind static">Enter</span></div>
-            <div class="row"><span>Toggle fullscreen</span><span class="keybind static">F11 / Alt + Enter</span></div>
-            <div class="row"><span>Mark square / player arrow</span><span class="keybind static">Shift + click</span></div>
-            <div class="row"><span>Mark row · column</span><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></div>
+            <p class="hint">Click a highlighted key to rebind it, then press the new key (Esc cancels). The others are fixed.</p>
+            <!-- Owner 10-02: every binding in one table (action | key). -->
+            <table class="keybind-table">
+              <thead><tr><th scope="col">Action</th><th scope="col">Key</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>Confirm move / pass target</td>
+                  <td><button class="keybind" :aria-label="`Confirm move / pass target: ${capturingKey === 'confirmKey' ? 'press a key' : keyLabel(settings.confirmKey)}. Click to rebind.`" @click="capturingKey = 'confirmKey'">
+                    {{ capturingKey === 'confirmKey' ? 'press a key…' : keyLabel(settings.confirmKey) }}
+                  </button></td>
+                </tr>
+                <tr>
+                  <td>Roster pop-out</td>
+                  <td><button class="keybind" data-testid="roster-key-bind" :aria-label="`Roster pop-out: ${capturingKey === 'rosterKey' ? 'press a key' : keyLabel(settings.rosterKey)}. Click to rebind.`" @click="capturingKey = 'rosterKey'">
+                    {{ capturingKey === 'rosterKey' ? 'press a key…' : keyLabel(settings.rosterKey) }}
+                  </button></td>
+                </tr>
+                <tr><td>Clear selection / close</td><td><span class="keybind static">Esc</span></td></tr>
+                <tr><td>Pick action 1–6 (selected player)</td><td><span class="keybind static">1 – 6</span></td></tr>
+                <tr><td>Camera pan</td><td><span class="keybind static">W A S D / Arrows</span></td></tr>
+                <tr><td>Open chat</td><td><span class="keybind static">Enter</span></td></tr>
+                <tr><td>Toggle fullscreen</td><td><span class="keybind static">F11 / Alt + Enter</span></td></tr>
+                <tr><td>Mark square / player</td><td><span class="keybind static">Shift + click</span></td></tr>
+                <tr><td>Mark row · column</td><td><span class="keybind static">Ctrl+Shift · Alt+Shift + click</span></td></tr>
+              </tbody>
+            </table>
+            <p v-if="keybindRefusal" class="hint keybind-refusal" role="status">{{ keybindRefusal }}</p>
             <label class="row">
               <span>Camera pan speed</span>
               <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
@@ -4137,6 +4157,15 @@ textarea:focus-visible,
   min-width: 110px;
 }
 .settings-pane .hint { margin: 0; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); }
+/* Owner 10-02: the keyboard bindings as a table - action left, key right; rebindable keys are buttons with the accent edge. */
+/* Bordered like the skill-config table above it; static keys read as quiet labels. */
+.settings-pane .keybind-table { width: 100%; border-collapse: collapse; }
+.settings-pane .keybind-table th { text-align: left; font-weight: 700; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.5rem 0.3rem; border-bottom: 1px solid var(--ui-border); }
+.settings-pane .keybind-table td { padding: 0.32rem 0.5rem; border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 60%, transparent); vertical-align: middle; }
+.settings-pane .keybind-table td:last-child, .settings-pane .keybind-table th:last-child { width: 1%; white-space: nowrap; text-align: right; }
+.settings-pane .keybind-table button.keybind { border-color: var(--ui-accent); }
+.settings-pane .keybind.static { display: inline-block; cursor: default; background: transparent; text-align: center; }
+.settings-pane .keybind-refusal { color: var(--ui-danger, #e05a5a); }
 .settings-pane .actions {
   display: flex;
   justify-content: flex-end;

@@ -7,6 +7,10 @@ export type PlayerSkillCategory = 'general' | 'agility' | 'strength' | 'passing'
 // Owner 09-09: the FULL BB2025 category lists (validator dataset bb2025/skills.json), matched case- and
 // punctuation-insensitively ("On the Ball", "Dump-off", "Side Step" all resolve). Devious shares the Passing colour
 // (the picker's categoryClass does the same), so it lands in the passing bucket. Everything else is a trait.
+/** BB2025 Devious skills (validator dataset bb2025/skills.json). Coloured as Passing, but a category of its own for
+ *  advancement value (a Devious-secondary player pays the secondary price). */
+const DEVIOUS_SKILLS = ['Dirty Player', 'Eye Gouge', 'Fumblerooski', 'Lethal Flight', 'Lone Fouler', 'Pile Driver', 'Put the Boot In', 'Quick Foul', 'Saboteur', 'Shadowing', 'Sneaky Git', 'Violent Innovator'] as const;
+
 const TEAM_BUILDER_SKILL_GROUPS: Readonly<Record<Exclude<PlayerSkillCategory, 'trait'>, readonly string[]>> = {
   general: ['Block', 'Dauntless', 'Fend', 'Frenzy', 'Kick', 'Pro', 'Steady Footing', 'Strip Ball', 'Sure Hands', 'Tackle', 'Taunt', 'Wrestle'],
   agility: ['Catch', 'Defensive', 'Diving Catch', 'Diving Tackle', 'Dodge', 'Hit And Run', 'Jump Up', 'Leap', 'Safe Pair Of Hands', 'Sidestep', 'Sprint', 'Sure Feet'],
@@ -14,7 +18,7 @@ const TEAM_BUILDER_SKILL_GROUPS: Readonly<Record<Exclude<PlayerSkillCategory, 't
   passing: [
     'Accurate', 'Cannoneer', 'Cloud Burster', 'Dump-Off', 'Give and Go', 'Hail Mary Pass', 'Leader', 'Nerves of Steel', 'On The Ball', 'Pass', 'Punt', 'Safe Pass',
     // Devious (BB2025) — same colour family as Passing
-    'Dirty Player', 'Eye Gouge', 'Fumblerooski', 'Lethal Flight', 'Lone Fouler', 'Pile Driver', 'Put the Boot In', 'Quick Foul', 'Saboteur', 'Shadowing', 'Sneaky Git', 'Violent Innovator',
+    ...DEVIOUS_SKILLS,
   ],
   mutation: ['Big Hand', 'Claws', 'Disturbing Presence', 'Extra Arms', 'Foul Appearance', 'Horns', 'Iron Hard Skin', 'Monstrous Mouth', 'Prehensile Tail', 'Tentacles', 'Two Heads', 'Very Long Legs'],
 };
@@ -35,4 +39,14 @@ export function playerSkillCategory(skill: string): PlayerSkillCategory {
 
 export function playerSkillCategoryClass(skill: string): `skill-${PlayerSkillCategory}` {
   return `skill-${playerSkillCategory(skill)}`;
+}
+
+/** The skill's REAL BB2025 category (Devious kept apart from Passing), or null for traits / unknown skills. Used for
+ *  advancement value, where the category decides primary (20k) vs secondary (40k) pricing. */
+export type SkillAdvanceCategory = 'general' | 'agility' | 'strength' | 'passing' | 'devious' | 'mutation';
+const DEVIOUS_KEYS: ReadonlySet<string> = new Set(DEVIOUS_SKILLS.map(skillKey));
+export function skillAdvanceCategory(skill: string): SkillAdvanceCategory | null {
+  const key = skillKey(skill);
+  if (DEVIOUS_KEYS.has(key)) return 'devious';
+  return CATEGORY_BY_KEY.get(key) ?? null;
 }

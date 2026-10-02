@@ -4,11 +4,19 @@
  * post-game Roster tab mounts) in a floating window during live play, spectate and replay. The frame copies the
  * popped-out ChatDock: teleported to `body`, ONE fixed box sized to itself (never a viewport-wide layer, so the
  * pitch keeps its input around it), dragged by the header, CSS-resizable. Closed = not rendered at all.
+ * Owner 10-02 (v2): the content GROWS with the window (game/rosterPopoutScale.ts). Taller = more rows at the base size
+ * until ELEVEN rows are in view; past that every size (header, team switch, rows, portraits, badges, text) scales up
+ * evenly so exactly eleven rows fill the list, and players 12+ scroll. Wider allows the scale-up too. The scale is
+ * written to --roster-scale on the frame; the scalable PostGameRoster multiplies it into every size.
+ * Width / height are written imperatively, never through the reactive style: Vue re-applies every key of a style
+ * object on each patch, which would snap a user-resized window back to its default size.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import PostGameRoster from './PostGameRoster.vue';
 import { clampPanelPosition } from '../game/edgePanelLayout';
+import { ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, rosterPopoutScale } from '../game/rosterPopoutScale';
 import type { PostGameSide, Side } from '../game/postGameProjection';
+import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 
 const props = withDefaults(defineProps<{
   teams: { home: PostGameSide; away: PostGameSide } | null;
@@ -16,25 +24,86 @@ const props = withDefaults(defineProps<{
   helmetIcon: string;
   /** Mirrors the Log panel's opacity setting, like the popped-out chat. */
   opacity?: number;
-}>(), { opacity: 0.92 });
+  /** The local coach's side ("(You)" on the team switch); null for a spectator / replay. */
+  localSide?: Side | null;
+  /** Owner 10-02: Settings skill display - icons replace the added-skill names. */
+  skillMode?: 'icons' | 'markings';
+  iconStyle?: SkillIconStyle;
+  /** Astra review: Settings is open - the pop-out steps aside (kept open, same spot) so it never covers the modal. */
+  suppressed?: boolean;
+}>(), { opacity: 0.92, localSide: null, skillMode: 'markings', iconStyle: 'bb3', suppressed: false });
 const emit = defineEmits<{ (e: 'close'): void }>();
 const side = defineModel<Side>('side', { default: 'home' });
 
 const DEFAULT_W = 520;
+/** Owner 10-02: skill icons sit in a four-wide grid - the window opens wider so every row fits four at scale 1. */
+const ICONS_W = 620;
+const defaultWidth = () => (props.skillMode === 'icons' ? ICONS_W : DEFAULT_W);
 const panelEl = ref<HTMLElement | null>(null);
+const headEl = ref<HTMLElement | null>(null);
+const bodyEl = ref<HTMLElement | null>(null);
 // Session-only position (null = the default spot, upper right); the window is a glance surface, not a layout panel.
 const pos = ref<{ x: number; y: number } | null>(null);
 
 const frameStyle = computed(() => {
   const vw = typeof window === 'undefined' ? 1280 : window.innerWidth;
-  const p = pos.value ?? { x: Math.max(0, vw - DEFAULT_W - 24), y: 80 };
+  const p = pos.value ?? { x: Math.max(0, vw - defaultWidth() - 24), y: 80 };
   return {
     left: `${p.x}px`,
     top: `${p.y}px`,
-    width: `${DEFAULT_W}px`,
     background: `rgba(20, 22, 26, ${props.opacity})`,
   } as Record<string, string>;
 });
+
+// ---- Owner 10-02: grow-with-the-window scaling ----
+let scale = 1;
+let sized = false; // the frame has its explicit starting height (until then it is content-sized and never scales)
+let observer: ResizeObserver | null = null;
+function parts() {
+  const panel = panelEl.value, head = headEl.value, body = bodyEl.value;
+  const list = body?.querySelector<HTMLElement>('.pg-roster-list') ?? null;
+  const row = list?.querySelector<HTMLElement>('li') ?? null;
+  if (!panel || !head || !body || !list || !row || row.offsetHeight <= 0) return null;
+  return { panel, head, body, list, row };
+}
+/** Header, body-minus-list and one row, divided back to scale 1. */
+function metricsAt(el: NonNullable<ReturnType<typeof parts>>, s: number) {
+  // Owner 10-02: skills now wrap, so a row can be taller than the rest - the 11-row unit is the SHORTEST (unwrapped) row.
+  const rowPx = Math.min(...Array.from(el.list.querySelectorAll<HTMLElement>('li')).map((li) => li.offsetHeight).filter((h) => h > 0), el.row.offsetHeight);
+  return { headH: el.head.offsetHeight / s, chromeH: (el.body.offsetHeight - el.list.offsetHeight) / s, rowH: rowPx / s };
+}
+function applyScale() {
+  const el = parts();
+  if (!el || !sized) return;
+  // Measure uncapped: with the eleven-row cap on, the free space under the list would read as chrome and pin the scale.
+  el.panel.style.removeProperty('--roster-list-max');
+  // A few passes: 1px borders do not scale, so the per-row measure drifts a hair between scales.
+  for (let pass = 0; pass < 3; pass++) {
+    const next = rosterPopoutScale({ frameHeight: el.panel.clientHeight, frameWidth: el.panel.clientWidth, baseWidth: defaultWidth() - 2, ...metricsAt(el, scale) });
+    if (Math.abs(next - scale) < 0.01) break;
+    scale = next;
+    el.panel.style.setProperty('--roster-scale', String(next));
+  }
+  // Astra review: a narrow, tall window caps the scale by WIDTH; the list still stops at eleven rows (players 12+ scroll).
+  el.panel.style.setProperty('--roster-list-max', `${Math.ceil(ROSTER_POPOUT_ROWS * metricsAt(el, scale).rowH * scale) + 1}px`);
+}
+/** First layout: start ELEVEN rows tall (fewer when neither team has that many), within the viewport. */
+function sizeFrame() {
+  if (sized) return;
+  const el = parts();
+  if (!el) return;
+  const rows = Math.max(1, Math.min(ROSTER_POPOUT_ROWS, Math.max(props.teams?.home.roster.length ?? 0, props.teams?.away.roster.length ?? 0)));
+  const borders = el.panel.offsetHeight - el.panel.clientHeight;
+  const want = rosterPopoutHeightFor(metricsAt(el, 1), rows) + borders;
+  el.panel.style.height = `${Math.ceil(Math.min(want, window.innerHeight * 0.9))}px`;
+  sized = true;
+  applyScale();
+}
+watch(() => props.teams, () => { void nextTick(() => { sizeFrame(); applyScale(); }); });
+watch(side, () => { void nextTick(applyScale); });
+// Astra re-review: icons <-> names changes row heights without resizing the frame - re-measure.
+// ...and keep it on screen: the default spot was computed from the other mode's width.
+watch(() => props.skillMode, () => { void nextTick(() => { applyScale(); clampToViewport(); }); });
 
 let drag: { startX: number; startY: number; origX: number; origY: number; grip: HTMLElement } | null = null;
 function startDrag(event: PointerEvent) {
@@ -53,7 +122,7 @@ function onDrag(event: PointerEvent) {
   const rect = panelEl.value?.getBoundingClientRect();
   pos.value = clampPanelPosition(
     { x: drag.origX + event.clientX - drag.startX, y: drag.origY + event.clientY - drag.startY },
-    { width: rect?.width ?? DEFAULT_W, height: rect?.height ?? 200 },
+    { width: rect?.width ?? defaultWidth(), height: rect?.height ?? 200 },
     { width: window.innerWidth, height: window.innerHeight },
   );
 }
@@ -63,13 +132,31 @@ function endDrag(event?: PointerEvent) {
   drag = null;
 }
 function clampToViewport() {
-  const p = pos.value;
   const rect = panelEl.value?.getBoundingClientRect();
-  if (!p || !rect) return;
-  pos.value = clampPanelPosition(p, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight });
+  if (!rect) return;
+  // From the default spot too (pos null = upper right): growing the window from its corner must not push it off-screen.
+  const p = pos.value ?? { x: rect.left, y: rect.top };
+  const next = clampPanelPosition(p, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight });
+  if (pos.value && next.x === pos.value.x && next.y === pos.value.y) return;
+  if (!pos.value && Math.abs(next.x - p.x) < 0.5 && Math.abs(next.y - p.y) < 0.5) return;
+  pos.value = next;
 }
-onMounted(() => window.addEventListener('resize', clampToViewport));
+onMounted(() => {
+  window.addEventListener('resize', clampToViewport);
+  const panel = panelEl.value;
+  if (panel) {
+    panel.style.width = `${defaultWidth()}px`;
+    panel.style.setProperty('--roster-scale', '1');
+  }
+  void nextTick(sizeFrame);
+  if (panel && typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(() => { applyScale(); clampToViewport(); });
+    observer.observe(panel);
+  }
+});
 onBeforeUnmount(() => {
+  observer?.disconnect();
+  observer = null;
   window.removeEventListener('resize', clampToViewport);
   window.removeEventListener('pointermove', onDrag);
   window.removeEventListener('pointerup', endDrag);
@@ -79,14 +166,15 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div ref="panelEl" class="roster-popout" role="dialog" aria-label="Roster" data-testid="roster-popout" :style="frameStyle">
-      <div class="roster-popout-head" @pointerdown="startDrag">
+    <div v-show="!suppressed" ref="panelEl" class="roster-popout" role="dialog" aria-label="Roster" data-testid="roster-popout" :style="frameStyle">
+      <div ref="headEl" class="roster-popout-head" @pointerdown="startDrag">
         <span class="roster-popout-grip" title="Drag to move" aria-hidden="true">⠿</span>
         <span class="roster-popout-title"><img class="roster-popout-icon" :src="helmetIcon" alt="" /> ROSTER</span>
         <button type="button" class="roster-popout-btn" title="Close (Esc)" aria-label="Close roster" @click="emit('close')">✕</button>
       </div>
-      <div class="roster-popout-body">
-        <PostGameRoster v-if="teams" v-model:side="side" :teams="teams" :portrait="portrait" />
+      <div ref="bodyEl" class="roster-popout-body">
+        <PostGameRoster v-if="teams" v-model:side="side" :teams="teams" :portrait="portrait" :local-side="localSide" scalable
+          :skill-mode="skillMode" :icon-style="iconStyle" />
         <p v-else class="roster-popout-empty">No game loaded</p>
       </div>
     </div>
@@ -97,7 +185,9 @@ onBeforeUnmount(() => {
 /* Frame = the popped-out ChatDock (.chat-dock--float): one positioned box, no full-viewport layer. */
 .roster-popout {
   position: fixed;
-  z-index: 115;
+  /* Astra review: above the end-game Dice overlay (.pg-dice-modal 210) - H opens it on every in-game screen. Settings
+     (z 100) would sit under it, so the pop-out is hidden (suppressed) while Settings is open. */
+  z-index: 215;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -117,13 +207,13 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 4px;
+  padding: calc(2px * var(--roster-scale, 1)) calc(4px * var(--roster-scale, 1));
   cursor: move;
   user-select: none;
   border-bottom: 1px solid var(--ui-border, #3a3f47);
   background: rgba(0, 0, 0, 0.25);
 }
-.roster-popout-grip { padding: 0 4px; color: #6a7280; font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); letter-spacing: -2px; }
+.roster-popout-grip { padding: 0 calc(4px * var(--roster-scale, 1)); color: #6a7280; font-size: calc(max(var(--ui-min-primary-text-size, 16px), 0.8rem) * var(--roster-scale, 1)); letter-spacing: -2px; }
 .roster-popout-grip:hover { color: #aab2c0; }
 .roster-popout-title {
   flex: 1;
@@ -131,19 +221,21 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   font-family: 'Nuffle', system-ui, sans-serif;
-  font-size: max(var(--ui-min-text-size, 12px), 0.62rem);
+  font-size: calc(max(var(--ui-min-text-size, 12px), 0.62rem) * var(--roster-scale, 1));
   font-weight: 800;
   letter-spacing: 0.06em;
 }
 .roster-popout-icon { width: 1.3em; height: 1.3em; object-fit: contain; flex: none; }
 .roster-popout-btn {
-  flex: 0 0 28px;
+  flex: 0 0 calc(28px * var(--roster-scale, 1));
+  font-size: calc(1em * var(--roster-scale, 1));
   background: transparent;
   color: var(--ui-muted, #98a0ac);
   border: none;
   cursor: pointer;
 }
 .roster-popout-btn:hover { color: var(--ui-text, #e8ecf2); }
-.roster-popout-body { flex: 1; min-height: 0; overflow-y: auto; user-select: text; }
+/* Owner 10-02: the body never scrolls itself; the roster's LIST does (the team switch stays put above it). */
+.roster-popout-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; user-select: text; }
 .roster-popout-empty { margin: 12px 16px; color: var(--ui-text-dim); font-style: italic; }
 </style>

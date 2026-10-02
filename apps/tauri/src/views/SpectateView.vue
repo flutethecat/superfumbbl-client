@@ -85,7 +85,7 @@ import { crestDataUrl, type CrestSide } from '../game/teamCrests';
 import { teamDiceTally, teamLogo } from '../game/gameStatRows';
 import PostGamePanel from '../components/PostGamePanel.vue';
 import RosterPopout from '../components/RosterPopout.vue';
-import { mvpCardFor, mvpConcededSides, postGameKey, postGamePublic, type PgMvpCard, type PostGameSnapshot } from '../game/postGameProjection';
+import { mvpConcededSides, postGameKey, postGamePublic, type PostGameSnapshot } from '../game/postGameProjection';
 import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
@@ -320,7 +320,7 @@ import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
 import superFumbblLogoUrl from '../assets/resources/super-fumbbl-logo.png';
-import { activeServerTarget, applyServerTarget, botConfigBaseUrl, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
+import { activeServerTarget, applyServerTarget, botConfigBaseUrl, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { coachPassword } from '../game/credentials';
 import {
   BUG_REPORT_DESCRIPTION_MAX,
@@ -8463,6 +8463,14 @@ function onKeydown(event: KeyboardEvent) {
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
   // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else).
   if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); rosterPopoutOpen.value = false; return; }
+  // Owner 10-02: the roster key (default H, Settings > Keyboard) toggles the Helmet roster pop-out on every screen
+  // (text fields keep their letters).
+  // Owner 10-02: "H should always pop up the roster unless the user is at the play/spectate menu screens" - every in-game
+  // screen (this view only exists in a game); only a text field typing the letter keeps it.
+  if (event.code === settings.rosterKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
+    && !keyboardOwnedByTextControl(event.target)) {
+    event.preventDefault(); toggleRosterPopout(); return;
+  }
   if (event.key === 'Escape') {
     // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
     // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
@@ -10748,57 +10756,14 @@ const mvpRoll = ref<{ home: MvpRoll; away: MvpRoll }>({
 // existing surfaced asset, NO new fetch/CDN, C-44) when a side's server award first appears; null if the
 // MVP is off-pitch (KO/cas → no sprite) → the chip just shows the name. Shown only at phase 'landed'.
 const mvpPortrait = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
-/** Owner 09-14: INDUCEMENT-PHASE roster viewer — coaches want the opponent's roster in front of them while buying
- *  inducements. Both teams (toggle), defaulting to the OPPONENT of the local seat; a row click pops the same
- *  portrait card the end-game MVP screen uses. Presentation only: reads the loaded game, sends nothing. */
-const induceRosterOpen = ref(false);
-const induceRosterSide = ref<'home' | 'away'>('away');
-const induceRosterCardId = ref<string | null>(null);
+/** Owner 10-02: the inducement screen's Rosters button opens the Helmet roster pop-out (the old inducement-only
+ *  roster viewer is retired) - on the OPPONENT's team first, since that is the roster a coach buys against. */
 function openInduceRosters(): void {
   const role = presetInducementsOpen.value ? presetMySide.value : induceMyRole.value;
   const mine = role === 'overdog' ? induceDisplayOverdogPanel.value.seat : role === 'underdog' ? induceDisplayUnderdogPanel.value.seat : null;
-  induceRosterSide.value = mine === 'away' ? 'home' : 'away';
-  induceRosterCardId.value = null;
-  induceRosterOpen.value = true;
+  rosterPopoutSide.value = mine === 'away' ? 'home' : 'away';
+  rosterPopoutOpen.value = true;
 }
-function closeInduceRosters(): void { induceRosterOpen.value = false; induceRosterCardId.value = null; }
-function selectInduceRosterSide(side: 'home' | 'away'): void { induceRosterSide.value = side; induceRosterCardId.value = null; }
-interface InduceRosterRow { playerId: string; nr: number; name: string; position: string; addedSkills: string; addedSkillList: { name: string; label: string }[]; spp: number }
-const induceRosterTeams = computed(() => {
-  const game = gameStore.game.value;
-  const one = (side: 'home' | 'away') => {
-    const team = side === 'home' ? game?.teamHome : game?.teamAway;
-    return { team: team?.teamName ?? '', logo: team ? teamLogo(team, side) : null };
-  };
-  return { home: one('home'), away: one('away') };
-});
-const induceRosterRows = computed<InduceRosterRow[]>(() => {
-  const game = gameStore.game.value;
-  if (!game) return [];
-  const side = induceRosterSide.value;
-  const team = side === 'home' ? game.teamHome : game.teamAway;
-  const results = side === 'home' ? game.gameResult.teamResultHome.playerResults : game.gameResult.teamResultAway.playerResults;
-  return [...team.playerArray]
-    .sort((a, b) => a.playerNr - b.playerNr)
-    .map((player) => {
-      // Owner 09-19: the same row shape as the end-of-game roster — category-coloured added-skill chips.
-      const posSkills = new Set((team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] })
-        .positionArray?.find((q) => q.positionId === player.positionId)?.skillArray ?? []);
-      const addedSkillList = playerDetailSkills(player, posSkills).filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
-      return {
-        playerId: player.playerId, nr: player.playerNr, name: player.playerName ?? '(unknown)',
-        position: positionNameFor({ player, side }), addedSkills: addedSkillList.map((sk) => sk.label).join(', '), addedSkillList,
-        spp: (results.find((r) => r.playerId === player.playerId)?.currentSpps as number | undefined) ?? 0,
-      };
-    });
-});
-const induceRosterCard = computed<PgMvpCard | null>(() => {
-  const game = gameStore.game.value;
-  const id = induceRosterCardId.value;
-  void rendererReady.value;
-  return game && id ? mvpCardFor(game, induceRosterSide.value, id, renderer?.playerPortrait(id) ?? null) : null;
-});
-watch(inducePhaseOpen, (open) => { if (!open) closeInduceRosters(); }); // the phase closing takes the viewer with it
 /** Owner 09-15: end-game roster portraits — the renderer's player portrait, memoised per player for the game. */
 const pgRosterPortraitCache = new Map<string, string | null>();
 watch(() => gameStore.game.value?.gameId, () => pgRosterPortraitCache.clear());
@@ -11710,7 +11675,7 @@ function sendChat() {
           <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
                opt-in via Settings > UI. -->
           <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn"
-            title="Roster — every player with their added skills" aria-label="Roster"
+            :title="`Roster (${keyLabel(settings.rosterKey)}) — every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
             @click="toggleRosterPopout()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
           <QuickBarButton class="report-btn" title="Report an issue — sends your description with the wire log"
             @click="openReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
@@ -12002,64 +11967,12 @@ function sendChat() {
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
           @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgeInducementsReview"
           @rosters="openInduceRosters" />
-        <!-- Owner 09-14: inducement-phase ROSTER viewer — both teams, opponent first; a row pops the MVP-style card. -->
-        <div v-if="inducePhaseOpen && induceRosterOpen" class="mvp-nominate-overlay induce-roster-overlay" data-testid="induce-rosters"
-          @click.self="closeInduceRosters">
-          <div class="mvp-nominate-card induce-roster-card" role="dialog" aria-label="Team rosters">
-            <div class="mvp-nominate-head">
-              <span class="mvp-nominate-title">Rosters</span>
-              <button type="button" class="induce-roster-close" aria-label="Close rosters" @click="closeInduceRosters">✕</button>
-            </div>
-            <div class="pg-roster induce-roster-body">
-              <div class="pg-roster-team-toggle" role="group" aria-label="Select roster team">
-                <button v-for="w in (['home', 'away'] as const)" :key="w" type="button"
-                  :data-active="induceRosterSide === w" @click="selectInduceRosterSide(w)">
-                  <img v-if="induceRosterTeams[w].logo" :src="induceRosterTeams[w].logo" alt="" />
-                  <span>{{ induceRosterTeams[w].team }}</span>
-                </button>
-              </div>
-              <div class="induce-roster-split" :data-card="!!induceRosterCard">
-                <ul v-if="induceRosterRows.length" class="pg-roster-list induce-roster-list">
-                  <li v-for="pl in induceRosterRows" :key="pl.playerId" role="button" tabindex="0"
-                    :data-active="induceRosterCardId === pl.playerId"
-                    @click="induceRosterCardId = pl.playerId" @keydown.enter.prevent="induceRosterCardId = pl.playerId">
-                    <span class="pg-roster-nr">#{{ pl.nr }}</span>
-                    <span class="pg-roster-portrait-slot"><img v-if="pgRosterPortrait(pl.playerId)" class="pg-roster-portrait" :src="pgRosterPortrait(pl.playerId)!" alt="" /></span>
-                    <span class="pg-roster-name">{{ pl.name }}</span>
-                    <span class="pg-roster-pos">{{ pl.position }}</span>
-                    <span v-if="pl.addedSkillList.length" class="pg-roster-skills" :title="`Added skills: ${pl.addedSkills}`">
-                      <span v-for="skill in pl.addedSkillList" :key="skill.name" class="pg-roster-skill" :class="playerSkillCategoryClass(skill.name)">{{ skill.label }}</span>
-                    </span>
-                    <span class="pg-roster-spp" :data-zero="pl.spp === 0">{{ pl.spp }} SPP</span>
-                  </li>
-                </ul>
-                <p v-else class="pg-mvp-none">No player records</p>
-                <div v-if="induceRosterCard" class="pg-mvp-card pg-bevel induce-roster-popout" :key="induceRosterCard.playerId">
-                  <div class="pg-mvp-portrait card-portrait">
-                    <img v-if="induceRosterCard.portrait" :src="induceRosterCard.portrait" alt="" />
-                    <span v-else class="portrait-missing">no portrait</span>
-                  </div>
-                  <div class="pg-mvp-card-info">
-                    <div class="pg-mvp-card-name" :data-side="induceRosterSide">#{{ induceRosterCard.nr }} {{ induceRosterCard.name }}</div>
-                    <div class="pg-mvp-card-pos">{{ induceRosterCard.position }}</div>
-                    <div class="pg-mvp-card-spp"><span class="card-spp">SPP {{ induceRosterCard.spp }}</span></div>
-                    <div v-if="induceRosterCard.advancement" class="pg-mvp-advance">{{ induceRosterCard.advancement.text }}</div>
-                    <PlayerDetailSkillList v-if="induceRosterCard.skills.length" :skills="induceRosterCard.skills" :mode="skillMode"
-                      :icon-style="effectiveIconStyle" :position-id="induceRosterCard.positionId" :side="induceRosterSide" mark-added />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-
         <!-- Owner 09-25: the END-OF-GAME pane is components/PostGamePanel.vue (Result window + MVP/Stats/Roster tabs + the
              Dice overlay), rendered from a PostGameSnapshot: live here, cached on the Play blade's Details popup. The
              seat-specific exit bar rides in its slot. Gates unchanged: pgSurface raises the surface (spectate seat early,
              MVP-pending), finalPostGameVisible opens the Stats/MVP window once the server's data settles. -->
         <PostGamePanel v-if="pgSurface && liveSnapshot" :snapshot="liveSnapshot" :show-stats="finalPostGameVisible" :mvp-roll="mvpRoll"
-          v-model:phase="postGamePhase" :default-roster-side="gameStore.myTeamIsHome.value ? 'home' : 'away'" :portrait-for="pgRosterPortrait"
+          v-model:phase="postGamePhase" :default-roster-side="gameStore.myTeamIsHome.value ? 'home' : 'away'" :local-side="gameStore.blockPresentationSeat.value" :portrait-for="pgRosterPortrait"
           :skill-mode="skillMode" :icon-style="effectiveIconStyle">
           <template #exit>
             <!-- Owner 08-19: the spectate seat's exit pair — appears with the MVP stage and REMAINS once the final panel
@@ -12078,7 +11991,8 @@ function sendChat() {
         <!-- Owner 10-02: the Helmet quick-bar pop-out — the end-game roster (shared PostGameRoster) on the live model.
              Teleports to body; closed = not mounted, so nothing sits over the pitch. -->
         <RosterPopout v-if="rosterPopoutOpen" v-model:side="rosterPopoutSide" :teams="rosterPopoutTeams"
-          :portrait="pgRosterPortrait" :helmet-icon="helmetIconUrl" :opacity="settings.logOpacity"
+          :portrait="pgRosterPortrait" :helmet-icon="helmetIconUrl" :opacity="settings.logOpacity" :local-side="gameStore.blockPresentationSeat.value"
+          :skill-mode="skillMode" :icon-style="effectiveIconStyle" :suppressed="ui.settingsOpen"
           @close="rosterPopoutOpen = false" />
 
         <!-- Owner 2026-07-06: DODGY SNACK — each coach's d6 thrown from a side
@@ -15124,27 +15038,8 @@ function sendChat() {
 .pg-roster-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
 
 /* Owner 09-14: inducement-phase roster viewer (mirrors the MVP-nominate modal + .pg-roster; rides over the phase). */
-.induce-roster-overlay { z-index: 80; }
 /* Owner 09-20: the inducement Rosters popout fills the viewport like the Dice pane (94vw x 91vh) and its type scales
    with it — the roster rows and the popped card are em-sized off a vw-driven font-size. */
-.induce-roster-card { width: 94vw; height: 91vh; max-height: 91vh; font-size: clamp(14px, 0.95vw, 22px); }
-.induce-roster-card .pg-roster-team-toggle button { font-size: 1em; }
-.induce-roster-card .pg-roster-team-toggle img { width: 1.8em; height: 1.8em; }
-.induce-roster-card .pg-roster-list li { font-size: 1em; padding: 0.3em 0.4em; }
-.induce-roster-card .pg-roster-portrait-slot { width: 3em; height: 2.8em; }
-.induce-roster-card .pg-roster-portrait { height: 3em; }
-.induce-roster-close { margin-left: auto; border: 1px solid var(--ui-border); background: transparent; color: var(--ui-text); border-radius: 6px; padding: 2px 8px; font: inherit; cursor: pointer; }
-.induce-roster-close:hover { background: var(--ui-surface-2); }
-.induce-roster-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; overflow: hidden; }
-.induce-roster-split { display: flex; gap: 14px; min-height: 0; flex: 1 1 auto; align-items: flex-start; }
-.induce-roster-split .induce-roster-list { flex: 1 1 auto; min-width: 0; max-height: none; align-self: stretch; margin-top: 8px; }
-.induce-roster-split { min-height: 0; height: 100%; }
-.induce-roster-list li { cursor: pointer; border-radius: 6px; padding: 5px 6px; }
-.induce-roster-list li:hover { background: color-mix(in srgb, var(--ui-surface-2) 70%, var(--ui-text) 8%); }
-.induce-roster-list li[data-active='true'] { background: color-mix(in srgb, var(--ui-accent) 20%, transparent); }
-.induce-roster-list .pg-roster-nr { color: var(--ui-text-dim); font-variant-numeric: tabular-nums; min-width: 2.2em; }
-.induce-roster-popout { flex: 0 0 auto; width: min(26em, 42%); margin-top: 8px; animation: mvp-round-pop 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
-@media (max-width: 760px) { .induce-roster-split { flex-direction: column; } .induce-roster-popout { width: 100%; } }
 /* Owner 2026-07-15: MVP NOMINATION roster-summary modal (mirrors .postgame / .pg-roster; theme-token driven). */
 .mvp-nominate-overlay {
   position: absolute; z-index: 55; inset: 0;

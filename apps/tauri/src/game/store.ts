@@ -1561,11 +1561,18 @@ let touchdownSoundTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleTouchdownSound(): void {
   if (touchdownSoundTimer) cancelGameTimeout(touchdownSoundTimer);
   const started = Date.now();
+  // Astra review: only the frames received BEFORE the push (queued now) - not ones that arrive after it.
+  const aheadAtPush = new Set(playback.queue);
   const tick = () => {
     touchdownSoundTimer = null;
     const stepsPending = presentation.presenting?.kind === 'walk' || presentation.queue.some((ev) => ev.kind === 'step'); // an in-flight step presents as the 'walk' gate
+    // Owner 10-02: the push belongs after every frame received before it — a spectator's still-paced run, or the
+    // touchdown frame held behind the run (touchdownResolutionMustWait). Those holds carry their own fail-open caps,
+    // so the sound cap stretches by one hold cap, never unbounded.
+    const resolutionHeld = framesAheadOfServerPush(aheadAtPush);
+    const capMs = presentationMs(TOUCHDOWN_SOUND_SETTLE_CAP_MS + (resolutionHeld ? TOUCHDOWN_RESOLUTION_HOLD_CAP_MS : 0));
     const waited = Date.now() - started;
-    if ((!stepsPending && !playersAnimating()) || waited >= presentationMs(TOUCHDOWN_SOUND_SETTLE_CAP_MS)) { playSound('touchdown'); return; }
+    if ((!stepsPending && !resolutionHeld && !playersAnimating()) || waited >= capMs) { playSound('touchdown'); return; }
     touchdownSoundTimer = scheduleGameTimeout(tick, TOUCHDOWN_SOUND_POLL_MS);
   };
   tick();
@@ -6303,6 +6310,11 @@ function applyFrameContents(frame: QueuedFrame) {
   if (endTurnInFlight && endTurnInFlightTurnKey !== currentTurnKey(game.value)) {
     if (endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; // owner 09-19: the server answered OUR regular End Turn
     endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; // #14b TB-5: the applied server model advanced the turn — END_TURN ack landed
+  } else if (endTurnInFlight && endTurnInFlightMode !== null && String(game.value.turnMode ?? '') !== endTurnInFlightMode) {
+    // Astra review (touchdown hold): a touchdown ends the turn by switching the turn MODE (regular -> setup) with no
+    // turn-key change - retire the latch (no ack claimed: the server ended the turn, not our click), or Confirm Setup
+    // would stay blocked behind a stale in-flight End Turn.
+    endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
   }
   // Durable pickup identity is shared with detached history; renderer sequence stays local.
   {
@@ -8138,6 +8150,11 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, PLAYBACK_BACKPRESSURE_POLL_MS);
     return;
   }
+  // Owner 10-02: the touchdown-resolving frame waits until the scoring run has been presented (both seats + spectate).
+  if (touchdownResolutionMustWait(playback.queue[0])) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, TOUCHDOWN_RESOLUTION_POLL_MS);
+    return;
+  }
   // Live is authoritative for TIMING VALUES and a live seat self-paces: it keeps the immediate drain. A spectator
   // re-applies on the wire's own inter-arrival cadence (clamped, backlog-compressed) so the model can never
   // outrun the presentation.
@@ -8160,6 +8177,52 @@ function pumpPlayback() {
     if (frame) applyFrame(frame);
     pumpPlayback();
   }, gap);
+}
+
+/** Owner 10-02 (g1949352, 1.0.78): the server sends a scoring run's step frames and the touchdown frame in one burst
+ *  (seven steps inside ~50 ms, the touchdown ~150 ms later). Live play applied the touchdown frame at once — score,
+ *  whistle, the turn-end board fence that retires the walk cursor, every token back to the boxes, setup — while the
+ *  #67 drain was still presenting the run, so the scorer jumped, the touchdown played, then the steps played slowly
+ *  (each re-presented tile lost its renderer ack and waited out the 750 ms gate cap). The frame that RESOLVES the
+ *  touchdown (turnEnd naming playerIdTouchdown) now waits in the playback queue until no movement step is queued or
+ *  presenting; frames behind it keep their order. The steps' model frames are already applied (plan/ack timing is
+ *  untouched) and the server is not waiting on this client after a touchdown, so only the reveal moves. Fail-open:
+ *  past the cap the frame applies regardless, so a lost renderer ack can delay it, never wedge it. Replay is excluded
+ *  (ReplayAutoPlayer already waits for presentation idle per command) and so is snap-only catch-up. */
+const TOUCHDOWN_RESOLUTION_HOLD_CAP_MS = 8000;
+const TOUCHDOWN_RESOLUTION_POLL_MS = 50;
+let touchdownResolutionHoldSince = 0;
+function frameResolvesTouchdown(frame: QueuedFrame | undefined): boolean {
+  if (!frame || frame.serverPush) return false;
+  const reports = (frame.cmd.reportList as { reports?: { reportId?: unknown; playerIdTouchdown?: unknown }[] } | undefined)?.reports;
+  return !!reports?.some((report) => String(report?.reportId ?? '') === 'turnEnd' && !!report?.playerIdTouchdown);
+}
+function movementPresentationPending(): boolean {
+  const presenting = presentation.presenting;
+  if (presenting && (presenting.kind === 'walk' || presenting.kind === 'rollBeat')) return true;
+  return presentation.queue.some((event) => event.kind === 'step');
+}
+/** True while `frame` must wait behind the movement presentation. Tracks one continuous hold for the cap. */
+function touchdownResolutionMustWait(frame: QueuedFrame | undefined): boolean {
+  if (replay.active || playback.catchingUp || !frameResolvesTouchdown(frame) || !movementPresentationPending()) {
+    touchdownResolutionHoldSince = 0;
+    return false;
+  }
+  const now = Date.now();
+  if (touchdownResolutionHoldSince === 0) touchdownResolutionHoldSince = now;
+  if (now - touchdownResolutionHoldSince >= presentationMs(TOUCHDOWN_RESOLUTION_HOLD_CAP_MS)) {
+    touchdownResolutionHoldSince = 0;
+    return false;
+  }
+  return true;
+}
+/** The touchdown sound push bypasses the playback queue; it waits while frames received before it are unapplied. */
+function framesAheadOfServerPush(aheadAtPush: ReadonlySet<QueuedFrame>): boolean {
+  return !replay.active && !playback.catchingUp && playback.queue.some((frame) => aheadAtPush.has(frame));
+}
+/** Astra review: a touchdown frame is still waiting behind the scorer's walk - the turn is over on the server. */
+function touchdownResolutionQueued(): boolean {
+  return !replay.active && playback.queue.some((frame) => frameResolvesTouchdown(frame));
 }
 
 /** Poll cadence while the drain is backpressured — a scheduler interval, not a presentation duration, so it is
@@ -8358,12 +8421,15 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // Order 66 play applies every sync immediately; spectator and flag-off paths retain paced playback.
   const o66Play = settings.order66 && play.active;
   // Outside Order 66, pace regular play frames but keep pregame/setup lockstep and queue continuity.
+  const frame: QueuedFrame = { cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall };
+  // Owner 10-02: a touchdown-resolving frame that lands while the scoring run is still presenting takes the queue
+  // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
-      && Date.now() >= opponentBlockChoiceRevealUntil) {
-    applyFrame({ cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall });
+      && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)) {
+    applyFrame(frame);
     return;
   }
-  playback.queue.push({ cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall });
+  playback.queue.push(frame);
   pumpPlayback();
 }
 
@@ -8392,6 +8458,7 @@ function resetPlayback() {
   playback.lastReceivedAt = 0;
   playback.holdUntil = 0;
   playbackBackpressureSince = 0;
+  touchdownResolutionHoldSince = 0;
   onTheBallConnectionEpoch += 1;
   onTheBallReceiveTurnMode = '';
   onTheBallFallbackReceiveSequence = 0;
@@ -11235,6 +11302,66 @@ export function installConfirmedMovementDrainTestHarness(
       state.confirmedMovementDrainActive = priorActive;
       state.movementPresentationRecovery = priorRecovery;
       lastAppliedCommandNr = priorCommandNr;
+    },
+  };
+}
+
+/** @internal Owner 10-02 (g1949352) touchdown-pacing seam: literal wire frames enter through the PRODUCTION receive
+ *  path (enqueueSync → applyFrame / pumpPlayback), server pushes through handleServerPush, exactly as the session
+ *  delivers them. The test owns the fake clock and plays the renderer (onAnimDone per presentationStep). */
+export function installTouchdownPacingTestHarness(
+  fixture: GameJson,
+  mode: 'play' | 'spectator',
+  /** Astra review: seat the local coach on the AWAY (scoring) team and capture outgoing commands. */
+  options: { seat?: 'home' | 'away'; send?: (command: Record<string, unknown>) => void } = {},
+): {
+  receive(cmd: Record<string, unknown>): void;
+  serverPush(cmd: Record<string, unknown>): void;
+  queuedFrames(): number;
+  dispose(): void;
+} {
+  const priorGame = game.value;
+  const priorPlay = { ...play };
+  const priorReplayActive = replay.active;
+  const priorCatchingUp = playback.catchingUp;
+  const priorOrder66 = settings.order66;
+  const priorWireLog = settings.wireLog;
+  const priorCommandNr = lastAppliedCommandNr;
+  const priorSession = session;
+  resetPresentation();
+  resetPlayback();
+  game.value = structuredClone(fixture);
+  play.active = mode === 'play';
+  const seatTeam = options.seat === 'away' ? game.value.teamAway : game.value.teamHome;
+  play.coach = mode === 'play' ? String((seatTeam as { coach?: string }).coach ?? '') : 'td-pacing-spectator';
+  if (options.send) { const send = options.send; session = { send(command: Record<string, unknown>) { send(command); } } as unknown as GameSession; }
+  endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
+  replay.active = false;
+  playback.catchingUp = false;
+  playback.lastReceivedAt = 0;
+  settings.order66 = true;
+  settings.wireLog = false;
+  const unregister = gameStore.registerConfirmedMovementPresentationConsumer();
+  return {
+    receive(cmd) { enqueueSync(structuredClone(cmd)); },
+    serverPush(cmd) { handleServerPush(structuredClone(cmd)); },
+    queuedFrames: () => playback.queue.length,
+    dispose() {
+      clearCinematics(true);
+      resetPlayback();
+      unregister();
+      resetPresentation();
+      if (touchdownSoundTimer) { cancelGameTimeout(touchdownSoundTimer); touchdownSoundTimer = null; }
+      game.value = priorGame;
+      play.active = priorPlay.active;
+      play.coach = priorPlay.coach;
+      replay.active = priorReplayActive;
+      playback.catchingUp = priorCatchingUp;
+      settings.order66 = priorOrder66;
+      settings.wireLog = priorWireLog;
+      lastAppliedCommandNr = priorCommandNr;
+      session = priorSession;
+      endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
     },
   };
 }
@@ -20370,6 +20497,9 @@ export const gameStore = {
   playerEndTurn() {
     const g = game.value;
     if (!g || !play.active) return;
+    // Astra review: the scoring run is still presenting and the touchdown frame is queued behind it - the server has
+    // already ended this turn, so an End Turn now would land on the setup phase. Ignore the click until it applies.
+    if (touchdownResolutionQueued()) return;
     if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);
       return;

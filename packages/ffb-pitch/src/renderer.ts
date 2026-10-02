@@ -72,6 +72,7 @@ import {
   walkerDecorLocalY,
   walkerDrawnFigureHeight,
   walkerFigureRatio,
+  walkerChestRatio,
   placeWalkerDecor,
   WALKER_REFERENCE_FIGURE_PX,
   walkerShadowRadii,
@@ -16042,7 +16043,8 @@ export class PitchRenderer {
     const body = token.children
       .filter((child): child is Sprite => child instanceof Sprite && child.label !== 'castShadow')
       .sort((a, b) => b.height - a.height)[0];
-    const walkerRatio = isWalkerToken(token) ? walkerFigureRatio(token) : null;
+    // Owner 10-02: the centre-line height (walkerChestRatio) - a raised fist / horns no longer lift it onto the face.
+    const walkerRatio = isWalkerToken(token) ? walkerChestRatio(token) : null;
     if (walkerRatio) {
       placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55, scale);
     } else {
@@ -16103,7 +16105,7 @@ export class PitchRenderer {
     // floated the eye above the head — mount it on the CHEST of the measured figure instead (55% up from the feet
     // line at the current decor scale; applyDecorScale keeps it there through the zoom snap).
     // Owner 09-06 (r2): laid out in DECOR-1 units through placeWalkerDecor (the raw placement ballooned when zoomed).
-    const walkerRatio = isWalkerToken(token) ? walkerFigureRatio(token) : null;
+    const walkerRatio = isWalkerToken(token) ? walkerChestRatio(token) : null; // owner 10-02: centre-line height
     if (walkerRatio) {
       placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55);
     } else {
@@ -17927,9 +17929,14 @@ export class PitchRenderer {
     const gazeInactive = !acted && !pickIneligible
       && this.gazeVictims.has(data.playerId)
       && hasFlag(data.playerState, PlayerStateFlag.CONFUSED);
+    // Owner 10-02: "They also lost tackle zones so should be shaded grey" - every standing player WITHOUT tackle zones
+    // (CONFUSED: Bone-head / Really Stupid / Animal Savagery / failed Bloodlust; HYPNOTIZED) - the DISTRACTED banner's
+    // players - gets the same grey as an inactive one (no checkmark: not an activation). The banner stays lit.
+    const distractedInactive = !acted && !pickIneligible && !gazeInactive && !isDown(data.playerState)
+      && (hasFlag(data.playerState, PlayerStateFlag.CONFUSED) || hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED));
     // item3: `k` is the dim LEVEL, not a boolean — mid-turnover it is the eased in-flight value, so a
     // player fading OUT (acted → not, the turnover case) still paints here even though acted is false.
-    const k = gazeInactive ? 1 : this.activationDimLevel(data.playerId, acted || pickIneligible ? 1 : 0);
+    const k = gazeInactive || distractedInactive ? 1 : this.activationDimLevel(data.playerId, acted || pickIneligible ? 1 : 0);
     const fading = this.activationFades.has(data.playerId);
     if (k <= 0.001 && !fading) return;
     // Owner 2026-07-04g: activated players shade ~15% MORE — a lower alpha
@@ -17972,7 +17979,7 @@ export class PitchRenderer {
         if (ring) ring.alpha = this.ringDimAlpha(Math.min(1, kk));
       }
     };
-    if (pickIneligible || gazeInactive) { paint(k); if (fading) this.activationFadePaint.set(data.playerId, paint); return; } // dim only — no activation checkmark
+    if (pickIneligible || gazeInactive || distractedInactive) { paint(k); if (fading) this.activationFadePaint.set(data.playerId, paint); return; } // dim only — no activation checkmark
     // Owner 2026-07-12 (o66j): in ADDITION to the shading, a small green ✓ badge
     // on an activated player. Belt-and-braces with the desaturation so "spent"
     // reads at a glance even when the shading is subtle at zoom. The three token-
