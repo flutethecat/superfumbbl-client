@@ -2095,7 +2095,9 @@ export class PitchRenderer {
     // Owner 09-15: 3 joins the ladder as the in-between step (2.25 -> 3 -> 4). It is 1.5 device px per art px, so
     // the WALKERS do not follow it — snapWalker rounds the 1.5 tie UP to the 2:1 whole ratio (same pixel size as
     // rung 4) while the ground, grid, markers and discs zoom to 3.
-    const ladder = [0.5, 1, 2, 2.25, 3, 4, 4.5, 6, 8, 9, 10, 12, 16];
+    // Owner 10-02 (S93): the 2.25 rung read as a near-copy of the 2x default next to it (12% apart) - dropped in both
+    // orientations; the full-pitch rung below 2 and the 3x rung above keep the steps distinct.
+    const ladder = [0.5, 1, 2, 3, 4, 4.5, 6, 8, 9, 10, 12, 16];
     // JLeav 09-23: the first step in from the whole-stadium fit jumped straight to 2x. Add a rung at the scale
     // where just the 26x15 pitch fills the viewport, when that lands strictly between two fixed rungs.
     const pitchFit = this.pitchOnlyFitScale();
