@@ -14214,13 +14214,25 @@ export class PitchRenderer {
     const hw = w / s / 2, hh = h / s / 2;
     return { x0: c.x - hw, y0: c.y - hh, x1: c.x + hw, y1: c.y + hh };
   }
-  /** The scale at which the playing squares alone (26x15) fill the viewport; null before the app exists. */
+  /** The scale at which the playing squares alone (26x15) fill the viewport; null before the app exists.
+   *  Owner 10-02 (S92): the FULL-PITCH view - "as close as possible with the pitch being completely visible; side zones
+   *  and stadium do not need to be shown". A thin margin keeps the boundary lines inside the window. */
   private pitchOnlyFitScale(): number | null {
     if (!this.app) return null;
-    const a = squareAnchor(0, 0), b = squareAnchor(PITCH_COLS - 1, PITCH_ROWS - 1);
-    const w = Math.abs(b.x - a.x) + TILE_W, h = Math.abs(b.y - a.y) + TILE_H;
-    return Math.min(this.app.screen.width / w, this.app.screen.height / h);
+    const box = this.pitchFitBox();
+    const m = PitchRenderer.PITCH_FIT_MARGIN * 2;
+    return Math.min((this.app.screen.width - m) / box.w, (this.app.screen.height - m) / box.h);
   }
+  /** World box of the 26x15 squares (the four corner squares, a full tile each). Its MIDDLE is the full-pitch view's
+   *  centre - the perspective squeezes the far end, so the middle square's anchor sits off the box's middle. */
+  private pitchFitBox(): { cx: number; cy: number; w: number; h: number } {
+    const pts = [[0, 0], [PITCH_COLS - 1, 0], [0, PITCH_ROWS - 1], [PITCH_COLS - 1, PITCH_ROWS - 1]].map(([x, y]) => squareAnchor(x!, y!));
+    const x0 = Math.min(...pts.map((p) => p.x)) - TILE_W / 2, x1 = Math.max(...pts.map((p) => p.x)) + TILE_W / 2;
+    const y0 = Math.min(...pts.map((p) => p.y)) - TILE_H / 2, y1 = Math.max(...pts.map((p) => p.y)) + TILE_H / 2;
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+  }
+  /** Screen px kept clear around the pitch in the full-pitch view (each side). */
+  private static readonly PITCH_FIT_MARGIN = 6;
   private fitScaleFor(worldW: number, worldH: number, margin: number): number {
     if (!this.app) return this.cameraFitScale;
     return this.quantizeZoom(Math.min((this.app.screen.width - margin) / worldW, (this.app.screen.height - margin) / worldH), 'floor');
@@ -18601,6 +18613,13 @@ export class PitchRenderer {
     this.world.position.x = screenX - (screenX - this.world.position.x) * applied;
     this.world.position.y = screenY - (screenY - this.world.position.y) * applied;
     this.world.scale.set(newScale);
+    // Owner 10-02 (S92): landing on the full-pitch rung frames the WHOLE pitch, wherever the cursor was - a zoom about
+    // the cursor left part of it off screen, which is what made the rung look missing.
+    const pitchFit = this.pitchOnlyFitScale();
+    if (pitchFit != null && Math.abs(newScale - this.quantizeZoom(pitchFit, 'nearest')) < 1e-6 && this.app) {
+      const box = this.pitchFitBox();
+      this.world.position.set(this.app.screen.width / 2 - box.cx * newScale, this.app.screen.height / 2 - box.cy * newScale);
+    }
     this.clampCamera();
     this.updateOverlayScales(); // B2-4/B2-20: badges counter-scale with zoom
   }
