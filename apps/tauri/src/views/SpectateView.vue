@@ -12882,6 +12882,11 @@ function sendChat() {
           :message="gameStore.state.touchbackWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- S91 (owner 10-01): Kick-off - the kicking coach is aiming the kick; every other seat waits on them. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.kickoffWaiting" title="Kick-off" notice-id="kickoff-waiting"
+          :message="gameStore.state.kickoffWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
           :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
 

@@ -168,6 +168,25 @@ export function touchbackWaitingFromGame(g: GameJson, myTeamId: string | null): 
   return { message: `${subject} is choosing who takes the touchback` };
 }
 
+/** Owner 10-01 (S91): "Your opponent is choosing the kick-off destination". Turn mode `kickoff` opens the kick: the
+ *  KICKING coach (the playing side - the store's own `myKick = homePlaying === iAmHome`) aims, and the ball has no
+ *  coordinate until the kick lands (corpus-block-hatred cmd 36 -> 37 sets ballCoordinate + kickoffScatter; every
+ *  recorded kickoff opens with ballCoordinate null). Later `kickoff` frames (Charge / Solid Defence choices) carry
+ *  the ball, so they never show this. A live dialog means the kicker is answering something else (an inducement);
+ *  a leftover `setupError` is informational and does not count. Every seat but the kicker is told. */
+export function kickoffWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  if (g.turnMode !== 'kickoff') return null;
+  const ball = (g.fieldModel as { ballCoordinate?: unknown } | undefined)?.ballCoordinate;
+  if (ball != null) return null;
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (dialog && dialog.dialogId !== 'setupError') return null;
+  const team = g.homePlaying ? g.teamHome : g.teamAway;
+  const teamId = String(team?.teamId ?? '');
+  if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The kicking coach');
+  return { message: `${subject} is choosing the kick-off destination` };
+}
+
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
  *  fallback the live applier uses (store: dp.playerId ?? dp.playerIds[0]). */
 function shadowingPlayerId(dialog: Record<string, unknown> | null): string | null {
@@ -215,6 +234,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     // Existing On-the-Ball copy is opponent-player-only; spectators have no owned reaction turn.
     chargeWaiting: chargeWaitingFromGame(g, null),
     touchbackWaiting: touchbackWaitingFromGame(g, null),
+    kickoffWaiting: kickoffWaitingFromGame(g, null),
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
