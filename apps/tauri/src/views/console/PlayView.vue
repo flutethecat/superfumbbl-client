@@ -181,9 +181,6 @@ function ownSide(entry: GameListEntry): 'home' | 'away' | null {
   if (lobbyCoach && entry.teamAwayCoach?.toLowerCase() === lobbyCoach) return 'away';
   return null;
 }
-function ownTeamName(entry: GameListEntry): string {
-  return (ownSide(entry) === 'away' ? entry.teamAwayName : entry.teamHomeName) || '';
-}
 function opponentFor(entry: GameListEntry): TeamPreview {
   const own = ownSide(entry);
   return own === 'away'
@@ -313,6 +310,76 @@ function formatTeamValue(value: number | undefined): string | undefined {
   return `TV ${thousands.toLocaleString()}k`;
 }
 function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter(row.myScore, row.opponentScore); }
+
+// Owner 10-02: My Active Games rows get the Recent/Spectate row treatment — MY team in the left box, the opponent in
+// the right box, status over turn over score in the centre, and Join/Rejoin in the right action slot. The game id
+// stays out of the visible text (tooltip only; owner removed ids from the Spectate page).
+function myTeam(game: FumbblActiveGame): FumbblActiveTeam { return game.mine === 'away' ? game.away : game.home; }
+function theirTeam(game: FumbblActiveGame): FumbblActiveTeam { return game.mine === 'away' ? game.home : game.away; }
+
+/** One side of a lobby-listed game, enriched only from data already on this page (no extra API calls). */
+interface ListedTeam { name: string; coach: string; race?: string; tv?: number; logoUrl?: string; baseIconPath?: string; side: 'home' | 'away' }
+interface ListedRow { own: ListedTeam; opponent: ListedTeam | null; started: boolean }
+
+/** Race / TV by FUMBBL team id from the live games (/api/match/current) and my recent games already loaded here. */
+const knownTeams = computed(() => {
+  const known = new Map<string, { race?: string; tv?: number }>();
+  // Astra review: recent games come newest-first - keep the FIRST (newest) TV per team, not the oldest.
+  for (const row of recent.value) if (row.myTeamId && !known.has(String(row.myTeamId))) known.set(String(row.myTeamId), { race: row.myRace, tv: row.myTv });
+  for (const game of activeGames.value)
+    for (const t of [game.home, game.away]) if (t.id) known.set(String(t.id), { race: t.race || undefined, tv: t.tv });
+  return known;
+});
+/** FFB's GameListEntry.started is the game's start date (null / empty while it waits for its opponent). */
+function entryStarted(entry: GameListEntry): boolean {
+  const started = entry.started;
+  return started !== null && started !== undefined && started !== '' && started !== 0;
+}
+function listedRow(entry: GameListEntry): ListedRow {
+  const ownSideName = ownSide(entry) ?? 'home';
+  const oppSideName = ownSideName === 'home' ? 'away' : 'home';
+  const pick = (side: 'home' | 'away'): { id: string; name: string; coach: string } => side === 'home'
+    ? { id: entry.teamHomeId || '', name: entry.teamHomeName || '', coach: entry.teamHomeCoach || '' }
+    : { id: entry.teamAwayId || '', name: entry.teamAwayName || '', coach: entry.teamAwayCoach || '' };
+  const enrich = (raw: { id: string; name: string; coach: string }, side: 'home' | 'away'): ListedTeam => {
+    const known = raw.id ? knownTeams.value.get(raw.id) : undefined;
+    const team: ListedTeam = { name: raw.name, coach: raw.coach, race: known?.race, tv: known?.tv, side };
+    // the JNLP lobby's own team / selected opponent may carry fetched preview data (race, TV, logo)
+    const preview = raw.id && raw.id === fumbblLobby.value?.teamId ? ownTeam.value
+      : raw.id && selectedEntry.value && Number(selectedEntry.value.gameId) === Number(entry.gameId) && raw.id === opponentTeam.value?.teamId ? opponentTeam.value
+        : null;
+    if (preview) {
+      team.name ||= preview.name;
+      team.coach ||= preview.coach ?? '';
+      team.race ||= preview.race;
+      team.tv = preview.teamValue ?? team.tv; // the freshly fetched preview wins over an older game's TV
+      team.logoUrl = preview.logoUrl;
+      team.baseIconPath = preview.baseIconPath;
+    }
+    return team;
+  };
+  const own = enrich(pick(ownSideName), ownSideName);
+  if (!own.coach && ownSide(entry)) own.coach = fumbblLobby.value?.coach ?? '';
+  const oppRaw = pick(oppSideName);
+  return {
+    own,
+    opponent: oppRaw.name || oppRaw.coach ? enrich(oppRaw, oppSideName) : null,
+    started: entryStarted(entry),
+  };
+}
+/** The lobby list's rows: the password lobby lists only games /api/match/current does not show; a JNLP lobby lists all. */
+const lobbyRows = computed(() => (fumbblLobby.value?.password ? listedGames.value : fumbblLobbyGames.value)
+  .map((entry) => ({ entry, row: listedRow(entry) })));
+/** Astra review: a crest URL that failed to load falls back to the initials (like the loaded card's logo()). */
+const failedCrests = ref(new Set<string>());
+function listedCrest(team: ListedTeam | null): string | null {
+  const url = team && (team.race || team.logoUrl) ? teamLogoUrl(team) : null;
+  return url && !failedCrests.value.has(url) ? url : null;
+}
+function crestFailed(url: string | null): void {
+  if (!url || failedCrests.value.has(url)) return;
+  const next = new Set(failedCrests.value); next.add(url); failedCrests.value = next;
+}
 </script>
 
 <template>
@@ -398,68 +465,101 @@ function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter
           <p v-if="fumbblLobbyError" class="load-error" role="alert">{{ fumbblLobbyError }}</p>
           <div v-if="fumbblLobbyListRequested" class="game-list" aria-live="polite">
             <p v-if="!fumbblLobby.password && !fumbblLobbyGames.length" class="empty">You do not have any open games to join.</p>
-            <button
-              v-for="entry in (fumbblLobby.password ? listedGames : fumbblLobbyGames)"
+            <!-- Owner 10-02: a lobby-listed game is a full game row - my team | status | opponent + Join/Rejoin
+                 (Rejoin when FFB's list says the game has started). The list carries no race/TV/score: those come
+                 only from teams already on this page (live games, recent games, the JNLP preview), else omitted. -->
+            <article
+              v-for="{ entry, row: lr } in lobbyRows"
               :key="entry.gameId"
-              class="game-entry"
-              type="button"
-              :disabled="!lobbyReady || ownSide(entry) === null"
-              @click="launchListed(entry)"
+              class="game-row lobby-row"
+              :data-started="lr.started"
             >
-              <span class="game-entry-team">
-                <small v-if="fumbblLobby.password" class="game-entry-coach">{{ ownTeamName(entry) }} vs</small>
-                <small class="game-entry-coach">{{ opponentFor(entry).coach || 'Coach unavailable' }}</small>
-                <span class="game-entry-identity">
-                  <span class="game-entry-logo-fallback" aria-hidden="true">{{ initials(opponentFor(entry).name) }}</span>
-                  <strong>{{ opponentFor(entry).name }}</strong>
+              <div class="row-team home">
+                <img v-if="listedCrest(lr.own)" class="row-logo" :src="listedCrest(lr.own)!" alt="" @error="crestFailed(listedCrest(lr.own))" />
+                <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(lr.own.name) }}</span>
+                <span class="row-text">
+                  <strong class="row-name">{{ lr.own.name || '—' }}</strong>
+                  <small v-if="lr.own.coach" class="row-meta row-coach">{{ lr.own.coach }}</small>
+                  <small v-if="lr.own.race" class="row-meta row-race">{{ lr.own.race }}</small>
+                  <small v-if="formatTeamValue(lr.own.tv)" class="row-meta row-tv">{{ formatTeamValue(lr.own.tv) }}</small>
                 </span>
-              </span>
-              <span class="game-entry-action">Waiting &middot; game {{ entry.gameId }}</span>
-              <span class="bevel small" aria-hidden="true">Join</span>
-            </button>
+              </div>
+              <div class="row-centre" :title="`Game ${entry.gameId}`">
+                <span class="row-status">{{ lr.started ? 'In progress' : 'Waiting' }}</span>
+                <span class="row-score row-score-vs">vs</span>
+              </div>
+              <div class="row-right">
+                <div v-if="lr.opponent" class="row-team away">
+                  <img v-if="listedCrest(lr.opponent)" class="row-logo" :src="listedCrest(lr.opponent)!" alt="" @error="crestFailed(listedCrest(lr.opponent))" />
+                  <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(lr.opponent!.name || lr.opponent!.coach) }}</span>
+                  <span class="row-text">
+                    <strong class="row-name">{{ lr.opponent!.name || 'Opponent' }}</strong>
+                    <small v-if="lr.opponent!.coach" class="row-meta row-coach">{{ lr.opponent!.coach }}</small>
+                    <small v-if="lr.opponent!.race" class="row-meta row-race">{{ lr.opponent!.race }}</small>
+                    <small v-if="formatTeamValue(lr.opponent!.tv)" class="row-meta row-tv">{{ formatTeamValue(lr.opponent!.tv) }}</small>
+                  </span>
+                </div>
+                <div v-else class="row-team away row-team-empty">
+                  <span class="row-logo logo-fallback" aria-hidden="true">?</span>
+                  <span class="row-text"><strong class="row-name row-waiting">Waiting for opponent</strong></span>
+                </div>
+                <button
+                  class="bevel resume-button join-button"
+                  type="button"
+                  :disabled="!lobbyReady || ownSide(entry) === null"
+                  :title="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}`"
+                  :aria-label="`${lr.started ? 'Rejoin' : 'Join'} game ${entry.gameId}${lr.opponent ? ` against ${lr.opponent.name || lr.opponent.coach}` : ''}`"
+                  @click="launchListed(entry)"
+                >{{ lr.started ? 'Rejoin' : 'Join' }}</button>
+              </div>
+            </article>
           </div>
         </template>
 
-        <article v-for="game in activeGames" :key="game.id" class="game-row" :data-mine="game.mine">
+        <!-- Owner 10-02: a live game (/api/match/current) is one the coach is already in, so its action is Rejoin
+             (same handler + enable rule as the old Resume). My team on the left, the opponent on the right; the
+             centre mirrors a live Spectate row: status, then the turn, then my score - their score. -->
+        <article v-for="game in activeGames" :key="game.id" class="game-row active-row" :data-mine="game.mine">
           <div class="row-team home">
-            <img v-if="crest(game.home)" class="row-logo" :src="crest(game.home)!" alt="" />
-            <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.home.name) }}</span>
+            <img v-if="crest(myTeam(game))" class="row-logo" :src="crest(myTeam(game))!" alt="" />
+            <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(myTeam(game).name) }}</span>
             <span class="row-text">
-              <strong class="row-name">{{ game.home.name }}</strong>
-              <small class="row-meta row-coach">{{ game.home.coach }}</small>
-              <small v-if="game.home.race" class="row-meta row-race">{{ game.home.race }}</small>
-              <small v-if="formatTeamValue(game.home.tv)" class="row-meta">{{ formatTeamValue(game.home.tv) }}</small>
+              <strong class="row-name">{{ myTeam(game).name }}</strong>
+              <small class="row-meta row-coach">{{ myTeam(game).coach }}</small>
+              <small v-if="myTeam(game).race" class="row-meta row-race">{{ myTeam(game).race }}</small>
+              <small v-if="formatTeamValue(myTeam(game).tv)" class="row-meta row-tv">{{ formatTeamValue(myTeam(game).tv) }}</small>
             </span>
           </div>
-          <div class="row-centre">
-            <span class="row-score"><span class="row-score-n">{{ game.home.score }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ game.away.score }}</span></span>
+          <div class="row-centre" :title="`Game ${game.id}`">
+            <span class="row-status">In progress</span>
             <span class="row-phase">{{ phaseLabel(game) }}</span>
+            <span class="row-score"><span class="row-score-n">{{ myTeam(game).score }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ theirTeam(game).score }}</span></span>
           </div>
           <div class="row-right">
             <div class="row-team away">
-              <img v-if="crest(game.away)" class="row-logo" :src="crest(game.away)!" alt="" />
-              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(game.away.name) }}</span>
+              <img v-if="crest(theirTeam(game))" class="row-logo" :src="crest(theirTeam(game))!" alt="" />
+              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(theirTeam(game).name) }}</span>
               <span class="row-text">
-                <strong class="row-name">{{ game.away.name }}</strong>
-                <small class="row-meta row-coach">{{ game.away.coach }}</small>
-              <small v-if="game.away.race" class="row-meta row-race">{{ game.away.race }}</small>
-                <small v-if="formatTeamValue(game.away.tv)" class="row-meta">{{ formatTeamValue(game.away.tv) }}</small>
+                <strong class="row-name">{{ theirTeam(game).name }}</strong>
+                <small class="row-meta row-coach">{{ theirTeam(game).coach }}</small>
+                <small v-if="theirTeam(game).race" class="row-meta row-race">{{ theirTeam(game).race }}</small>
+                <small v-if="formatTeamValue(theirTeam(game).tv)" class="row-meta row-tv">{{ formatTeamValue(theirTeam(game).tv) }}</small>
               </span>
             </div>
             <button
-              class="bevel resume-button"
+              class="bevel resume-button rejoin-button"
               type="button"
               :disabled="!canResume || (pendingResume?.id === game.id)"
-              :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to resume from here'"
+              :title="canResume ? `Reconnect to game ${game.id}` : 'Save your FUMBBL password in Settings to rejoin from here'"
               @click="resumeGame(game)"
-            >{{ pendingResume?.id === game.id ? 'Connecting…' : 'Resume' }}</button>
+            >{{ pendingResume?.id === game.id ? 'Connecting…' : 'Rejoin' }}</button>
           </div>
         </article>
 
         <p v-if="activeError" class="load-error" role="alert">{{ activeError }}</p>
         <p v-if="coach && !activeCount && !activeLoading" class="empty">No active games</p>
         <div v-if="coach && !settings.password" class="card-foot">
-          <small class="lobby-note">Save your FUMBBL password in Settings to resume games from here.</small>
+          <small class="lobby-note">Save your FUMBBL password in Settings to rejoin games from here.</small>
         </div>
       </section>
 
@@ -585,7 +685,11 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
   text-shadow: 1px 1px 0 #3b0307;
   white-space: nowrap;
 }
-.plain { padding: 8px 14px; color: var(--pb-text); border: 1px solid var(--pb-text); background: var(--ui-old-lace, #F8F5E7); cursor: pointer; }
+/* Owner 10-02: the lobby's List Games / Cancel speak the game rows' bevelled-panel language (no behaviour change). */
+.plain { padding: 8px 14px; color: var(--pb-text); border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px; background: var(--ui-old-lace, #F8F5E7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 2px 5px rgba(26, 64, 28, .2);
+  font-family: 'Nuffle', system-ui, sans-serif; font-size: 15px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
+.plain:hover:not(:disabled) { border-color: var(--pb-carmine); color: var(--pb-carmine); }
 .plain:disabled { opacity: .45; cursor: default; }
 .link { padding: 0; color: var(--pb-carmine); border: 0; background: none; font: inherit; text-decoration: underline; cursor: pointer; }
 .link:disabled { opacity: .5; cursor: default; }
@@ -608,6 +712,9 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 
 /* Loaded-JNLP card */
 .loaded-card, .lobby-card { display: grid; gap: 12px; padding: 14px 18px; border: 1px solid var(--pb-carmine); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); }
+/* Owner 10-02: the password-lobby status block sits in the game rows' family - the row's eggshell strip and line. */
+.lobby-card { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; padding: 12px 14px; border-color: var(--pb-line); }
+.lobby-card .lobby-actions { flex: 1 1 auto; }
 .loaded-line { color: #2f8f46; font-size: 14px; }
 .match-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: center; gap: 16px; }
 .team-side { display: grid; grid-template-columns: 128px auto auto auto minmax(0, 1fr); column-gap: 12px; row-gap: 2px; align-items: center; min-width: 0; }
@@ -646,16 +753,8 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .join-row input:focus { outline: 2px solid var(--pb-carmine); outline-offset: 1px; }
 .lobby-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lobby-actions small { margin-left: auto; color: var(--pb-muted); }
-.game-list { display: grid; gap: 7px; }
-.game-entry { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; color: var(--pb-text); text-align: left; border: 1px solid var(--pb-line); border-radius: 4px; background: var(--ui-eggshell, #E7DDC7); cursor: pointer; }
-.game-entry:disabled { opacity: .45; cursor: default; }
-.game-entry:hover:not(:disabled) { border-color: var(--pb-carmine); background: var(--ui-old-lace, #F8F5E7); }
-.game-entry-team { display: grid; gap: 4px; min-width: 0; }
-.game-entry-coach { color: var(--pb-carmine); font-size: 12px; }
-.game-entry-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.game-entry-identity strong { overflow-wrap: anywhere; }
-.game-entry-logo-fallback { display: grid; flex: 0 0 28px; place-items: center; width: 28px; height: 28px; border: 1px solid var(--pb-line); border-radius: 3px; background: var(--ui-old-lace, #F8F5E7); font-size: 12px; }
-.game-entry-action { color: var(--pb-muted); white-space: nowrap; }
+/* Owner 10-02: lobby-listed games are full game rows (.game-row.lobby-row), stacked like the live rows below them. */
+.game-list { display: grid; gap: 10px; }
 
 /* Game rows (active + recent share the design) */
 /* Owner 10-01 (S77): a game row is THREE boxes - my team | result | opponent - each bevelled and lifted off the row
@@ -684,9 +783,16 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 .row-score-n:first-child { text-align: right; }
 .row-score-n:last-child { text-align: left; }
 .row-phase { color: var(--pb-text); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+/* Owner 10-02: active rows - the game's status heads the centre box (Waiting / In progress); a waiting lobby game has no
+   score yet, so the centre keeps the Spectate page's truthful "vs" in the score's style. */
+.row-status { color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 16px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
+.row-score.row-score-vs { display: block; justify-self: center; }
+.row-waiting { color: var(--pb-muted); font-style: italic; }
 /* Owner 10-01 (S77): the result label art at its own CSS size (1x/2x/3x sources, never stretched). */
 .row-result-art { display: block; flex: none; max-width: 100%; height: auto; image-rendering: auto; } /* S79: the IMAGE's centre sits over the score's dash */
 .resume-button, .play-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
+/* Owner 10-02: JOIN and REJOIN share one width so every active-game row's opponent box lines up. */
+.join-button, .rejoin-button { min-width: 7.2em; text-align: center; }
 /* Owner 10-01 (S80): the action column fills the row's height - Details at the top, Replay in the middle, and the
    time's bottom edge on the panels' bottom edge. */
 .row-actions { display: grid; gap: 8px; align-content: space-between; align-self: stretch; justify-items: stretch; }
@@ -719,6 +825,14 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
   .resume-button { font-size: 20px; padding: 10px 12px; }
 }
 
+/* Owner 10-02 (Astra review): between the 1500 px and the 640 px layouts the right column (opponent box + action
+   button) ran out of room around 900 px - the action drops under the opponent box and the crests go to 64 px. */
+@media (max-width: 1100px) {
+  .game-row { grid-template-columns: minmax(0, 1fr) minmax(150px, .3fr) minmax(0, 1fr); }
+  .row-right { flex-direction: column; }
+  .row-right > .bevel { align-self: stretch; }
+  .row-logo, .game-row .logo-fallback { flex-basis: 64px; width: 64px; height: 64px; }
+}
 @media (max-width: 640px) {
   .play-view { padding: 12px; }
   h1 { font-size: 32px; }

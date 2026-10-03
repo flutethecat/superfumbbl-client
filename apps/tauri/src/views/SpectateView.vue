@@ -777,6 +777,16 @@ function logNameStyle(team: LogNameTeam): Record<string, string> | undefined {
   return color ? { color, '--log-seat-glow': color } : undefined;
 }
 
+/** Owner 10-02: the L toggle - the Log at double width and height (clamped to the view), never persisted over the
+ *  coach's own size (settings.logSize); the next L restores it. */
+const logExpanded = ref(false);
+function logDisplaySize(size: { w: number; h: number }): { w: number; h: number } {
+  if (!logExpanded.value) return size;
+  const vp = panelViewport.value;
+  const maxW = vp ? Math.round(vp.width * 0.9) : size.w * 2;
+  const maxH = vp ? Math.round(vp.height * 0.9) : size.h * 2;
+  return { w: Math.min(size.w * 2, maxW), h: Math.min(size.h * 2, maxH) };
+}
 const panelStyle = computed(() => {
   const style: Record<string, string> = { '--log-panel-opacity': String(settings.logOpacity) };
   // Owner: minimizing (▾) DOCKS the bar just to the RIGHT of the quick-action
@@ -819,12 +829,13 @@ const panelStyle = computed(() => {
   // so the explicit SE grip grows the panel down/right instead of upward.
   const pos = settings.logPos ?? panelAnchor.value;
   if (pos) {
-    const size = settings.logSize ?? defaultPanelSize.value ?? { w: 360, h: 150 };
+    const size = logDisplaySize(settings.logSize ?? defaultPanelSize.value ?? { w: 360, h: 150 });
     Object.assign(style, resizablePanelStyle(
       pos, { width: size.w, height: size.h }, panelViewport.value, logResizeOrigin.value,
     ));
   }
-  const size = settings.logSize ?? defaultPanelSize.value;
+  const stored = settings.logSize ?? defaultPanelSize.value;
+  const size = stored ? logDisplaySize(stored) : stored;
   if (size && !panelCollapsed.value) {
     style.width = `${size.w}px`;
     style.height = `${size.h}px`;
@@ -1456,6 +1467,8 @@ function startLogResize(event: PointerEvent) {
   if (!el) return;
   cancelLogResize(false);
   const rect = el.getBoundingClientRect();
+  // Owner 10-02: dragging the grip while L-enlarged makes the dragged size the Log's own size (not doubled again).
+  logExpanded.value = false;
   const parentRect = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect();
   logResizeOrigin.value = { x: rect.left - (parentRect?.left ?? 0), y: rect.top - (parentRect?.top ?? 0) };
   const grip = event.currentTarget as HTMLElement;
@@ -8471,6 +8484,12 @@ function onKeydown(event: KeyboardEvent) {
     && !keyboardOwnedByTextControl(event.target)) {
     event.preventDefault(); toggleRosterPopout(); return;
   }
+  // Owner 10-02: "When a user pushes L, let's expand the log window so it's larger and twice its size. A second L push
+  // returns it to its old size." (Settings > Keyboard can rebind it.)
+  if (event.code === settings.logExpandKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.repeat
+    && !keyboardOwnedByTextControl(event.target)) {
+    event.preventDefault(); logExpanded.value = !logExpanded.value; if (logExpanded.value) panelCollapsed.value = false; return;
+  }
   if (event.key === 'Escape') {
     // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
     // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
@@ -8556,7 +8575,7 @@ onMounted(async () => {
     let sawInitial = false;
     panelResizeObserver = new ResizeObserver(() => {
       const el = panelEl.value;
-      if (!el || panelCollapsed.value || panelDrag) return;
+      if (!el || panelCollapsed.value || panelDrag || logExpanded.value) return; // owner 10-02: the L-doubled size is never persisted
       if (!sawInitial) {
         sawInitial = true;
         return;

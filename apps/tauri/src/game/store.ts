@@ -6528,17 +6528,25 @@ function applyFrameContents(frame: QueuedFrame) {
   // #78 (owner 08-05): pace pickup, catch resolution, and EVERY ball-scatter hop in o66 play; spectate keeps holdPlayback. The frame's sound rides its beat (#92 Group-A cue); beats ride the #67 FIFO so they land AFTER move steps and degrade to instant on flush/catch-up.
   if (settings.order66 && !playback.catchingUp) {
     const snd = String((cmd as { sound?: unknown }).sound ?? '');
+    // Owner 10-02 (g1949371): the loose-ball chain's frame gate — each hop and each catch roll reads before the
+    // next frame applies (ballChainWaitMs). Summed here, armed once below.
+    let ballChainBeatMs = 0;
+    let ballChainFrame = false;
     if (reports.some((r) => String(r.reportId) === 'pickUpRoll')) {
       const s = (snd === 'pickup' || snd === 'catch') ? snd : undefined;
       enqueueBeat(presentationMs(PICKUP_BOUNCE_BEAT_MS), s);
       if (s) relocatedBeatSounds.add(s);
     }
-    const catchRoll = reports.find((r) => String(r.reportId) === 'catchRoll') as { successful?: unknown } | undefined;
+    const catchRoll = reports.find((r) => String(r.reportId) === 'catchRoll') as { successful?: unknown; bomb?: unknown } | undefined;
+    // Astra review: a BOMB's scatter / catch is not the loose ball - it never opens or extends the chain.
+    const bombFrame = frameInvolvesBomb(cmd.modelChangeList as ModelChangeListJson | null | undefined, reports);
     if (catchRoll?.successful === false || catchRoll?.successful === true) {
       // A fail beat reads before the next bounce frame; a success beat is the chain's terminal resolution.
       const s = snd === 'catch' && !relocatedBeatSounds.has('catch') ? 'catch' : undefined;
       enqueueBeat(presentationMs(CATCH_BEAT_MS), s);
       if (s) relocatedBeatSounds.add(s);
+      // A catch attempt inside a bounce chain shows its die at the catcher before the next hop / the chain's end.
+      if (ballChainOpen && !bombFrame) { ballChainBeatMs += presentationMs(BALL_CHAIN_CATCH_READ_MS); ballChainFrame = true; }
     }
     const scatterBall = reports.find((r) => String(r.reportId) === 'scatterBall');
     const scatterDirs = (scatterBall?.directionArray ?? scatterBall?.directions) as unknown;
@@ -6551,11 +6559,24 @@ function applyFrameContents(frame: QueuedFrame) {
       const s = snd === 'bounce' ? 'bounce' : undefined;
       enqueueBeat(presentationMs(BOUNCE_HOP_BEAT_MS) * hopCount, s);
       if (s) relocatedBeatSounds.add(s);
+      if (!bombFrame) {
+        ballChainOpen = true;
+        ballChainBeatMs += presentationMs(BOUNCE_HOP_BEAT_MS) * hopCount;
+        ballChainFrame = true;
+      }
     } else if (snd === 'bounce' && !kickoffOwnedScatter && !passPacingOwnedScatter) {
       // Preserve #78's sound-only fallback when a future/legacy bounce omits scatter directions.
       enqueueBeat(presentationMs(BOUNCE_HOP_BEAT_MS), 'bounce');
       relocatedBeatSounds.add('bounce');
     }
+    if (ballChainBeatMs > 0) armBallChainBeat(ballChainBeatMs);
+    // The chain ends at its catch, when the ball settles, or at the first frame that is neither a hop nor a catch.
+    const ballSettled = catchRoll?.successful === true
+      || ((cmd.modelChangeList as ModelChangeListJson | null | undefined)?.modelChangeArray ?? []).some((change) =>
+        change.modelChangeId === ModelChangeId.FIELD_MODEL_SET_BALL_MOVING && change.modelChangeValue === false);
+    if (!ballChainFrame || ballSettled) ballChainOpen = false;
+  } else {
+    ballChainOpen = false;
   }
   // S46: Blastin' second beat. The projection keeps the failed report of this activation; the chooser gets the standard notice once
   // when the beat opens; the shooter's seat and spectators get the waiting pill below (same producer as the other reactive decisions).
@@ -8155,6 +8176,12 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, TOUCHDOWN_RESOLUTION_POLL_MS);
     return;
   }
+  // Owner 10-02 (g1949371): a loose-ball bounce chain presents one hop / one catch roll at a time (play + spectate).
+  const ballChainWait = ballChainWaitMs(playback.queue[0]);
+  if (ballChainWait > 0) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, ballChainWait);
+    return;
+  }
   // Live is authoritative for TIMING VALUES and a live seat self-paces: it keeps the immediate drain. A spectator
   // re-applies on the wire's own inter-arrival cadence (clamped, backlog-compressed) so the model can never
   // outrun the presentation.
@@ -8215,6 +8242,80 @@ function touchdownResolutionMustWait(frame: QueuedFrame | undefined): boolean {
     return false;
   }
   return true;
+}
+/** Owner 10-02 (g1949371, 1.0.79): "ball bounces on a scattered ball are not paced and render instantaneously in
+ *  live play". After a push onto the ball the server sent five bounce frames and five catch-roll frames inside
+ *  ~210 ms; Order 66 play applied each on arrival, so every scatterAnim re-armed over the last one, the ball jumped
+ *  through all five squares at once and the catch dice popped before the hop that reached them. A loose-ball chain
+ *  now presents one frame at a time: a bounce frame first waits for the movement presentation in front of it (the
+ *  follow-up step, a faller's square), then each hop holds the next frame for its hop beat and each catch roll in
+ *  the chain for a 450 ms read (viewer-visible rule); the frames after the chain (the catch, the cleared acting
+ *  player, a turnover, a touchdown) queue behind it in order. Receive-time bookkeeping (trackActingPlayer, ack
+ *  gates) is untouched and the server is not waiting on this client inside a chain, so only the reveal moves.
+ *  The beats are wall-clock deadlines armed at apply (no renderer ack), and the movement wait carries a fail-open
+ *  cap, so a lost animation ack can delay the chain but never wedge it. Kickoff-owned and pass-paced scatters keep
+ *  their own presentation; replay (ReplayAutoPlayer paces per command) and snap-only catch-up are excluded. */
+const BALL_CHAIN_CATCH_READ_MS = 450;
+const BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS = 2000;
+const BALL_CHAIN_POLL_MS = 50;
+let ballChainOpen = false;
+let ballChainNextApplyAt = 0;
+let ballBounceMovementWaitSince = 0;
+function ballChainPacingActive(): boolean {
+  return settings.order66 && !replay.active && !playback.catchingUp;
+}
+function armBallChainBeat(ms: number): void {
+  if (!ballChainPacingActive()) return;
+  ballChainNextApplyAt = Math.max(ballChainNextApplyAt, Date.now() + ms);
+}
+/** Astra review: bomb frames (Bombardier / Hail Mary bomb) carry bomb model changes or bomb-flagged reports. */
+function frameInvolvesBomb(changes: ModelChangeListJson | null | undefined, reports: readonly Record<string, unknown>[]): boolean {
+  if (reports.some((r) => r.bomb === true)) return true;
+  return (changes?.modelChangeArray ?? []).some((change) => /bomb/i.test(String(change.modelChangeId ?? '')));
+}
+/** Astra review: a server dialog (set, non-null) is queued - it must reach the coach promptly, not after the hops. */
+function frameSetsDialog(frame: QueuedFrame): boolean {
+  if (frame.serverPush) return false;
+  return ((frame.cmd.modelChangeList as ModelChangeListJson | null | undefined)?.modelChangeArray ?? []).some((change) =>
+    change.modelChangeId === ModelChangeId.GAME_SET_DIALOG_PARAMETER && change.modelChangeValue != null);
+}
+/** Astra review: the chain is holding frames back - the coach's model is behind the server's. */
+function ballChainHolding(): boolean {
+  return ballChainPacingActive() && playback.queue.length > 0 && (ballChainOpen || Date.now() < ballChainNextApplyAt);
+}
+function frameIsLooseBallBounce(frame: QueuedFrame): boolean {
+  if (frame.serverPush || kickoffPresentationOccurrence != null) return false;
+  if (frameInvolvesBomb(frame.cmd.modelChangeList as ModelChangeListJson | null | undefined,
+    ((frame.cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []))) return false;
+  if (passPacing && (passPacing.awaitingAuthoritativeThrow || !!passPacing.active || passPacing.queue.length > 0)) return false;
+  const reports = (frame.cmd.reportList as { reports?: { reportId?: unknown; directionArray?: unknown; directions?: unknown }[] } | undefined)?.reports;
+  return !!reports?.some((report) => {
+    if (String(report?.reportId ?? '') !== 'scatterBall') return false;
+    const dirs = report.directionArray ?? report.directions;
+    return Array.isArray(dirs) && dirs.length > 0;
+  });
+}
+/** Milliseconds `frame` must still wait behind the loose-ball chain (0 = apply now). */
+function ballChainWaitMs(frame: QueuedFrame | undefined): number {
+  if (!frame || !ballChainPacingActive()) {
+    ballChainNextApplyAt = 0;
+    ballBounceMovementWaitSince = 0;
+    return 0;
+  }
+  const now = Date.now();
+  // Astra review: a dialog queued behind the chain (a Catch / team reroll on a failed catch, apothecary, ...) ends the
+  // pacing - the remaining hops apply at once so the decision reaches the coach without waiting out the beats.
+  if (playback.queue.some(frameSetsDialog)) {
+    ballChainNextApplyAt = 0; ballChainOpen = false; ballBounceMovementWaitSince = 0;
+    return 0;
+  }
+  if (now < ballChainNextApplyAt) return ballChainNextApplyAt - now;
+  if (frameIsLooseBallBounce(frame) && movementPresentationPending()) {
+    if (ballBounceMovementWaitSince === 0) ballBounceMovementWaitSince = now;
+    if (now - ballBounceMovementWaitSince < presentationMs(BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS)) return BALL_CHAIN_POLL_MS;
+  }
+  ballBounceMovementWaitSince = 0;
+  return 0;
 }
 /** The touchdown sound push bypasses the playback queue; it waits while frames received before it are unapplied. */
 function framesAheadOfServerPush(aheadAtPush: ReadonlySet<QueuedFrame>): boolean {
@@ -8425,7 +8526,8 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // Owner 10-02: a touchdown-resolving frame that lands while the scoring run is still presenting takes the queue
   // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
-      && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)) {
+      && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
+      && ballChainWaitMs(frame) === 0) {
     applyFrame(frame);
     return;
   }
@@ -8459,6 +8561,9 @@ function resetPlayback() {
   playback.holdUntil = 0;
   playbackBackpressureSince = 0;
   touchdownResolutionHoldSince = 0;
+  ballChainOpen = false;
+  ballChainNextApplyAt = 0;
+  ballBounceMovementWaitSince = 0;
   onTheBallConnectionEpoch += 1;
   onTheBallReceiveTurnMode = '';
   onTheBallFallbackReceiveSequence = 0;
@@ -20500,6 +20605,8 @@ export const gameStore = {
     // Astra review: the scoring run is still presenting and the touchdown frame is queued behind it - the server has
     // already ended this turn, so an End Turn now would land on the setup phase. Ignore the click until it applies.
     if (touchdownResolutionQueued()) return;
+    // Astra review: likewise while a loose-ball chain still holds frames (the server may already be past this state).
+    if (ballChainHolding()) return;
     if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);
       return;

@@ -58,11 +58,17 @@ export const FIXED_SHORTCUT_CODES: readonly string[] = [
  *  fire: the handlers ignore modified presses). */
 const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OSLeft', 'OSRight', 'ContextMenu', 'CapsLock', 'NumLock', 'ScrollLock', 'Fn'];
 
+// Before load(): the loader validates the stored rebindable keys with hotkeyConflict at module init.
+export type RebindableKey = 'confirmKey' | 'rosterKey' | 'logExpandKey';
+const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm move / pass target', rosterKey: 'Roster pop-out', logExpandKey: 'Enlarge the Log window' };
+
 export interface AppSettings {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
   /** Owner 10-02: toggles the Helmet roster pop-out (KeyboardEvent.code; default H). */
   rosterKey: string;
+  /** Owner 10-02: toggles the Log window between its size and double (KeyboardEvent.code; default L). */
+  logExpandKey: string;
   /** Owner 09-05: WASD camera glide speed, screen px per frame (2-30, 9 = original). */
   cameraPanSpeed: number;
   // markings
@@ -468,6 +474,7 @@ export interface SkillConfigEntry {
 const DEFAULTS: AppSettings = {
   confirmKey: 'Space', // owner 2026-07-02: Space confirms queued moves
   rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
+  logExpandKey: 'KeyL', // owner 10-02: L doubles the Log window, L again restores it
   cameraPanSpeed: 9,
   tackleZoneMode: 'opposition',
   showDefaultSkills: false,
@@ -909,6 +916,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // Astra review: a hand-edited / stale value goes through the same rules as a rebind in Settings.
     merged.rosterKey = typeof raw.rosterKey === 'string' && !hotkeyConflict('rosterKey', raw.rosterKey, merged)
       ? raw.rosterKey : (['KeyH', 'KeyR', 'KeyJ'].find((k) => !hotkeyConflict('rosterKey', k, merged)) ?? 'KeyH');
+    merged.logExpandKey = typeof raw.logExpandKey === 'string' && !hotkeyConflict('logExpandKey', raw.logExpandKey, merged)
+      ? raw.logExpandKey : (['KeyL', 'KeyK', 'KeyO'].find((k) => !hotkeyConflict('logExpandKey', k, merged)) ?? 'KeyL');
     const installedIdentity = (value: unknown) => typeof value === 'string'
       && (/^[a-f0-9]{32}$/.test(value) || value === '')
       ? value : '';
@@ -1558,14 +1567,14 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 }
 
 /** Human-readable label for a KeyboardEvent.code binding. */
-export type RebindableKey = 'confirmKey' | 'rosterKey';
 /** Null when `code` may be bound to `which`; otherwise why not. */
 export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey>): string | null {
   if (!code) return 'No key pressed';
   if (UNBINDABLE_CODES.includes(code)) return `${keyLabel(code)} can't be used as a shortcut`;
   if (FIXED_SHORTCUT_CODES.includes(code)) return `${keyLabel(code)} is already a fixed shortcut`;
-  const other: RebindableKey = which === 'confirmKey' ? 'rosterKey' : 'confirmKey';
-  if (current[other] === code) return `${keyLabel(code)} is already bound to ${other === 'confirmKey' ? 'Confirm move / pass target' : 'Roster pop-out'}`;
+  for (const other of Object.keys(REBINDABLE_LABEL) as RebindableKey[]) {
+    if (other !== which && current[other] === code) return `${keyLabel(code)} is already bound to ${REBINDABLE_LABEL[other]}`;
+  }
   return null;
 }
 

@@ -1934,6 +1934,12 @@ function captureKey(event: KeyboardEvent) {
                     {{ capturingKey === 'rosterKey' ? 'press a key…' : keyLabel(settings.rosterKey) }}
                   </button></td>
                 </tr>
+                <tr>
+                  <td>Enlarge the Log window (press again to restore)</td>
+                  <td><button class="keybind" data-testid="log-key-bind" :aria-label="`Enlarge the Log window: ${capturingKey === 'logExpandKey' ? 'press a key' : keyLabel(settings.logExpandKey)}. Click to rebind.`" @click="capturingKey = 'logExpandKey'">
+                    {{ capturingKey === 'logExpandKey' ? 'press a key…' : keyLabel(settings.logExpandKey) }}
+                  </button></td>
+                </tr>
                 <tr><td>Clear selection / close</td><td><span class="keybind static">Esc</span></td></tr>
                 <tr><td>Pick action 1–6 (selected player)</td><td><span class="keybind static">1 – 6</span></td></tr>
                 <tr><td>Camera pan</td><td><span class="keybind static">W A S D / Arrows</span></td></tr>
