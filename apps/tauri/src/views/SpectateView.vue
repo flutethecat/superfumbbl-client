@@ -11021,6 +11021,8 @@ function unactivatedOwnIds(): string[] {
   return ids;
 }
 function unactivatedOwnCount(): number { return unactivatedOwnIds().length; }
+/** Owner 10-03: Confirm Setup is unavailable until the setup pane's conditions are met (the removed Done button's rule). */
+const setupConfirmBlocked = computed(() => !!setupPhase.value && !setupPhase.value.validation.valid);
 /** Owner 09-08: "Go back" keeps the idle-player arrows for this long (or until the coach clicks a player). */
 const UNACTIVATED_CUE_GRACE_MS = 2000;
 function endTurn() {
@@ -11030,6 +11032,9 @@ function endTurn() {
   // Owner 09-14: CONFIRM SETUP is a placement confirmation, not a turn with activations — nobody has "acted", so
   // the idle-player guard below would always fire. Send it straight through.
   const turnMode = String(gameStore.game.value?.turnMode ?? '');
+  // Owner 10-03: the setup pane's Done button is gone - Confirm Setup submits through the same store seam it used
+  // (setupSubmit: validity guard + the coordinate map a Solid Defence re-setup needs).
+  if (setupPhase.value) { gameStore.setupSubmit(); return; }
   if (endTurnButtonText.value === 'Confirm Setup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
   // #8: idle players → raise the confirm modal; only its "End turn" proceeds.
   const idle = unactivatedOwnIds();
@@ -11626,10 +11631,10 @@ function sendChat() {
           <span class="sb-cell sb-turn home" :data-active="homePanel?.playing ?? false"
             :title="`${homePanel?.coach ?? 'Home'} — turn ${homePanel?.turnNr ?? 0}`">Turn {{ homePanel?.turnNr ?? 0 }}</span>
           <button v-if="gameStore.isPlaying.value" class="sb-cell end-turn"
-            :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction"
+            :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction || setupConfirmBlocked"
             :data-opponent="!gameStore.myTurn.value"
             :data-setup="endTurnButtonText === 'Confirm Setup'"
-            :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : 'End the current turn (or kick-off mini-phase)'"
+            :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : setupConfirmBlocked ? 'Meet the setup conditions first' : 'End the current turn (or kick-off mini-phase)'"
             @click="endTurn()">{{ endTurnButtonText }}</button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
             :title="`${awayPanel?.coach ?? 'Away'} — turn ${awayPanel?.turnNr ?? 0}`">Turn {{ awayPanel?.turnNr ?? 0 }}</span>
@@ -12301,11 +12306,11 @@ function sendChat() {
           </div>
           <div v-if="solidDefenceError" class="setup-selected" data-solid-defence-error role="alert">
             The referee rejected that setup: you moved <b>{{ solidDefenceError.amount }}</b> player<span v-if="solidDefenceError.amount !== 1">s</span>
-            rather than the allowed <b>{{ solidDefenceError.limit }}</b>. Correct it and press Done again.
+            rather than the allowed <b>{{ solidDefenceError.limit }}</b>. Correct it and press Confirm Setup again.
             <button class="setup-btn" type="button" @click="gameStore.dismissSolidDefenceError()">Dismiss</button>
           </div>
           <div v-if="setupPhase.setupErrors.length" class="setup-selected" data-setup-error role="alert">
-            <b>SETUP REJECTED</b> — correct the formation and press Done again.
+            <b>SETUP REJECTED</b> — correct the formation and press Confirm Setup again.
             <ul>
               <li v-for="message in setupPhase.setupErrors" :key="message">{{ message }}</li>
             </ul>
@@ -12334,8 +12339,9 @@ function sendChat() {
             {{ selectedSetupPlaced ? 'click a square to move, or click the dugout to return to reserves' : 'click a square on your half to place' }}
           </div>
           <div class="setup-actions">
+            <!-- Owner 10-03: the pane no longer carries its own confirm - the scoreboard's Confirm Setup is the one
+                 submit (same store seam, setupSubmit). -->
             <button class="setup-btn" @click="returnSelectedToReserve" :disabled="!selectedSetupPlayerId">↩ Reserve</button>
-            <button class="setup-btn done" :disabled="!setupPhase.validation.valid" @click="gameStore.setupSubmit()">Done</button>
             <button v-if="setupPhase.validation.canConcede" class="setup-btn concede" @click="gameStore.setupConcede()">Concede</button>
           </div>
         </div>
