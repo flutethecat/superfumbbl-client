@@ -139,6 +139,35 @@ export function opponentBudget(input: {
   return phaseMoney({ role, availableGold: pettyCash + scumPool, pettyCash, scumPool, teamTreasury: treasury, spent });
 }
 
+/** Bug report 2026-10-03 (Elyod, g1949448): the OPPONENT's inducement dialog IS synced to the watching seat
+ *  (`buyPrayersAndInducements` / `buyInducements` with THEIR teamId: availableGold / pettyCash / treasury) - when it is
+ *  up, those server numbers are the budget (no client derivation). Null when the dialog is not theirs. */
+const INDUCEMENT_BUDGET_DIALOGS = new Set(['buyPrayersAndInducements', 'buyInducements', 'buyCardsAndInducements']);
+export function opponentDialogBudget(dialog: unknown, opponentTeamId: string, teamTreasury: number, panelRole?: InducementRole): PhaseMoney | null {
+  const d = dialog as { dialogId?: unknown; teamId?: unknown; availableGold?: unknown; pettyCash?: unknown; treasury?: unknown; usesTreasury?: unknown } | null | undefined;
+  if (!d || !INDUCEMENT_BUDGET_DIALOGS.has(String(d.dialogId ?? '')) || String(d.teamId ?? '') !== String(opponentTeamId)) return null;
+  const availableGold = Number(d.availableGold);
+  if (!Number.isFinite(availableGold)) return null;
+  const pettyCash = Number(d.pettyCash ?? 0) || 0;
+  const scumPool = Number(d.treasury ?? 0) || 0;
+  // The server's own leg flag decides the readout shape (usesTreasury = one pool; otherwise petty + capped treasury).
+  const role: InducementRole = d.usesTreasury === true ? 'overdog' : 'underdog';
+  // Astra review 10-03: the panel the readout lands in is chosen by seat role, not by this leg flag. A one-pool leg
+  // (equal TV / always-use-treasury) shown in the underdog panel must not read 0k / 0k: whatever of the server's
+  // availableGold is not petty cash shows on the second line, so the three lines always add up to the server total.
+  if (role === 'overdog' && panelRole === 'underdog') {
+    return { role: 'underdog', cap: availableGold, spent: 0, remaining: availableGold,
+      pettyLeft: Math.max(0, Math.min(pettyCash, availableGold)), scumLeft: Math.max(0, availableGold - Math.max(0, pettyCash)), treasuryLeft: Math.max(0, teamTreasury) };
+  }
+  return phaseMoney({ role, availableGold, pettyCash, scumPool, teamTreasury, spent: 0 });
+}
+/** The TV-difference petty cash for the derived (pre-dialog) readout: the server's own figure when it has set one,
+ *  else the TV gap - a zero / unset `pettyCashFromTvDiff` must NOT read as "no petty cash" (the Elyod report). */
+export function pettyCashFromTvGap(wirePettyCashFromTvDiff: unknown, tvHome: number, tvAway: number): number {
+  const wire = Number(wirePettyCashFromTvDiff ?? NaN);
+  return Number.isFinite(wire) && wire > 0 ? wire : Math.abs(tvHome - tvAway);
+}
+
 export function phaseMoney(input: MoneyInput): PhaseMoney {
   const { role, availableGold, pettyCash, scumPool, teamTreasury, spent } = input;
   if (role === 'overdog') {

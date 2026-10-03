@@ -76,7 +76,7 @@ import TurnToast from '../components/TurnToast.vue';
 import { visibleMatchLogEntries } from '../game/logVisibility';
 import {
   bladeOf, phaseMoney, phaseOf, roleFromWire, summaryCards,
-  type Blade, type InducementPhase, type InducementRole, opponentBudget, type PhaseOption } from '../game/inducementsPhase';
+  type Blade, type InducementPhase, type InducementRole, opponentBudget, opponentDialogBudget, pettyCashFromTvGap, type PhaseOption } from '../game/inducementsPhase';
 import { buildInducementOptions as buildCatalogInducementOptions } from '../game/inducementCatalog';
 import { inducementTeamFromWire, purchaseOptionsFromWire } from '../game/inducementPurchase';
 import { activeInducementSprite } from '../game/inducementPortrait';
@@ -1650,11 +1650,6 @@ function cycleSprites() {
   const choices = spriteChoices.value;
   const index = choices.indexOf(currentSpriteChoice.value);
   void applySpriteChoice(choices[(index + 1) % choices.length] ?? 'walk');
-}
-
-function openSettingsPane() {
-  ui.settingsTab = 'general';
-  ui.settingsOpen = true;
 }
 
 // Owner feature request 2026-08-18: Report now opens a MODAL — the tester writes a short description
@@ -4783,8 +4778,10 @@ const induceOppMoney = computed(() => {
   const tvAway = tv(g.teamAway, g.gameResult?.teamResultAway);
   const oppIsHome = String(opp.teamId) === String(g.teamHome.teamId);
   const oppResult = (oppIsHome ? g.gameResult?.teamResultHome : g.gameResult?.teamResultAway) as { pettyCashFromTvDiff?: unknown } | null | undefined;
-  const wireDiff = Number(oppResult?.pettyCashFromTvDiff ?? NaN);
-  const tvDiff = Number.isFinite(wireDiff) ? wireDiff : Math.abs(tvHome - tvAway);
+  // Bug report 10-03 (Elyod): the opponent's own dialog carries their real budget - show the server's numbers.
+  const fromDialog = opponentDialogBudget(g.dialogParameter, String(opp.teamId), Number((opp as { treasury?: unknown }).treasury ?? 0), role);
+  if (fromDialog) return fromDialog;
+  const tvDiff = pettyCashFromTvGap(oppResult?.pettyCashFromTvDiff, tvHome, tvAway);
   // The reveal wire carries no costs (a guessed total would be a client invention), so these readouts are shown only
   // while the opponent is still choosing — spent is 0 by definition then.
   const spent = 0;
@@ -11676,8 +11673,8 @@ function sendChat() {
             <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('config-bar', $event)"></span>
             <button class="ui-reset" title="Reset to default" @click="resetPanel('config-bar')">↺</button>
           </template>
-          <QuickBarButton disclosure :active="ui.settingsOpen" class="icon-button" title="Settings"
-            @click="openSettingsPane()">⚙</QuickBarButton>
+          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)"
+            @click="ui.gameMenuOpen = !ui.gameMenuOpen">⚙</QuickBarButton>
           <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
             @click="cycleTackleZones()">🛡</QuickBarButton>
           <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button"
