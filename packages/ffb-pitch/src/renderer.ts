@@ -1100,6 +1100,9 @@ const CHECKER_LETTER_STYLE = new TextStyle({
   fill: 0xffffff,
   stroke: { color: 0x14161a, width: 4 },
 });
+/** Owner 10-03: a standing walker whose centre-line height is at least this multiple of the reference lineman is a
+ *  BIG GUY for the activated-check mount (the demo ogre is 1.21; ST 4 blitzers / blockers are ~1.06). */
+const ACTIVATED_CHECK_BIG_GUY_RATIO = 1.15;
 const BADGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 8, fontWeight: 'bold', fill: COLORS.badgeText });
 // owner 08-13: skill badges dim when they'd occlude the player standing behind them, instead of going opaque.
 // owner 08-19: full opacity when clear; drop only when a token sits behind the icon.
@@ -18052,7 +18055,7 @@ export class PitchRenderer {
    * once they activate they lose the ring/glow (see the token build) and get this
    * deeper shading. Consistent with the ring removal.
    */
-  private applyActivationShading(token: Container, data: PlayerDataJson, _isHome: boolean, strength?: number): void {
+  private applyActivationShading(token: Container, data: PlayerDataJson, _isHome: boolean, strength?: number, walkerFigure?: { chestRatio?: number }): void {
     const acted = this.actedPlayers.has(data.playerId);
     // Owner ruling (Charge/High Kick shading unification, live): a player excluded from a shaded pick's
     // eligible set (pickIneligibleIds) gets the exact same dim treatment as "already activated" — no new
@@ -18128,6 +18131,17 @@ export class PitchRenderer {
     check.label = 'activatedCheck';
     // top-right shoulder of the token; token origin ≈ feet/square anchor.
     check.position.set(TILE_W * 0.30, -TILE_H * 0.62);
+    // Owner 10-03: on a BIG GUY that fixed offset is chest height - right under the DISTRACTED banner. Big guys wear
+    // the badge beside the head instead (right shoulder line, ~80% up the centre-line height; walkerChestRatio so a
+    // raised fist / horns don't lift it), laid out in decor-1 units like the chest markers.
+    // (This runs while the walker is still being built - before it is registered - so the figure arrives as
+    // `walkerFigure` and the layout here is in decor-1 units, which applyDecorScale then scales with the figure.)
+    const walker = !!walkerFigure || isWalkerToken(token);
+    const chestRatio = walkerFigure?.chestRatio;
+    if (chestRatio != null && chestRatio >= ACTIVATED_CHECK_BIG_GUY_RATIO) {
+      const figure = chestRatio * WALKER_REFERENCE_FIGURE_PX;
+      check.position.set(figure * 0.3, WALKER_FEET_Y_PX - figure * 0.8);
+    }
     const r = 6;
     check.addChild(new Graphics().circle(0, 0, r).fill({ color: 0x1f9d3a }).circle(0, 0, r).stroke({ color: 0xffffff, width: 1.2, alpha: 0.95 }));
     check.addChild(new Graphics().moveTo(-3, 0).lineTo(-0.8, 2.6).lineTo(3.4, -2.8).stroke({ color: 0xffffff, width: 1.8, alpha: 1 }));
@@ -18137,7 +18151,10 @@ export class PitchRenderer {
     // Owner 2026-07-13 (#3): counter the token's strengthScale so the ✓ is a constant on-pitch size
     // regardless of the model's build (a big guy's token scales up; the badge must not). Depth + zoom
     // still apply. base is re-applied by updateOverlayScales on every zoom change.
-    const base = 1 / (isWalkerToken(token) ? this.walkerStrengthFor(data.playerId) : strengthScale(strength)); // walkers: ST 5+ only (09-05)
+    // Owner 10-03: "big guy badges are also visually smaller ... match sizing to normal players". A walker token is
+    // never scaled by strength (its figure is drawn larger instead), so dividing by the strength scale only shrank
+    // the badge on ST 4+ walkers. Classic / disc tokens ARE scaled, so they keep the counter-scale.
+    const base = walker ? 1 : 1 / strengthScale(strength);
     this.overlayBaseScale.set(check, base);
     this.overlayScaleGroups.push(check);
     check.scale.set(this.overlayZoomFactor() * base);

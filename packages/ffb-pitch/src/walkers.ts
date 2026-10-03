@@ -105,7 +105,9 @@ export interface WalkerHelpers {
     badgeOccluded?: boolean,
   ): void;
   addMarkingText(token: Container, player: PlayerJson, down: boolean): void;
-  applyActivationShading(token: Container, data: PlayerDataJson, isHome: boolean, strength: number): void;
+  /** `walkerFigure` (owner 10-03): the token is a walker under construction - children are laid out in DECOR-1 units and
+   *  `chestRatio` is the standing figure's centre-line height vs the reference lineman (undefined when lying down). */
+  applyActivationShading(token: Container, data: PlayerDataJson, isHome: boolean, strength: number, walkerFigure?: { chestRatio?: number }): void;
   addPlayerNumber(token: Container, player: PlayerJson, isHome: boolean, down: boolean): void;
 }
 
@@ -896,7 +898,11 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
   helpers.addPlayerNumber(token, player, isHome, down);
   if (includeBadges) helpers.addSkillBadges(token, player, data, trim, team, baselineSkills, badgeOccluded);
   helpers.addMarkingText(token, player, down);
-  if (shading) helpers.applyActivationShading(token, data, isHome, player.strength);
+  if (shading) {
+    const centreLine = walker.headHeight && walker.headHeight > 0 ? Math.min(walker.headHeight, walker.figureHeight) : walker.figureHeight;
+    helpers.applyActivationShading(token, data, isHome, player.strength,
+      { chestRatio: down ? undefined : (centreLine * visual) / WALKER_REFERENCE_FIGURE_PX });
+  }
 
   // Ref acquisition is deliberately the last construction step.
   const assetRecord = assetRecords.get(walker);
