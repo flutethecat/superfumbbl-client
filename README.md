@@ -32,7 +32,7 @@ This, however, is a project that was created with heavy use of AI. If you're eth
 We recommend the bundled release below for most users. It contains all assets and is configured to function as designed. We also offer self build routes for those who would like to do so, however not all assets are contained within as we do not have the rights to include them as individual files where they may be redistributed.
 
 Bundled release:
-https://github.com/flutethecat/superfumbbl-client/releases/tag/v1.0.0
+https://github.com/flutethecat/superfumbbl-client/releases/latest
 
 ```bash
 pnpm install
