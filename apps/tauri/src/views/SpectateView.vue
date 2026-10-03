@@ -1876,6 +1876,8 @@ watchEffect(() => {
 watch(() => settings.oneSpritePerPosition, (enabled) => renderer?.setOneSpritePerPosition(enabled));
 // Owner 09-06: Settings > Appearance > Action decorations — repaint the active marker on change.
 watch(() => settings.actionDecorations, (style) => { if (renderer) { renderer.actionDecorationStyle = style; renderer.refresh(); } });
+// Owner 10-03: Settings > Display > blood splatters - repaint the pitch on change.
+watch(() => settings.bloodSplatters, (on) => { if (renderer) { renderer.bloodDecalsEnabled = on; renderer.refresh(); } });
 // Accessibility grid options (owner 2026-07-03 r3): parse the hex colour and push
 // show/width/colour to the renderer whenever any changes.
 function gridColorInt(): number {
@@ -6616,6 +6618,7 @@ function applyMarkings() {
   renderer.setSkillIconStyle(effectiveIconStyle.value); // compatibility signature; snapshot owns the pack
   void renderer.setBundledSkillBadgeFamily(settings.skillBadgeFamily); // owner 09-09: "Illustrated - Default" (no-op when unchanged)
   renderer.actionDecorationStyle = settings.actionDecorations; // owner 09-06: artwork | emoji
+  renderer.bloodDecalsEnabled = settings.bloodSplatters; // owner 10-03
   // owner 2026-07-03 r6f: per-group render position (over head / at feet)
   renderer.iconPosition = settings.iconPosition;
   renderer.markerPosition = settings.markerPosition;
@@ -8633,6 +8636,9 @@ onMounted(async () => {
   // ran (and returned) while `renderer` was still null, so nothing seeded it. A mount mid-splash must suspend the backstop.
   actionDiceLifecycle.seedSplashShowing(!!gameStore.state.turnover);
   mountedRenderer.setD6FaceVariant(settings.d6FaceVariant);
+  // Astra review: seed at MOUNT - a saved "off" must hold from the very first paint (applyMarkings only runs from watchers).
+  mountedRenderer.bloodDecalsEnabled = settings.bloodSplatters;
+  mountedRenderer.actionDecorationStyle = settings.actionDecorations;
   mountedRenderer.setPresentationMode(gameStore.replay.active ? 'replay' : gameStore.isPlaying.value ? 'live' : 'spectator');
   mountedRenderer.setConfirmedMovementPresentation(gameStore.state.confirmedMovementDrainActive);
   if (!await initPitchRendererMount(

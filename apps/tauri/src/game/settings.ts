@@ -187,6 +187,8 @@ export interface AppSettings {
   walkFaceCamera: boolean;
   /** Owner 09-06: fake-sun cast shadow under each standing walker (prototype; default on). */
   castShadows: boolean;
+  /** Owner 10-03: blood splatter decals on the tile where a player was casualtied (Settings > Display). */
+  bloodSplatters: boolean;
   /** Owner 09-09 ("option 3"): players and their markers stay one size on every square; the ground keeps its
    *  perspective with a softer far edge. Off = Madden depth scaling. */
   uniformFigures: boolean;
@@ -533,6 +535,7 @@ const DEFAULTS: AppSettings = {
   walkFps: null,
   walkFaceCamera: true, // owner 09-04: on by default
   castShadows: true, // owner 09-06: prototype on by default
+  bloodSplatters: true, // owner 10-03: on by default; Settings > Display turns them off
   uniformFigures: false, // owner 09-10: N-S OFF by default (classic depth scaling); was on 09-09
   uniformFiguresEw: true, // owner 09-10: E-W on by default, independent
   actionDecorations: 'art', // owner 09-06: artwork by default; emoji kept as the Appearance option
@@ -844,6 +847,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.walkAnimation = typeof raw.walkAnimation === 'boolean' ? raw.walkAnimation : DEFAULTS.walkAnimation;
     merged.walkFaceCamera = typeof raw.walkFaceCamera === 'boolean' ? raw.walkFaceCamera : DEFAULTS.walkFaceCamera;
     merged.castShadows = typeof raw.castShadows === 'boolean' ? raw.castShadows : DEFAULTS.castShadows;
+    merged.bloodSplatters = typeof raw.bloodSplatters === 'boolean' ? raw.bloodSplatters : DEFAULTS.bloodSplatters;
     merged.uniformFigures = typeof raw.uniformFigures === 'boolean' ? raw.uniformFigures : DEFAULTS.uniformFigures;
     merged.uniformFiguresEw = typeof raw.uniformFiguresEw === 'boolean' ? raw.uniformFiguresEw : DEFAULTS.uniformFiguresEw;
     merged.blockDice3d = raw.blockDice3d !== false;

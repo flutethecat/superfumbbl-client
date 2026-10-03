@@ -26,7 +26,7 @@ import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchLatestRelease, inAppUpdaterEnabled, PUBLIC_RELEASES_REPO, updateAvailable } from './game/updateCheck';
+import { fetchLatestRelease, inAppUpdaterEnabled, MENU_RETURN_UPDATE_CHECK_DELAY_MS, PUBLIC_RELEASES_REPO, shouldCheckForUpdateOnMenuReturn, updateAvailable } from './game/updateCheck';
 import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
@@ -130,8 +130,13 @@ async function loadAppPatchStatus(): Promise<AppPatchStatus | null> {
   return appPatchStatus.value;
 }
 // Owner 09-25: the prompt NAGS — every launch and every hourly poll re-offers an available update, "Later" or not.
+let updateCheckInFlight = false;
 async function checkForUpdate(): Promise<void> {
-  if (updatePrompt.value || updateProgress.value) return;
+  if (updatePrompt.value || updateProgress.value || updateCheckInFlight) return;
+  updateCheckInFlight = true;
+  try { await runUpdateCheck(); } finally { updateCheckInFlight = false; }
+}
+async function runUpdateCheck(): Promise<void> {
   if (inAppUpdaterEnabled({ appVersion, inTauri, forkEdition: FORK_EDITION })) {
     // D2: installer updates compare with the SHELL version (a patched page is ahead of its shell).
     const shellVersion = (await loadAppPatchStatus())?.shellVersion ?? appVersion;
@@ -226,6 +231,11 @@ onMounted(() => {
   updatePollTimer = setInterval(() => { if (gameStore.game.value) return; void checkForUpdate(); }, UPDATE_POLL_MS);
 });
 onBeforeUnmount(() => { if (updatePollTimer) clearInterval(updatePollTimer); updatePollTimer = null; });
+// Owner 10-03: "check for updates each time it returns to the menu" - when a game / replay closes and the console
+// is back on screen, check right away instead of waiting for the hourly poll. Never while a game is up.
+watch(() => !!gameStore.game.value, (inGame, wasInGame) => {
+  if (shouldCheckForUpdateOnMenuReturn(wasInGame, inGame)) setTimeout(() => { if (!gameStore.game.value) void checkForUpdate(); }, MENU_RETURN_UPDATE_CHECK_DELAY_MS);
+});
 // Owner 09-23: ART PACK — a split (public) build downloads its art into app-data on first run and only the
 // changed parts after an update; the pitch views wait for it (menus stay usable). Bundled builds are ready at once.
 async function startArtPackSync(): Promise<void> {
@@ -2243,6 +2253,11 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <input v-model="settings.castShadows" type="checkbox" />
               <span>Cast shadows on players</span>
+            </label>
+            <!-- Owner 10-03: casualty blood splatters on the pitch can be turned off. -->
+            <label class="row">
+              <input v-model="settings.bloodSplatters" type="checkbox" data-testid="blood-splatters-toggle" />
+              <span>Blood splatters where players are casualtied</span>
             </label>
             <label class="row">
               <input v-model="settings.uniformFigures" type="checkbox" />

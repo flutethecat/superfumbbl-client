@@ -1,0 +1,296 @@
+{
+  "date": "2026-10-03",
+  "tool": "built-in image_gen",
+  "exact_prompt": "Use case: stylized-concept. Create one square sprite sheet with FOUR original top-down blood stain ground decals in an evenly spaced 2 by 2 grid, each isolated in its own square quadrant with generous transparent margins. Genuine transparent background, no turf drawn. Retro SNES 16-bit pixel art, chunky deliberate hard square pixel clusters, designed for a 48x48 logical grid per decal. Limited five-red palette: deep maroon #400d1b, #641021, crimson #891629, #ae2436, restrained wet highlight #ca4650. Flat stains viewed directly overhead, no elevation, no bevel, no cast shadow, no glow, no antialiasing, no gradient mist. Top left: roundish irregular central pool with a few small satellite drops and short streaks. Top right: elongated diagonal smear with short dragging streaks and a few droplets; overall droplets span a roughly square footprint. Bottom left: big irregular radial splash with distinct protrusions and satellite droplets. Bottom right: scattered multi-pool stain, several separated uneven pools of different sizes with small drops. Four clearly distinct silhouettes. Each full stain including satellites occupies about 75 to 80 percent of its square quadrant in both directions, centered, no crossing quadrant boundaries. Dark crimson to deep maroon with small slightly lighter wet highlight clusters, readable over green grass. Non-graphic stains only: no body parts, no objects, no text, no labels, no grid lines, no logos, no third-party or Games Workshop imagery.",
+  "source": {
+    "original_path": "C:\\Users\\Jay\\.codex\\generated_images\\01a10150-2690-7ae2-a36c-9befd824f2b3\\exec-5ef8d3e4-9677-49f6-ae2d-ddf5ab4b5430.png",
+    "preserved_copy": "blood-master-generated.png",
+    "sha256": "362d06cd8bf282114f3fc30047c0176bf2dc779e15f4cd1c1b62dd156c4e772b"
+  },
+  "originality_note": "Original artwork (built-in image generation); no third-party or GW-derived imagery.",
+  "processing_steps": [
+    "Split original sheet into four 627x627 quadrants in reading order.",
+    "Threshold original alpha at 200, retain red-dominant pixels (R>1.35G and R>1.15B); clear all other RGBA values to zero.",
+    "Crop each quadrant to retained content; preserve aspect ratio with NEAREST fit to 38 pixels maximum extent; snap RGB to nearest of five specified reds by squared RGB distance.",
+    "Crop sampled transparent edge if any; center on transparent square 48x48 canvas with floor-rounded padding.",
+    "Export 1x, 2x, 4x using NEAREST.",
+    "Composite previews at 4x on turf #3f7a2a and #14161a."
+  ],
+  "hand_edits_or_procedural_redraw": "None. Only deterministic background/alpha cleanup, crop, resampling, palette snapping and padding were applied to generated artwork. Contact sheet labels are presentation only.",
+  "palette_rgb": [
+    [
+      64,
+      13,
+      27
+    ],
+    [
+      100,
+      16,
+      33
+    ],
+    [
+      137,
+      22,
+      41
+    ],
+    [
+      174,
+      36,
+      54
+    ],
+    [
+      202,
+      70,
+      80
+    ]
+  ],
+  "variants": [
+    {
+      "variant": 1,
+      "source_quadrant": [
+        0,
+        0,
+        627,
+        627
+      ],
+      "source_content_bbox": [
+        58,
+        52,
+        585,
+        567
+      ],
+      "bbox": [
+        5,
+        5,
+        43,
+        42
+      ],
+      "opaque_colours": 5,
+      "alpha_histogram": {
+        "0": 1808,
+        "255": 496
+      }
+    },
+    {
+      "variant": 2,
+      "source_quadrant": [
+        627,
+        0,
+        1254,
+        627
+      ],
+      "source_content_bbox": [
+        72,
+        65,
+        576,
+        563
+      ],
+      "bbox": [
+        5,
+        5,
+        43,
+        43
+      ],
+      "opaque_colours": 5,
+      "alpha_histogram": {
+        "0": 1898,
+        "255": 406
+      }
+    },
+    {
+      "variant": 3,
+      "source_quadrant": [
+        0,
+        627,
+        627,
+        1254
+      ],
+      "source_content_bbox": [
+        65,
+        31,
+        592,
+        561
+      ],
+      "bbox": [
+        5,
+        5,
+        43,
+        43
+      ],
+      "opaque_colours": 5,
+      "alpha_histogram": {
+        "0": 1733,
+        "255": 571
+      }
+    },
+    {
+      "variant": 4,
+      "source_quadrant": [
+        627,
+        627,
+        1254,
+        1254
+      ],
+      "source_content_bbox": [
+        81,
+        59,
+        559,
+        560
+      ],
+      "bbox": [
+        6,
+        5,
+        42,
+        43
+      ],
+      "opaque_colours": 5,
+      "alpha_histogram": {
+        "0": 1624,
+        "255": 680
+      }
+    }
+  ],
+  "files": [
+    {
+      "file": "blood-1-1x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-1-1x.png",
+      "dimensions": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "sha256": "7ee0e29bc7c0cb4d88807dd0cf29a69fa968d4283f704ddfe884b16ae8a59020"
+    },
+    {
+      "file": "blood-1-2x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-1-2x.png",
+      "dimensions": [
+        96,
+        96
+      ],
+      "mode": "RGBA",
+      "sha256": "e8b8127dca3eb1861199aab37a1cfc6a5b9c773b0965a9498a80f345b98fee29"
+    },
+    {
+      "file": "blood-1-4x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-1-4x.png",
+      "dimensions": [
+        192,
+        192
+      ],
+      "mode": "RGBA",
+      "sha256": "752cc9307e9134c9ffa2c86f56a540f64f5fe993529beda7618d028b368e8b32"
+    },
+    {
+      "file": "blood-2-1x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-2-1x.png",
+      "dimensions": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "sha256": "3631200ef62b2b7324139d62b48a132c5e545bc6b97a965eeea3d3bbc3bb528e"
+    },
+    {
+      "file": "blood-2-2x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-2-2x.png",
+      "dimensions": [
+        96,
+        96
+      ],
+      "mode": "RGBA",
+      "sha256": "8303ce9356c5a0d527582ae8d67736452cd04d2edd6ad0890c16c9e6b76c0978"
+    },
+    {
+      "file": "blood-2-4x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-2-4x.png",
+      "dimensions": [
+        192,
+        192
+      ],
+      "mode": "RGBA",
+      "sha256": "b61679b81e1f6f67a4e7597389c0a78f101e3706bc340f3387c893edbd1b8354"
+    },
+    {
+      "file": "blood-3-1x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-3-1x.png",
+      "dimensions": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "sha256": "ab1f70dc72730d92c3ef9df8ee6e62041ac01076ca346cb414d98865eba35860"
+    },
+    {
+      "file": "blood-3-2x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-3-2x.png",
+      "dimensions": [
+        96,
+        96
+      ],
+      "mode": "RGBA",
+      "sha256": "e0a0fc324c454318f97f7b5c79257e1dbc5781b67468790abad9c52e47243b20"
+    },
+    {
+      "file": "blood-3-4x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-3-4x.png",
+      "dimensions": [
+        192,
+        192
+      ],
+      "mode": "RGBA",
+      "sha256": "dae5f97f2d4cf7728b4a757eccfa549af5e2e6053baa6e84bcc52fb7f5674249"
+    },
+    {
+      "file": "blood-4-1x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-4-1x.png",
+      "dimensions": [
+        48,
+        48
+      ],
+      "mode": "RGBA",
+      "sha256": "ed4d559b10e3874f7b7b2ebe177c1810f5bc632adc85fc12b2877688d6325604"
+    },
+    {
+      "file": "blood-4-2x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-4-2x.png",
+      "dimensions": [
+        96,
+        96
+      ],
+      "mode": "RGBA",
+      "sha256": "ef64c13ae11c4b8c866b79fde2f59be6fd1d976f7ee87b57c3884072da7ab650"
+    },
+    {
+      "file": "blood-4-4x.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-4-4x.png",
+      "dimensions": [
+        192,
+        192
+      ],
+      "mode": "RGBA",
+      "sha256": "d58170cbbc3f4b00d380a2615cb0bf4f690e453cb49a06f32dad98dcef0448cd"
+    },
+    {
+      "file": "blood-master-generated.png",
+      "path": "C:\\Users\\Jay\\Documents\\Claude\\wt-replayer\\packages\\ffb-pitch\\assets\\decorations\\blood\\blood-master-generated.png",
+      "dimensions": [
+        1254,
+        1254
+      ],
+      "mode": "RGBA",
+      "sha256": "362d06cd8bf282114f3fc30047c0176bf2dc779e15f4cd1c1b62dd156c4e772b"
+    }
+  ],
+  "contact_sheet": {
+    "file": "blood-contact-sheet.png",
+    "path": "C:\\Users\\Jay\\AppData\\Local\\Temp\\claude\\C--Users-Jay-Documents-Claude\\e9806d4b-013f-4337-ba56-d3ec3ef2743b\\scratchpad\\blood-contact-sheet.png",
+    "dimensions": [
+      832,
+      464
+    ],
+    "mode": "RGB",
+    "sha256": "5eadd3cdae4c8d9d166a7357d4fa2cb3af3cd6c21b7e872e6196468d65989cdd"
+  },
+  "processing_script": "C:\\Users\\Jay\\AppData\\Local\\Temp\\claude\\C--Users-Jay-Documents-Claude\\e9806d4b-013f-4337-ba56-d3ec3ef2743b\\scratchpad\\build_blood.py"
+}

@@ -829,13 +829,21 @@ export function isWalkerToken(token: Container): boolean {
   return walkerTokens.has(token);
 }
 
+/** Owner 10-03: "Portrait mode should always have a south facing player" - while a portrait is being built the
+ *  walker faces the camera (S) whatever the facing setting or the player's last travel direction. */
+let portraitFacingDepth = 0;
+export function withPortraitFacing<T>(build: () => T): T {
+  portraitFacingDepth += 1;
+  try { return build(); } finally { portraitFacingDepth -= 1; }
+}
+
 export function buildWalkerToken(args: WalkerTokenArgs): Container {
   const {
     token, walker, player, team, isHome, down, data, includeBadges, shading,
     baselineSkills, badgeOccluded, stunCaption, trim, body, ownerId, facing, helpers,
   } = args;
   const downMark = args.downMark ?? true;
-  const initialFacing = travelFacing.get(player.playerId) ?? defaultFacing(isHome, facing, 'S');
+  const initialFacing = portraitFacingDepth > 0 ? 'S' : travelFacing.get(player.playerId) ?? defaultFacing(isHome, facing, 'S');
   const row = directionIndex.get(initialFacing)!;
   // Owner 09-05: the POSITION ring stays (at the feet, under the ground shadow); only the inner team-colour body
   // ring is dropped on walkers — the kits already carry the team colour, and it cut the figure at the waist.

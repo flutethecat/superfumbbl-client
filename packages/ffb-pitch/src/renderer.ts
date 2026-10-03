@@ -79,6 +79,7 @@ import {
   WALKER_FEET_Y_PX,
   loadBundledWalkSheets,
   refreshWalkerFacing,
+  withPortraitFacing,
   registerLiveWalker,
   resetWalkerFacing,
   setActiveWalkerPlayer,
@@ -145,6 +146,31 @@ export function sameIdSet(a: ReadonlySet<string> | null, b: ReadonlySet<string> 
   if (!sa || !sb || sa.size !== sb.size) return false;
   for (const id of sa) if (!sb.has(id)) return false;
   return true;
+}
+
+/** Owner 10-03: casualty blood splatter art (assets/decorations/blood/blood-N-4x.png). A glob, so the build never
+ *  breaks while the art is absent - the decals simply do not draw. */
+const BLOOD_DECAL_URLS: string[] = Object.entries(
+  import.meta.glob('../assets/decorations/blood/blood-*-4x.png', { eager: true, query: '?url', import: 'default' }) as Record<string, string>,
+).sort(([a], [b]) => a.localeCompare(b)).map(([, url]) => url);
+/** The decal covers this share of the tile's on-screen width / height. */
+const BLOOD_DECAL_FILL = 0.94;
+/** The on-pitch squares that carry a CASUALTY blood spot (FFB BloodSpot.injury = the victim's PlayerState: base 6
+ *  Badly Hurt, 7 Serious Injury, 8 RIP; a knock-out's spot, base 5, is not a casualty). */
+export function bloodDecalSpots(spots: readonly { coordinate?: [number, number] | null; injury?: unknown }[] | null | undefined): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (const spot of spots ?? []) {
+    const base = Number(spot?.injury ?? 0) & 0xff;
+    if (base < 6 || base > 8) continue;
+    if (!isOnPitch(spot?.coordinate ?? null)) continue;
+    out.push({ x: spot.coordinate![0], y: spot.coordinate![1] });
+  }
+  return out;
+}
+/** Stable per-square variant + mirror, so a tile's splatter never changes between refreshes. */
+export function bloodDecalVariant(x: number, y: number, variants: number): { variant: number; flip: boolean } {
+  const hash = Math.abs(Math.imul(x * 73856093 ^ y * 19349663, 2654435761) | 0);
+  return { variant: variants > 0 ? hash % variants : 0, flip: ((hash >>> 8) & 1) === 1 };
 }
 
 export function movementTokenGenerationSignature(game: GameJson | null): string | null {
@@ -1831,6 +1857,12 @@ export class PitchRenderer {
   private sweetSpotLogoRequestGeneration = 0;
   /** Arena dressing over the pitch surface: corner pennants, bunting. */
   private dressingLayer = new Container();
+  /** Owner 10-03: casualty blood splatters - flat on the turf, the LOWEST thing on a tile (under setup zones, range
+   *  shading, square marks and every token); rebuilt each refresh from the server's bloodspotArray. */
+  private bloodLayer = new Container();
+  private bloodTextures: Texture[] = [];
+  /** Owner 10-03: Settings > Display can turn the splatters off (the host sets this and refreshes). */
+  bloodDecalsEnabled = true;
   /** Range shading + selection halo, under the tokens. */
   private overlayLayer = new Container();
   private movementReachLayer = new Container();
@@ -4005,6 +4037,20 @@ export class PitchRenderer {
       this.chompedDecoTexture = null;
     }
     if (!this.initActive(generation, app)) return;
+    { // owner 10-03: casualty blood splatter variants (Codex pixel art, assets/decorations/blood/blood-N-4x.png)
+      const loaded: Texture[] = [];
+      for (const url of BLOOD_DECAL_URLS) {
+        try {
+          const texture = await Assets.load<Texture>(url);
+          if (!this.initActive(generation, app)) return;
+          texture.source.scaleMode = 'linear';
+          texture.source.autoGenerateMipmaps = true;
+          loaded.push(texture);
+        } catch { /* a missing variant just narrows the pool */ }
+      }
+      this.bloodTextures = loaded;
+    }
+    if (!this.initActive(generation, app)) return;
     try { // owner 09-30: DISTRACTED banner (512x205 master) centred on the torso of a player without tackle zones
       const texture = await Assets.load<Texture>(new URL('../assets/decorations/distracted.png', import.meta.url).href);
       if (!this.initActive(generation, app)) return;
@@ -4724,6 +4770,7 @@ export class PitchRenderer {
       this.pitchLayer,
       this.sweetSpotLayer, // B7-5: over turf, under players
       this.dressingLayer,
+      this.bloodLayer, // owner 10-03: casualty blood, lowest on the tile
       this.setupZoneLayer, // owner 2026-07-04: setup zone shading, under players
       this.overlayLayer,
       this.marksLayer, // owner 2026-07-04f: persistent square marks (under tokens)
@@ -5066,6 +5113,7 @@ export class PitchRenderer {
     this.persistentPlayerArrowIds.clear(); this.persistentPlayerArrows = [];
     this.playerMarkLabels.clear(); this.destroyPlayerMarkLabelNodes();
     this.marks.clear(); this.markLabels.clear(); for (const c of this.marksLayer.removeChildren()) c.destroy({ children: true });
+    for (const c of this.bloodLayer.removeChildren()) c.destroy(); // owner 10-03: a new game starts with a clean pitch
     // reset movement/ball baselines so the new game doesn't tween from stale squares
     this.lastSquares.clear();
     this.lastBallSquare = null; this.lastBallOnPitch = false; this.ballEverRendered = false;
@@ -5628,8 +5676,33 @@ export class PitchRenderer {
     }
     this.pendingLeapInPlace.clear(); // consumed above (or dropped if the token wasn't rebuilt)
 
-    // App19: Classic/default keeps the upstream blood decals. Modern deliberately suppresses
-    // only their presentation; the protocol/model bloodspotArray remains untouched.
+    // Owner 10-03: "Whenever a player is casualtied, let's place the blood splatter at the lowest z-level on the tile
+    // itself for the remainder of the match." Modern draws the Codex splatter art flat on the tile from the server's
+    // bloodspotArray (which only grows during a game) - casualties only (BH / SI / RIP), not knock-outs.
+    for (const child of this.bloodLayer.removeChildren()) child.destroy();
+    if (this.bloodDecalsEnabled && this.modernPitchPresentation && this.bloodTextures.length > 0 && !this.boardCleared) {
+      const seenSquares = new Set<string>();
+      for (const spot of bloodDecalSpots(this.game.fieldModel.bloodspotArray as { coordinate?: [number, number]; injury?: unknown }[])) {
+        const key = `${spot.x},${spot.y}`;
+        if (seenSquares.has(key)) continue; // one splatter per tile, however many fell there
+        seenSquares.add(key);
+        const quad = squareQuad(spot.x, spot.y);
+        const xs = quad.points.map((point) => point[0]);
+        const width = Math.max(...xs) - Math.min(...xs);
+        const height = quad.yBottom - quad.yTop;
+        const anchor = squareAnchor(spot.x, spot.y);
+        const pick = bloodDecalVariant(spot.x, spot.y, this.bloodTextures.length);
+        const decal = new Sprite(this.bloodTextures[pick.variant]!);
+        decal.label = 'bloodDecal';
+        decal.anchor.set(0.5, 0.5);
+        decal.width = width * BLOOD_DECAL_FILL * (pick.flip ? -1 : 1);
+        decal.height = height * BLOOD_DECAL_FILL;
+        decal.position.set(anchor.x, anchor.y);
+        decal.alpha = 0.92;
+        this.bloodLayer.addChild(decal);
+      }
+    }
+    // App19: Classic/default keeps the upstream blood decals.
     if (!this.modernPitchPresentation) {
       for (const spot of this.game.fieldModel.bloodspotArray as { coordinate?: [number, number] }[]) {
         if (!isOnPitch(spot?.coordinate ?? null)) continue;
@@ -9056,7 +9129,8 @@ export class PitchRenderer {
     if (!player) return null;
     // owner 2026-07-02: the portrait excludes skill badges (the card's own
     // skill row covers them, with ALL skills including positional defaults)
-    const token = this.buildPlayerToken(player, data, isHome, team, undefined, false);
+    // Owner 10-03: the portrait always shows the player facing the camera (south), never its on-pitch facing.
+    const token = withPortraitFacing(() => this.buildPlayerToken(player, data!, isHome, team, undefined, false));
     token.scale.set(1); // portrait ignores depth scaling
     // Owner 09-09: the position ring and the (sheared) shadows widened the extract's bounds asymmetrically, so
     // the figure sat off-centre in the card's portrait box — the portrait is the FIGURE plus its state markers.

@@ -44,3 +44,11 @@ export async function fetchLatestRelease(fetchFn: (url: string, init?: RequestIn
 export function inAppUpdaterEnabled(input: { appVersion: string; inTauri: boolean; forkEdition: boolean }): boolean {
   return input.inTauri && !input.forkEdition && !isDevCut(input.appVersion) && parseVersion(input.appVersion) !== null;
 }
+
+/** Owner 10-03: "check for updates each time it returns to the menu" - true on the edge from a game / replay on
+ *  screen back to the console (never on the first load, which the launch check covers, nor on entering a game). */
+export function shouldCheckForUpdateOnMenuReturn(wasInGame: boolean | undefined, inGame: boolean): boolean {
+  return wasInGame === true && !inGame;
+}
+/** Let the board tear down before the prompt may appear. */
+export const MENU_RETURN_UPDATE_CHECK_DELAY_MS = 800;
