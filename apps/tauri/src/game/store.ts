@@ -2807,11 +2807,14 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       // Weather Change is a child of the authoritative kickoff transaction for both audiences.
       const wRoll = weather.roll, wName = weather.weather;
       // Owner 09-09: a weather roll in the KICK-OFF frame is the Changing Weather event -> the shorter card.
+      // 10-03 (FUMBBL g1949553 cmd 1107/1108): live, the weather report arrives one frame AFTER kickoffResult, so
+      // `kickoff` is null here. Inside a live kick-off transaction a weather roll is always Changing Weather - it
+      // took the full 5.6 s Weather Roll card (with dice) while the receiving coach's turn had already started.
       enqueueFifoCine(
         'weatherChange',
-        () => { state.weatherCine = { roll: wRoll, weather: wName, changing: !!kickoff }; },
+        () => { state.weatherCine = { roll: wRoll, weather: wName, changing: true }; },
         () => { state.weatherCine = null; },
-        presentationMs(kickoff ? WEATHER_CHANGE_CINE_MS : WEATHER_CINE_MS),
+        presentationMs(WEATHER_CHANGE_CINE_MS),
       );
     } else {
       const weatherDwell = presentationMs(kickoff ? WEATHER_CHANGE_CINE_MS : WEATHER_CINE_MS);
