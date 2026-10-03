@@ -20181,8 +20181,11 @@ export const gameStore = {
   },
 
   /** Submit the completed setup (only sent when the validation is legal). */
-  setupSubmit() {
-    if (!state.setupPhase?.validation.valid || !game.value || !setupSurfaceIsServerArmed(game.value)) return;
+  /** `force` (Astra review 10-03): send the setup even though the client's own checklist calls it illegal. The
+   *  checklist is fixed at the standard 11 / 3 / 2 rules; the SERVER is the referee (maxPlayersOnField, a mandatory
+   *  captain, ...), so the coach can always put the formation in front of it. Never automatic. */
+  setupSubmit(force = false) {
+    if (!state.setupPhase || (!force && !state.setupPhase.validation.valid) || !game.value || !setupSurfaceIsServerArmed(game.value)) return;
     // G303-B3: echo the LIVE turnMode — a Solid-Defence re-setup must close with
     // clientEndTurn{turnMode:'solidDefence'}, not a hardcoded 'setup' (the g303 wire
     // shows the server rejects/ignores the wrong phase tag and the game wedges).

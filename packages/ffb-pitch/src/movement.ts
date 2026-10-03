@@ -97,9 +97,15 @@ export function reachableSquares(occupied: ReadonlySet<string>, from: Square, ma
  * - leaves a square marked by an opposition tackle zone (dodge), or
  * - exceeds the normal Movement Allowance (rush).
  * Level-by-level DP: the step count IS the level, so each level L holds the
- * minimum dice-rolls to reach each square in exactly stepsUsed+L steps.
- * Returns the best path (fewest rolls, then fewest steps) or null.
+ * minimum roll cost to reach each square in exactly stepsUsed+L steps.
+ * Owner 10-03 ("prefer rushes over dodges where possible"): a dodge costs DODGE_ROLL_COST and a rush 1, so the
+ * planner takes the fewest dodges first, then the fewest rushes, then the fewest steps - it will rush around a
+ * tackle zone it can avoid rather than dodge out of it. A heuristic only: roll targets (AG, tackle zones on the
+ * destination, skills) are not weighed.
+ * Returns the best path (lowest roll cost, then fewest steps) or null.
  */
+/** More than any possible number of rushes in one activation (MAX_REACH_STEPS), so no count of rushes outweighs a dodge. */
+export const DODGE_ROLL_COST = MAX_REACH_STEPS + 1;
 export function planPath(
   occupied: ReadonlySet<string>,
   /** squares marked by ≥1 opposition tackle zone (dodge to leave them) */
@@ -135,7 +141,7 @@ export function planPath(
     );
     for (const [key, entry] of expansion) {
       const [cx, cy] = key.split(',').map(Number) as Square;
-      const stepRolls = (marked.has(key) ? 1 : 0) + (stepsUsed + level > normal ? 1 : 0);
+      const stepRolls = (marked.has(key) ? DODGE_ROLL_COST : 0) + (stepsUsed + level > normal ? 1 : 0);
       for (const [nx, ny] of neighbors(cx, cy).sort((a, b) => toTarget(a) - toTarget(b))) {
         const nk = squareKey(nx, ny);
         if (occupied.has(nk)) continue;
@@ -158,6 +164,44 @@ export function planPath(
     key = levels[level]!.get(key)!.parent;
   }
   return path;
+}
+
+/** The roll cost planPath assigns to a finished route (same rule: DODGE_ROLL_COST per step that leaves a marked
+ *  square, 1 per step beyond the normal allowance). Lets a caller compare routes to DIFFERENT squares - the
+ *  blitz / foul stance choice - by the planner's own preference instead of by length. */
+export function pathRollCost(
+  marked: ReadonlySet<string>,
+  from: Square,
+  path: readonly Square[],
+  stepsUsed: number,
+  normal: number,
+): number {
+  let cost = 0;
+  let at: Square = from;
+  path.forEach((step, index) => {
+    if (marked.has(squareKey(at[0], at[1]))) cost += DODGE_ROLL_COST;
+    if (stepsUsed + index + 1 > normal) cost += 1;
+    at = step;
+  });
+  return cost;
+}
+
+/** The one rule for choosing between finished routes to DIFFERENT squares (the stance beside a blitz / foul
+ *  target): lower planner roll cost first (fewest dodges, then fewest rushes), then the shorter walk. Returns
+ *  "candidate beats incumbent". Astra review 10-03: every stance picker shares this, so none ranks by raw length
+ *  or by an unweighted roll count. */
+export function routePreference(
+  marked: ReadonlySet<string>,
+  from: Square,
+  stepsUsed: number,
+  normal: number,
+): (candidate: readonly Square[], incumbent: readonly Square[]) => boolean {
+  const cost = (path: readonly Square[]) => pathRollCost(marked, from, path, stepsUsed, normal);
+  return (candidate, incumbent) => {
+    const a = cost(candidate);
+    const b = cost(incumbent);
+    return a < b || (a === b && candidate.length < incumbent.length);
+  };
 }
 
 /**

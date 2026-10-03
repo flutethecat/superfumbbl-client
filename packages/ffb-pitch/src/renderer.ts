@@ -48,7 +48,7 @@ import {
 } from './geometry';
 import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
 import { APOTHECARY_STATION_LAYOUT, apoBoxState, apothecaryTokenScale, projectedApothecaryLabelPlacement } from './apothecaryBox';
-import { budgetAfterPlannedSteps, planPath, reachableSquares, squareKey, type Square } from './movement';
+import { budgetAfterPlannedSteps, pathRollCost, planPath, reachableSquares, routePreference, squareKey, type Square } from './movement';
 
 export type PassDestinationKind = 'ball' | 'bomb' | 'stunty';
 /** Owner 09-28 (S16): Hail Mary Pass scatter squares, derived by the host from received frames only. `decision.square`
@@ -6954,14 +6954,30 @@ export class PitchRenderer {
     const cheby = (a: Square, c: Square) => Math.max(Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]));
     if (cheby(b.from, target) <= 1) return []; // already adjacent — no walk needed
     let best: Square[] | null = null;
+    const better = this.contactRouteComparator(attackerId, b);
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
       if (!dx && !dy) continue;
       const sq: Square = [target[0] + dx, target[1] + dy];
       if (sq[0] < 0 || sq[1] < 0) continue;
       const path = this.o66AutoPath(attackerId, sq);
-      if (path && path.length > 0 && (!best || path.length < best.length)) best = path;
+      if (path && path.length > 0 && (!best || better(path, best))) best = path;
     }
     return best;
+  }
+
+  /** Owner 10-03 ("prefer rushes over dodges where possible"): the stance beside a blitz / foul target is chosen by
+   *  the planner's own roll cost (fewest dodges, then fewest rushes), then the shorter walk - it was the shortest walk
+   *  alone, so a stance reached through a tackle zone beat a clean one a square further round. */
+  private contactRouteComparator(attackerId: string, b: { from: Square; normal: number }): (candidate: Square[], incumbent: Square[]) => boolean {
+    return routePreference(this.markedSquaresFor(attackerId), b.from, 0, b.normal);
+  }
+
+  /** The planner's roll cost of a whole route for `playerId` from its current square (Infinity when the player has no
+   *  movement budget). For callers that choose between routes outside the renderer (the left-click blitz waypoint
+   *  extension) - Astra review 10-03. */
+  o66RouteRollCost(playerId: string, route: readonly Square[]): number {
+    const b = this.o66MovementBudget(playerId);
+    return b ? pathRollCost(this.markedSquaresFor(playerId), b.from, route, 0, b.normal) : Number.POSITIVE_INFINITY;
   }
 
   /** #36 (Yularen 07-16 RATIFIED): reason-returning companion to o66PathToContact. Same walk-to-contact plot,
@@ -6984,6 +7000,7 @@ export class PitchRenderer {
     if (cheby(b.from, target) <= 1) return { status: 'PATH', path: [] }; // already adjacent — no walk needed
     let best: Square[] | null = null;
     let anyOpenNeighbour = false;
+    const better = this.contactRouteComparator(attackerId, b);
     for (let dx = -1; dx <= 1; dx++)
       for (let dy = -1; dy <= 1; dy++) {
         if (!dx && !dy) continue;
@@ -6992,7 +7009,7 @@ export class PitchRenderer {
         if (this.playersBySquare.has(squareKey(sq[0], sq[1]))) continue; // occupied — can't stand here
         anyOpenNeighbour = true;
         const path = this.o66AutoPath(attackerId, sq);
-        if (path && path.length > 0 && (!best || path.length < best.length)) best = path;
+        if (path && path.length > 0 && (!best || better(path, best))) best = path;
       }
     if (best) return { status: 'PATH', path: best };
     return { status: anyOpenNeighbour ? 'OUT_OF_RANGE' : 'SURROUNDED', path: [] };
@@ -7375,7 +7392,10 @@ export class PitchRenderer {
     if (Math.max(Math.abs(start[0] - opponentSquare[0]), Math.abs(start[1] - opponentSquare[1])) === 1) return;
     const occupied = this.occupiedForPathing();
     const marked = this.markedSquares();
-    let best: { path: Square[]; rolls: number } | null = null;
+    let best: Square[] | null = null;
+    // Astra review 10-03: the same stance rule as o66PathToContact (this picker ranked by an unweighted roll count,
+    // so one dodge still beat a two-rush walk around).
+    const better = routePreference(marked, start, this.plannedPath.length, info.normal);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         if (dx === 0 && dy === 0) continue;
@@ -7384,25 +7404,10 @@ export class PitchRenderer {
         if (occupied.has(squareKey(target[0], target[1]))) continue;
         const path = planPath(occupied, marked, start, target, this.plannedPath.length, info.normal, info.normal + info.rushes);
         if (!path) continue;
-        const rolls = this.countRolls(path, start, marked, info.normal, this.plannedPath.length);
-        if (!best || rolls < best.rolls || (rolls === best.rolls && path.length < best.path.length)) {
-          best = { path, rolls };
-        }
+        if (!best || better(path, best)) best = path;
       }
     }
-    if (best) this.setPath([...this.plannedPath, ...best.path]);
-  }
-
-  /** Dice rolls (dodges + rushes) a path extension would cost. */
-  private countRolls(path: Square[], start: Square, marked: ReadonlySet<string>, normal: number, stepsUsed: number): number {
-    let rolls = 0;
-    let from = start;
-    path.forEach((square, i) => {
-      if (marked.has(squareKey(from[0], from[1]))) rolls++;
-      if (stepsUsed + i + 1 > normal) rolls++;
-      from = square;
-    });
-    return rolls;
+    if (best) this.setPath([...this.plannedPath, ...best]);
   }
 
   /** After a model refresh, drop path steps that became occupied. */

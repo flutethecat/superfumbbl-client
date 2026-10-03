@@ -89,6 +89,7 @@ import { mvpConcededSides, postGameKey, postGamePublic, type PostGameSnapshot } 
 import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
+import { setupProblems } from '../game/setupProblems';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
 import { hasOffPitchCandidate, resolveRosterPickCandidates } from '../game/rosterPicker';
 import { d6LogParts, d6RequirementParts } from '../game/d6Log';
@@ -3546,7 +3547,7 @@ type ReactivePromptDragKey =
   | 'apothecaryChoice' | 'apothecaryD16' | 'apothecaryAutoReturn' | 'selectSkill' | 'endTurnWarn' | 'endActConfirm'
   | 'blitzMove' | 'keywordChoice' | 'cardChoice' | 'cardBuy' | 'coinChoice' | 'receiveChoice'
   | 'yesNo' | 'blockAlternative' | 'followup' | 'blockPartial' | 'multiBlock'
-  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting';
+  | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer';
 type ReactivePromptDragPos = { x: number; y: number };
 const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePromptDragPos | null>>({
   skillChoice: null,
@@ -3578,6 +3579,8 @@ const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePro
   multiBlock: null,
   injuryInteraction: null,
   onTheBallWaiting: null,
+  setupConfirm: null,
+  concedeOffer: null,
 });
 const reactivePromptStyle = (key: ReactivePromptDragKey, anchored?: { x: number; y: number; leftEdge?: boolean }) => {
   const pos = reactivePromptDragPos[key];
@@ -6106,6 +6109,7 @@ function previewLeftClickBlitzRoute(actingId: string, targetId: string): [number
     waypointRoute: o66PendingMove.value?.route ?? [],
     directContact: () => renderer?.o66PathToContact(actingId, target) ?? null,
     extendWaypoint: (route, destination) => renderer?.o66ExtendPath(actingId, route, destination) ?? null,
+    routeCost: (route) => renderer?.o66RouteRollCost(actingId, route) ?? 0, // owner 10-03: rushes before dodges
   })?.route ?? null;
 }
 function playerSquareById(pid: string): [number, number] | null {
@@ -7722,6 +7726,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     return;
   }
   if (endTurnWarnCount.value !== null) { cancelEndTurnWarn(); return; }
+  if (setupConfirm.value) { cancelSetupConfirm(); return; }
   // Owner 08-19: right-click cancels a pending setup placement.
   if (setupPhase.value && selectedSetupPlayerId.value !== null) {
     selectedSetupPlayerId.value = null;
@@ -8128,6 +8133,7 @@ function o66ConfirmPending(): boolean {
   if (wideRailActivationPrompt.value) return true;
   if (endActConfirm.value) { confirmEndActivation(); return true; }
   if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
+  if (setupConfirm.value) { if (setupConfirm.value.problems.length) cancelSetupConfirm(); else confirmSetupNow(); return true; }
   if (gameStore.state.followupChoice) { answerFollowup(true); return true; }
   // S40: with a modifying skill there are three answers and no default: Space is consumed without a wire.
   if (gameStore.state.skillChoice?.mine) { if (!gameStore.state.skillChoice.modifyingSkill) gameStore.resolveSkillUse(true); return true; }
@@ -11021,8 +11027,63 @@ function unactivatedOwnIds(): string[] {
   return ids;
 }
 function unactivatedOwnCount(): number { return unactivatedOwnIds().length; }
-/** Owner 10-03: Confirm Setup is unavailable until the setup pane's conditions are met (the removed Done button's rule). */
-const setupConfirmBlocked = computed(() => !!setupPhase.value && !setupPhase.value.validation.valid);
+/** Owner 10-03: the Confirm Setup modal. The pitch stays interactive under it, so what it shows is LIVE (Astra review:
+ *  a snapshot went stale when a player was dragged with the modal up): `setupReview` re-derives from the current
+ *  formation, and the offender arrows follow it until the formation is legal or the setup ends. */
+const setupConfirmOpen = ref(false);
+const setupArrowsActive = ref(false);
+const setupReview = computed(() => (setupPhase.value ? setupProblems(setupPhase.value.players, setupPhase.value.validation) : null));
+const setupConfirm = computed(() => (setupConfirmOpen.value && setupReview.value && setupPhase.value
+  ? { problems: setupReview.value.problems, refereeErrors: setupPhase.value.setupErrors } : null));
+function syncSetupArrows(): void {
+  const offenders = setupArrowsActive.value ? (setupReview.value?.offenders ?? []) : [];
+  if (offenders.length) renderer?.showUnactivatedCues(offenders); // the arrow + gold pulse, on the offenders
+  else { if (setupArrowsActive.value) renderer?.clearUnactivatedCues(); setupArrowsActive.value = false; }
+}
+function stopSetupArrows(): void {
+  if (setupArrowsActive.value) renderer?.clearUnactivatedCues();
+  setupArrowsActive.value = false;
+}
+function openSetupConfirm(): void {
+  if (!setupPhase.value) return;
+  setupConfirmOpen.value = true;
+  stopSetupArrows();
+  setupArrowsActive.value = (setupReview.value?.offenders.length ?? 0) > 0;
+  syncSetupArrows();
+}
+/** `anyway` = the coach sends a formation the client's checklist calls illegal; the server referees it. */
+function confirmSetupNow(anyway = false): void {
+  const open = setupConfirm.value;
+  if (!open || (open.problems.length > 0 && !anyway)) return;
+  setupConfirmOpen.value = false;
+  stopSetupArrows();
+  gameStore.setupSubmit(anyway);
+}
+function cancelSetupConfirm(): void {
+  setupConfirmOpen.value = false; // the arrows stay up while the coach fixes the formation (syncSetupArrows retires them)
+}
+// the arrows track the formation: a moved offender loses its arrow, a fixed formation clears them all
+watch(() => (setupArrowsActive.value ? (setupReview.value?.offenders ?? []).join('|') + '#' + (setupPhase.value?.players ?? []).map((p) => p.coord?.join(',') ?? '-').join('|') : ''),
+  () => { if (setupArrowsActive.value) syncSetupArrows(); });
+watch(setupPhase, (phase) => { if (!phase) { setupConfirmOpen.value = false; stopSetupArrows(); } });
+/** Owner 10-03: "pop a modal when it would be legal to concede asking the user if they want to" - once per setup. */
+const concedeOfferDismissedKey = ref<string | null>(null);
+const concedeOfferKey = computed(() => {
+  const phase = setupPhase.value;
+  const g = gameStore.game.value;
+  // Astra review 10-03: the server's own concessionPossible flag gates it too (allowConcessions off, not my turn) -
+  // never offer something the server would silently drop.
+  if (!phase || !g || !phase.validation.canConcede || solidDefenceSetup.value || !gameStore.canConcedeGame) return null;
+  return `${String((g as { gameId?: unknown }).gameId ?? '')}:${g.half ?? 0}:${g.turnDataHome?.turnNr ?? 0}:${g.turnDataAway?.turnNr ?? 0}`;
+});
+const concedeOffer = computed(() => (concedeOfferKey.value && concedeOfferKey.value !== concedeOfferDismissedKey.value
+  ? { available: setupPhase.value?.validation.available ?? 0 } : null));
+function answerConcedeOffer(concede: boolean): void {
+  concedeOfferDismissedKey.value = concedeOfferKey.value;
+  if (!concede) return;
+  setupConfirmOpen.value = false; // never two confirmations at once
+  gameStore.setupConcede(); // requests it; the server's own concede confirmation follows
+}
 /** Owner 09-08: "Go back" keeps the idle-player arrows for this long (or until the coach clicks a player). */
 const UNACTIVATED_CUE_GRACE_MS = 2000;
 function endTurn() {
@@ -11032,9 +11093,10 @@ function endTurn() {
   // Owner 09-14: CONFIRM SETUP is a placement confirmation, not a turn with activations — nobody has "acted", so
   // the idle-player guard below would always fire. Send it straight through.
   const turnMode = String(gameStore.game.value?.turnMode ?? '');
-  // Owner 10-03: the setup pane's Done button is gone - Confirm Setup submits through the same store seam it used
-  // (setupSubmit: validity guard + the coordinate map a Solid Defence re-setup needs).
-  if (setupPhase.value) { gameStore.setupSubmit(); return; }
+  // Owner 10-03: Confirm Setup asks first. A legal setup gets "Confirm Setup?"; an illegal one gets the list of what
+  // is wrong, with arrows on the offending players. Only the confirmation submits (setupSubmit: the validity guard +
+  // the coordinate map a Solid Defence re-setup needs).
+  if (setupPhase.value) { openSetupConfirm(); return; }
   if (endTurnButtonText.value === 'Confirm Setup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
   // #8: idle players → raise the confirm modal; only its "End turn" proceeds.
   const idle = unactivatedOwnIds();
@@ -11631,10 +11693,10 @@ function sendChat() {
           <span class="sb-cell sb-turn home" :data-active="homePanel?.playing ?? false"
             :title="`${homePanel?.coach ?? 'Home'} — turn ${homePanel?.turnNr ?? 0}`">Turn {{ homePanel?.turnNr ?? 0 }}</span>
           <button v-if="gameStore.isPlaying.value" class="sb-cell end-turn"
-            :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction || setupConfirmBlocked"
+            :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction"
             :data-opponent="!gameStore.myTurn.value"
             :data-setup="endTurnButtonText === 'Confirm Setup'"
-            :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : setupConfirmBlocked ? 'Meet the setup conditions first' : 'End the current turn (or kick-off mini-phase)'"
+            :title="!gameStore.myTurn.value ? 'Waiting for opponent' : endTurnUnavailableDuringReaction ? 'End Turn unavailable during a reaction' : setupPhase ? 'Confirm your setup' : 'End the current turn (or kick-off mini-phase)'"
             @click="endTurn()">{{ endTurnButtonText }}</button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
             :title="`${awayPanel?.coach ?? 'Away'} — turn ${awayPanel?.turnNr ?? 0}`">Turn {{ awayPanel?.turnNr ?? 0 }}</span>
@@ -12322,11 +12384,11 @@ function sendChat() {
             </li>
             <li :class="{ ok: setupPhase.validation.leftOk }">
               <span class="setup-mark">{{ setupPhase.validation.leftOk ? '✓' : '✗' }}</span>
-              ≤2 in the left wide zone ({{ setupPhase.validation.leftWide }})
+              Max 2 in the left wide zone ({{ setupPhase.validation.leftWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.rightOk }">
               <span class="setup-mark">{{ setupPhase.validation.rightOk ? '✓' : '✗' }}</span>
-              ≤2 in the right wide zone ({{ setupPhase.validation.rightWide }})
+              Max 2 in the right wide zone ({{ setupPhase.validation.rightWide }})
             </li>
             <li :class="{ ok: setupPhase.validation.countOk }">
               <span class="setup-mark">{{ setupPhase.validation.countOk ? '✓' : '✗' }}</span>
@@ -12339,10 +12401,9 @@ function sendChat() {
             {{ selectedSetupPlaced ? 'click a square to move, or click the dugout to return to reserves' : 'click a square on your half to place' }}
           </div>
           <div class="setup-actions">
-            <!-- Owner 10-03: the pane no longer carries its own confirm - the scoreboard's Confirm Setup is the one
-                 submit (same store seam, setupSubmit). -->
+            <!-- Owner 10-03: the pane no longer carries its own confirm (the scoreboard's Confirm Setup opens the setup
+                 confirmation) nor Concede (a prompt asks when conceding is legal). -->
             <button class="setup-btn" @click="returnSelectedToReserve" :disabled="!selectedSetupPlayerId">↩ Reserve</button>
-            <button v-if="setupPhase.validation.canConcede" class="setup-btn concede" @click="gameStore.setupConcede()">Concede</button>
           </div>
         </div>
 
@@ -12552,6 +12613,45 @@ function sendChat() {
           <template #actions>
             <button class="rr-use" @click="confirmEndTurnAnyway()">End turn</button>
             <button class="rr-decline" @click="cancelEndTurnWarn()">Go back</button>
+          </template>
+        </PitchConfirmationPanel>
+
+        <!-- Owner 10-03: Confirm Setup asks first; an illegal setup lists what is wrong (arrows mark the offenders). -->
+        <PitchConfirmationPanel v-if="setupConfirm" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup?'"
+          label="Setup confirmation" test-id="setup-confirm"
+          :position-style="reactivePromptStyle('setupConfirm')" draggable
+          @drag-start="startReactivePromptDrag('setupConfirm', $event)">
+          <template v-if="setupConfirm.problems.length">
+            <ul class="setup-confirm-problems">
+              <li v-for="problem in setupConfirm.problems" :key="problem">{{ problem }}</li>
+            </ul>
+          </template>
+          <template v-else>Lock in this setup? Players can't be moved once it is confirmed.</template>
+          <!-- Astra review 10-03: a rejection from the server is shown here too, not only in the pane. -->
+          <div v-if="setupConfirm.refereeErrors.length" class="setup-confirm-referee">
+            The referee rejected the last setup:
+            <ul class="setup-confirm-problems">
+              <li v-for="message in setupConfirm.refereeErrors" :key="message">{{ message }}</li>
+            </ul>
+          </div>
+          <template #actions>
+            <button v-if="!setupConfirm.problems.length" class="rr-use" @click="confirmSetupNow()">Confirm setup</button>
+            <button class="rr-decline" @click="cancelSetupConfirm()">Go back</button>
+            <!-- The checklist is the standard rules; the server referees league options (Astra review 10-03). -->
+            <button v-if="setupConfirm.problems.length" class="rr-decline" data-testid="setup-submit-anyway"
+              title="Send this setup to the referee as it is. The server decides whether it is legal."
+              @click="confirmSetupNow(true)">Submit anyway</button>
+          </template>
+        </PitchConfirmationPanel>
+
+        <!-- Owner 10-03: conceding at setup is offered as a question (it left the setup pane). -->
+        <PitchConfirmationPanel v-if="concedeOffer && !setupConfirm" title="Concede?" label="Concede offer" test-id="concede-offer"
+          :position-style="reactivePromptStyle('concedeOffer')" draggable
+          @drag-start="startReactivePromptDrag('concedeOffer', $event)">
+          You have {{ concedeOffer.available }} player{{ concedeOffer.available === 1 ? '' : 's' }} available for this drive, so you are allowed to concede. Do you want to concede the match?
+          <template #actions>
+            <button class="rr-use" @click="answerConcedeOffer(true)">Concede</button>
+            <button class="rr-decline" @click="answerConcedeOffer(false)">Keep playing</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -15550,6 +15650,9 @@ function sendChat() {
   color: var(--ui-heading);
 }
 .setup-conditions { list-style: none; margin: 0 0 8px; padding: 0; }
+.setup-confirm-problems { margin: 0; padding: 0 0 0 18px; text-align: left; }
+.setup-confirm-problems li { margin: 0 0 4px; }
+.setup-confirm-referee { margin-top: 8px; text-align: left; }
 .setup-conditions li {
   display: flex;
   align-items: center;

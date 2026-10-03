@@ -20,6 +20,9 @@ export function leftClickBlitzContactRoute(input: {
   waypointRoute: readonly BlitzSquare[];
   directContact: () => BlitzSquare[] | null;
   extendWaypoint: (route: BlitzSquare[], destination: BlitzSquare) => BlitzSquare[] | null;
+  /** Owner 10-03 (prefer rushes over dodges): the planner's roll cost of a WHOLE candidate route. When supplied, the
+   *  waypoint extension takes the cheapest route (then the shortest) instead of the shortest alone. */
+  routeCost?: (route: BlitzSquare[]) => number;
   pitchCols?: number;
   pitchRows?: number;
 }): BlitzContactRoute | null {
@@ -36,7 +39,12 @@ export function leftClickBlitzContactRoute(input: {
       const destination: BlitzSquare = [input.target[0] + dx, input.target[1] + dy];
       if (destination[0] < 0 || destination[0] >= cols || destination[1] < 0 || destination[1] >= rows) continue;
       const candidate = input.extendWaypoint(prior, destination);
-      if (candidate && candidate.length > 0 && (!best || candidate.length < best.length)) best = candidate;
+      if (!candidate || candidate.length === 0) continue;
+      if (!best) { best = candidate; continue; }
+      const candidateCost = input.routeCost ? input.routeCost(candidate) : 0;
+      const bestCost = input.routeCost ? input.routeCost(best) : 0;
+      // explicit compares (not a subtraction): two unpriceable routes (Infinity) fall through to the length rule
+      if (candidateCost < bestCost || (!(bestCost < candidateCost) && candidate.length < best.length)) best = candidate;
     }
     return best ? { route: best, source: 'waypoint-extension' } : null;
   }
