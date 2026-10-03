@@ -16062,8 +16062,27 @@ export class PitchRenderer {
     const node = new Sprite(tex);
     node.anchor.set(0.5, 0.5);
     node.label = 'heatExhaustedMarker';
-    const ratio = isWalkerToken(token) ? (walkerFigureRatio(token) ?? 1) : 1;
-    this.placeChestMarker(token, node, 52, (HEAT_H * ratio) / tex.height);
+    const chip = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
+    if (chip) {
+      // Owner 10-03 ("extend the heat marker to all sprites"): CHECKERS / CHESS - a badge on the disc's upper-right,
+      // the KO marker's mount, so the position letter stays readable.
+      node.scale.set((chip.r * 1.05) / tex.height);
+      node.position.set(chip.r * 0.62, chip.y - chip.r * 0.62);
+      node.zIndex = 200;
+    } else if (isWalkerToken(token)) {
+      this.placeChestMarker(token, node, 52, (HEAT_H * (walkerFigureRatio(token) ?? 1)) / tex.height);
+    } else {
+      // Classic / pack icons (a single body sprite): centred on the torso and sized to the icon, not the forehead
+      // mount placeChestMarker falls back to.
+      const body = token.children
+        .filter((child): child is Sprite => child instanceof Sprite && child.label !== 'castShadow')
+        .sort((x, y) => y.height - x.height)[0];
+      const top = body ? body.position.y - body.height * body.anchor.y : -44.5;
+      const height = body ? body.height : 44.5;
+      node.scale.set(Math.min(HEAT_H, height * 0.5) / tex.height);
+      node.position.set(body ? body.position.x + body.width * (0.5 - body.anchor.x) : 0, top + height * 0.55);
+      node.zIndex = 52;
+    }
     token.sortableChildren = true;
     token.addChild(node);
   }
