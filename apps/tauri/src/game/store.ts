@@ -5265,14 +5265,47 @@ function movementDraining(playerId?: string): boolean {
 // Throw Team-Mate reroll decisions, and the later Swoop election. The client only validates and displays it.
 
 
+/** Owner 10-03 ("bombs should be revealed to both players"): an uncontested bomb's whole resolution (passCoordinate
+ *  set ... cleared) lands in one burst, so the watching coach's marker was set and removed in the same tick and never
+ *  drew. A BOMB destination therefore stays up for the bomb's flight (the same 700 ms the throw sprite takes) before
+ *  the server's clear is honoured. Presentation only: the square is the server's passCoordinate, nothing is invented. */
+const BOMB_DESTINATION_HOLD_MS = 700;
+let bombDestinationShownAt = 0;
+/** The pending retire of a marker the server has already cleared (null = the marker, if any, is live server truth). */
+let bombDestinationHoldTimer: ReturnType<typeof setTimeout> | null = null;
+function cancelBombDestinationHold(): void {
+  if (bombDestinationHoldTimer) cancelGameTimeout(bombDestinationHoldTimer);
+  bombDestinationHoldTimer = null;
+}
+/** True only while the retire timer is really pending (a leave / reset drains the registry without telling us). */
+function bombDestinationHoldPending(): boolean {
+  if (bombDestinationHoldTimer && !gameTimeouts.has(bombDestinationHoldTimer)) bombDestinationHoldTimer = null;
+  return bombDestinationHoldTimer !== null;
+}
 function syncPassDestination(g: GameJson): void {
   const marker = passDestinationFromGame(g);
+  const prior = state.passDestination;
   if (!marker) {
+    if (bombDestinationHoldPending() && prior) return; // already holding this marker to its deadline
+    if (prior?.kind === 'bomb') {
+      const remaining = bombDestinationShownAt + presentationMs(BOMB_DESTINATION_HOLD_MS) - Date.now();
+      if (remaining > 0) {
+        bombDestinationHoldTimer = scheduleGameTimeout(() => {
+          bombDestinationHoldTimer = null;
+          if (!passDestinationFromGame(game.value)) state.passDestination = null;
+        }, remaining);
+        return;
+      }
+    }
     state.passDestination = null;
     return;
   }
-  const prior = state.passDestination;
-  if (prior?.square[0] === marker.square[0] && prior.square[1] === marker.square[1] && prior.kind === marker.kind) return;
+  // Astra review 10-03: a destination set while an earlier one is only being held (a second bomb, or a caught bomb
+  // thrown straight back at the same square) is a NEW occurrence - it gets its own seq and its own full hold.
+  const heldOver = bombDestinationHoldPending();
+  cancelBombDestinationHold();
+  if (!heldOver && prior?.square[0] === marker.square[0] && prior.square[1] === marker.square[1] && prior.kind === marker.kind) return;
+  if (marker.kind === 'bomb') bombDestinationShownAt = Date.now();
   state.passDestination = {
     ...marker,
     seq: (prior?.seq ?? 0) + 1,
@@ -7255,6 +7288,9 @@ function applyFrameContents(frame: QueuedFrame) {
           if (!pacedPass) {
             const seq = (state.throwAnim?.seq ?? 0) + 1;
             state.throwAnim = { kind, from: [from[0], from[1]], to: [end[0], end[1]], thrownId, seq, sound: throwSound };
+            // Owner 10-03: nothing behind a bomb throw (its explosion, the knockdowns, the server's destination clear)
+            // applies until the bomb has landed - see bombFlightWaitMs.
+            if (kind === 'throwBomb' && play.active) bombFlightHoldUntil = Date.now() + presentationMs(BOMB_FLIGHT_MS);
           // #92 Inc-2 (Meero SC-3): relocate the throw sound to renderer.playThrow's onCue (fired at RELEASE) when the cue sink is wired; keep the apply-time emit until then so it's never dropped, never doubled.
           if (!soundCueActive) playSound(throwSound);
           // row29-ttm-anim (cross-brief, owner g866): EVERY kind auto-clears after its own flight so the
@@ -8176,6 +8212,12 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, TOUCHDOWN_RESOLUTION_POLL_MS);
     return;
   }
+  // Owner 10-03: a thrown bomb lands before its explosion (and everything after it) is applied.
+  const bombFlightWait = bombFlightWaitMs();
+  if (bombFlightWait > 0) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, bombFlightWait);
+    return;
+  }
   // Owner 10-02 (g1949371): a loose-ball bounce chain presents one hop / one catch roll at a time (play + spectate).
   const ballChainWait = ballChainWaitMs(playback.queue[0]);
   if (ballChainWait > 0) {
@@ -8260,6 +8302,21 @@ const BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS = 2000;
 const BALL_CHAIN_POLL_MS = 50;
 let ballChainOpen = false;
 let ballChainNextApplyAt = 0;
+/** Owner 10-03 ("bomb marker should stay up ... until the explosion animation plays"): an uncontested bomb's frames
+ *  (throw animation, explosion, knockdowns, passCoordinate clear) arrive in one burst, so live play fired the explosion
+ *  at the instant of the throw. The queue now holds everything behind the throw frame for the bomb's flight (the same
+ *  700 ms the thrown sprite takes), so the blast plays on landing and the server's own destination clear - which
+ *  follows the explosion frame - retires the marker then. Live seats only: spectate / replay serialise projectiles
+ *  in their own presentation chain. */
+const BOMB_FLIGHT_MS = 700;
+let bombFlightHoldUntil = 0;
+function bombFlightWaitMs(): number {
+  if (bombFlightHoldUntil === 0) return 0;
+  const remaining = bombFlightHoldUntil - Date.now();
+  if (remaining > 0) return remaining;
+  bombFlightHoldUntil = 0;
+  return 0;
+}
 let ballBounceMovementWaitSince = 0;
 function ballChainPacingActive(): boolean {
   return settings.order66 && !replay.active && !playback.catchingUp;
@@ -8527,7 +8584,7 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
-      && ballChainWaitMs(frame) === 0) {
+      && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0) {
     applyFrame(frame);
     return;
   }
@@ -8551,6 +8608,7 @@ function forceSnapshotTick() {
   state.snapshotEpoch += 1;
 }
 function resetPlayback() {
+  bombFlightHoldUntil = 0;
   if (opponentBlockChoiceRevealTimer) cancelGameTimeout(opponentBlockChoiceRevealTimer);
   opponentBlockChoiceRevealTimer = null;
   opponentBlockChoiceRevealUntil = 0;
@@ -8639,6 +8697,7 @@ function resetPlayback() {
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
   state.ttmRailTerminal = null; // fresh game/reconnect — no historical landing may retire a new rail
   state.passDestination = null; // a server-owned destination never crosses a snapshot boundary
+  cancelBombDestinationHold(); // Astra review 10-03: nor does a pending hold on one
   state.hmpScatterMarks = null;
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
@@ -8681,7 +8740,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.zapAnim = null; state.addPlayerPuff = null; state.cardChoice = null; state.bombBlast = null; state.fireballAnim = null;
   state.leap = null; state.leapFail = null; leapMovesAwaitingReport.clear(); state.scatterAnim = null; state.ballCatch = null; state.deferMove = null;
   clearPassPacing(true);
-  state.ttmHeld = null; state.throwAnim = null; state.trickster = null; state.passDestination = null;
+  state.ttmHeld = null; state.throwAnim = null; state.trickster = null; state.passDestination = null; cancelBombDestinationHold();
   state.vampireBite = null; clearFallOver(); state.negatraitCue = null; // #132: flush the negatrait cue on a game change
   state.watchOutToast = null; // Withergrasp's transient overhead announcement never crosses a game boundary
   if (hardGameBoundary) watchOutAnnouncedPlayers.clear();
@@ -17308,9 +17367,12 @@ let kickPlacementSeq = 0; // owner o66aj: monotonic seq for the kick-placement w
 let fastPregame = false;
 
 /** A player is eligible to be FIELDED in setup unless they're KO'd, injured,
- *  sent off, or missing (they sit in the dugout, not the reserve box). */
+ *  sent off, or missing (they sit in the dugout, not the reserve box).
+ *  Bug reports 10-03 (SickAsEggs / dement0r): EXHAUSTED (0x0e, Sweltering Heat) sits the drive out too. The server
+ *  accepts a placement of an exhausted player - upstream enforces this in the client (UtilClientPlayerDrag only
+ *  drags STANDING / RESERVE box players), so this predicate is the rule. */
 function canFieldInSetup(base: number): boolean {
-  return base !== 0x05 && base !== 0x06 && base !== 0x07 && base !== 0x08 && base !== 0x0a && base !== 0x0d;
+  return base !== 0x05 && base !== 0x06 && base !== 0x07 && base !== 0x08 && base !== 0x0a && base !== 0x0d && base !== 0x0e;
 }
 
 /** The exact `playerChoice:solidDefence` occurrence THIS client answered, retained until the server leaves the
@@ -20607,6 +20669,7 @@ export const gameStore = {
     if (touchdownResolutionQueued()) return;
     // Astra review: likewise while a loose-ball chain still holds frames (the server may already be past this state).
     if (ballChainHolding()) return;
+    if (playback.queue.length > 0 && bombFlightWaitMs() > 0) return; // owner 10-03: the bomb's resolution is still queued
     if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);
       return;

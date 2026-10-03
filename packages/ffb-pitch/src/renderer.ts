@@ -1905,6 +1905,8 @@ export class PitchRenderer {
   private casualtySkullTexture: Texture | null = null;
   /** Owner 09-15 (art handoff): the KO lettering (dazed head + stars + tilted KO) for the dugout knockout marker. */
   private knockoutDecoTexture: Texture | null = null;
+  /** Owner 10-03: the Sweltering Heat marker over an EXHAUSTED player sitting the drive out in the dugout. */
+  private heatExhaustedDecoTexture: Texture | null = null;
   private d6FaceTextures: Array<Texture | undefined> = [];
   private d6FaceVariant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT;
   private d6FaceLoadGeneration = 0;
@@ -3910,6 +3912,15 @@ export class PitchRenderer {
       this.knockoutDecoTexture = texture;
     } catch {
       this.knockoutDecoTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try { // owner 10-03: Sweltering Heat marker, same mipmapped treatment as the KO lettering
+      const texture = await Assets.load<Texture>(new URL('../assets/decorations/heat-exhausted.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.heatExhaustedDecoTexture = texture;
+    } catch {
+      this.heatExhaustedDecoTexture = null;
     }
     if (!this.initActive(generation, app)) return;
     try {
@@ -7697,6 +7708,7 @@ export class PitchRenderer {
         const moverIsHome = this.game?.teamHome.playerArray.some((p) => p.playerId === this.o66PathMover) ?? false;
         const moverPlayer = [...(this.game?.teamHome.playerArray ?? []), ...(this.game?.teamAway.playerArray ?? [])].find((p) => p.playerId === this.o66PathMover);
         const oppCounts = this.tackleZoneCounts(moverIsHome).opposition; // key → # opponents marking
+        const oppDodgeMarks = this.tackleZoneCounts(moverIsHome, { dodgeDestination: true }).opposition; // Titchy zones excluded
         const rushTarget = rushTargetForPlayer(this.game, this.o66PathMover);
         if (b && moverPlayer) {
           const persistentPath = this.movementOverlayOwner === this.o66PathMover;
@@ -7739,7 +7751,7 @@ export class PitchRenderer {
               // ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Stunty.java (Stunty#postConstruct)
               // supplies it. ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Titchy.java
               // (Titchy#postConstruct) registers the mover's -1 DodgeModifier.
-              const destMarks = oppCounts.get(`${dx},${dy}`) ?? 0;
+              const destMarks = oppDodgeMarks.get(`${dx},${dy}`) ?? 0;
               const target = Math.min(
                 6,
                 Math.max(2, agility + (moverHasStunty ? 0 : destMarks) - (moverHasTitchy ? 1 : 0)),
@@ -8024,6 +8036,7 @@ export class PitchRenderer {
     if (this.plannedPath.length > 0) {
       const persistentPlannedPath = this.movementOverlayOwner === this.selectedPlayerId;
       const oppositionCounts = this.tackleZoneCounts(this.selectedIsHome()).opposition;
+      const oppositionDodgeMarks = this.tackleZoneCounts(this.selectedIsHome(), { dodgeDestination: true }).opposition; // Titchy zones excluded
       const line = new Graphics();
       let prev = squareAnchor(px, py);
       line.moveTo(prev.x, prev.y - 3);
@@ -8045,6 +8058,7 @@ export class PitchRenderer {
         // opponent marking the DESTINATION square
         const dodge = oppositionCounts.has(squareKey(fromSquare[0], fromSquare[1]));
         const destMarks = oppositionCounts.get(squareKey(sx, sy)) ?? 0;
+        const dodgeDestMarks = oppositionDodgeMarks.get(squareKey(sx, sy)) ?? 0;
         if (this.jumpSteps.has(i)) {
           // jump over a downed player: AG test, modified by markers of the
           // square jumped from AND the landing square (FGUR p.23)
@@ -8103,7 +8117,7 @@ export class PitchRenderer {
               });
               return serverSquare && serverSquare.minimumRollDodge > 0
                 ? serverSquare.minimumRollDodge
-                : Math.min(6, Math.max(2, info.player.agility + destMarks));
+                : Math.min(6, Math.max(2, info.player.agility + dodgeDestMarks));
             }
             const selectedIsHome = this.selectedIsHome();
             const homeIds = new Set(this.game!.teamHome.playerArray.map((p) => p.playerId));
@@ -8129,7 +8143,7 @@ export class PitchRenderer {
             // ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Stunty.java (Stunty#postConstruct)
             // supplies it. ffb-common/src/main/java/com/fumbbl/ffb/skill/mixed/Titchy.java
             // (Titchy#postConstruct) registers the mover's -1 DodgeModifier.
-            const stuntyDestMarks = moverHasSkill('stunty') ? 0 : destMarks;
+            const stuntyDestMarks = moverHasSkill('stunty') ? 0 : dodgeDestMarks;
             const titchyAdj = moverHasSkill('titchy') ? -1 : 0;
             return Math.min(6, Math.max(2, info.player.agility + stuntyDestMarks + titchyAdj) + dtAdj);
           })();
@@ -9032,14 +9046,23 @@ export class PitchRenderer {
    * mode, opposition zones win overlapping squares (O9.2.2).
    */
   /** squareKey → count of adjacent tackle zones per side, relative to selection. */
-  private tackleZoneCounts(selectedIsHome: boolean): { opposition: Map<string, number>; friendly: Map<string, number> } {
+  /** `dodgeDestination` (bug report Elyod 10-03): the count that MODIFIES a dodge roll. Upstream Titchy registers
+   *  hasNoTacklezoneForDodging and DodgeModifierFactory#numberOfTacklezones filters those players out, so a Titchy
+   *  opponent (Snotling) adds nothing to a dodge INTO its zone. Leaving its zone still needs a dodge, and shading,
+   *  jumps and every other reader keep the full count (the default). */
+  private tackleZoneCounts(selectedIsHome: boolean, options: { dodgeDestination?: boolean } = {}): { opposition: Map<string, number>; friendly: Map<string, number> } {
     const opposition = new Map<string, number>();
     const friendly = new Map<string, number>();
     if (!this.game) return { opposition, friendly };
     const homeIds = new Set(this.game.teamHome.playerArray.map((p) => p.playerId));
+    const titchyIds = options.dodgeDestination
+      ? new Set([...this.game.teamHome.playerArray, ...this.game.teamAway.playerArray]
+        .filter((p) => playerHasSkill(p, 'Titchy')).map((p) => p.playerId))
+      : null;
     for (const data of this.game.fieldModel.playerDataArray) {
       if (!isOnPitch(data.playerCoordinate) || !hasTackleZones(data.playerState)) continue;
       const zoneIsFriendly = homeIds.has(data.playerId) === selectedIsHome;
+      if (!zoneIsFriendly && titchyIds?.has(data.playerId)) continue;
       const target = zoneIsFriendly ? friendly : opposition;
       const [px, py] = data.playerCoordinate;
       for (let dx = -1; dx <= 1; dx++) {
@@ -9460,7 +9483,9 @@ export class PitchRenderer {
           // on leave()). Key strictly off that server-sent base — reusing the same inactive
           // treatment as applyActivationShading (alpha + grey desaturation) rather than drawing
           // them lying down, since the dugout lying-pose stub above is reserved for KO/BH/SI/RIP.
-          if (base === PlayerStateBase.PRONE) {
+          // Owner 10-03: a Sweltering Heat casualty (EXHAUSTED) cannot be set up either - same greyed treatment, with
+          // the HEAT marker on the chest (mounted like DISTRACTED, added after the tint so it stays fully lit).
+          if (base === PlayerStateBase.PRONE || base === PlayerStateBase.EXHAUSTED) {
             token.alpha = 0.765;
             for (const child of token.children) {
               if (child instanceof Sprite && child.label !== 'castShadow') child.tint = 0xaeb0b1; // 09-06: shadow stays black
@@ -9482,6 +9507,7 @@ export class PitchRenderer {
           // Pass the REAL playerState (not the faked-STUNNED lying stub); bloodlust is an acting-player
           // property → false. Markers are token children so they ride the dugout token's scale.
           if (section.label !== 'RESERVES') this.addStateMarkers(token, data.playerState, false, data.playerId);
+          if (base === PlayerStateBase.EXHAUSTED) this.addHeatExhaustedMarker(token); // owner 10-03: chest mount, like DISTRACTED
           // owner 2026-07-08: register this dugout token for the direct proximity hit-test
           // (it's outside the pitch bands, so the square lookup can't select it → no card).
           this.dugoutHits.push({ x: anchor.x, y: anchor.y, r: TILE_W * 0.55 * scale, playerId: data.playerId });
@@ -16026,6 +16052,22 @@ export class PitchRenderer {
     token.addChild(node);
   }
 
+  /** Owner 10-03: the Sweltering Heat marker (thermometer + HEAT lettering, 496x512 art) on the CHEST of an EXHAUSTED
+   *  player in the dugout - the DISTRACTED mount, sized to the figure. Label 'heatExhaustedMarker'; never tinted (it rides the
+   *  greyed token's alpha, the owner-approved look). */
+  private addHeatExhaustedMarker(token: Container): void {
+    const tex = this.heatExhaustedDecoTexture;
+    if (!tex) return;
+    const HEAT_H = 26; // near-square art: about the figure's chest-to-waist height (DISTRACTED is 18 tall but 45 wide)
+    const node = new Sprite(tex);
+    node.anchor.set(0.5, 0.5);
+    node.label = 'heatExhaustedMarker';
+    const ratio = isWalkerToken(token) ? (walkerFigureRatio(token) ?? 1) : 1;
+    this.placeChestMarker(token, node, 52, (HEAT_H * ratio) / tex.height);
+    token.sortableChildren = true;
+    token.addChild(node);
+  }
+
   /** Owner 09-30: the DISTRACTED word art over the CHEST of a standing player, at ROOTED / CHOMPED's perceived size
    *  (512x205 art, the figure's own width). Label 'distractedMarker'; above the state row. */
   private addDistractedMarker(token: Container): void {
@@ -18021,7 +18063,7 @@ export class PitchRenderer {
     // owner 09-06: the walker's cast shadow stays black (its tint is the shadow ink, not a body layer)
     // Owner 09-30: the STUNNED / DISTRACTED banners stay FULLY LIT on a shaded player (the status must read, like
     // the gaze eye) — never tinted, and their alpha compensates the token's.
-    const litMarkers = new Set(['stunnedBanner', 'distractedMarker']);
+    const litMarkers = new Set(['stunnedBanner', 'distractedMarker', 'heatExhaustedMarker']);
     const sprites = token.children.filter((c): c is Sprite => c instanceof Sprite && c.label !== 'castShadow' && !litMarkers.has(String(c.label)));
     const baseTints = sprites.map((s) => Number(s.tint));
     const paint = (kk: number): void => {
