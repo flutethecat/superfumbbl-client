@@ -31,6 +31,7 @@ import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
+import { CONFIRMATION_SETTING_ROWS } from './game/confirmationSettings';
 import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
@@ -1981,6 +1982,20 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">Shows the selected friendly player's legal actions instead of immediately declaring Move.
               Right click always opens the player context menu; Shift+click marks (see Keyboard).</p>
+          </fieldset>
+
+          <!-- Owner 10-04: every client confirmation prompt has its own line. Off = the gesture goes straight through. -->
+          <fieldset class="settings-group" data-testid="confirmation-settings">
+            <legend>Confirmations</legend>
+            <p class="hint">Each prompt below asks before the client does something that is hard to take back.
+              Turn one off and you are no longer asked: the action goes through at once (or, for the concede offer, the question is simply not raised).</p>
+            <template v-for="row in CONFIRMATION_SETTING_ROWS" :key="row.key">
+              <label class="row">
+                <input v-model="settings[row.key]" type="checkbox" />
+                <span>{{ row.label }}</span>
+              </label>
+              <p class="hint">{{ row.hint }}</p>
+            </template>
           </fieldset>
 
           <fieldset class="settings-group">

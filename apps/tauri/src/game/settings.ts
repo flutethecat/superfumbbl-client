@@ -4,6 +4,7 @@ import type { EdgePanelPosition } from './edgePanelLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
+import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type ConfirmationSettings } from './confirmationSettings';
 
 /**
  * App settings, persisted to localStorage (works in the web preview and the
@@ -62,7 +63,8 @@ const UNBINDABLE_CODES: readonly string[] = ['Tab', 'MetaLeft', 'MetaRight', 'OS
 export type RebindableKey = 'confirmKey' | 'rosterKey' | 'logExpandKey';
 const REBINDABLE_LABEL: Record<RebindableKey, string> = { confirmKey: 'Confirm move / pass target', rosterKey: 'Roster pop-out', logExpandKey: 'Enlarge the Log window' };
 
-export interface AppSettings {
+// Owner 10-04: each client confirmation prompt has its own on/off line (confirmationSettings.ts; all default on).
+export interface AppSettings extends ConfirmationSettings {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
   /** Owner 10-02: toggles the Helmet roster pop-out (KeyboardEvent.code; default H). */
@@ -567,6 +569,7 @@ const DEFAULTS: AppSettings = {
   declareBlitzBehavior: 'fumbbl',
   friendlyPlayerSwitch: true,
   leftClickOpensContextMenu: false,
+  ...CONFIRMATION_DEFAULTS,
   devMode: false,
   coachBrain: 'none',
   flyBrainUrl: 'http://127.0.0.1:8766',
@@ -974,6 +977,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.declareBlitzBehavior = raw.declareBlitzBehavior === 'modern' ? 'modern' : 'fumbbl';
     merged.friendlyPlayerSwitch = raw.friendlyPlayerSwitch !== false;
     merged.leftClickOpensContextMenu = raw.leftClickOpensContextMenu === true;
+    Object.assign(merged, normalizeConfirmationSettings(raw as Record<string, unknown>)); // only an explicit false turns a prompt off
     // v5 (owner 2026-07-14): the theme engine. Existing installs adopt the Black/Red default; a later user
     // change to the theme fields sticks (stamped below).
     if ((raw.settingsVersion ?? 0) < 5) {

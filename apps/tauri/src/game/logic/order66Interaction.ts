@@ -14,7 +14,14 @@ import { deriveClientState, isActiveActivation, type ClientStateContext, type Cl
 import { availableActions, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 
-export type EndActivationConfirmKind = 'blitz' | 'punt' | 'generic';
+export type EndActivationConfirmKind = 'blitz' | 'punt' | 'handOver' | 'pass' | 'generic';
+
+/** Owner 10-04 (FUMBBL g1949714, KrisB): a declared Hand-off / Pass is a once-per-turn action, so ending it asks
+ *  first - a stray right-click on the grass silently sent the end and the turn's hand-off was spent with the
+ *  ball still in hand. Null for every other state. */
+export function ballActionEndConfirmKind(state: ClientStateId | '' | null | undefined): 'handOver' | 'pass' | null {
+  return state === 'HAND_OVER' ? 'handOver' : state === 'PASS' ? 'pass' : null;
+}
 
 /** Spec S15B: how an end-activation confirm was opened. An explicit End gesture (End row, click on self) may roll a held
  *  Big Guy Activate intent; Esc and every other cancel gesture never does. */
@@ -378,7 +385,7 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
     // requiresBlitzEndConfirmation covers must classify 'blitz' here, matching the right-click path
     // (SpectateView.vue's requestEndActivation) exactly.
     const confirmKind: EndActivationConfirmKind = requiresBlitzEndConfirmation(input.clientState) ? 'blitz'
-      : input.clientState === 'PUNT' ? 'punt' : 'generic';
+      : input.clientState === 'PUNT' ? 'punt' : ballActionEndConfirmKind(input.clientState) ?? 'generic';
     return { level: 3, kind: 'ask-end-activation', confirmKind, wire: 'none' };
   }
   if (input.hasSelection) return { level: 3, kind: 'clear-selection', wire: 'none' };

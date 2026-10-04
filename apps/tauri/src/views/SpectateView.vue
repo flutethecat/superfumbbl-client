@@ -90,7 +90,9 @@ import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
 import { setupProblems } from '../game/setupProblems';
+import { endActivationConfirmEnabled } from '../game/confirmationSettings';
 import { starBadgeFor } from '../game/starBadge';
+import { opponentChoosingSideStepSquare } from '../game/opponentSideStepPick';
 import starBadgeUrl from '../assets/star-badge/star-badge.png';
 import starBadgeUsedUrl from '../assets/star-badge/star-badge-used-x.png';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
@@ -122,7 +124,7 @@ import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
 gameStore.setInteractiveReRolls(true);
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, ballActionEndConfirmKind, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
 import { isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
@@ -170,6 +172,8 @@ const o66ExplicitBlockChoice = ref<{ kind: BlockKind | null } | null>(null);
 const o66PendingMove = ref<{ dest: [number, number]; route: [number, number][] } | null>(null);
 // Owner 09-27: tile clicks hold while the actor's confirmed move is still on screen (fails open on a stalled token).
 const o66MoveClickGate = createMoveClickGate();
+// Owner 10-04: right-clicks get their own gate (same rule, separate bookkeeping) - see openContextMenu.
+const o66RightClickGate = createMoveClickGate();
 // Fives lane 08-19: target waits for the server's SELECT_BLITZ_TARGET echo; no speculative target wire.
 const o66PendingBlitzTarget = ref<string | null>(null);
 // A confirmed left-click target owns its previewed route while the server acknowledges Blitz, target selection,
@@ -194,6 +198,7 @@ const furySecondBlockTargeting = computed(() => {
   return g && gameStore.isPlaying.value ? projectFurySecondBlockTargeting(g) : null;
 });
 function chooseBlitzBlockAlternative(kind: BlockKind | null) {
+  if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   if (kind === 'chainsaw') { chainsawBlitzConfirm.value = true; return; }
   // SR-241: commitBlitzBlock sends the already-declared Blitz's clientBlock with this kind's existing USING_* flag.
   gameStore.commitBlitzBlock(kind);
@@ -203,8 +208,12 @@ const foulChoiceChainsawTarget = computed(() => {
   const g = gameStore.game.value; const hold = gameStore.state.foulChoiceHold;
   return g && hold ? foulArmourTargetAt(g, hold.actingId, hold.defenderId, true) : null;
 });
-function chooseFoulKind(usingChainsaw: boolean) { gameStore.commitFoulChoice(usingChainsaw); }
+function chooseFoulKind(usingChainsaw: boolean) {
+  if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
+  gameStore.commitFoulChoice(usingChainsaw);
+}
 function confirmChainsawBlitz() {
+  if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   chainsawBlitzConfirm.value = false;
   // Confirmation is still display-only UI; the store emits USING_CHAINSAW on clientBlock, never a new declare.
   gameStore.commitBlitzBlock('chainsaw');
@@ -257,6 +266,16 @@ const ttmCommittedActivationKeys = new Set<string>();
 // Fives lane 08-19: aggressive-action staging covers adjacent BLOCK and the owner's two-click quick Blitz.
 // Blitz uses stage 1 only; confirm hands the target to o66PendingBlitzTarget for the post-declare server echo.
 const o66AggroStage = ref<{ kind: 'block' | 'blitz'; target: string; stage: 1 | 2 } | null>(null);
+// Owner 10-04: "Modern mouse blitz behavior should shift to blitz decoration when a user paths next to a player and
+// then clicks an opposition player." From the nominating click (the blitz aggro stage) through the stored
+// left-click plan, the acting player's marker shows Blitz; the server-declared Blitz takes over from there.
+const modernBlitzIntentPlayerId = computed<string | null>(() => {
+  if (o66PendingLeftClickBlitzPlan.value) return o66PendingLeftClickBlitzPlan.value.playerId;
+  if (o66AggroStage.value?.kind !== 'blitz') return null;
+  const acting = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return acting && gameStore.iControl(acting) ? acting : null;
+});
+watch(modernBlitzIntentPlayerId, (id) => renderer?.setBlitzIntentPlayer(id), { flush: 'sync' });
 const selectedAggroBlockKind = computed<BlockKind | null>(() => {
   const stage = o66AggroStage.value;
   if (!stage) return null;
@@ -2655,6 +2674,14 @@ watch(
   (armed) => renderer?.setPushOptionsArmed(armed),
   { immediate: true },
 );
+// Owner 10-04: while the OPPONENT picks their Side Step square, the blocking coach sees the same candidate arrows
+// (display only - no crosshairs, nothing clickable).
+const opponentSideStepPick = computed(() => opponentChoosingSideStepSquare(gameStore.game.value, {
+  playing: gameStore.isPlaying.value,
+  iControl: (playerId) => gameStore.iControl(playerId),
+  localPushChoiceArmed: !!gameStore.state.pushChoice,
+}));
+watch(opponentSideStepPick, (watching) => renderer?.setPushOptionsWatching(watching), { immediate: true });
 
 // While a mate is held, render it at the thrower and retain its pre-pickup square for the pickup tween.
 watch(
@@ -3689,6 +3716,11 @@ const BLOCK_STAMP_URLS: Record<string, string> = {
   'defender-stumbles': new URL('../assets/blockdice-log/defender-stumbles.png', import.meta.url).href,
   pow: new URL('../assets/blockdice-log/pow.png', import.meta.url).href,
 };
+// Owner 10-04: the blocked player's fist becomes the applied block-die face (cleared when the stamp is retired).
+watch(() => gameStore.state.blockResultStamp?.seq, () => {
+  const stamp = gameStore.state.blockResultStamp;
+  renderer?.setAppliedBlockResult(stamp ? BLOCK_STAMP_URLS[stamp.symbol] ?? null : null, stamp?.playerIds ?? []);
+}, { flush: 'sync' });
 watch(() => gameStore.state.blockResultStamp?.seq, () => {
   const stamp = gameStore.state.blockResultStamp;
   if (!stamp || !renderer || settings.spectatorClean) return;
@@ -5269,6 +5301,7 @@ const unknownActions = () => gameStore.unknownCallActions();
 // tabindex -1 and never take focus when the confirmation opens).
 function confirmUnknownAttempt(event: MouseEvent) {
   if (event.detail === 0) return;
+  if (pitchHeldByConfirmation()) return; // Astra pass 5 (10-04): nothing commits under an open End Turn / End Activation confirmation
   const kind = unknownConfirm.value;
   unknownConfirm.value = null;
   if (kind === 'endTurn') gameStore.tryUnknownEndTurn();
@@ -5431,6 +5464,7 @@ watch(() => {
 onBeforeUnmount(() => cancelAnimationFrame(puntConeRaf));
 // The cone-centre card is the only sender — commit the current aim as the punt field-coordinate.
 function confirmPuntV2() {
+  if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   const g = gameStore.game.value;
   if (!g || !isPuntTargeting(g) || !o66PendingPunt.value) return;
   const af = puntActingFrom(g); if (!af) return;
@@ -5907,6 +5941,7 @@ function blitzUsedActingSide(g: { homePlaying?: boolean; turnDataHome?: { blitzU
   return !!(g.homePlaying ? g.turnDataHome?.blitzUsed : g.turnDataAway?.blitzUsed);
 }
 function acceptBlitzMoveConvert() {
+  if (pitchHeldByConfirmation()) return; // Astra pass 5 (10-04): nothing commits under an open End Turn / End Activation confirmation
   const tile = blitzMoveModalTile.value; blitzMoveModalTile.value = null;
   if (tile) gameStore.convertBlitzToMove(tile); // ⚖ Tarkin's hook: un-consume (self-target-cancel) → re-declare move → step
 }
@@ -6990,6 +7025,7 @@ watch(() => popup.visible, (visible) => { if (!visible) renderer?.clearRosterAtt
 const queuedSteps = ref(0);
 
 function confirmMove() {
+  if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   // Owner 2026-07-04c: an armed foul/handoff/pass — the confirm button commits
   // the WHOLE action (path + wire), per "the confirm button should behave as
   // expected here and confirm any action that is currently planned".
@@ -7151,6 +7187,7 @@ watch(
 function acceptWideRailActivationRule(ruleId: WideRailPreActionRuleId) {
   const prompt = wideRailActivationPrompt.value;
   if (!prompt || !prompt.options.some((option) => option.ruleId === ruleId)) return;
+  if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: answer the open confirmation first
   const accepted = gameStore.useWideRailActivationRule(ruleId, prompt.playerId, prompt.playerAction, prompt.seq);
   if (!accepted) return;
   wideRailAnsweredKey = prompt.key;
@@ -7163,6 +7200,7 @@ function acceptWideRailActivationRule(ruleId: WideRailPreActionRuleId) {
 function declineWideRailActivationRules() {
   const prompt = wideRailActivationPrompt.value;
   if (!prompt) return;
+  if (pitchHeldByConfirmation()) return; // Astra pass 3 (10-04): answer the open confirmation first
   wideRailAnsweredKey = prompt.key;
   wideRailActivationPrompt.value = null;
   gameStore.dismissWideRailActivationRules(prompt.playerId, prompt.playerAction, prompt.seq);
@@ -7639,6 +7677,22 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   const selectedToken = !!target.playerId && renderer?.getSelectedPlayerId() === target.playerId;
   const contextGame = gameStore.game.value;
   const actingId = String((contextGame?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  // Owner 10-04: "Right clicks should be swallowed by the client while a player token is in the middle of its
+  // movement. Currently, users can right click and we're seeing 'Plan lost' warnings." While MY acting player's walk
+  // is still on screen (or its plan is still sending steps) a right-click does nothing: no menu, no plan cancel, no
+  // end of activation. Same gate as the left-click hold (fails open on a stalled token).
+  if (settings.order66 && gameStore.isPlaying.value && actingId && gameStore.iControl(actingId) && renderer) {
+    const seen = renderer.movementOnScreen(actingId);
+    if (o66RightClickGate.swallow(actingId, { inFlight: seen.inFlight || gameStore.isPlanWalking(actingId), progress: seen.progress }, performance.now())) {
+      ctxMenu.visible = false;
+      return;
+    }
+  }
+  // Astra pass 6 (10-04): AFTER the walking hold (a right-click during the walk stays a no-op), BEFORE every command.
+  // Astra pass 5 (10-04): a right-click under an open confirmation used to end / cancel the activation behind it.
+  // It now only answers the prompt with its safe option ("Go back") and does nothing else.
+  if (endActConfirm.value) { ctxMenu.visible = false; cancelEndActivation(); return; }
+  if (endTurnWarnCount.value !== null) { ctxMenu.visible = false; cancelEndTurnWarn(); return; }
   const controlledActingTarget = !!actingId && target.playerId === actingId && gameStore.iControl(actingId);
   const rows = controlledActingTarget ? assembleActingPlayerRows(target, x, y) : [];
   // Spec S23: a live Activate intent on the acting Big Guy surfaces the menu; only its roll row (or confirm) rolls.
@@ -7825,7 +7879,9 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         //   the blitz case behind the shared "End your blitz?" confirm (confirmEndActivation mirrors the direct branch below);
         //   every other activation keeps the direct deselect/end.
         const rcState = gRc ? deriveClientState(gRc, o66Ctx()) : '';
-        if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || gameStore.state.gazeIntent) {
+        // Owner 10-04 (g1949714): Hand-off and Pass join them - a right-click that missed the receiver's token
+        // ended the hand-off with the ball in hand.
+        if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || ballActionEndConfirmKind(rcState) || gameStore.state.gazeIntent) {
           requestEndActivation();
           return;
         }
@@ -7988,6 +8044,8 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
 
 function runMenuItem(item: MenuItem) {
   if (item.disabled || !item.action) return;
+  // Astra re-review 10-04: a context-menu row left open under an End Activation / End Turn confirmation sends nothing.
+  if (pitchHeldByConfirmation()) { ctxMenu.visible = false; return; }
   item.action();
   ctxMenu.visible = false;
 }
@@ -8131,6 +8189,62 @@ function confirmDeclaredGaze(): boolean {
   return true;
 }
 
+/** A button INSIDE one of the client's confirmation panels has keyboard focus (Astra review 10-04). */
+function focusedPromptButton(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.tagName === 'BUTTON' && !!target.closest('.pitch-confirm-panel');
+}
+/** Astra review 10-04: while an End Activation / End Turn confirmation is up, the pitch takes no clicks - a click
+ *  on a receiver used to nominate (or send) the throw UNDER the open prompt, and Space then confirmed the end. */
+function pitchHeldByConfirmation(): boolean {
+  return !!endActConfirm.value || endTurnWarnCount.value !== null;
+}
+/** Astra re-review 10-04: with a confirmation up, a button the coach reached BY KEYBOARD (Tab - :focus-visible)
+ *  outside the panel owns its own key; the global shortcut must not end the activation / turn behind it. A button
+ *  merely left focused by a mouse click (End Turn, a quick-bar action) does not match :focus-visible, so the common
+ *  "click End Turn, press Space" flow still confirms. */
+function keyboardFocusedOutsideButton(target: EventTarget | null): boolean {
+  if (!pitchHeldByConfirmation() && !setupConfirm.value) return false;
+  if (!(target instanceof HTMLElement) || target.tagName !== 'BUTTON' || target.closest('.pitch-confirm-panel')) return false;
+  // Astra pass 3 (10-04): :focus-visible is a per-browser heuristic. Ownership is decided by a recorded fact: the
+  // focused button is the one the coach last pressed with the pointer (mouse focus) or it is not (keyboard focus).
+  return target !== lastPointerFocusedButton;
+}
+/** The button the coach last pressed with the pointer (null after any Tab). Captured on window, so it is recorded
+ *  before any component handler runs. */
+let lastPointerFocusedButton: HTMLElement | null = null;
+function trackPointerFocus(event: PointerEvent) {
+  const button = event.target instanceof HTMLElement ? event.target.closest('button') : null;
+  lastPointerFocusedButton = button instanceof HTMLElement ? button : null;
+}
+function trackKeyboardFocus(event: KeyboardEvent) {
+  if (event.key === 'Tab') lastPointerFocusedButton = null;
+}
+onMounted(() => {
+  window.addEventListener('pointerdown', trackPointerFocus, true);
+  window.addEventListener('keydown', trackKeyboardFocus, true);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', trackPointerFocus, true);
+  window.removeEventListener('keydown', trackKeyboardFocus, true);
+  lastPointerFocusedButton = null;
+});
+/** Astra pass 3 (10-04): the on-screen Confirm Move / Foul / Gaze buttons. They used to call o66ConfirmPending, the
+ *  keyboard dispatcher that answers whichever prompt is open - so "Confirm Move" (Tab + Space, or a click) confirmed
+ *  the End TURN warning. A button commits its own planner arm, and nothing at all while a confirmation is up. */
+function confirmPlannerFromButton(): boolean {
+  if (pitchHeldByConfirmation() || setupConfirm.value) return false;
+  return o66ConfirmPending();
+}
+/** Astra re-review 10-04: an open client confirmation outranks every planner arm (a staged Block / Blitz used to
+ *  be committed by Space while the End Turn warning was up). The End Turn warning is always the newer of the two. */
+function answerOpenConfirmation(): boolean {
+  if (!settings.order66 || !gameStore.isPlaying.value || !gameStore.game.value) return false;
+  if (wideRailActivationPrompt.value) return false; // the election consumes Space itself (o66ConfirmPending)
+  if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
+  if (endActConfirm.value) { confirmEndActivation(); return true; }
+  return false;
+}
+
 /** Owner o66ad: affirm the visible ORDER 66 prompt or commit whatever planner preview is armed (used by
  *  Space-to-confirm). Mirrors the 2nd-click CONFIRM in onTilePick: a previewed move/blitz route sends the whole path
  *  in one command; a previewed PASS target throws. Returns true if it consumed a pending action. */
@@ -8141,8 +8255,8 @@ function o66ConfirmPending(): boolean {
   // The unified election always has at least one special plus Continue. Space consumes the gesture without
   // guessing between them; the coach must choose an explicit row with the mouse.
   if (wideRailActivationPrompt.value) return true;
-  if (endActConfirm.value) { confirmEndActivation(); return true; }
   if (endTurnWarnCount.value !== null) { confirmEndTurnAnyway(); return true; }
+  if (endActConfirm.value) { confirmEndActivation(); return true; }
   if (setupConfirm.value) { if (setupConfirm.value.problems.length) cancelSetupConfirm(); else confirmSetupNow(); return true; }
   if (gameStore.state.followupChoice) { answerFollowup(true); return true; }
   // S40: with a modifying skill there are three answers and no default: Space is consumed without a wire.
@@ -8279,6 +8393,9 @@ function dismissO66OpponentInspection(g: GameJson): boolean {
 function confirmAggroStage(): boolean {
   const g = gameStore.game.value;
   if (!settings.order66 || !gameStore.isPlaying.value || !g) return false;
+  // Astra pass 3 (10-04): the Confirm Block / Blitz button (click, or its own Space handler) committed the attack
+  // under an open End Turn / End Activation confirmation. Every caller is held here.
+  if (pitchHeldByConfirmation()) return false;
   const st = o66AggroStage.value;
   if (!st) return false;
   const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -8521,11 +8638,17 @@ function onKeydown(event: KeyboardEvent) {
     } else {
       ui.gameMenuOpen = true;
     }
+  } else if ((event.code === settings.confirmKey || event.key === 'Enter')
+    && (focusedPromptButton(event.target) || keyboardFocusedOutsideButton(event.target))) {
+    // Astra review 10-04: the coach tabbed to a button inside a client confirmation ("Go back") - the key belongs to
+    // that button (native click), never to the global "confirm the open prompt" shortcut. Re-review: the same holds
+    // for Enter (it used to open chat instead) and for a keyboard-focused button outside the panel.
   } else if (event.code === settings.confirmKey) {
     // Owner o66ad: Space CONFIRMS the ORDER 66 planner (a previewed move/blitz path, or a pass target) first;
     // otherwise it falls through to the legacy queued-path confirm. preventDefault only when we actually consume it
     // (Space would otherwise scroll / re-click a focused button).
-    if (confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
+    // Astra re-review 10-04: an open End Turn / End Activation confirmation is answered BEFORE a staged attack.
+    if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
     else if (queuedSteps.value > 0) { event.preventDefault(); confirmMove(); }
   } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target)) {
     // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04; arrow keys 09-14): W/A pan
@@ -8775,6 +8898,7 @@ onMounted(async () => {
     renderer.onDugoutSetupDragStart = startSwarmingPlayerDrag;
   }
   renderer.onPlayerClick = (playerId, clickX = 0, clickY = 0) => {
+    if (pitchHeldByConfirmation()) return; // Astra review 10-04: answer the open confirmation first
     renderer?.clearUnactivatedCues(); // owner 09-08: any player click ends the End-Turn idle-player cue
     if (wideRailActivationPrompt.value) return;
     if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
@@ -9302,6 +9426,7 @@ onMounted(async () => {
   renderer.onActionConfirm = ({ mode, actorId, targetId, targetSquare, path }) => {
     actionModal.value = null;
     actionTip.visible = false;
+    if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: no throw / foul under an open confirmation
     const p = path as [number, number][];
     // LEGACY ONLY (order66=off): this action-modal hotbar is hidden in Order 66 (template v-if !settings.order66),
     // so o66 play NEVER reaches here — the o66 foul/pass teleport fix lives in onPlayerClick/onTilePick via
@@ -9316,6 +9441,9 @@ onMounted(async () => {
   // Owner 2026-07-04e: coordinate tile pick — a clicked crosshair square answers it. Case 421: a
   // TRICKSTER pick takes precedence (relocate the tricked player); else the unknown-call coordinate.
   renderer.onTilePick = (coord) => {
+    // Astra review 10-04: answer the open confirmation first. Re-review: a SERVER-requested square pick is never
+    // swallowed - the server is waiting on it.
+    if (pitchHeldByConfirmation() && !gameStore.state.squarePick && !unknownPickingTile.value) return;
     if (wideRailActivationPrompt.value) return;
     if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
     if (o66PendingLeftClickBlitzPlan.value) return;
@@ -9359,6 +9487,8 @@ onMounted(async () => {
         //   select) untouched. The gate is the BM-1/BM-2 fail-safe intersection — never on a consumed blitz.
         if (st === 'SELECT_BLITZ_TARGET' && actingId && !blitzUsedActingSide(g)
             && (renderer?.o66Reach(actingId)?.squares ?? []).some((s) => s[0] === c[0] && s[1] === c[1])) {
+          // Owner 10-04: "Keep blitz should also get its own settings line" - off = the click converts at once.
+          if (!settings.confirmBlitzToMove) { gameStore.convertBlitzToMove(c); return; }
           blitzMoveModalTile.value = c;
           return;
         }
@@ -9520,6 +9650,7 @@ onMounted(async () => {
   renderer.onBncAim = (coord) => {
     const g = gameStore.game.value;
     if (!g || !settings.order66 || !gameStore.isPlaying.value) return;
+    if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: no aim under an open confirmation
     const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!actingId) return;
     const st = deriveClientState(g, o66Ctx());
@@ -11056,6 +11187,9 @@ function stopSetupArrows(): void {
 }
 function openSetupConfirm(): void {
   if (!setupPhase.value) return;
+  // Owner 10-04: with "Confirm Setup" switched off a LEGAL setup is submitted at once; a setup that is not legal
+  // still opens, because that surface is the explanation of what is wrong, not an "are you sure".
+  if (!settings.confirmSetup && (setupReview.value?.problems.length ?? 0) === 0) { stopSetupArrows(); gameStore.setupSubmit(); return; }
   setupConfirmOpen.value = true;
   stopSetupArrows();
   setupArrowsActive.value = (setupReview.value?.offenders.length ?? 0) > 0;
@@ -11083,6 +11217,7 @@ const concedeOfferKey = computed(() => {
   const g = gameStore.game.value;
   // Astra review 10-03: the server's own concessionPossible flag gates it too (allowConcessions off, not my turn) -
   // never offer something the server would silently drop.
+  if (!settings.confirmConcedeOffer) return null; // owner 10-04: its own Settings line; conceding stays in the Game Menu
   if (!phase || !g || !phase.validation.canConcede || solidDefenceSetup.value || !gameStore.canConcedeGame) return null;
   return `${String((g as { gameId?: unknown }).gameId ?? '')}:${g.half ?? 0}:${g.turnDataHome?.turnNr ?? 0}:${g.turnDataAway?.turnNr ?? 0}`;
 });
@@ -11100,6 +11235,9 @@ function endTurn() {
   // Owner 2026-07-04 (interaction catalog 15): in play mode End Turn sends the
   // real clientEndTurn for the CURRENT turnMode (also closes kick-off mini-phases).
   if (!gameStore.isPlaying.value) { gameStore.demoEndTurn(); return; }
+  // Astra pass 5 (10-04): with an End Activation prompt open (and nobody idle) End Turn sent clientEndTurn straight
+  // over it. The open prompt is answered first.
+  if (endActConfirm.value) return;
   // Owner 09-14: CONFIRM SETUP is a placement confirmation, not a turn with activations — nobody has "acted", so
   // the idle-player guard below would always fire. Send it straight through.
   const turnMode = String(gameStore.game.value?.turnMode ?? '');
@@ -11110,13 +11248,25 @@ function endTurn() {
   if (endTurnButtonText.value === 'Confirm Setup' || PLACEMENT_TURN_MODES.has(turnMode)) { gameStore.playerEndTurn(); return; }
   // #8: idle players → raise the confirm modal; only its "End turn" proceeds.
   const idle = unactivatedOwnIds();
-  if (idle.length > 0) {
-    endTurnWarnCount.value = idle.length;
-    renderer?.showUnactivatedCues(idle); // owner 09-08: ▼ + gold pulse on every idle player while the guard is up
+  // Astra review 10-04: End Turn also ends a Hand-off / Pass that is still in progress (the active player is never
+  // "idle", so with everyone else done the turn ended silently, ball in hand). It asks under that action's own line.
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const ballAction = g && actingId && gameStore.iControl(actingId) ? ballActionEndConfirmKind(deriveClientState(g, o66Ctx())) : null;
+  const askBallAction = !!ballAction && endActivationConfirmEnabled(ballAction, settings);
+  const askIdle = idle.length > 0 && settings.confirmEndTurn; // owner 10-04: the End Turn warning has its own Settings line
+  if (askIdle || askBallAction) {
+    endTurnWarnBallAction.value = askBallAction ? ballAction : null;
+    endActConfirm.value = null; // Astra re-review 10-04: the End Turn warning supersedes an open End Activation prompt
+    ctxMenu.visible = false;
+    endTurnWarnCount.value = askIdle ? idle.length : 0;
+    if (askIdle) renderer?.showUnactivatedCues(idle); // owner 09-08: ▼ + gold pulse on every idle player while the guard is up
     return;
   }
   gameStore.playerEndTurn();
 }
+/** Astra review 10-04: the Hand-off / Pass still in progress when End Turn was pressed (null = none). */
+const endTurnWarnBallAction = ref<'handOver' | 'pass' | null>(null);
 function confirmEndTurnAnyway() {
   endTurnWarnCount.value = null;
   renderer?.clearUnactivatedCues(); // owner 09-08: End turn → tear the arrows down at once
@@ -11134,11 +11284,35 @@ const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActi
   blitz: { text: 'Are you sure you want to end your blitz?', confirmLabel: 'End blitz' },
   // Owner punt-① (08-12): the parallel PUNT commission specializes the copy, mirroring the blitz idiom.
   punt: { text: 'End your punt?', confirmLabel: 'End punt' },
+  // Owner 10-04: Hand-off and Pass get the blitz idiom - they are once per turn.
+  handOver: { text: 'Are you sure you want to end your hand-off?', confirmLabel: 'End hand-off' },
+  pass: { text: 'Are you sure you want to end your pass action?', confirmLabel: 'End pass' },
   generic: { text: 'End activation?', confirmLabel: 'End activation' },
 };
 const endActConfirm = ref<EndActivationConfirm | null>(null);
 watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
+// Astra review 10-04: the prompt belongs to ONE activation. It remembers whose it is and closes itself when the
+// acting player changes (the activation ended server-side, a turnover, the turn passed), so "End hand-off" can never
+// be confirmed against a different player.
+const currentActingId = (): string => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+let endActConfirmActingId = '';
+watch(endActConfirm, (now, before) => { if (now && !before) endActConfirmActingId = currentActingId(); }, { flush: 'sync' });
+watch(() => [currentActingId(), gameStore.myTurn.value] as const, ([actingId, mine]) => {
+  if (endActConfirm.value && (!mine || actingId !== endActConfirmActingId)) endActConfirm.value = null;
+  if (endTurnWarnCount.value !== null && !mine) { endTurnWarnCount.value = null; renderer?.clearUnactivatedCues(); }
+});
 function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
+  // Owner 10-04: each confirmation has its own Settings line. Switched off, the gesture does exactly what the
+  // prompt's confirm button would have done (same arms cleared, same wire, same Blitz token / Activate roll).
+  if (!endActivationConfirmEnabled(kind, settings)) {
+    const actingNow = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const direct = endActivationConfirmDecision({ origin, kind, rollPlayerId: gameStore.bigGuyActivateRollPlayerId(), actingId: actingNow, rollLabel: bigGuyRollEndLabel(gameStore.game.value, actingNow) });
+    endActConfirm.value = null;
+    clearO66Arms();
+    renderer?.clearSelection();
+    gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: direct.roll });
+    return;
+  }
   // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
   // Blitz action for the turn — so the prompt says so. Copy only; the wire is the same endActivation.
   if (kind === 'blitz' && blitzUntouched(gameStore.game.value)) {
@@ -11146,6 +11320,15 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
       kind,
       text: 'Cancel your blitz? This player has not moved or blocked yet, so your Blitz action will be refunded for this turn.',
       confirmLabel: 'Cancel Blitz',
+    };
+    return;
+  }
+  // Owner 10-04: a Hand-off / Pass that has not started (declared, no squares moved) is still free to cancel.
+  if ((kind === 'handOver' || kind === 'pass') && blitzUntouched(gameStore.game.value)) {
+    endActConfirm.value = {
+      kind,
+      text: kind === 'handOver' ? 'Cancel your hand-off? This player has not moved yet.' : 'Cancel your pass? This player has not moved yet.',
+      confirmLabel: kind === 'handOver' ? 'Cancel Hand-off' : 'Cancel Pass',
     };
     return;
   }
@@ -11170,12 +11353,15 @@ function blitzUntouched(g: GameJson | null | undefined): boolean {
 function requestEndActivation() {
   const g = gameStore.game.value;
   const st = g ? deriveClientState(g, o66Ctx()) : '';
+  const ballAction = ballActionEndConfirmKind(st);
   if (requiresBlitzEndConfirmation(st)) askEndActivation('blitz');
   else if (st === 'PUNT') askEndActivation('punt');
+  else if (ballAction) askEndActivation(ballAction);
   else if (gameStore.state.gazeIntent) askEndActivation('generic', 'explicit');
   else gameStore.endActivation({ rollActivate: true }); // explicit End gesture: a held Activate intent rolls (Spec S15B)
 }
 function confirmEndActivation() {
+  if (endActConfirm.value && currentActingId() !== endActConfirmActingId) { endActConfirm.value = null; return; } // stale: send nothing
   const kind = endActConfirm.value?.kind;
   const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
   endActConfirm.value = null;
@@ -11236,6 +11422,9 @@ function sendChat() {
   if (reviewChatHidden.value) return;
   const text = chatInput.value.trim();
   if (gameStore.spectatorReview.value.active && text.startsWith('/')) return;
+  // Astra pass 5 (10-04): a slash command (/endturn, /pass, /stuck) is a game action - held, text kept, while a
+  // confirmation is open. Plain chat still sends.
+  if (text.startsWith('/') && pitchHeldByConfirmation()) return;
   if (text) {
     // Owner 2026-07-08: a leading '/' routes to the DEV CONSOLE (e.g. /stuck to pass a
     // stuck turn) instead of being sent as chat.
@@ -11963,7 +12152,7 @@ function sendChat() {
              blitz/block bar; Space also confirms via o66ConfirmPending). Pass/hand-off stay single-click (EX-1). -->
         <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && gameStore.isPlaying.value"
           class="confirm-move confirm-aggro" tone="aggressive" :label="o66PendingConfirmLabel"
-          :shortcut-code="settings.confirmKey" @activate="o66ConfirmPending()" />
+          :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
 
         <!-- Server-derived single/multiple Apothecary election. -->
         <ApothecaryPrompt v-if="gameStore.state.apothecaryChoice" :key="gameStore.state.apothecaryChoice.seq"
@@ -12619,7 +12808,8 @@ function sendChat() {
         <PitchConfirmationPanel v-if="endTurnWarnCount !== null" title="End Turn?" label="End turn confirmation"
           :position-style="reactivePromptStyle('endTurnWarn')" draggable
           @drag-start="startReactivePromptDrag('endTurnWarn', $event)">
-          {{ endTurnWarnCount }} of your players {{ endTurnWarnCount === 1 ? 'has' : 'have' }} not activated yet.
+          <template v-if="endTurnWarnBallAction">Your {{ endTurnWarnBallAction === 'handOver' ? 'hand-off' : 'pass' }} has not been completed. </template>
+          <template v-if="endTurnWarnCount > 0">{{ endTurnWarnCount }} of your players {{ endTurnWarnCount === 1 ? 'has' : 'have' }} not activated yet.</template>
           <template #actions>
             <button class="rr-use" @click="confirmEndTurnAnyway()">End turn</button>
             <button class="rr-decline" @click="cancelEndTurnWarn()">Go back</button>
@@ -13230,7 +13420,7 @@ function sendChat() {
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
         <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !!o66AggroStage || !!o66PendingFoul || canConfirmPendingGaze, 'pass-destination': o66TargetCue.throwRoll != null }"
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
-          @click="o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmPendingGaze) && o66ConfirmPending())">
+          @click="o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmPendingGaze) && confirmPlannerFromButton())">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
@@ -13280,7 +13470,7 @@ function sendChat() {
         <div v-if="jumpTogglePos" class="jump-toggle on"
           :style="{ left: jumpTogglePos.x + 'px', top: jumpTogglePos.y + 'px' }"
           :title="`${jumpGerund} — click to turn off`"
-          @click="gameStore.toggleJump()">🦘 {{ jumpGerund }}</div>
+          @click="pitchHeldByConfirmation() || gameStore.toggleJump()">🦘 {{ jumpGerund }}</div>
 
         <!-- #236: server-confirmed Fumblerooski election badge. StepInitMoving.java:270-278 emits ballMoving=true +
              ReportFumblerooskie(used=true) without entering a picker; StepResetFumblerooskie.java:89-117 emits the

@@ -1629,6 +1629,32 @@ function ballCarrierInScoringEndzone(g: GameJson): boolean {
   return false;
 }
 
+// Owner 10-04: "When a user uses the 'Throw a rock' prayer to nuffle, hold the turn splash until after the rock throw
+// has been resolved." The server sends the throwAtPlayer report, the injury and the next turn's turnEnd within ~50 ms
+// (wire g1949088 nr 1069-1076), so the splash used to start over the rock. The window opens at the report and closes
+// once the announcement, the rock flight and its injury have all gone idle; a hard cap keeps it fail-open.
+const ROCK_THROW_RESOLVE_CAP_MS = 9000;
+let rockThrowResolveStartedAt: number | null = null;
+export function rockThrowResolveDecision(input: { waitedMs: number; active: boolean; minimumMs: number; capMs: number }): 'hold' | 'release' {
+  if (input.waitedMs >= input.capMs) return 'release'; // fail-open: late, never never
+  if (input.active) return 'hold';
+  return input.waitedMs < input.minimumMs ? 'hold' : 'release'; // the flight (a miss has no injury) / the gap before the injury is queued
+}
+function noteRockThrowResolving(): void {
+  if (!playback.catchingUp) rockThrowResolveStartedAt = Date.now();
+}
+function rockThrowResolving(): boolean {
+  if (rockThrowResolveStartedAt === null) return false;
+  const decision = rockThrowResolveDecision({
+    waitedMs: Date.now() - rockThrowResolveStartedAt,
+    active: rockImpactGate !== null || injuryQueue.length > 0 || injuryPlaying || !!state.injurySplash || !!state.prayerAnnounce,
+    minimumMs: rockThrowFlightMs() + rockImpactBeatMs() + presentationMs(300),
+    capMs: presentationMs(ROCK_THROW_RESOLVE_CAP_MS),
+  });
+  if (decision === 'release') rockThrowResolveStartedAt = null;
+  return decision === 'hold';
+}
+
 /** Raise the turnover splash for `side` after an authoritative non-TD turnEnd and other anims settle, then auto-clear (sad-trombone sting). */
 function showTurnover(
   side: 'home' | 'away',
@@ -1685,6 +1711,7 @@ function showTurnover(
       ballCarrierInEndzone: ballCarrierInScoringEndzone(current),
     });
     if (!fireAllowed) { turnoverTimer = null; return; }
+    if (rockThrowResolving()) { turnoverTimer = scheduleGameTimeout(tick, 150); return; } // owner 10-04: the rock reads first
     const waited = Date.now() - started;
     if (turnoverSplashReady(waited, settled(), minimumDelayMs)) { fire(); return; } // item4: + ball-at-rest, same 3000ms cap
     turnoverTimer = scheduleGameTimeout(tick, 150);
@@ -1751,7 +1778,12 @@ function showTurnStart(side: 'home' | 'away') {
   const delayMs = presentationMs(TURN_START_DELAY_MS);
   const holdMs = presentationMs(TURN_START_HOLD_MS);
   holdPlayback(delayMs + holdMs);
-  turnStartTimer = scheduleGameTimeout(() => {
+  const fireTurnStart = () => {
+    // Owner 10-04: a Throw a Rock still resolving holds the splash (the handle stays set, so the window stays owned).
+    // Astra pass 3 (10-04): the drain hold is an absolute deadline taken at arm time - extend it while waiting and
+    // reserve the full visible hold when the splash finally appears (no-op in play mode).
+    if (rockThrowResolving()) { holdPlayback(150 + holdMs); turnStartTimer = scheduleGameTimeout(fireTurnStart, 150); return; }
+    holdPlayback(holdMs);
     turnStartTimer = null; // #172: same reason as the turnover handle — a fired handle left set pins the window
     state.turnStart = { side, coach, teamName, logo, seq: (state.turnStart?.seq ?? 0) + 1 };
     showTurnToastForSide(side, 'normal');
@@ -1760,7 +1792,8 @@ function showTurnStart(side: 'home' | 'away') {
       state.turnStart = null;
       flushPendingPickPrompt(); // #172 (PW-4): re-arm on the CLEAR
     }, holdMs);
-  }, delayMs);
+  };
+  turnStartTimer = scheduleGameTimeout(fireTurnStart, delayMs);
 }
 
 // Owner 2026-07-07 (TTM): FFB Direction → (dx,dy) on the game grid (x long axis, y across), per UtilServerCatchScatterThrowIn.findScatterCoordinate. Used to rebuild a scatter path.
@@ -2937,6 +2970,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       if (pending) enqueuePrayerAnnouncement(entry, pending.team, `${entry.name} is wasted`, ['No eligible recipient was available.']);
     }
     for (const result of throwAtPlayers) {
+      noteRockThrowResolving(); // owner 10-04: the turn splash waits for this rock
       const entry = PRAYER_TABLE[13]!;
       const targetIsHome = g.teamHome.playerArray.some((player) => player.playerId === result.playerId);
       const prayerTeam = targetIsHome ? g.teamAway : g.teamHome;
@@ -3718,6 +3752,9 @@ async function pauseSpectatorView(): Promise<void> {
       });
       if (blockOutcome.stamp !== undefined) state.blockResultStamp = blockOutcome.stamp
         ? { ...blockOutcome.stamp, seq: (state.blockResultStamp?.seq ?? 0) + 1 } : null;
+      // Astra pass 3 (10-04): same fresh-roll retirement as the live reader.
+      else if (state.blockResultStamp && reports.some((report) => String(report.reportId) === 'blockRoll')
+        && !reports.some((report) => String(report.reportId) === 'blockChoice')) state.blockResultStamp = null;
       if (blockOutcome.dauntlessBeat
           && !await presentStages([{ delayBefore: presentationMs(DAUNTLESS_BEAT_MS), present: () => {} }], signal)) return;
       if (blockOutcome.choiceIndex != null && transitionBlockCard) {
@@ -6463,6 +6500,9 @@ function applyFrameContents(frame: QueuedFrame) {
   const opponentBlockChoice = [...reports].reverse().find((report) => String(report.reportId) === 'blockChoice');
   // Owner 09-05: stamp the applied result on the affected token(s) — for EVERY seat (chooser, non-chooser,
   // spectator) the blockChoice report is the server's word that the result applies.
+  // Owner 10-04: a fresh block roll retires the previous applied result (the token's die face returns to the fist
+  // until this roll's own result is applied).
+  if (!opponentBlockChoice && state.blockResultStamp && reports.some((report) => String(report.reportId) === 'blockRoll')) state.blockResultStamp = null;
   if (!playback.catchingUp && opponentBlockChoice) {
     const outcome = blockOutcomePresentation(reports, game.value, {
       attackerId: String(game.value.actingPlayer?.playerId ?? ''),
@@ -8611,6 +8651,7 @@ function forceSnapshotTick() {
   state.snapshotEpoch += 1;
 }
 function resetPlayback() {
+  rockThrowResolveStartedAt = null;
   bombFlightHoldUntil = 0;
   if (opponentBlockChoiceRevealTimer) cancelGameTimeout(opponentBlockChoiceRevealTimer);
   opponentBlockChoiceRevealTimer = null;

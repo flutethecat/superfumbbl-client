@@ -1109,6 +1109,8 @@ const BADGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 8, fontW
 // owner 08-27: occluded opacity raised 0.5 → 0.8 (badges were dimming too far over tokens).
 // owner 09-05: 0.8 → 0.7 (still too opaque over a token).
 const BADGE_OCCLUDED_ALPHA = 0.7;
+/** Declared-action marker (Move / Blitz / Foul / Pass / Hand-off art) opacity while it sits over ANOTHER player's token. */
+export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
 const DISTANCE_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
   fontSize: 22,
@@ -3502,6 +3504,43 @@ export class PitchRenderer {
   setPushOptionsArmed(on: boolean): void {
     if (this.pushOptionsArmed === on) return;
     this.pushOptionsArmed = on;
+    this.refresh();
+  }
+  /** Owner 10-04: "The block fist should be replaced with the face of the block die that's been applied to them."
+   *  Once the block result is chosen (the store's blockResultStamp, from the server's blockChoice report), the
+   *  blocked player's chest decoration shows that block-die face instead of the fist, for as long as the server
+   *  keeps the player in its blocked state. Owner 10-04 follow-up: "It looks like we're using a full die for this?
+   *  Let's just use the face of it" - the app supplies its PLAIN result symbol (the result stamp's art, no die tile). */
+  private appliedBlockFaces = new Map<string, Texture>();
+  private appliedBlockFaceKey = '';
+  /** The acting player when the result was applied: only that attacker's over-head fist is hidden. */
+  private appliedBlockAttackerId: string | null = null;
+  setAppliedBlockResult(textureUrl: string | null, playerIds: readonly string[] = []): void {
+    const attackerId = String((this.game?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || null;
+    const key = textureUrl && playerIds.length > 0 ? `${textureUrl}|${playerIds.join(',')}|${attackerId ?? ''}` : '';
+    if (key === this.appliedBlockFaceKey) return;
+    this.appliedBlockFaceKey = key;
+    if (!key || !textureUrl) {
+      this.appliedBlockAttackerId = null;
+      if (this.appliedBlockFaces.size === 0) return;
+      this.appliedBlockFaces = new Map();
+      this.refresh();
+      return;
+    }
+    this.appliedBlockAttackerId = attackerId;
+    const ids = [...playerIds];
+    void Assets.load<Texture>(textureUrl).then((texture) => {
+      if (this.destroyed || this.appliedBlockFaceKey !== key) return; // retired or replaced while loading
+      this.appliedBlockFaces = new Map(ids.map((id) => [id, texture]));
+      this.refresh();
+    }).catch(() => { /* the fist simply stays */ });
+  }
+  /** Owner 10-04: the OTHER coach is choosing among the server's open pushback squares (their Side Step). The
+   *  candidate arrows are drawn for the watching coach too - display only: no crosshairs, no click targets. */
+  private pushOptionsWatching = false;
+  setPushOptionsWatching(on: boolean): void {
+    if (this.pushOptionsWatching === on) return;
+    this.pushOptionsWatching = on;
     this.refresh();
   }
   onTilePick: ((coord: [number, number]) => void) | null = null;
@@ -6251,6 +6290,8 @@ export class PitchRenderer {
           this.declaredActionCache = null;
           glyphAction = null;
         }
+        // Owner 10-04: a Modern-flow blitz intent on the acting player shows the Blitz marker over the declared Move.
+        if (apid != null && apid === this.blitzIntentPlayerId && !(glyphAction ?? '').toLowerCase().includes('blitz')) glyphAction = 'blitzMove';
         const normalizedGlyphAction = (glyphAction ?? '').toLowerCase().replace(/[^a-z]/g, '');
         // Opposition-only dedupe: SpectateView's persistent #94 blitzer badge already draws ⚡
         // for this player, so suppress the transient actionEmoji/buildActionMarker blitz glyph.
@@ -6261,7 +6302,12 @@ export class PitchRenderer {
         // affordance), so no marker node is built or mounted at all for it; every other action is unchanged.
         const marker: Container | null = normalizedGlyphAction === 'throwkey' ? null : new Container();
         const blitzBadged = apid === this.oppositionBlitzBadgePlayerId || (!!apid && apid === this.blitzTokens?.blitzerId);
-        if (marker && !(blitzBadged && normalizedGlyphAction.includes('blitz'))) {
+        // Owner 10-04: "The block fist should be completely gone when the block die result has been applied" - the
+        // attacker's over-head fist leaves with the target's chest fist (the applied die face takes over).
+        // Astra pass 3 (10-04): only for the attacker of THAT block - another player's newly declared Block keeps its fist.
+        const blockResultApplied = this.appliedBlockFaces.size > 0 && apid != null && apid === this.appliedBlockAttackerId
+          && normalizedGlyphAction.includes('block');
+        if (marker && !blockResultApplied && !(blitzBadged && normalizedGlyphAction.includes('blitz'))) {
           marker.addChild(this.buildActionMarker(glyphAction));
         }
         // Owner 08-18: the declared-action decoration family (MOVE 🏃, blitz ⚡, pass 🏈, … — every
@@ -6293,7 +6339,8 @@ export class PitchRenderer {
         // drop the marker to 20% opacity so it doesn't hide them.
         const [msx, msy] = worldToSquare(tp.x, markerY);
         const behindId = this.playersBySquare.get(`${msx},${msy}`);
-        if (behindId && behindId !== this.activePlayerId) marker.alpha = 0.2;
+        // Owner 10-04: was 0.2 - hard to see over a token; now ACTION_MARKER_OCCLUDING_ALPHA.
+        if (behindId && behindId !== this.activePlayerId) marker.alpha = ACTION_MARKER_OCCLUDING_ALPHA;
         // Owner 09-06: the marker lives in the EFFECTS layer just above the trail-number band — a trail digit on the
         // square behind the mover (one row up, i.e. right where the head-tight marker sits) drew over the Move art.
         // The digit stays visible around the marker. effectsLayer is not wiped by refresh(), so the previous node is
@@ -6466,6 +6513,17 @@ export class PitchRenderer {
   }
 
   /** Identify an opposition blitzer already carrying SpectateView's persistent #94 badge. */
+  /** Owner 10-04 (Modern mouse blitz): the coach has pathed next to an opponent and clicked them - a BLITZ is the
+   *  intent, but the server still has the player declared on Move until the confirming click. While this is set for
+   *  the acting player its over-head marker shows the Blitz art instead of Move, so the Modern flow reads as a blitz
+   *  the moment the target is picked. View-local intent only: it never touches blitzTokens (the server's echo). */
+  private blitzIntentPlayerId: string | null = null;
+  setBlitzIntentPlayer(playerId: string | null): void {
+    if (playerId === this.blitzIntentPlayerId) return;
+    this.blitzIntentPlayerId = playerId;
+    this.refresh();
+  }
+
   setOppositionBlitzBadgePlayer(playerId: string | null): void {
     if (playerId === this.oppositionBlitzBadgePlayerId) return;
     this.oppositionBlitzBadgePlayerId = playerId;
@@ -10608,9 +10666,16 @@ export class PitchRenderer {
     // IS choosing → not a spectator. (deriveClientState→PUSHBACK + state.pushChoice already gate the AUTHORITY;
     // this is purely the visual/click surface.) Off-flag: identical `!plannerEnabled`.
     const spectator = (!this.plannerEnabled && !this.order66) || (this.order66 && !this.pushOptionsArmed); // owner 09-06: unarmed o66 = chosen square only
+    const watchOccupied = new Set<string>();
+    if (spectator && this.pushOptionsWatching) {
+      for (const d of this.game.fieldModel.playerDataArray) if (isOnPitch(d.playerCoordinate)) watchOccupied.add(`${d.playerCoordinate![0]},${d.playerCoordinate![1]}`);
+    }
     for (const sq of squares) {
       if (!sq.coordinate || !isOnPitch(sq.coordinate)) continue;
-      if (spectator && !sq.selected) continue; // spectators: chosen square only
+      // spectators: chosen square only - except the open candidates while the opponent picks their Side Step square
+      if (spectator && !sq.selected && !(this.pushOptionsWatching && !sq.locked)) continue;
+      // Owner 10-04: an occupied square is not a Side Step destination - no watched arrow or crosshair for it.
+      if (spectator && !sq.selected && watchOccupied.has(`${sq.coordinate[0]},${sq.coordinate[1]}`)) continue;
       // A LIVE candidate is a square that is neither the chosen (selected) nor a resolved (locked) one —
       // it's the currently-choosable direction. Owner o66d (chain push dead): a CHAIN push leaves the FIRST
       // push's square selected+locked in the array alongside the NEW unlocked candidates; gating the clickable
@@ -10640,7 +10705,9 @@ export class PitchRenderer {
       if (isLive && !spectator) nextLive.set(`${sq.coordinate[0]},${sq.coordinate[1]}`, { from: arrowFrom, to: sq.coordinate });
       if (sq.selected) this.pushOptionPulse.push(arrow);
       this.tokenLayer.addChild(arrow);
-      if (spectator) continue; // spectators: no crosshairs / click targets
+      // spectators: no crosshairs / click targets. Owner 10-04: the watched Side Step candidates DO carry the
+      // crosshair (display only - they are never added to the clickable set above).
+      if (spectator && !(this.pushOptionsWatching && isLive)) continue;
       // Owner 2026-07-03: a pulsing crosshair reticle at the arrow tip marks where
       // to click (interactive play only).
       const cross = this.buildPushCrosshair(sq.coordinate);
@@ -10656,7 +10723,8 @@ export class PitchRenderer {
         this.tokenLayer.addChild(badge);
       }
       // Each unlocked, unchosen candidate is a clickable push-direction target (chain pushes included).
-      if (isLive) this.pushOptionCoords.push([sq.coordinate[0], sq.coordinate[1]]);
+      // Astra pass 3 (10-04): never a watched (display-only) candidate - it used to intercept the pitch click.
+      if (isLive && !spectator) this.pushOptionCoords.push([sq.coordinate[0], sq.coordinate[1]]);
     }
     retire();
   }
@@ -15857,7 +15925,7 @@ export class PitchRenderer {
     playerId: string,
     coordinate?: [number, number],
   ): void {
-    const markers: { text: string; emoji: boolean; deco: string; scale?: number; art?: 'target' | 'attacker' | 'blitzer' | 'blitzTarget'; icon?: string }[] = [];
+    const markers: { text: string; emoji: boolean; deco: string; scale?: number; art?: 'target' | 'attacker' | 'blitzer' | 'blitzTarget'; icon?: string; dieFace?: Texture }[] = [];
     // A confirmed declaration and a successfully confused victim share the token-local eye.
     const confused = !isDown(playerState) && hasFlag(playerState, PlayerStateFlag.CONFUSED);
     const gazeMarked = this.gazeTarget === playerId || (confused && this.gazeVictims.has(playerId));
@@ -15903,7 +15971,10 @@ export class PitchRenderer {
     const blitzing = /blitz/i.test(String((this.game?.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? ''));
     const blockDeco = blitzing ? null : blockedDecoration(playerState, !!this.game?.homePlaying, String(this.game?.turnMode ?? ''));
     // Owner 09-06: the target wears the front fist + red Pow burst art (💥 glyph = fallback while the art loads).
-    if (blockDeco) markers.push({ text: '💥', emoji: true, deco: blockDeco, art: 'target' });
+    // Owner 10-04: once the block result is applied, the chosen block-die FACE replaces the fist.
+    const appliedFace = blockDeco && playerId ? this.appliedBlockFaces.get(playerId) : undefined;
+    if (blockDeco && appliedFace) markers.push({ text: '💥', emoji: true, deco: blockDeco, dieFace: appliedFace });
+    else if (blockDeco) markers.push({ text: '💥', emoji: true, deco: blockDeco, art: 'target' });
     // Owner 09-07: the ATTACKER wears NO chest fist — its over-head action marker (buildActionMarker '👊' -> the
     // attacker-fist art) already shows the block; only the target keeps its decoration.
     // Owner 09-07: the persistent BLITZ badges ride this row too — ⚡ on the blitzer's chest from the moment the blitz
@@ -15940,9 +16011,10 @@ export class PitchRenderer {
     markers.forEach((m, i) => {
       // Owner 09-07: a sprite marker's size rides the decor-1 SCALE (placeWalkerDecor owns a child's scale) — the
       // stat-down icon set its height directly and drew at the full 1254 px texture (the giant AV plate).
-      const art = m.art ? this.buildBlockDecorationNode(m.art) : (m.icon ? this.buildStatDownMarkerNode(m.icon) : null);
+      const art = m.dieFace !== undefined ? this.buildAppliedBlockFaceNode(m.dieFace)
+        : m.art ? this.buildBlockDecorationNode(m.art) : (m.icon ? this.buildStatDownMarkerNode(m.icon) : null);
       const node = art?.node ?? this.buildStateMarkerNode(m);
-      if (art) node.label = m.art === 'attacker' ? 'blockAttackerDeco' : m.art === 'blitzer' ? 'blitzerDeco' : m.art === 'blitzTarget' ? 'blitzTargetDeco' : 'blockTargetDeco';
+      if (art) node.label = m.dieFace !== undefined ? 'blockAppliedFaceDeco' : m.art === 'attacker' ? 'blockAttackerDeco' : m.art === 'blitzer' ? 'blitzerDeco' : m.art === 'blitzTarget' ? 'blitzTargetDeco' : 'blockTargetDeco';
       // torso centre (feet at y=0, head ~ -30); owner 09-06: walkers place it in decor-1 units (was ballooning zoomed).
       // Owner 09-07: a PRONE figure lies centred on its square — the row sits on the token origin (its chest), not
       // the standing torso offset (the blitz ring floated above a lying player).
@@ -16004,6 +16076,13 @@ export class PitchRenderer {
    *  glyph's height) — each scale keys to its own fist's content height and the anchor sits on the fist's centre,
    *  so the transparent padding and the target's burst (above-right, kept as drawn) never shift the fist. Null
    *  (💥 fallback) until the art has loaded. */
+  /** Owner 10-04: the applied block-die face, drawn in the block target decoration's footprint (TARGET_H units). */
+  private buildAppliedBlockFaceNode(tex: Texture): { node: Sprite; scale: number } | null {
+    const node = new Sprite(tex);
+    node.anchor.set(0.5, 0.5);
+    return { node, scale: TARGET_H / Math.max(1, tex.height) };
+  }
+
   private buildBlockDecorationNode(art: 'target' | 'attacker' | 'blitzer' | 'blitzTarget'): { node: Sprite; scale: number } | null { // 'attacker' kept for the action marker's texture; the chest fist is gone (09-07)
     const FIST_H = 14; // owner 09-06: 20 -> 14, read too large
     // Owner 09-07: the blitz badges honour the Appearance option — the emoji style keeps the ⚡ / 🎯 glyphs.
