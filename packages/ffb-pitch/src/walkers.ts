@@ -839,6 +839,9 @@ export function withPortraitFacing<T>(build: () => T): T {
   try { return build(); } finally { portraitFacingDepth -= 1; }
 }
 
+/** Owner 10-04: the frame row a lying (prone / stunned / injured-in-the-dugout) walker is drawn from - the FRONT view. */
+const PRONE_FACING: Dir8 = 'S';
+
 export function buildWalkerToken(args: WalkerTokenArgs): Container {
   const {
     token, walker, player, team, isHome, down, data, includeBadges, shading,
@@ -846,7 +849,10 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
   } = args;
   const downMark = args.downMark ?? true;
   const initialFacing = portraitFacingDepth > 0 ? 'S' : travelFacing.get(player.playerId) ?? defaultFacing(isHome, facing, 'S');
-  const row = directionIndex.get(initialFacing)!;
+  // Owner 10-04: "When a player is knocked down and laying prone, they should always be face up." The lying pose is
+  // the standing frame turned on its side, so it took the player's last travel direction - one knocked down while
+  // running away from the camera lay FACE DOWN (the back-view frame). A down player always lies on the front frame.
+  const row = directionIndex.get(down ? PRONE_FACING : initialFacing)!;
   // Owner 09-05: the POSITION ring stays (at the feet, under the ground shadow); only the inner team-colour body
   // ring is dropped on walkers — the kits already carry the team colour, and it cut the figure at the waist.
   // Owner 09-05: blitzer-class sheets carry a visual scale (mass parity with the Skaven Blitzer); feet stay planted.
@@ -1007,7 +1013,7 @@ function tweenArrived(tween: TweenView, now: number, x: number, y: number): bool
 }
 
 function setWalkerFrame(record: WalkerTokenRecord, column: number): void {
-  const row = directionIndex.get(record.facing)!;
+  const row = directionIndex.get(record.prone ? PRONE_FACING : record.facing)!; // owner 10-04: prone = always face up
   const texture = framesOf(record.asset, record.useHalfSheet ?? useDisplaySheets)[row]?.[column];
   if (texture && record.sprite.texture !== texture) record.sprite.texture = texture;
   syncCastShadow(record);
