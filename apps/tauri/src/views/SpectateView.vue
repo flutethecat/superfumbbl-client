@@ -90,6 +90,9 @@ import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
 import { setupProblems } from '../game/setupProblems';
+import { starBadgeFor } from '../game/starBadge';
+import starBadgeUrl from '../assets/star-badge/star-badge.png';
+import starBadgeUsedUrl from '../assets/star-badge/star-badge-used-x.png';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
 import { hasOffPitchCandidate, resolveRosterPickCandidates } from '../game/rosterPicker';
 import { d6LogParts, d6RequirementParts } from '../game/d6Log';
@@ -6858,6 +6861,11 @@ function positionNameFor(entry: { player: PlayerJson; side: 'home' | 'away' }): 
 }
 const popupPlayer = computed<{ player: PlayerJson; side: 'home' | 'away' } | null>(() => playerSideById(popup.playerId));
 
+/** Hover text for the star badge: the rule's name and whether it has been used. */
+function starBadgeTitle(badge: { rules: string[]; usedRules: string[]; used: boolean }): string {
+  if (!badge.rules.length) return 'Star player';
+  return badge.used ? `Star player - ${badge.usedRules.join(', ')} used` : `Star player - ${badge.rules.join(', ')}`;
+}
 const popupInfo = computed(() => {
   const entry = popupPlayer.value;
   const game = gameStore.game.value;
@@ -6900,6 +6908,8 @@ const popupInfo = computed(() => {
     positionName,
     teamName: team.teamName,
     side,
+    // Owner 10-03: star players wear a badge on the portrait; the server's used-skill mark crosses it out.
+    starBadge: starBadgeFor(player, team),
     // BB2025 statline: AG/PA/AV are roll targets ("3+"); PA can be absent.
     // EFFECTIVE stats (Player.get*WithModifiers, Player.java:225-243): the base roster stat plus the temporary
     // modifiers a prayer/card granted — Iron Man's +1 AV and Greasy Cleats' -1 MA must READ on the card, and a
@@ -13826,6 +13836,13 @@ function sendChat() {
             <div class="card-portrait">
               <img v-if="portrait" :src="portrait" alt="" />
               <span v-else class="portrait-missing">no portrait</span>
+              <!-- Owner 10-03: STAR badge, top right; the red X lies over it once the server marks the star's
+                   special rule used (and lifts again if the server unmarks it). -->
+              <span v-if="popupInfo.starBadge" class="star-badge" data-testid="star-badge" :data-used="popupInfo.starBadge.used"
+                :title="starBadgeTitle(popupInfo.starBadge)">
+                <img class="star-badge-art" :src="starBadgeUrl" alt="Star player" />
+                <img v-if="popupInfo.starBadge.used" class="star-badge-used" :src="starBadgeUsedUrl" alt="Special rule used" />
+              </span>
             </div>
           </div>
           <PlayerDetailSkillList v-if="popupInfo.skills.length" :skills="popupInfo.skills" :mode="skillMode" :icon-style="effectiveIconStyle"
@@ -18836,6 +18853,7 @@ function sendChat() {
   font-weight: bold;
 }
 .card-portrait {
+  position: relative; /* owner 10-03: anchors the star badge */
   flex: 1;
   display: flex;
   align-items: center;
@@ -18845,6 +18863,28 @@ function sendChat() {
   border-radius: 6px;
   min-height: 0; /* owner 09-09: the box follows the stat column (was 10.2em of mostly empty green) */
   overflow: hidden;
+}
+/* Owner 10-03: the STAR badge in the portrait's top-right corner, with the red X over it when the rule is used.
+   (0,2,1) so the portrait's own img rule (zoom / fill) never applies to the badge art. */
+.card-portrait .star-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 2.3em;
+  height: 2.3em;
+  z-index: 2;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 70%));
+}
+.card-portrait .star-badge img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  transform: none;
+  image-rendering: auto;
 }
 .card-portrait img {
   /* owner 09-09: zoomed in — the frame fills the box and the transparent padding around the figure is cropped */

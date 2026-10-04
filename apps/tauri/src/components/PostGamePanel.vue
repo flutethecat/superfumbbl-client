@@ -42,9 +42,13 @@ const props = withDefaults(defineProps<{
 
 const game = computed(() => props.snapshot.game);
 const stats = computed(() => props.snapshot.endGameStats);
-const pg = computed(() => postGamePublic(game.value)!);
-const pgStatRows = computed(() => gameStatRows(game.value, props.snapshot.tallies));
-const pgMvpConceded = computed(() => mvpConcededSides(game.value, stats.value));
+// Owner 10-03 ("the end-game MVP never arrives in spectator mode"): the game object is updated IN PLACE, so a computed
+// keyed on `game` (same reference every time) never re-ran - a panel mounted before the awards arrived (the spectator's
+// "selecting MVP" surface) kept its empty MVP list, zero SPP and old stats for good. Read through the SNAPSHOT prop,
+// which the view replaces on every model update.
+const pg = computed(() => postGamePublic(props.snapshot.game)!);
+const pgStatRows = computed(() => gameStatRows(props.snapshot.game, props.snapshot.tallies));
+const pgMvpConceded = computed(() => mvpConcededSides(props.snapshot.game, props.snapshot.endGameStats));
 const roll = computed<{ home: MvpRoll; away: MvpRoll }>(() => props.mvpRoll ?? {
   home: pg.value.home.mvps.length ? { phase: 'landed', display: pg.value.home.mvps[0]!.name } : { phase: 'none', display: '' },
   away: pg.value.away.mvps.length ? { phase: 'landed', display: pg.value.away.mvps[0]!.name } : { phase: 'none', display: '' },

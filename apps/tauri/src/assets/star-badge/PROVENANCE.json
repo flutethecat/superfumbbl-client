@@ -1,0 +1,19 @@
+{
+  "license": "Super FUMBBL Media License (original art)",
+  "tool": "Codex ImageGen (owner-commissioned 10-03); 1254x1254 masters cropped to the alpha bounds, centred on 512, nearest-neighbour to 256",
+  "note": "No FUMBBL or Games Workshop material.",
+  "files": [
+    {
+      "file": "star-badge.png",
+      "purpose": "Star player badge in the top-right of the player card portrait (variant A, round medallion).",
+      "source": "C:/Users/Jay/.codex/generated_images/01a1043d-9447-7623-b5f0-48cb8fc1ea3b/exec-28026fa0-c404-4ec5-a67b-ce38491ec308.png",
+      "sha256": "9f084913389309a45dd79922a9391173ce7fe573a5638c77af22e1ede23a7d9f"
+    },
+    {
+      "file": "star-badge-used-x.png",
+      "purpose": "Red X laid over the star badge once the server marks the star's special rule used.",
+      "source": "C:/Users/Jay/.codex/generated_images/01a1043d-9447-7623-b5f0-48cb8fc1ea3b/exec-6c1f97c5-8c08-40db-b00e-0f43cd8b5d71.png",
+      "sha256": "5280abf875ae057c622109714938a1d693603c2d5d5f5d963e7a1103ddfa01f3"
+    }
+  ]
+}
