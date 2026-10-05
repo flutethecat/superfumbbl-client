@@ -12823,7 +12823,7 @@ function sendChat() {
         <div v-if="setupPhase && !setupCardClosed" class="setup-panel setup-card">
           <button class="setup-close-button setup-card-close" type="button" aria-label="Close setup panel" title="Close"
             data-testid="setup-card-close" @click="setupCardClosed = true">✕</button>
-          <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE SETUP' : 'SET UP YOUR TEAM' }}</div>
+          <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE' : 'SET UP YOUR TEAM' }}</div>
           <!-- StepApplyKickoffResult.handleSolidDefense: only the players the server selected may be moved;
                everything else on the pitch is deactivated and inert. -->
           <div v-if="solidDefenceSetup" class="setup-selected" data-solid-defence>
@@ -16110,7 +16110,7 @@ function sendChat() {
   /* Owner batch #3 #1 (2026-07-14): flip to the LEFT — pinned RIGHT it blocked the reserves view. */
   left: 12px;
   right: auto;
-  width: 248px; /* owner 10-05: wide enough that the "Max 2 in the ... wide zone" lines never wrap (was 210) */
+  width: 270px; /* owner 10-05: wide enough that the "Max 2 in the ... wide zone" lines and the 15 px title never wrap (was 210) */
   padding: 10px 12px;
   background: rgba(14, 18, 26, 0.92);
   border: 1px solid rgba(120, 150, 190, 0.5);
@@ -16124,8 +16124,8 @@ function sendChat() {
   letter-spacing: 0.04em;
   margin-bottom: 8px;
   color: var(--ui-heading);
-  /* owner 10-05: one line, never wraps in the 248 px card (the card is scaled 1.3x, so 13 px reads as ~17) */
-  font-size: 13px;
+  /* owner 10-05: one line, never wraps in the 270 px card (the card is scaled 1.3x, so 15 px reads as ~20) */
+  font-size: 15px;
   white-space: nowrap;
 }
 .setup-conditions { list-style: none; margin: 0 0 8px; padding: 0; }
