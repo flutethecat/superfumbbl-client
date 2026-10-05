@@ -3412,23 +3412,24 @@ const injuryIsCasualty = computed(() => {
 // result string (e.g. "Seriously Hurt (MNG)", "Serious Injury (NI)", "Smashed Knee (-MA)",
 // "Dead (RIP)"); map it (by keyword, tolerant of the "(-ST)" stat suffix) to the injury phrasing.
 // A plain Badly Hurt (state casualty, no result string) falls back to "is Badly Hurt!".
-function injuryPhrase(splash: { player: string; seriousInjury?: string | null; injuryBase: number }): string {
+// Owner 10-05: the toast is TWO centred lines - "<Player> is" / "<Casualty>" - the injury always on the second line.
+function injuryPhraseLines(splash: { player: string; seriousInjury?: string | null; injuryBase: number }): [string, string] {
   const who = splash.player || 'The player';
   const s = (splash.seriousInjury ?? '').toLowerCase();
-  if (s.includes('rip') || s.includes('dead') || s.includes('killed')) return `${who} is KILLED!`;
-  if (s.includes('knee')) return `${who} has smashed their knee!`;
-  if (s.includes('arm')) return `${who} has broken their arm!`;
-  if (s.includes('hip')) return `Call Lifeline! ${who} has dislocated their hip!`;
-  if (s.includes('shoulder')) return `${who} has broken their shoulder!`;
+  if (s.includes('rip') || s.includes('dead') || s.includes('killed')) return [`${who} is`, 'KILLED!'];
+  if (s.includes('knee')) return [`${who} has`, 'smashed their knee!'];
+  if (s.includes('arm')) return [`${who} has`, 'broken their arm!'];
+  if (s.includes('hip')) return [`Call Lifeline! ${who} has`, 'dislocated their hip!'];
+  if (s.includes('shoulder')) return [`${who} has`, 'broken their shoulder!'];
   if (s.includes('head') || s.includes('eye') || s.includes('concussion') || s.includes('skull') || s.includes('neck'))
-    return `${who} receives a Head Injury!`;
-  if (s.includes('niggling') || s.includes('(ni)')) return `${who} receives a Niggling Injury!`;
-  if (s.includes('seriously hurt') || s.includes('mng')) return `${who} is Seriously Hurt!`;
-  if (splash.injuryBase === DEAD_BASE) return `${who} is KILLED!`; // DEAD state, no result string
-  return `${who} is Badly Hurt!`; // no lasting-injury string → the coarse casualty
+    return [`${who} receives a`, 'Head Injury!'];
+  if (s.includes('niggling') || s.includes('(ni)')) return [`${who} receives a`, 'Niggling Injury!'];
+  if (s.includes('seriously hurt') || s.includes('mng')) return [`${who} is`, 'Seriously Hurt!'];
+  if (splash.injuryBase === DEAD_BASE) return [`${who} is`, 'KILLED!']; // DEAD state, no result string
+  return [`${who} is`, 'Badly Hurt!']; // no lasting-injury string → the coarse casualty
 }
-const casualtyPhrase = computed(() =>
-  gameStore.state.injurySplash ? injuryPhrase(gameStore.state.injurySplash) : '',
+const casualtyPhraseLines = computed<[string, string] | null>(() =>
+  gameStore.state.injurySplash ? injuryPhraseLines(gameStore.state.injurySplash) : null,
 );
 // Owner 2026-07-07: injury display — every injury also gets a token-bound toast at the injured
 // square (KO / casualty / stun), and a CASUALTY additionally KEEPS its full-width splash banner
@@ -12828,7 +12829,7 @@ function sendChat() {
         <div v-if="setupPhase && !setupCardClosed" class="setup-panel setup-card">
           <button class="setup-close-button setup-card-close" type="button" aria-label="Close setup panel" title="Close"
             data-testid="setup-card-close" @click="setupCardClosed = true">✕</button>
-          <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE — RE-SET UP' : 'SET UP YOUR TEAM' }}</div>
+          <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE SETUP' : 'SET UP YOUR TEAM' }}</div>
           <!-- StepApplyKickoffResult.handleSolidDefense: only the players the server selected may be moved;
                everything else on the pitch is deactivated and inert. -->
           <div v-if="solidDefenceSetup" class="setup-selected" data-solid-defence>
@@ -12864,7 +12865,6 @@ function sendChat() {
               Placed {{ setupPhase.validation.placed }}/{{ setupPhase.validation.required }}
             </li>
           </ul>
-          <div class="setup-reserve-label">RESERVES: {{ setupReserves.length }} left — click OR drag a reserve onto the pitch; click a placed player then the dugout to send it back; click two placed players (or a placed player then a reserve) to swap</div>
           <div v-if="selectedSetupPlayer" class="setup-selected">
             Selected: <b>{{ selectedSetupPlayer.posName || selectedSetupPlayer.name }}</b> —
             {{ selectedSetupPlaced ? 'click a square to move, or click the dugout to return to reserves' : 'click a square on your half to place' }}
@@ -12901,7 +12901,6 @@ function sendChat() {
               Placed {{ swarmingPhase.placedCount }}<template v-if="swarmingPhase.amount !== null">/{{ swarmingPhase.amount }}</template>
             </li>
           </ul>
-          <div class="setup-reserve-label">RESERVES: {{ swarmingReserves.length }} left — click OR drag a reserve onto the pitch; click a placed player to send it back</div>
           <div v-if="selectedSwarming" class="setup-selected">
             Selected: <b>{{ swarmingPlayers.find((player) => player.playerId === selectedSwarming)?.name }}</b>. Choose a square to place the player
           </div>
@@ -13820,8 +13819,10 @@ function sendChat() {
           <template v-if="injuryIsRockImpact">
             <span class="ko-toast-phrase">{{ gameStore.state.injurySplash.player }} is hit by a rock!</span>
           </template>
-          <template v-else-if="injuryIsCasualty">
-            <span class="ko-toast-phrase">{{ casualtyPhrase }}</span>
+          <template v-else-if="injuryIsCasualty && casualtyPhraseLines">
+            <!-- owner 10-05: two centred lines, the casualty always on the second -->
+            <span class="ko-toast-phrase ko-toast-lines"
+              :aria-label="casualtyPhraseLines.join(' ')"><span class="ko-toast-lead">{{ casualtyPhraseLines[0] }}</span><span class="ko-toast-casualty">{{ casualtyPhraseLines[1] }}</span></span>
           </template>
           <template v-else-if="injuryIsReserves">
             <span class="ko-toast-phrase">{{ gameStore.state.injurySplash.player }} returns to reserves</span>
@@ -16128,9 +16129,12 @@ function sendChat() {
 }
 .setup-title {
   font-weight: 800;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   margin-bottom: 8px;
   color: var(--ui-heading);
+  /* owner 10-05: one line, never wraps in the 210 px card (the card is scaled 1.3x, so 11 px reads as ~14) */
+  font-size: 11px;
+  white-space: nowrap;
 }
 .setup-conditions { list-style: none; margin: 0 0 8px; padding: 0; }
 .setup-confirm-problems { margin: 0; padding: 0 0 0 18px; text-align: left; }
@@ -16145,7 +16149,6 @@ function sendChat() {
 }
 .setup-conditions li.ok { color: #7ee59a; }
 .setup-mark { font-weight: 900; width: 12px; text-align: center; }
-.setup-reserve-label { margin: 6px 0 4px; font-size: max(var(--ui-min-text-size, 12px), 10.5px); opacity: 0.75; }
 /* Owner 2026-07-15 (click-to-place): the live selection echo — which player is picked + the next-tap hint. */
 .setup-selected {
   margin: 2px 0 6px;
@@ -17352,6 +17355,10 @@ function sendChat() {
   white-space: normal; /* owner 08-05: wrap long casualty phrases; pill grows vertically */
   overflow-wrap: break-word;
 }
+/* owner 10-05: casualty toast = two centred lines; the lead ("X is") may wrap, the casualty line never does */
+.ko-toast-lines { display: flex; flex-direction: column; align-items: center; gap: 1px; max-width: 17rem; }
+.ko-toast-lines .ko-toast-lead { font-size: 0.86em; font-weight: 700; letter-spacing: 0.05em; }
+.ko-toast-lines .ko-toast-casualty { white-space: nowrap; }
 /* Owner 2026-07-08: FALLS OVER toast (failed Dodge/Rush) — token-anchored like the stun tag,
    a cooler slate palette so a fall reads distinct from an injury. */
 .fall-toast {

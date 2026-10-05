@@ -174,6 +174,7 @@ export const POSITION_TYPE_BY_NAME: Record<string, RingType> = {
   werewolf: 'blitzer',
   whitelion: 'blitzer',
   wight: 'blitzer',
+  wraith: 'bigguy', // owner 10-05: Necromantic Wraith rings ORANGE (the big-guy colour), not blitzer red
   wilhelmchaney: 'star',
   witchelf: 'catcher',
   withergraspdoubledrool: 'star',

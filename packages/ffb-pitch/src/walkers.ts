@@ -801,9 +801,21 @@ export function walkerRingGeometry(walker: Pick<WalkerAsset, 'figureHeight' | 'f
     return { cx: 0, cy: 0, rx: length * 0.5 * k, ry: Math.max(thick * 0.5, length * 0.4) * k };
   }
   // Owner 09-05 (round 20): wide-rooted models (treemen 49u) read as a disc at 1.15x — ring now 1.05x the feet, flatter
-  const feet = (walker.feetWidth ?? walker.figureHeight * 0.5) * visual;
+  const feet = taperedBaseFeet(walker.feetWidth ?? walker.figureHeight * 0.5, walker.figureWidth) * visual;
   const rx = Math.max(6, feet * 0.525); // half the feet span x 1.05
   return { cx: 0, cy: WALKER_FEET_Y_PX - 1, rx, ry: rx * 0.42 };
+}
+
+/** Owner 10-05 ("the Wraith's position ring is incredibly small - same diameter as other ST 3 sprites"): a figure
+ *  whose base tapers to a point - a floating spirit's tail, a pogo stick - measures a few pixels of "feet" and drew a
+ *  pin-prick ring. When the feet span is under TAPERED_BASE_RATIO of the figure's widest span, the ring is sized from
+ *  the width instead, at the typical feet/width ratio of a standing figure (linemen, zombies, ghouls measure 0.64-0.79),
+ *  so a wraith's ring matches its roster-mates'. Winged / wide-shouldered figures (0.44-0.47) keep their true feet. */
+export const TAPERED_BASE_RATIO = 0.42;
+export const TYPICAL_FEET_TO_WIDTH = 0.72;
+export function taperedBaseFeet(feetWidth: number, figureWidth: number | undefined): number {
+  if (figureWidth === undefined || feetWidth >= figureWidth * TAPERED_BASE_RATIO) return feetWidth;
+  return figureWidth * TYPICAL_FEET_TO_WIDTH;
 }
 
 function buildGroundShadow(g: { cx: number; cy: number; rx: number; ry: number }): Graphics {
