@@ -3670,6 +3670,9 @@ async function pauseSpectatorView(): Promise<void> {
     turnMode: checkpoint.model.turnMode, homePlaying: checkpoint.model.homePlaying,
   };
   let transitionBlockDownPlayers: string[] | null = null;
+  /** Astra round 5: the live-review reroll pin, raised in the synchronous publication boundary (the renderer drops
+   *  the offer hold as soon as the published model has no reroll dialog - before present() ever runs). */
+  let transitionRerollPin: { seq: number } | null = null;
   let transitionBlockCard = checkpoint.durableProjection.blockCard
     ? structuredClone(checkpoint.durableProjection.blockCard) : null;
   // Owner 09-14: the choice reveal after GO TO LIVE must sit on the block's defender square; the live model has
@@ -3703,6 +3706,14 @@ async function pauseSpectatorView(): Promise<void> {
         const beforeActingId = String(beforeModel?.actingPlayer?.playerId ?? '');
         transitionBlockDownPlayers = !snap && previous && blockSequenceEndedWithKnockdown(position.model, beforeDefenderId, beforeActingId)
           ? [beforeActingId, beforeDefenderId].filter(Boolean) : null;
+      }
+      {
+        const isRerollDialog = (model: unknown) => String(((model as { dialogParameter?: { dialogId?: unknown } | null } | undefined)?.dialogParameter)?.dialogId ?? '')
+          .toLowerCase().replace(/[^a-z0-9]/g, '').includes('reroll');
+        // a reroll offer was just answered: hold the failed die until present() knows whether a result follows
+        transitionRerollPin = !snap && previous && isRerollDialog(previous.model) && !isRerollDialog(position.model)
+          ? { seq: (state.rerollResultPending?.seq ?? 0) + 1 } : null;
+        if (transitionRerollPin) state.rerollResultPending = transitionRerollPin;
       }
       transitionBlockCard = previous?.durableProjection.blockCard
         ? structuredClone(previous.durableProjection.blockCard) : null;
@@ -3962,8 +3973,11 @@ async function pauseSpectatorView(): Promise<void> {
         || (!!projectile.fireball && wireSound === projectile.fireball.sound)
       );
       if (!projectileOwnsWireSound) playSound(wireSound);
-      const reviewRerollPin = rerolledRolls.length > 0 ? { seq: (state.rerollResultPending?.seq ?? 0) + 1 } : null;
-      if (reviewRerollPin) state.rerollResultPending = reviewRerollPin;
+      // The pin was raised at publication (see transitionRerollPin). No rerolled result in this transition means
+      // the offer was declined: drop the pin now so the die fades with the answer.
+      const reviewRerollPin = transitionRerollPin;
+      transitionRerollPin = null;
+      if (reviewRerollPin && rerolledRolls.length === 0 && state.rerollResultPending?.seq === reviewRerollPin.seq) state.rerollResultPending = null;
       const staged = await presentStages([
         { delayBefore: 0, present: () => showRolls(firstRolls) },
         { delayBefore: failBeat, present: () => {
@@ -3975,7 +3989,7 @@ async function pauseSpectatorView(): Promise<void> {
           showRolls(rerolledRolls);
           // Astra round 4: live review pins the held failed die for the accepted reroll's result as live play does
           // (raised below, before the first stage); it is released shortly after the result has been shown.
-          if (reviewRerollPin) {
+          if (reviewRerollPin && rerolledRolls.length > 0) {
             const pin = reviewRerollPin;
             scheduleGameTimeout(() => { if (state.rerollResultPending?.seq === pin.seq) state.rerollResultPending = null; }, presentationMs(REROLL_RESULT_PIN_TAIL_MS));
           }

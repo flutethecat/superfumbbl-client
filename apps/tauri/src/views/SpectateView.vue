@@ -2781,6 +2781,9 @@ watchConfirmedMovementPresentation(
 // numbers / follow-up "0", for either coach and for spectators). The follow-up step may still be walking when the
 // server clears the defender, so the clear waits for those two players' on-screen movement to finish (3 s cap).
 let blockDownTrailClearTimer: ReturnType<typeof setTimeout> | null = null;
+/** Bumped by the renderer's selection callback on EVERY selection change (Astra round 5: an 80 ms sample could
+ *  miss a select-away-and-back). The block cleanup only clears a selection nobody has touched since its pulse. */
+let pitchSelectionRevision = 0;
 watch(() => gameStore.state.blockDownTrailClear?.seq, () => {
   const pulse = gameStore.state.blockDownTrailClear;
   if (!pulse || !renderer) return;
@@ -2791,14 +2794,13 @@ watch(() => gameStore.state.blockDownTrailClear?.seq, () => {
   // Astra round 4: ownership is continuity, not identity. A selection that changed at any point since the pulse is
   // the coach's own (even if it came back to the same player), and an acting player who has moved on since the
   // pulse owns the marks now on the pitch.
-  let selectionTouched = false;
+  const selectionRevisionAtPulse = pitchSelectionRevision;
   const movedAtPulse = Number((gameStore.game.value?.actingPlayer as { currentMove?: number } | undefined)?.currentMove ?? 0);
   const attempt = () => {
     blockDownTrailClearTimer = null;
     if (!renderer || gameStore.state.blockDownTrailClear?.seq !== pulse.seq) return;
     const g = gameStore.game.value;
     const actingNow = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (renderer.getSelectedPlayerId() !== selectedAtPulse) selectionTouched = true;
     if (actingNow && Number((g?.actingPlayer as { currentMove?: number } | undefined)?.currentMove ?? 0) > movedAtPulse) return; // moved on: its trail is live
     // Astra (10-05): this cleanup belongs to ONE block. A different game, or another player's activation that has
     // started since, owns whatever is on the pitch now - the stale cleanup is discarded, never applied to it.
@@ -2813,7 +2815,7 @@ watch(() => gameStore.state.blockDownTrailClear?.seq, () => {
     // block (and no longer the server's acting player) is an inspection - its range squares and rush dice go with
     // the marks. A selection the coach made since is theirs and stays.
     const selected = renderer.getSelectedPlayerId();
-    if (selected && !selectionTouched && selected === selectedAtPulse && selected !== actingNow && pulse.playerIds.includes(selected)) {
+    if (selected && pitchSelectionRevision === selectionRevisionAtPulse && selected === selectedAtPulse && selected !== actingNow && pulse.playerIds.includes(selected)) {
       renderer.clearSelection();
       if (o66InspectedOpponent.value === selected) o66InspectedOpponent.value = null;
     }
@@ -3050,10 +3052,21 @@ watch(() => gameStore.state.rerollResultPending?.seq ?? null, (seq) => renderer?
 // an accepted reroll's pin (and its own cap) still protects the in-place reroll.
 const REROLL_OFFER_HOLD_FAILOPEN_MS = 4000;
 let rerollOfferFailOpenTimer = 0;
-watch(() => !!gameStore.state.reRollPrompt, (open, was) => {
+/** The square of MY open reroll offer's player (Astra round 5: the release is scoped to that one die, so it can
+ *  never let go of a die held for another offer - e.g. the opponent's, which this seat does not see as a prompt). */
+let myRerollOfferSquare: [number, number] | null = null;
+watch(() => (gameStore.state.reRollPrompt?.mine ? gameStore.state.reRollPrompt.seq : null), (seq, was) => {
   if (rerollOfferFailOpenTimer) { clearTimeout(rerollOfferFailOpenTimer); rerollOfferFailOpenTimer = 0; }
-  if (open || !was) return;
-  rerollOfferFailOpenTimer = window.setTimeout(() => { rerollOfferFailOpenTimer = 0; renderer?.releaseRerollOfferHold(); }, REROLL_OFFER_HOLD_FAILOPEN_MS);
+  if (seq !== null) {
+    const prompt = gameStore.state.reRollPrompt!;
+    const at = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === prompt.playerId)?.playerCoordinate;
+    myRerollOfferSquare = at && at[0] >= 0 && at[0] <= 25 && at[1] >= 0 && at[1] <= 14 ? [at[0], at[1]] : null;
+    return;
+  }
+  const square = myRerollOfferSquare;
+  myRerollOfferSquare = null;
+  if (was === null || !square) return;
+  rerollOfferFailOpenTimer = window.setTimeout(() => { rerollOfferFailOpenTimer = 0; renderer?.releaseRerollOfferHold(square); }, REROLL_OFFER_HOLD_FAILOPEN_MS);
 });
 onBeforeUnmount(() => { if (rerollOfferFailOpenTimer) clearTimeout(rerollOfferFailOpenTimer); });
 const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
@@ -3643,7 +3656,10 @@ watch(
       renderer.cinematicZoom(sq, 9000);
       // Astra round 4: the roll's own die (held for this offer, wearing its GFI / Dodge marker) is usually already on
       // that square - a second, unlabelled die there would take the reroll and leave the labelled one behind.
-      if (p.roll && !renderer.hasFailedDieAt(sq)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
+      // Round 6: only THIS roll's own die on the pitch (failed, that value, held for the offer) suppresses the prompt
+      // die. When the roll's die arrives later instead (a deferred show, live review's ordering) the renderer
+      // replaces this unlabelled one with it (showActionDie), so the two never stand side by side.
+      if (p.roll && !renderer.hasOfferHeldFailedDieAt(sq, p.roll)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
     }
     const follow = () => {
       if (!gameStore.state.reRollPrompt) { rerollMenuPos.ready = false; return; }
@@ -9911,6 +9927,7 @@ onMounted(async () => {
   };
   // path-planning clicks shouldn't leave a stale stats card behind
   renderer.onSelectionChange = (playerId) => {
+    pitchSelectionRevision += 1; // Astra round 5: every selection change counts, however brief
     // Owner 09-08: an empty-square click while an opposition token is inspected during MY activation hands the
     // selection back to the actor (the renderer only deselects; the opponent's turn keeps the plain deselect).
     if (!playerId && o66InspectedOpponent.value && gameStore.game.value && dismissO66OpponentInspection(gameStore.game.value)) {

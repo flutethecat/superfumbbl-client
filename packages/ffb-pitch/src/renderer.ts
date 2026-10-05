@@ -1133,6 +1133,8 @@ export function kickBallAirborne(input: { carried: boolean; hanging: boolean; ai
 export const REROLL_RESULT_PIN_CAP_MS = 5000;
 /** A token within this many world pixels of a square's rest position is drawn ON that square. */
 export const PLAYER_ARRIVED_PX = 3;
+/** A failed die shown this recently is taken to be the roll a just-opened reroll prompt is about. */
+export const PROMPT_DIE_FRESH_MS = 4000;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
 const DISTANCE_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
@@ -13081,6 +13083,22 @@ export class PitchRenderer {
       this.startActionDieTumble(persisted, now, tumbleMs);
       return;
     }
+    // Astra round 6: the reroll prompt may already have put up its own UNLABELLED copy of this failed roll (shown
+    // when the roll's die had not arrived yet). The roll's own die - the one with the cause marker - replaces it.
+    if (failed && cause && !rerollSkill) {
+      this.actionDice = this.actionDice.filter((d) => {
+        const promptCopy = d.failed && d.cause === undefined && d.value === value && d.square && d.square[0] === x && d.square[1] === y;
+        if (promptCopy) { d.node.parent?.removeChild(d.node); d.node.destroy({ children: true }); }
+        return !promptCopy;
+      });
+    }
+    // Round 7: a roll with NO cause marker (Foul Appearance, Steady Footing...) arriving after the prompt's identical
+    // unlabelled copy is the same die - adopt the copy (it takes this roll's hold) instead of adding a second one.
+    if (failed && !cause && !rerollSkill) {
+      const copy = this.actionDice.find((d) => d.failed && d.cause === undefined && d.value === value && !d.node.destroyed
+        && now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS) && d.square && d.square[0] === x && d.square[1] === y);
+      if (copy) { copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer; return; }
+    }
     const built = this.buildActionDieFace(value, cause);
     const die = built.node;
     this.decorateActionDie(die, failed, needed, rerollSkill, rerollTeam, opponentRerollPending);
@@ -13258,21 +13276,29 @@ export class PitchRenderer {
     const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!dialogId.includes('reroll')) this.releaseOpponentRerollDice();
   }
-  /** Astra round 4: is a FAILED action die already showing on that square (the roll's own die)? */
-  hasFailedDieAt(square: readonly [number, number]): boolean {
-    return this.actionDice.some((d) => d.failed && !d.node.destroyed && d.square && d.square[0] === square[0] && d.square[1] === square[1]);
+  /** Astra rounds 4-7: is THIS roll's own failed die already on that square? A failed die showing that value that
+   *  is held for a reroll offer, or was shown within the last few seconds (a Pass / Catch die takes no offer hold but
+   *  is on the pitch when its prompt opens). An old failed die from an earlier roll - e.g. one held for the turnover -
+   *  is neither, so it does not hide a new prompt's die. */
+  hasOfferHeldFailedDieAt(square: readonly [number, number], value: number): boolean {
+    const now = performance.now();
+    return this.actionDice.some((d) => d.failed && d.value === value && !d.node.destroyed
+      && (d.holdForOpponentReroll || now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS))
+      && d.square && d.square[0] === square[0] && d.square[1] === square[1]);
   }
-  /** Astra round 4: fail-open release of the reroll-offer hold, for when the coach's prompt is gone but the server's
-   *  dialog-clearing frame never arrived (a lost connection). Respects an accepted reroll's pin. */
-  releaseRerollOfferHold(): void {
-    this.releaseOpponentRerollDice();
+  /** Astra round 4 / 5: fail-open release of the reroll-offer hold for the die on ONE square (the coach's own
+   *  answered offer), for when the server's dialog-clearing frame never arrives. Dice held for any other offer -
+   *  an opponent still deciding - are not touched. Respects an accepted reroll's pin. */
+  releaseRerollOfferHold(square: readonly [number, number]): void {
+    this.releaseOpponentRerollDice(square);
   }
-  private releaseOpponentRerollDice(): void {
+  private releaseOpponentRerollDice(onlyAt?: readonly [number, number]): void {
     if (performance.now() < this.rerollResultPinUntil) return; // pinned for an accepted reroll's result
     const now = performance.now();
     const holdBoundary = presentationMs(ACTION_DIE_IN_MS + ACTION_DIE_HOLD_MS);
     for (const die of this.actionDice) {
       if (!die.holdForOpponentReroll) continue;
+      if (onlyAt && !(die.square && die.square[0] === onlyAt[0] && die.square[1] === onlyAt[1])) continue;
       if (now - die.start > holdBoundary) die.start = now - holdBoundary;
       die.holdForOpponentReroll = false;
     }

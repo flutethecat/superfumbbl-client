@@ -49,6 +49,8 @@ export interface SwallowedGesture {
 /** For events that carry NO pointer id (older engines' click / context menu, compatibility mouse events): how long
  *  after the release they are still taken to be the swallowed gesture's. Identified events need no window. */
 export const UNIDENTIFIED_TAIL_MS = 1000;
+/** A released swallowed gesture is forgotten after this long (its click, if it was ever coming, is long gone). */
+export const SWALLOWED_GESTURE_FORGET_MS = 10_000;
 
 /** Does this follow-up event belong to the swallowed gesture?
  *  `pointerId` is undefined for events that carry none and -1 for keyboard-generated clicks; `lastPointerDownId` is
@@ -67,7 +69,11 @@ export function belongsToSwallowedGesture(
   if (lastPointerDownId !== gesture.pointerId) return false;
   if (gesture.releasedAt !== 0 && now - gesture.releasedAt > UNIDENTIFIED_TAIL_MS) return false;
   if (event.kind === 'mouse') return true; // compatibility mousedown / mouseup of the swallowed press
-  if (event.kind === 'contextmenu') return gesture.button === 2 || (event.detail ?? 0) !== 0; // a right-click's menu
+  // A swallowed RIGHT press's menu, while it is held or within the unidentified window after its release. An event
+  // with no pointer id and detail 0 is also what the keyboard's menu key sends; inside that window it is dropped
+  // too - a lost menu-key press (recoverable by pressing again) is the accepted cost of never letting the swallowed
+  // right-click's menu reach a handler (Astra round 6: on the pitch that menu can cancel a Blitz).
+  if (event.kind === 'contextmenu') return gesture.button === 2 || (event.detail ?? 0) !== 0;
   return (event.detail ?? 0) !== 0; // detail 0 = keyboard activation (Enter / Space on a focused button)
 }
 
@@ -89,9 +95,11 @@ export function installFocusClickGuard(target: Window = window): () => void {
     const now = performance.now();
     const pointerId = pointerIdOf(event) ?? 1;
     lastPointerDownId = pointerId;
-    // A new press ends the swallowed gesture once it has been released (its click, if any, is long overdue) or when
-    // it is the same pointer again (its release never reached this window). A still-held swallowed touch stays.
-    if (gesture && (gesture.pointerId === pointerId || gesture.releasedAt !== 0)) gesture = null;
+    // The SAME pointer pressing again ends the swallowed gesture (a new gesture of its own; if its release never
+    // reached this window, this is where that is noticed). ANOTHER pointer pressing never does (Astra round 5: it
+    // let the swallowed pointer's delayed click out) - that gesture is only forgotten once it is long over.
+    if (gesture && (gesture.pointerId === pointerId
+      || (gesture.releasedAt !== 0 && now - gesture.releasedAt > SWALLOWED_GESTURE_FORGET_MS))) gesture = null;
     const result = onPress(state, now, target.document.hasFocus());
     state = result.state;
     if (!result.swallow) return; // an unrelated pointer proceeds, and does not release a swallowed one
