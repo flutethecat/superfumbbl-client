@@ -4368,12 +4368,6 @@ function onSetupDragEnd(e: PointerEvent) {
   // PLACED player to reserves — "drag back to the dugout" (fixes: an over-filled formation couldn't be pulled back).
   if (!sq && mode.placedCoord(d.playerId)) { mode.remove(d.playerId); mode.clearSelection(); }
 }
-function returnSelectedToReserve() {
-  if (selectedSetupPlayerId.value) {
-    gameStore.setupRemove(selectedSetupPlayerId.value);
-    selectedSetupPlayerId.value = null;
-  }
-}
 
 // Owner 2026-07-04: REFEREE SEND-OFF cinematic. The prompt spotlights the spotted
 // player (stand-firm style); the result rolls a d6 in from the bottom, then reveals
@@ -12869,11 +12863,9 @@ function sendChat() {
             Selected: <b>{{ selectedSetupPlayer.posName || selectedSetupPlayer.name }}</b> —
             {{ selectedSetupPlaced ? 'click a square to move, or click the dugout to return to reserves' : 'click a square on your half to place' }}
           </div>
-          <div class="setup-actions">
-            <!-- Owner 10-03: the pane no longer carries its own confirm (the scoreboard's Confirm Setup opens the setup
-                 confirmation) nor Concede (a prompt asks when conceding is legal). -->
-            <button class="setup-btn" @click="returnSelectedToReserve" :disabled="!selectedSetupPlayerId">↩ Reserve</button>
-          </div>
+          <!-- Owner 10-03: the pane carries no confirm (the scoreboard's Confirm Setup opens the setup confirmation) nor
+               Concede (a prompt asks when conceding is legal); owner 10-05: nor a Reserve button - a placed player goes
+               back by clicking it then the dugout, or by dragging it off the pitch. -->
         </div>
 
         <!-- ClientStateSwarming.java:10-27: dedicated setup-shaped placement without formation controls. Owner
@@ -16118,7 +16110,7 @@ function sendChat() {
   /* Owner batch #3 #1 (2026-07-14): flip to the LEFT — pinned RIGHT it blocked the reserves view. */
   left: 12px;
   right: auto;
-  width: 210px;
+  width: 248px; /* owner 10-05: wide enough that the "Max 2 in the ... wide zone" lines never wrap (was 210) */
   padding: 10px 12px;
   background: rgba(14, 18, 26, 0.92);
   border: 1px solid rgba(120, 150, 190, 0.5);
@@ -16132,8 +16124,8 @@ function sendChat() {
   letter-spacing: 0.04em;
   margin-bottom: 8px;
   color: var(--ui-heading);
-  /* owner 10-05: one line, never wraps in the 210 px card (the card is scaled 1.3x, so 11 px reads as ~14) */
-  font-size: 11px;
+  /* owner 10-05: one line, never wraps in the 248 px card (the card is scaled 1.3x, so 13 px reads as ~17) */
+  font-size: 13px;
   white-space: nowrap;
 }
 .setup-conditions { list-style: none; margin: 0 0 8px; padding: 0; }
