@@ -2229,8 +2229,8 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <span>Stadium stands</span>
               <select v-model="settings.stadiumStands" :disabled="!settings.showStadium">
-                <option value="crowd">Baked crowd tiles (new)</option>
                 <option value="classic">Classic seats + fans</option>
+                <option value="crowd">Baked crowd tiles</option>
               </select>
             </label>
             <label class="row">
