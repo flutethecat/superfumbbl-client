@@ -1110,6 +1110,29 @@ const BADGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 8, fontW
 // owner 09-05: 0.8 → 0.7 (still too opaque over a token).
 const BADGE_OCCLUDED_ALPHA = 0.7;
 /** Declared-action marker (Move / Blitz / Foul / Pass / Hand-off art) opacity while it sits over ANOTHER player's token. */
+/** Owner 10-05: E-W dugout band text. `quad` = the band's four screen corners as [x0,y0, x1,y1, x2,y2, x3,y3]
+ *  (near-left, far-left, far-right, near-right along the band's long axis: corners 0/3 are one end, 1/2 the other).
+ *  Returns the rotation that lays the text's reading direction along the band's centreline - whichever of the two
+ *  directions is closer to `baseRotation`, so the text keeps reading the way it did - and the band's centre. */
+export function dugoutBandTextRotation(quad: readonly number[], baseRotation: number): { rotation: number; x: number; y: number } {
+  const endA = { x: (quad[0]! + quad[6]!) / 2, y: (quad[1]! + quad[7]!) / 2 };
+  const endB = { x: (quad[2]! + quad[4]!) / 2, y: (quad[3]! + quad[5]!) / 2 };
+  const along = Math.atan2(endB.y - endA.y, endB.x - endA.x);
+  const turn = (angle: number) => Math.abs(Math.atan2(Math.sin(angle - baseRotation), Math.cos(angle - baseRotation)));
+  const rotation = turn(along) <= turn(along + Math.PI) ? along : along + Math.PI;
+  return { rotation: Math.atan2(Math.sin(rotation), Math.cos(rotation)), x: (endA.x + endB.x) / 2, y: (endA.y + endB.y) / 2 };
+}
+/** Owner 10-05: is the kick ball in the air (so it draws over the dugouts)? A carried ball never is. `hanging` =
+ *  parked at the apex during a kick-off event; `airTween` = an airborne kick tween (fly-in, snapshot arc, descent) is
+ *  driving THIS sprite right now. The ground bounce after landing is not airborne. */
+export function kickBallAirborne(input: { carried: boolean; hanging: boolean; airTween: boolean }): boolean {
+  return !input.carried && (input.hanging || input.airTween);
+}
+/** Fail-open cap for the accepted-reroll die pin (the store clears it ~1 s after the result; team reroll splash
+ *  beats run about 2 s). */
+export const REROLL_RESULT_PIN_CAP_MS = 5000;
+/** A token within this many world pixels of a square's rest position is drawn ON that square. */
+export const PLAYER_ARRIVED_PX = 3;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
 const DISTANCE_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
@@ -1549,6 +1572,9 @@ export interface MoveTweenRecord {
   baseScale?: number;
   growTo?: number;
   growMode?: 'up' | 'down' | 'arc';
+  /** Owner 10-05: an AIRBORNE kick phase (fly-in arc, snapshot arc, descent). While this exact tween drives the
+   *  ball it draws over the dugouts; the ground bounce that follows is an ordinary tween without the mark. */
+  kickAir?: boolean;
   /** step-stutter: the presentation step this tile tween presents (armPresentationStepTween only). Tagged so
    *  the ticker can mark exactly THAT step consumed at its visual end — never a neighbouring tween for the
    *  same player (a leap arc, a coalesced-jump path) that happens to finish first. */
@@ -1885,6 +1911,15 @@ export class PitchRenderer {
   private movementOverlayOwner: string | null = null;
   /** BB2-style dugouts flanking the pitch (owner 2026-07-02). */
   private dugoutLayer = new Container();
+  /** Owner 10-05: "Kick ball trail traveled under the z-level of the dugout labels." The dugout FLOOR (stone, trim,
+   *  section lines, the INJURED / RESERVES bands and their text) lives here, UNDER the token layer, so the kick-off
+   *  ball flying in from the corner (a token-layer sprite) passes over it. The dugout's players, halos and markers
+   *  stay in dugoutLayer above the pitch tokens, as before. */
+  private dugoutGroundLayer = new Container();
+  /** Owner 10-05: "Kickoff ball and trail should pass over the players in dugout." While a kick-off ball is in
+   *  the air (fly-in, apex hang, descent and its bounce) its sprite rides here, above the dugout players and their
+   *  skill markings; it returns to the token layer (normal depth sorting with the players) when it has landed. */
+  private kickBallLayer = new Container();
   /** Live rendered dugout token anchors, rebuilt with the dugout generation. Presentation
    *  followers use these instead of a player's stale last on-pitch square after a removal. */
   private dugoutTokensById = new Map<string, Container>();
@@ -3653,6 +3688,9 @@ export class PitchRenderer {
   onContextMenu: ((target: ContextTarget, canvasX: number, canvasY: number) => void) | null = null;
   /** Fired after a right-click consumes an open waypoint plan. The host retires its matching planner refs. */
   onWaypointPlanCancel: (() => void) | null = null;
+  /** Astra pass 4 (10-05): the quick second right-click on empty grass is consumed here as a full reset and never
+   *  reaches onContextMenu; the host hears about it so its own right-click cancels (a pending player switch) run. */
+  onRightClickReset: (() => void) | null = null;
   /** Path indices that are JUMPS (over a downed player) rather than steps. */
   private jumpSteps = new Set<number>();
   /** Double right-click window (B2-1): two quick right-clicks = full reset. */
@@ -4321,6 +4359,7 @@ export class PitchRenderer {
       tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt());
       this.redrawBlockPreviewOnDecorChange();
       this.replaceActiveMarkerOnDecorChange();
+      this.syncKickBallLayer(); // a kick tween just ended (or began): re-seat the ball this frame
     });
     // Unified Auto Director runs after visual movement advances, so it follows the
     // presented token/ball rather than an immediate-apply model endpoint.
@@ -4827,11 +4866,13 @@ export class PitchRenderer {
       this.setupZoneLayer, // owner 2026-07-04: setup zone shading, under players
       this.overlayLayer,
       this.marksLayer, // owner 2026-07-04f: persistent square marks (under tokens)
+      this.dugoutGroundLayer, // owner 10-05: dugout floor + band text, under the tokens (and the kick-off ball)
       this.tokenLayer,
       this.pathLayer,
       this.dugoutLayer,
       this.markingLayer, // owner 09-15: skill markings over every token, on-pitch and in the dugout
       this.turnTrackLayer, // owner 2026-07-07: SW turn/score/re-roll track
+      this.kickBallLayer, // owner 10-05: an airborne kick-off ball, over the dugouts (the trail is in effectsLayer above)
       this.effectsLayer, // F-5 transient effects — never cleared by refresh
     );
     app.stage.addChild(this.backdropLayer); // B2-11: behind everything
@@ -4930,6 +4971,7 @@ export class PitchRenderer {
     this.onActionModeChange = null;
     this.onContextMenu = null;
     this.onWaypointPlanCancel = null;
+    this.onRightClickReset = null;
     this.onBlockConfirm = null;
     this.onActionRejected = null;
     this.onCue = null;
@@ -5311,7 +5353,13 @@ export class PitchRenderer {
     for (const child of this.tokenLayer.removeChildren()) {
       if (!child.destroyed) child.destroy({ children: true });
     }
+    for (const child of this.kickBallLayer.removeChildren()) {
+      if (!child.destroyed) child.destroy({ children: true });
+    }
     for (const child of this.dugoutLayer.removeChildren()) {
+      if (!child.destroyed) child.destroy({ children: true });
+    }
+    for (const child of this.dugoutGroundLayer.removeChildren()) {
       if (!child.destroyed) child.destroy({ children: true });
     }
     this.playersBySquare.clear();
@@ -5398,6 +5446,9 @@ export class PitchRenderer {
     // texture destruction stays opt-in in Pixi's destroy().
     for (const child of this.tokenLayer.removeChildren()) {
       if (child !== preservedPresentationToken) child.destroy({ children: true });
+    }
+    for (const child of this.kickBallLayer.removeChildren()) {
+      if (!child.destroyed) child.destroy({ children: true });
     }
     this.playersBySquare.clear();
     this.tokensById.clear();
@@ -6017,7 +6068,7 @@ export class PitchRenderer {
           // Owner 2026-07-08: punt stays on its byte-preserved refresh-driven ball-token path.
           const p0 = squareAnchor(pt.from[0], pt.from[1]);
           const target = { x: g.position.x, y: g.position.y }; // current landing anchor (keeps ball offset)
-          this.moveTweens.set('__ball__', { token: g, waypoints: [p0, target], style: 'slide', start: pt.start, segmentMs: pt.durationMs, arc: KICK_ARC_PX });
+          this.moveTweens.set('__ball__', { token: g, waypoints: [p0, target], style: 'slide', start: pt.start, segmentMs: pt.durationMs, arc: KICK_ARC_PX, kickAir: true });
           if (!carrier) this.addTrailEcho(ball[0], ball[1], 0x22d3ee, 0x0a2a30);
         }
       } else if (this.holdBallDuringInjury && !carrier && prevBall && (prevBall[0] !== ball[0] || prevBall[1] !== ball[1])) {
@@ -6075,6 +6126,7 @@ export class PitchRenderer {
               token: g, waypoints: [edge, apex], style: 'slide',
               start: this.kickInFlyStart, segmentMs: presentationMs(KICK_FLYIN_MS), arc: KICK_ARC_PX,
               baseScale: g.scale.x, growTo: KICK_BALL_GROW, growMode: 'up', // grow toward the apex
+              kickAir: true,
             });
           } else {
             g.position.set(apex.x, apex.y); // flight complete — hang at the apex
@@ -6121,6 +6173,7 @@ export class PitchRenderer {
       if (!heldKickIn && !arcActive) this.lastBallOnPitch = true;
       this.ballEverRendered = true;
       this.lastCarrierId = carrier?.playerId ?? null;
+      this.syncKickBallLayer(); // owner 10-05: an airborne kick ball draws over the dugouts
 
       // Ball-carrier marker (owner 2026-07-02, queue item 9): halo under the
       // carrier + bobbing down-arrow with "BALL" above the head, KO-marker
@@ -7144,6 +7197,15 @@ export class PitchRenderer {
   /** Owner 09-27: host-facing form of the 09-23 probe. Live play runs the order-66 tile route (the legacy planner
    *  below is off there), so the view asks before it plots, extends or commits a walk. `progress` is the token's
    *  rendered position — a host holding clicks on this can fail open once nothing on screen is advancing. */
+  /** Owner 10-05: has this player's token ARRIVED on that square on screen (drawn there, no move tween running)?
+   *  The pickup die waits for this. Fail-open: an unknown / rebuilt token counts as arrived. */
+  playerDrawnAt(playerId: string, square: readonly [number, number]): boolean {
+    const token = this.tokensById.get(playerId);
+    if (!token || token.destroyed) return true;
+    if (this.moveTweens.has(playerId)) return false;
+    const rest = this.tokenPos(square[0], square[1]);
+    return Math.hypot(token.position.x - rest.x, token.position.y - rest.y) <= PLAYER_ARRIVED_PX;
+  }
   movementOnScreen(playerId: string): { inFlight: boolean; progress: string } {
     const token = this.tokensById.get(playerId);
     const progress = token && !token.destroyed ? `${Math.round(token.position.x)},${Math.round(token.position.y)}` : '';
@@ -9251,9 +9313,11 @@ export class PitchRenderer {
    */
   private drawDugouts(): void {
     for (const child of this.dugoutLayer.removeChildren()) child.destroy({ children: true });
+    for (const child of this.dugoutGroundLayer.removeChildren()) child.destroy({ children: true });
     this.dugoutTokensById.clear();
     this.dugoutCompartmentById.clear();
     this.dugoutLayer.sortableChildren = true;
+    this.dugoutGroundLayer.sortableChildren = true;
     this.dugoutHits = []; // owner 2026-07-08: rebuilt below for the direct dugout click hit-test
     if (!this.game || !this.dugoutsEnabled || this.boardCleared) return; // owner 2026-07-15: clear the board at end of game
     // Sections run from each team's OWN end zone toward the line of
@@ -9402,7 +9466,7 @@ export class PitchRenderer {
       // decor that isn't doing anything" cluttering the dugout. The functional dugout
       // (stone ground, team trim, section separators, labels, player tokens) stays.
       ground.zIndex = -1;
-      this.dugoutLayer.addChild(ground);
+      this.dugoutGroundLayer.addChild(ground);
 
       const offPitch = this.game.fieldModel.playerDataArray.filter(
         (d) => team.playerArray.some((p) => p.playerId === d.playerId)
@@ -9424,7 +9488,7 @@ export class PitchRenderer {
         band.poly(bandQuad).fill({ color: isHome ? 0x1a3a9a : 0x9a1a1a, alpha: physicalChrome ? 0.64 : 0.9 });
         if (physicalChrome) band.poly(bandQuad).stroke({ color: trim, width: 1.3, alpha: 0.9 });
         band.zIndex = -0.5;
-        this.dugoutLayer.addChild(band);
+        this.dugoutGroundLayer.addChild(band);
 
         // Owner 09-14: 4x raster + linear filtering — the band text read low-res under the camera zoom (marking-text rule).
         const label = new Text({ text: section.label, style: DUGOUT_LABEL_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
@@ -9433,8 +9497,17 @@ export class PitchRenderer {
         label.rotation = pitchTextRotation(labelRow, columns[1]!); // owner 09-10: E-W turns the band text with the pitch
         const mid = squareAnchor(labelRow, columns[1]!);
         label.position.set(mid.x, mid.y);
+        // Owner 10-05: "Dugouts in east-west mode are not quite lined up correctly" - the band is a perspective slab
+        // that leans toward the pitch centre, but its text was turned exactly 90 degrees and ran straight up the
+        // screen, drifting across the band. In E-W the text now runs along the band's own centreline and sits on
+        // the band's centre.
+        if (getOrientation() === 'ew') {
+          const alongBand = dugoutBandTextRotation(bandQuad, label.rotation);
+          label.rotation = alongBand.rotation;
+          label.position.set(alongBand.x, alongBand.y);
+        }
         label.zIndex = 0;
-        this.dugoutLayer.addChild(label);
+        this.dugoutGroundLayer.addChild(label);
 
         // #129/#331 (owner 08-17, superseded): the standalone bench sprite is replaced by the
         // labeled APOTHECARY box on the turn-track margin (drawApothecaryBox) — the token now
@@ -11885,6 +11958,22 @@ export class PitchRenderer {
    *  edge" is automatic in every orientation (N-S top/bottom, E-W left/right, flat).
    *  The moving visual ball temporarily becomes the unified Auto Director target;
    *  it uses the same 1/2/3-square policy as a moving player. */
+  /** Owner 10-05 / Astra: seat the ball sprite in the layer its LIVE state calls for. Called from refresh() and at the
+   *  end of every tween tick, so there is no landing timer or deadline to go stale: a re-kick, a refresh mid-flight
+   *  or a rebuilt sprite are all just "what is the ball doing now". */
+  private syncKickBallLayer(): void {
+    const g = this.renderedBall;
+    if (!g || g.destroyed) return;
+    const tween = this.moveTweens.get('__ball__');
+    const airborne = kickBallAirborne({
+      carried: this.lastCarrierId != null,
+      hanging: this.kickApexAim != null,
+      airTween: !!tween && tween.token === g && tween.kickAir === true,
+    });
+    const want = airborne ? this.kickBallLayer : this.tokenLayer;
+    if (g.parent !== want && (g.parent === this.kickBallLayer || g.parent === this.tokenLayer)) want.addChild(g);
+  }
+
   private animateKickIn(g: Container, landing: [number, number], targetPos: { x: number; y: number }): void {
     const aim = this.pendingKickAim ?? landing;
     this.pendingKickAim = null;
@@ -11900,7 +11989,7 @@ export class PitchRenderer {
     this.startMoveTween('__ball__', g, edge, aim, KICK_ARC_PX, presentationMs(KICK_FLYIN_MS));
     const tween = this.moveTweens.get('__ball__');
     // grow to the apex (mid-flight) then shrink back as it drops to the aim
-    if (tween) { tween.baseScale = g.scale.x; tween.growTo = KICK_BALL_GROW; tween.growMode = 'arc'; }
+    if (tween) { tween.baseScale = g.scale.x; tween.growTo = KICK_BALL_GROW; tween.growMode = 'arc'; tween.kickAir = true; }
     // B0: the persistent target crosshair clears once the ball has LANDED
     const flyClearMs = presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS) + bounceMs + presentationMs(KICK_CLEAR_TAIL_MS);
     this.kickInVisualUntil = performance.now() + flyClearMs; // #59a: suppress the carrier-clear until this landing
@@ -11980,6 +12069,7 @@ export class PitchRenderer {
       style: 'slide',
       start: performance.now(),
       segmentMs: presentationMs(KICK_DESCENT_MS),
+      kickAir: true,
       // shrink from the apex size back to 1× as the ball falls (g starts at base·grow here)
       baseScale: g.scale.x / KICK_BALL_GROW, growTo: KICK_BALL_GROW, growMode: 'down',
     });
@@ -12950,7 +13040,11 @@ export class PitchRenderer {
   /** On-pitch action d6 (owner 2026-07-03 r3): pop a die showing `value` (1–6)
    *  NEXT TO the given square (upper-right corner), animated in/hold/out. Driven
    *  from the report stream on skill/agility rolls (pickup, dodge, GFI, catch…). */
-  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean): void {
+  showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number, rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean): void {
+    // Owner 10-05: a reroll OFFER is open for this failed roll - the die and its cause marker stay until the offer
+    // is answered (accepted: the die re-rolls in place and keeps its marker; declined / cleared: both fade together).
+    // `opponentRerollPending` (the watching seat) additionally hides the needed roll on the FAILED plate, as before.
+    const holdForRerollOffer = !!opponentRerollPending || !!rerollOfferPending;
     if (!this.app || !isOnPitch(square) || !isD6FaceValue(value)) return;
     const [x, y] = square;
     const anchor = squareAnchor(x, y);
@@ -12977,7 +13071,7 @@ export class PitchRenderer {
       persisted.start = now - presentationMs(ACTION_DIE_IN_MS); // already popped in: hold restarts, no re-pop
       persisted.value = value;
       persisted.failed = !!failed;
-      persisted.holdForOpponentReroll = opponentRerollPending;
+      persisted.holdForOpponentReroll = holdForRerollOffer;
       persisted.holdUntilTurnover = !!failed;
       persisted.splashSuspendMs = 0;
       persisted.node.alpha = 1;
@@ -13000,7 +13094,7 @@ export class PitchRenderer {
       node: die,
       baseScale: scale,
       start: now,
-      holdForOpponentReroll: opponentRerollPending,
+      holdForOpponentReroll: holdForRerollOffer,
       // owner 09-06: a failed RE-ROLL stays up until the turnover splash (releaseDiceAtTurnover), not one tick.
       holdUntilTurnover: !!(rerollSkill && failed),
       square: [x, y],
@@ -13145,7 +13239,36 @@ export class PitchRenderer {
 
   /** Keep the opponent's original failed die readable for as long as the server-owned
    * reroll offer is live. Once that dialog closes, resume at the normal fade boundary. */
+  /** Owner 10-05 ("let's pin that die"): an accepted reroll's result is on its way. The failed die held for the
+   *  offer is NOT released when the reroll dialog closes; it waits for the result, which re-rolls it in place with
+   *  its cause marker. Fail-open: the pin expires by itself, so a result that never arrives cannot strand a die. */
+  private rerollResultPinUntil = 0;
+  setRerollResultPending(pending: boolean): void {
+    if (pending) {
+      this.rerollResultPinUntil = performance.now() + presentationMs(REROLL_RESULT_PIN_CAP_MS);
+      // the cap is autonomous: at expiry the pin drops and anything still held for a closed offer is released
+      const until = this.rerollResultPinUntil;
+      this.scheduleTimer(() => { if (this.rerollResultPinUntil === until) this.setRerollResultPending(false); }, presentationMs(REROLL_RESULT_PIN_CAP_MS) + 20);
+      return;
+    }
+    if (this.rerollResultPinUntil === 0) return;
+    this.rerollResultPinUntil = 0;
+    // the result has landed (or the pin was dropped): anything still held for a closed offer fades now
+    const dialog = (this.game as { dialogParameter?: { dialogId?: unknown } | null } | null)?.dialogParameter;
+    const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!dialogId.includes('reroll')) this.releaseOpponentRerollDice();
+  }
+  /** Astra round 4: is a FAILED action die already showing on that square (the roll's own die)? */
+  hasFailedDieAt(square: readonly [number, number]): boolean {
+    return this.actionDice.some((d) => d.failed && !d.node.destroyed && d.square && d.square[0] === square[0] && d.square[1] === square[1]);
+  }
+  /** Astra round 4: fail-open release of the reroll-offer hold, for when the coach's prompt is gone but the server's
+   *  dialog-clearing frame never arrived (a lost connection). Respects an accepted reroll's pin. */
+  releaseRerollOfferHold(): void {
+    this.releaseOpponentRerollDice();
+  }
   private releaseOpponentRerollDice(): void {
+    if (performance.now() < this.rerollResultPinUntil) return; // pinned for an accepted reroll's result
     const now = performance.now();
     const holdBoundary = presentationMs(ACTION_DIE_IN_MS + ACTION_DIE_HOLD_MS);
     for (const die of this.actionDice) {
@@ -16542,6 +16665,12 @@ export class PitchRenderer {
     this.moveTrailCount.clear();
     this.clearTrailNumbers();
   }
+  /** Owner 10-05 / Astra: drop the VISIBLE step numbers only. The per-activation counters stay, so a Blitz that keeps
+   *  moving after its block goes on counting (no fresh origin "0", no restart at 1). clearMoveTrail() - the turn-end
+   *  clear - still resets both. */
+  clearMoveTrailMarks(): void {
+    this.clearTrailNumbers();
+  }
 
   /** B3-3: builds the movement tween for the active moveStyle. slide/trail
    *  take one segment; walk/hop step through each intermediate square
@@ -18793,6 +18922,7 @@ export class PitchRenderer {
         if (quickSecond) {
           this.setPath([]);
           this.clearSelection(); // full reset
+          this.onRightClickReset?.();
           return;
         }
         // Owner 2026-07-04f: an empty square with no plotted path → the Mark… menu.

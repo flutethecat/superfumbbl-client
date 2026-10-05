@@ -22,6 +22,7 @@ import AccountSettings from './components/AccountSettings.vue';
 import { FORK_EDITION } from './game/edition';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
+import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import { detectDevMode } from './game/devMode';
@@ -285,6 +286,11 @@ onMounted(async () => {
 });
 function openUpdateRelease(): void { const p = updatePrompt.value; if (!p) return; void openExternal(p.url); updatePrompt.value = null; }
 
+// Beta launch splash (owner 10-05): FIRST on EVERY launch, both editions, ahead of the intro / legal /
+// contributions cards. Plain in-memory ref — never persisted, so it re-shows on each app start. It is part
+// of the first-open gate, so the shell stays unmounted and JNLPs stay held until it is dismissed.
+const betaSplashOpen = ref(true);
+
 // Legal acceptance is a revisioned launch gate rather than a dismissible preference. Missing or
 // malformed persistence fails closed, including for existing installs that predate this field.
 // The normal shell is not mounted and native JNLP requests are held in memory until the explicit
@@ -296,7 +302,7 @@ const legalNoticeOpen = computed(() => legalNoticeBusy.value || needsLegalAcknow
 // a failed persist closes it anyway (it simply reappears next launch).
 const CONTRIBUTIONS_VERSION = 1;
 const contributionsOpen = computed(() => !legalNoticeOpen.value && settings.contributionsSeenVersion < CONTRIBUTIONS_VERSION);
-const firstOpenGateOpen = computed(() => legalNoticeOpen.value || contributionsOpen.value);
+const firstOpenGateOpen = computed(() => betaSplashOpen.value || legalNoticeOpen.value || contributionsOpen.value);
 async function continueContributions(): Promise<void> {
   settings.contributionsSeenVersion = CONTRIBUTIONS_VERSION;
   try {
@@ -315,7 +321,8 @@ const INTRO_VIDEO_URL = '/intro.mp4';
 const introVideo = ref<HTMLVideoElement | null>(null);
 const introDone = ref(false);
 const introNeedsGesture = ref(false);
-const introOpen = computed(() => legalNoticeOpen.value && !introDone.value);
+// Held behind the beta splash: no autoplay, and no window Esc/Enter/Space listener that could skip it.
+const introOpen = computed(() => !betaSplashOpen.value && legalNoticeOpen.value && !introDone.value);
 function finishIntro(): void {
   introDone.value = true;
   introNeedsGesture.value = false;
@@ -1976,6 +1983,12 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">Refunds an untouched declaration. After the server confirms any movement, action,
               skill, or effect was consumed, the click ends the current activation without activating the next player.</p>
+            <label class="row" data-testid="defer-friendly-switch-end">
+              <input v-model="settings.deferFriendlySwitchEnd" type="checkbox" :disabled="!settings.friendlyPlayerSwitch" />
+              <span>Hold the previous player's end until the new player is activated</span>
+            </label>
+            <p class="hint">The first click on another player sends nothing. The previous player's activation ends
+              when you click the new player a second time. Clicking anywhere else, right click or Esc cancels.</p>
             <label class="row">
               <input v-model="settings.leftClickOpensContextMenu" type="checkbox" />
               <span>Left click opens context menu</span>
@@ -3272,6 +3285,7 @@ function captureKey(event: KeyboardEvent) {
       <div class="version-stamp" :title="`build ${gitSha}`">v{{ appVersion }}</div>
     </div>
   </main>
+  <BetaLaunchSplash v-else-if="betaSplashOpen" @dismiss="betaSplashOpen = false" />
   <div v-else-if="introOpen" class="intro-splash" role="dialog" aria-label="Super FUMBBL intro">
     <video
       ref="introVideo"

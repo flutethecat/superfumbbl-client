@@ -2,6 +2,7 @@ import { createApp } from 'vue';
 import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import App from './App.vue';
 import { initCredentials } from './game/credentials';
+import { installFocusClickGuard } from './game/focusClickGuard';
 import { initSettingsFile, settings } from './game/settings';
 import {
   assetMods,
@@ -56,6 +57,8 @@ async function boot() {
   } catch (error) {
     console.warn('SNES font failed to load — brand text falls back to Nuffle', error);
   }
+  // Owner 10-05: the click that brings an unfocused window back is not an order - it is dropped; the next one counts.
+  installFocusClickGuard();
   createApp(App).mount('#app');
 }
 

@@ -16,6 +16,8 @@ export interface ActionDieRoll {
   rerollSkill?: string;
   rerollTeam?: boolean;
   opponentRerollPending?: boolean;
+  /** Owner 10-05: the ROLLING coach's own failed roll while their reroll offer is open (same hold, own seat). */
+  rerollOfferPending?: boolean;
 }
 
 /** The turnover splash object the store publishes (subset of `state.turnover`). */
@@ -24,7 +26,7 @@ export interface TurnoverSplash { seq: number }
 /** The renderer surface the lifecycle drives (a subset of PitchRenderer). */
 export interface ActionDiceRenderer {
   showActionDie(square: [number, number], value: number, cause?: string, failed?: boolean, needed?: number,
-    rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean): void;
+    rerollSkill?: string, rerollTeam?: boolean, opponentRerollPending?: boolean, rerollOfferPending?: boolean): void;
   releaseDiceAtTurnover(): void;
   clearActionDice(): void;
   setTurnoverSplashShowing(showing: boolean): void;
@@ -72,8 +74,10 @@ export function createActionDiceLifecycle(deps: ActionDiceLifecycleDeps): Action
     const dialogId = deps.currentDialogId();
     for (const roll of rolls) {
       const opponentRerollPending = opponentRerollHoldAtShow(roll.opponentRerollPending, dialogId);
+      // the same re-validation for the rolling coach's own offer: a deferred show after the offer closed takes no hold
+      const rerollOfferPending = opponentRerollHoldAtShow(roll.rerollOfferPending, dialogId);
       renderer.showActionDie(roll.square, roll.value, roll.cause, roll.failed, roll.needed,
-        roll.rerollSkill, roll.rerollTeam, opponentRerollPending);
+        roll.rerollSkill, roll.rerollTeam, opponentRerollPending, rerollOfferPending);
     }
   };
 

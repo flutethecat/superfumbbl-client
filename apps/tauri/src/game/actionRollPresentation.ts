@@ -44,7 +44,7 @@ export function dodgeUsedBreakTackle(report: Readonly<Record<string, unknown>>):
     && dieCauseFromRollModifiers(report.rollModifiers) === 'breakTackle';
 }
 
-export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean }
+export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }
 export interface ActionRollCue {
   reRolled: boolean;
   die: ActionDieCue | null;
@@ -83,7 +83,15 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   result.die = { square, value: roll, cause, failed, needed,
     rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined };
-  if (failed && passiveViewer && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
-    && offeredReRollOptions(dialog ?? {}, playerById(game, playerId)?.skillDisplayValuesMap).length > 0) result.die.opponentRerollPending = true;
+  // Owner 10-05: "The marker that says GFI, Dodge, etc, should persist on a failed roll until the roll is either
+  // accepted or cleared. Teardown should occur at the same time as the die." The failed die (with its cause marker)
+  // was held through the reroll offer only on the WATCHING client; the rolling coach's own die faded after its
+  // normal ~1.6 s while their reroll prompt was still open, and an accepted reroll then drew a fresh die without
+  // the cause. Both seats now hold it for as long as the server's reroll offer for that player is open.
+  if (failed && dialogId.includes('reroll') && String(dialog?.playerId ?? '') === playerId
+    && offeredReRollOptions(dialog ?? {}, playerById(game, playerId)?.skillDisplayValuesMap).length > 0) {
+    if (passiveViewer) result.die.opponentRerollPending = true;
+    else result.die.rerollOfferPending = true;
+  }
   return result;
 }

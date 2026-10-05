@@ -557,6 +557,15 @@ const legacyState = reactive({
   plannerRevision: 0,
   /** #107/#119: move-trail CLEAR pulse — bumped at the received turnEnd frame (the server IS the signal, not a timer — ⚖ Voss); view calls renderer.clearMoveTrail(). Side-agnostic. */
   moveTrailClearSeq: 0,
+  /** Owner 10-05 ("let's pin that die"): a reroll was ACCEPTED and its result is staged behind the reroll beat /
+   *  splash. While set, the failed die held for the offer stays pinned (the closed dialog no longer releases it),
+   *  so the result re-rolls that die in place and keeps its GFI / Dodge marker. Cleared just after the result is
+   *  surfaced; the renderer carries its own fail-open cap. */
+  rerollResultPending: null as { seq: number } | null,
+  /** Owner 10-05: a block that knocked a player down has finished resolving - the movement marks left on the pitch
+   *  (the blocker's step numbers, the follow-up's, either side's) are cleared. Server-derived: pulsed when the
+   *  server clears the block's defender with the attacker or the defender off their feet. */
+  blockDownTrailClear: null as { seq: number; playerIds: string[] } | null,
   /** #111 option-B / spec-207 D-4: HELD block-commit awaiting the flavor choice. Blitz holds its planner act; a standalone block holds before its direct send. */
   // Owner 09-28 (Sol review round 3, item 2): armedAction (optional) is the acting player's playerAction recorded
   // at arm time — present only on a hold armed via holdBlitzBlockChoice; absent (undefined) on the standalone
@@ -585,7 +594,7 @@ const legacyState = reactive({
    * survives a reconnect and its setters early-return on unchanged values, so nothing repainted until a click). */
   snapshotEpoch: 0,
   /** Owner 07-03 r3: single-die skill/agility rolls this frame — a d6 pops at each acting square (pickup/dodge/GFI/catch/pass…). */
-  actionDice: null as { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean }[]; seq: number } | null,
+  actionDice: null as { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[]; seq: number } | null,
   /** o66 #7: PASS/CATCH roll as an over-head MODAL (passRoll.playerId = passer, catchRoll.playerId = catcher — the modal lands on the right head). */
   rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; seq: number } | null,
   /** #18a: DERIVED each frame, not latched (Meero C-18a): opponent is the block-dice decider — keyed on the dialog's `choosingTeamId` so a Side-Step defender's OWN pick suppresses it. Existence-only, never the dice values. */
@@ -1284,7 +1293,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
   'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
-  'blockPartial', 'kickScatterPreview', 'kickTargetReveal',
+  'blockPartial', 'kickScatterPreview', 'kickTargetReveal', 'blockDownTrailClear', 'rerollResultPending',
 ] satisfies (keyof typeof legacyState)[]);
 const spectatorTransientState = reactive<Record<string, unknown>>({});
 function clearSpectatorTransientState(): void {
@@ -1655,6 +1664,21 @@ function rockThrowResolving(): boolean {
   return decision === 'hold';
 }
 
+/** Owner 10-05: did a block just finish (its defender cleared by the server this frame) with the attacker or the
+ *  defender no longer on their feet? Base states: 1 standing, 2 moving; anything else on either player (prone,
+ *  stunned, KO, casualty, off the pitch) is a knock-down outcome. */
+export function blockSequenceEndedWithKnockdown(game: GameJson | null | undefined, preDefenderId: string, attackerId: string): boolean {
+  if (!game || !preDefenderId || String((game as { defenderId?: string | null }).defenderId ?? '') !== '') return false;
+  const down = (playerId: string): boolean => {
+    if (!playerId) return false;
+    const data = game.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId) as { playerState?: number } | undefined;
+    if (!data) return false;
+    const base = Number(data.playerState ?? 0) & 0xff;
+    return base !== 1 && base !== 2;
+  };
+  return down(preDefenderId) || down(attackerId);
+}
+
 /** Raise the turnover splash for `side` after an authoritative non-TD turnEnd and other anims settle, then auto-clear (sad-trombone sting). */
 function showTurnover(
   side: 'home' | 'away',
@@ -1852,6 +1876,9 @@ const PICKUP_BEAT_MS = 950;
 const REROLL_BEAT_MS = 1100; // the reroll splash reads before the re-rolled result (spectate drain hold)
 // Owner 2026-07-08 (rev 7): when the SPECTATOR watched the coach's reroll dialog, the coach's pick GLOWS activation-gold for this long before the rest of the events (splash, re-rolled result, downstream) render.
 let rerollStageTimers: ReturnType<typeof setTimeout>[] = [];
+/** After the staged reroll result is surfaced, how long the pin outlives it: the view may still defer the die's
+ *  show for a camera pan, and the result must find the held die before the pin lets it fade. */
+const REROLL_RESULT_PIN_TAIL_MS = 900;
 /** Owner 07-06/08: the reroll mini splash — names the SOURCE used; TRR keeps its icon. */
 function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = true, raw?: string) { // owner 09-06: copy
   const g = game.value;
@@ -3642,6 +3669,7 @@ async function pauseSpectatorView(): Promise<void> {
   let transitionKickoffBefore: Pick<GameJson, 'turnMode' | 'homePlaying'> = {
     turnMode: checkpoint.model.turnMode, homePlaying: checkpoint.model.homePlaying,
   };
+  let transitionBlockDownPlayers: string[] | null = null;
   let transitionBlockCard = checkpoint.durableProjection.blockCard
     ? structuredClone(checkpoint.durableProjection.blockCard) : null;
   // Owner 09-14: the choice reveal after GO TO LIVE must sit on the block's defender square; the live model has
@@ -3667,6 +3695,15 @@ async function pauseSpectatorView(): Promise<void> {
         turnMode: (previous?.model ?? position.model).turnMode,
         homePlaying: (previous?.model ?? position.model).homePlaying,
       };
+      // Owner 10-05 / Astra: live review publishes positions without applyFrame, so the block knock-down cleanup
+      // pulse is derived here from the same previous -> current model transition (never on a seek / snapshot).
+      {
+        const beforeModel = previous?.model as { defenderId?: string | null; actingPlayer?: { playerId?: string | null } } | undefined;
+        const beforeDefenderId = String(beforeModel?.defenderId ?? '');
+        const beforeActingId = String(beforeModel?.actingPlayer?.playerId ?? '');
+        transitionBlockDownPlayers = !snap && previous && blockSequenceEndedWithKnockdown(position.model, beforeDefenderId, beforeActingId)
+          ? [beforeActingId, beforeDefenderId].filter(Boolean) : null;
+      }
       transitionBlockCard = previous?.durableProjection.blockCard
         ? structuredClone(previous.durableProjection.blockCard) : null;
       transitionBlockDefenderSquare = previous?.durableProjection.block.defenderSquare
@@ -3747,6 +3784,10 @@ async function pauseSpectatorView(): Promise<void> {
           () => { state.masterChefSplash = { ...chef, seq: (state.masterChefSplash?.seq ?? 0) + 1 }; },
           () => { state.masterChefSplash = null; }, PREGAME_CINE_GAP_MS);
       };
+      if (transitionBlockDownPlayers) {
+        state.blockDownTrailClear = { seq: (state.blockDownTrailClear?.seq ?? 0) + 1, playerIds: transitionBlockDownPlayers };
+        transitionBlockDownPlayers = null;
+      }
       const blockOutcome = blockOutcomePresentation(reports, position.model, {
         ...position.durableProjection.block, previousDice: transitionBlockCard?.dice,
       });
@@ -3921,6 +3962,8 @@ async function pauseSpectatorView(): Promise<void> {
         || (!!projectile.fireball && wireSound === projectile.fireball.sound)
       );
       if (!projectileOwnsWireSound) playSound(wireSound);
+      const reviewRerollPin = rerolledRolls.length > 0 ? { seq: (state.rerollResultPending?.seq ?? 0) + 1 } : null;
+      if (reviewRerollPin) state.rerollResultPending = reviewRerollPin;
       const staged = await presentStages([
         { delayBefore: 0, present: () => showRolls(firstRolls) },
         { delayBefore: failBeat, present: () => {
@@ -3930,10 +3973,16 @@ async function pauseSpectatorView(): Promise<void> {
         { delayBefore: resultBeat, present: () => {
           if (reroll?.lonerFailed) showLonerFailedSplash(reroll.pid);
           showRolls(rerolledRolls);
+          // Astra round 4: live review pins the held failed die for the accepted reroll's result as live play does
+          // (raised below, before the first stage); it is released shortly after the result has been shown.
+          if (reviewRerollPin) {
+            const pin = reviewRerollPin;
+            scheduleGameTimeout(() => { if (state.rerollResultPending?.seq === pin.seq) state.rerollResultPending = null; }, presentationMs(REROLL_RESULT_PIN_TAIL_MS));
+          }
         } },
         ...(reroll?.lonerFailed ? [{ delayBefore: presentationMs(REROLL_SPLASH_HOLD_MS), present: () => {} }] : []),
       ], signal);
-      if (!staged) return;
+      if (!staged) { if (reviewRerollPin && state.rerollResultPending?.seq === reviewRerollPin.seq) state.rerollResultPending = null; return; }
       if (projectile) {
         if (projectile.unknownAnimationType && !warnedAnimationTypes.has(projectile.unknownAnimationType)) {
           warnedAnimationTypes.add(projectile.unknownAnimationType);
@@ -6297,6 +6346,7 @@ function applyFrameContents(frame: QueuedFrame) {
   let sppGainsThisFrame: SppGainPart[] = [];
   const preActing = game.value.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
   const preActingId = String(preActing?.playerId ?? '');
+  const preDefenderId = String((game.value as { defenderId?: string | null }).defenderId ?? '');
   const preMovementUsedRaw = Number(preActing?.currentMove);
   const changes = (cmd.modelChangeList as { modelChangeArray?: {
     modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown;
@@ -6414,6 +6464,11 @@ function applyFrameContents(frame: QueuedFrame) {
   }
   // #10 pt-2: latch "recovering" on STUNNED→PRONE(+!active), hold while PRONE+!active, clear on leaving — the stun X persists through the missed turn without false-marking a wrestled player.
   state.recoveringPlayers = reduceRecoveringPlayers(state.recoveringPlayers, preStunned, game.value);
+  // Owner 10-05: the server has just cleared this block's defender - the block is resolved. If it put the attacker
+  // or the defender on the ground, the movement marks go (both sides, every seat).
+  if (!playback.catchingUp && blockSequenceEndedWithKnockdown(game.value, preDefenderId, preActingId)) {
+    state.blockDownTrailClear = { seq: (state.blockDownTrailClear?.seq ?? 0) + 1, playerIds: [preActingId, preDefenderId].filter(Boolean) };
+  }
   // Per-square walk detection (adjacent on-pitch→on-pitch only): Order 66 live play and full-presentation
   // replay route the ACTING player's steps through the #67 PRESENTATION DRAIN (DD-1 snapshot, per-tile gated;
   // scoped to acting so a same-frame pushback isn't mis-read). Other live paths keep the C3 holdPlayback stagger.
@@ -7433,7 +7488,7 @@ function applyFrameContents(frame: QueuedFrame) {
   {
     const onPitch = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
     // Owner 2026-07-08: split this frame's action dice into the FIRST rolls and the RE-ROLLED results so a fail→reroll→result burst can be staged sequentially.
-    const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean }[] = [];
+    const firstRolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[] = [];
     const reRolledRolls: typeof firstRolls = [];
     for (const report of reports) {
       const pid = report.playerId;
@@ -7509,6 +7564,13 @@ function applyFrameContents(frame: QueuedFrame) {
       holdPlayback(failBeat + resultBeat);
       if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw), failBeat));
       rerollStageTimers.push(scheduleGameTimeout(() => pushDice(reRolledRolls), failBeat + resultBeat));
+      // Owner 10-05: pin the held failed die until that result has landed on it (then release anything left).
+      if (reRolledRolls.length > 0 && !playback.catchingUp) {
+        const pin = { seq: (state.rerollResultPending?.seq ?? 0) + 1 };
+        state.rerollResultPending = pin;
+        rerollStageTimers.push(scheduleGameTimeout(() => { if (state.rerollResultPending?.seq === pin.seq) state.rerollResultPending = null; },
+          failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
+      }
       // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
       // reroll splash clears (splash deprecated → after the fail beat + breath) and holds its own read beat.
       if (rr.lonerFailed) {
@@ -8304,6 +8366,25 @@ function pumpPlayback() {
 const TOUCHDOWN_RESOLUTION_HOLD_CAP_MS = 8000;
 const TOUCHDOWN_RESOLUTION_POLL_MS = 50;
 let touchdownResolutionHoldSince = 0;
+/** Owner 10-05 (g1950323, spectating): "The client rendered the handoff to a zombie but immediately switched to setup
+ *  without rendering the zombie's animation into the end zone. The entire token walk needs to be rendered here prior
+ *  to the tear down for setup." The touchdown frame (which also carries the switch to setup and clears the pitch)
+ *  used to apply the instant the last step left the presentation queue - about 100 ms after the scorer's token
+ *  arrived, so the arrival never read. Once the frame has waited behind a walk, it now also waits this beat after the
+ *  walk's last step finished, so the scorer is seen standing in the end zone (viewer-visible rule, 450 ms+). */
+const TOUCHDOWN_ARRIVAL_BEAT_MS = 500;
+let touchdownMovementSeenAt = 0;
+export function touchdownResolutionDecision(input: {
+  movementPending: boolean; now: number; holdSince: number; movementSeenAt: number; capMs: number; arrivalBeatMs: number;
+}): { wait: boolean; holdSince: number; movementSeenAt: number } {
+  const released = { wait: false, holdSince: 0, movementSeenAt: 0 };
+  const movementSeenAt = input.movementPending ? input.now : input.movementSeenAt;
+  // nothing walking, and this frame never waited behind a walk (or its arrival beat has passed): apply now
+  if (!input.movementPending && (movementSeenAt === 0 || input.now - movementSeenAt >= input.arrivalBeatMs)) return released;
+  const holdSince = input.holdSince === 0 ? input.now : input.holdSince;
+  if (input.now - holdSince >= input.capMs) return released; // fail-open: late, never never
+  return { wait: true, holdSince, movementSeenAt };
+}
 function frameResolvesTouchdown(frame: QueuedFrame | undefined): boolean {
   if (!frame || frame.serverPush) return false;
   const reports = (frame.cmd.reportList as { reports?: { reportId?: unknown; playerIdTouchdown?: unknown }[] } | undefined)?.reports;
@@ -8316,17 +8397,19 @@ function movementPresentationPending(): boolean {
 }
 /** True while `frame` must wait behind the movement presentation. Tracks one continuous hold for the cap. */
 function touchdownResolutionMustWait(frame: QueuedFrame | undefined): boolean {
-  if (replay.active || playback.catchingUp || !frameResolvesTouchdown(frame) || !movementPresentationPending()) {
+  if (replay.active || playback.catchingUp || !frameResolvesTouchdown(frame)) {
     touchdownResolutionHoldSince = 0;
+    touchdownMovementSeenAt = 0;
     return false;
   }
-  const now = Date.now();
-  if (touchdownResolutionHoldSince === 0) touchdownResolutionHoldSince = now;
-  if (now - touchdownResolutionHoldSince >= presentationMs(TOUCHDOWN_RESOLUTION_HOLD_CAP_MS)) {
-    touchdownResolutionHoldSince = 0;
-    return false;
-  }
-  return true;
+  const decision = touchdownResolutionDecision({
+    movementPending: movementPresentationPending(), now: Date.now(),
+    holdSince: touchdownResolutionHoldSince, movementSeenAt: touchdownMovementSeenAt,
+    capMs: presentationMs(TOUCHDOWN_RESOLUTION_HOLD_CAP_MS), arrivalBeatMs: presentationMs(TOUCHDOWN_ARRIVAL_BEAT_MS),
+  });
+  touchdownResolutionHoldSince = decision.holdSince;
+  touchdownMovementSeenAt = decision.movementSeenAt;
+  return decision.wait;
 }
 /** Owner 10-02 (g1949371, 1.0.79): "ball bounces on a scattered ball are not paced and render instantaneously in
  *  live play". After a push onto the ball the server sent five bounce frames and five catch-roll frames inside
@@ -8663,6 +8746,7 @@ function resetPlayback() {
   playback.holdUntil = 0;
   playbackBackpressureSince = 0;
   touchdownResolutionHoldSince = 0;
+  touchdownMovementSeenAt = 0;
   ballChainOpen = false;
   ballChainNextApplyAt = 0;
   ballBounceMovementWaitSince = 0;
@@ -8819,6 +8903,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
   state.turnStart = null; clearRerollSplash();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
+  state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
   state.solidDefenceError = null; solidDefenceSelection = null; solidDefenceErrorNr = -1;
   state.sendOff = null; state.sendOffResult = null; clearSendOffWaiting(); sendOffKey = ''; sendOffAnsweredKey = null;
@@ -14584,6 +14669,9 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
   const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
   return actionAllowed(g, ctx, commandActionClass(id));
 }
+/** Commands the transport accepted - counted after session.send returned, past every gate and late refusal (Astra 10-05: lets a caller of a void sender
+ *  such as endActivation() prove its command was really sent before acting on the outcome). */
+let emittedCommandCount = 0;
 function sendCommand(cmd: Record<string, unknown>): boolean {
   if (!play.active || spectatorTransport?.review.source === 'live-review' || !replayAllowsGameCommand(replay.active)) {
     observeOutgoingShadow(cmd, 'dropped');
@@ -14644,6 +14732,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     verboseTee('out', outgoing); // owner 2026-07-07: tee outbound commands actually sent (wire log)
     if (!session) return false;
     session.send(outgoing as never);
+    emittedCommandCount += 1; // Astra pass 3: only after the transport accepted it (past every late refusal above)
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
     // send). Always-allowed commands (concede, time-out call, chat, ping ...) say nothing about the activation.
@@ -23420,6 +23509,8 @@ export const gameStore = {
   },
   clearAcceptedPassSubmission(): void { state.acceptedPassSubmission = null; },
   // Owner ruling 08-05 (game_808): ignore mid-walk self-clicks; two spurious clientActingPlayer{null} sends burned a Dark Elf activation.
+  /** Count of commands actually sent (see emittedCommandCount). */
+  emittedCommandCount(): number { return emittedCommandCount; },
   isPlanWalking(playerId: string): boolean { return plannerPlan != null && plannerPlan.phase === 'moving' && plannerPlan.playerId === playerId; },
   /** ORDER 66 (#6.4): cancel the in-flight plan (e.g. user Esc / right-click clear). */
   cancelPlan() { plannerFlush('cancelled by you'); },

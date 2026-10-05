@@ -60,6 +60,7 @@ import {
 } from '../game/inducementRevealHold';
 import ChargePickPanel from '../components/ChargePickPanel.vue';
 import PitchConfirmationPanel from '../components/PitchConfirmationPanel.vue';
+import { deferredSwitchClick, deferredSwitchFollowUpFresh, deferredSwitchStillValid, type DeferredFriendlySwitch } from '../game/deferredFriendlySwitch';
 import ConfirmActionButton from '../components/ConfirmActionButton.vue';
 import PlayerDetailSkillList from '../components/PlayerDetailSkillList.vue';
 import ApothecaryPrompt from '../components/ApothecaryPrompt.vue';
@@ -2776,6 +2777,51 @@ watchConfirmedMovementPresentation(
   () => renderer,
 );
 
+// Owner 10-05: a block that knocked a player down has resolved - drop the movement marks it left (the blocker's step
+// numbers / follow-up "0", for either coach and for spectators). The follow-up step may still be walking when the
+// server clears the defender, so the clear waits for those two players' on-screen movement to finish (3 s cap).
+let blockDownTrailClearTimer: ReturnType<typeof setTimeout> | null = null;
+watch(() => gameStore.state.blockDownTrailClear?.seq, () => {
+  const pulse = gameStore.state.blockDownTrailClear;
+  if (!pulse || !renderer) return;
+  if (blockDownTrailClearTimer) clearTimeout(blockDownTrailClearTimer);
+  const started = performance.now();
+  const gameId = String(gameStore.game.value?.gameId ?? '');
+  const selectedAtPulse = renderer.getSelectedPlayerId();
+  // Astra round 4: ownership is continuity, not identity. A selection that changed at any point since the pulse is
+  // the coach's own (even if it came back to the same player), and an acting player who has moved on since the
+  // pulse owns the marks now on the pitch.
+  let selectionTouched = false;
+  const movedAtPulse = Number((gameStore.game.value?.actingPlayer as { currentMove?: number } | undefined)?.currentMove ?? 0);
+  const attempt = () => {
+    blockDownTrailClearTimer = null;
+    if (!renderer || gameStore.state.blockDownTrailClear?.seq !== pulse.seq) return;
+    const g = gameStore.game.value;
+    const actingNow = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (renderer.getSelectedPlayerId() !== selectedAtPulse) selectionTouched = true;
+    if (actingNow && Number((g?.actingPlayer as { currentMove?: number } | undefined)?.currentMove ?? 0) > movedAtPulse) return; // moved on: its trail is live
+    // Astra (10-05): this cleanup belongs to ONE block. A different game, or another player's activation that has
+    // started since, owns whatever is on the pitch now - the stale cleanup is discarded, never applied to it.
+    if (!g || String(g.gameId ?? '') !== gameId || (actingNow && !pulse.playerIds.includes(actingNow))) return;
+    const moving = !!gameStore.state.presentationStep || pulse.playerIds.some((id) => renderer!.movementOnScreen(id).inFlight);
+    if (moving) {
+      if (performance.now() - started < 3000) blockDownTrailClearTimer = setTimeout(attempt, 80);
+      return; // past the cap and still moving: leave the marks to the turn-end clear rather than wipe a live walk
+    }
+    renderer.clearMoveTrailMarks(); // marks only: a Blitz that moves on keeps its count
+    // "be sure we're clearing both local and opposition movement": a block player still selected FROM BEFORE the
+    // block (and no longer the server's acting player) is an inspection - its range squares and rush dice go with
+    // the marks. A selection the coach made since is theirs and stays.
+    const selected = renderer.getSelectedPlayerId();
+    if (selected && !selectionTouched && selected === selectedAtPulse && selected !== actingNow && pulse.playerIds.includes(selected)) {
+      renderer.clearSelection();
+      if (o66InspectedOpponent.value === selected) o66InspectedOpponent.value = null;
+    }
+  };
+  attempt();
+});
+onBeforeUnmount(() => { if (blockDownTrailClearTimer) clearTimeout(blockDownTrailClearTimer); });
+
 // Clear move-trail numbers only on the received turnEnd signal.
 watch(
   () => gameStore.state.moveTrailClearSeq,
@@ -2995,6 +3041,30 @@ const actionDiceLifecycle = createActionDiceLifecycle({
   catchingUp: () => gameStore.playbackCatchingUp.value,
 });
 
+// Owner 10-05 ("let's pin that die"): an accepted reroll pins the held failed die until its result lands. sync:
+// the store sets this inside the frame that closes the reroll dialog, and the renderer must know before that
+// frame's setGame would release the die.
+watch(() => gameStore.state.rerollResultPending?.seq ?? null, (seq) => renderer?.setRerollResultPending(seq !== null), { flush: 'sync' });
+// Astra round 4: the hold on MY failed die is released by the server's dialog clearing. If my prompt has gone
+// (answered, declined, connection lost) and that frame never arrives, release it here so it cannot stay forever;
+// an accepted reroll's pin (and its own cap) still protects the in-place reroll.
+const REROLL_OFFER_HOLD_FAILOPEN_MS = 4000;
+let rerollOfferFailOpenTimer = 0;
+watch(() => !!gameStore.state.reRollPrompt, (open, was) => {
+  if (rerollOfferFailOpenTimer) { clearTimeout(rerollOfferFailOpenTimer); rerollOfferFailOpenTimer = 0; }
+  if (open || !was) return;
+  rerollOfferFailOpenTimer = window.setTimeout(() => { rerollOfferFailOpenTimer = 0; renderer?.releaseRerollOfferHold(); }, REROLL_OFFER_HOLD_FAILOPEN_MS);
+});
+onBeforeUnmount(() => { if (rerollOfferFailOpenTimer) clearTimeout(rerollOfferFailOpenTimer); });
+const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
+let pickupDieTimer = 0;
+onBeforeUnmount(() => { if (pickupDieTimer) clearTimeout(pickupDieTimer); });
+/** The player the model has standing on that square (the mover a pickup roll belongs to), or null. */
+function pickupMoverAt(square: readonly [number, number]): string | null {
+  const data = gameStore.game.value?.fieldModel?.playerDataArray?.find((d) => d.playerCoordinate
+    && d.playerCoordinate[0] === square[0] && d.playerCoordinate[1] === square[1]);
+  return data ? data.playerId : null;
+}
 // On-pitch action d6 (owner 2026-07-03 r3) — pop a die with the rolled value
 // next to each acting player's square. Shown regardless of spectator-clean (it's
 // a roll RESULT, not a planner preview).
@@ -3002,6 +3072,9 @@ watch(
   () => gameStore.state.actionDice?.seq,
   () => {
     const a = gameStore.state.actionDice;
+    // Astra round 4: a pending pickup wait belongs to the cue that armed it - ANY newer cue or reset cancels it (the
+    // seq restarts after a reset, so a number alone cannot tell an old cue from a new one).
+    if (pickupDieTimer) { clearTimeout(pickupDieTimer); pickupDieTimer = 0; }
     // Owner 09-28 (S7 v3): a live catch-up / reset nulls state.actionDice — tear the renderer's dice down with it AND
     // neuter any pending deferred show (advance the epoch), so no held die and no stale timer survives the boundary.
     if (!a) { actionDiceLifecycle.onDiceCleared(); return; }
@@ -3014,8 +3087,30 @@ watch(
     // on the ball square (arrive→[beat]→reveal) instead of popping the instant the token lands.
     // ONLY pickups get the beat — dodge/GFI/block/catch keep their timing. ⚖ delays WHEN a
     // resolved report shows, never what's known; the beat scales with the movement-speed setting.
-    const pickupBeat = a.rolls.some((r) => r.cause === 'pickup') ? presentationMs(settings.moveSpeedMs) : 0;
-    actionDiceLifecycle.onDiceCue(a.rolls, delay + pickupBeat);
+    // Owner 10-05: "I'm seeing the die toast happen early for pickups, this should only occur when the token enters
+    // the square." The beat above was a fixed one-step delay from the roll's ARRIVAL; with several queued steps still
+    // being walked the die popped while the mover was squares away. A pickup die now waits until the mover's token is
+    // drawn on the ball square (polled, 4 s fail-open cap), and is dropped if a newer cue / reset replaced it.
+    const pickup = a.rolls.find((r) => r.cause === 'pickup');
+    const moverId = pickup ? pickupMoverAt(pickup.square) : null;
+    if (!pickup || !moverId) {
+      const pickupBeat = pickup ? presentationMs(settings.moveSpeedMs) : 0; // mover unknown: the old fixed beat
+      actionDiceLifecycle.onDiceCue(a.rolls, delay + pickupBeat);
+      return;
+    }
+    const seq = a.seq;
+    const epoch = actionDiceLifecycle.epoch; // a seek / teardown advances it: the wait dies with its presentation
+    const started = performance.now();
+    const showOnArrival = () => {
+      pickupDieTimer = 0;
+      if (!renderer || gameStore.state.actionDice?.seq !== seq || actionDiceLifecycle.epoch !== epoch) return; // superseded or torn down
+      if (!renderer.playerDrawnAt(moverId, pickup.square) && performance.now() - started < PICKUP_DIE_ARRIVAL_CAP_MS) {
+        pickupDieTimer = window.setTimeout(showOnArrival, 50);
+        return;
+      }
+      actionDiceLifecycle.onDiceCue(a.rolls, Math.max(0, delay - (performance.now() - started)));
+    };
+    showOnArrival();
   },
 );
 
@@ -3546,7 +3641,9 @@ watch(
       at && at[0] >= 0 && at[0] <= 25 && at[1] >= 0 && at[1] <= 14 ? [at[0], at[1]] : null;
     if (sq && renderer) {
       renderer.cinematicZoom(sq, 9000);
-      if (p.roll) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
+      // Astra round 4: the roll's own die (held for this offer, wearing its GFI / Dodge marker) is usually already on
+      // that square - a second, unlabelled die there would take the reroll and leave the labelled one behind.
+      if (p.roll && !renderer.hasFailedDieAt(sq)) renderer.showActionDie(sq, p.roll, undefined, !p.thresholdless, p.needed);
     }
     const follow = () => {
       if (!gameStore.state.reRollPrompt) { rerollMenuPos.ready = false; return; }
@@ -3947,6 +4044,23 @@ const lastAppliedSetupTemplateId = ref<string | null>(null);
 const setupPanelSection = ref<'templates' | 'saved'>('templates');
 const savedSetupsRequested = ref(false);
 const savedSetupsCollapsed = ref(false);
+// Owner 10-05: "Can we add an X to the set up your team panel and saved setups panels to close them in setup mode?"
+// Closing is view-only (nothing is sent). Both come back for every new setup, and the rules card re-opens by
+// itself when the referee rejects the setup - that message must be seen. A small tab re-opens either one.
+const setupCardClosed = ref(false);
+const setupBrowserClosed = ref(false);
+watch(() => !!setupPhase.value, (inSetup, was) => { if (inSetup && !was) { setupCardClosed.value = false; setupBrowserClosed.value = false; } });
+watch(() => (setupPhase.value?.setupErrors.length ?? 0) > 0 || !!solidDefenceError.value, (rejected) => { if (rejected) setupCardClosed.value = false; });
+// Astra (10-05): a SECOND rejection while the first is still showing is true -> true above. Each rejection is its
+// own occurrence: a new server setupError dialog object, or the next Solid Defence error sequence.
+watch(() => gameStore.game.value?.dialogParameter ?? null, (dialog, previous) => {
+  // Astra (10-05): Solid Defence rejections are recognised the same way - by a NEW dialog object. (The store bumps
+  // solidDefenceError.seq on every frame while that dialog stays up, so a watch on it re-opened the card on a mere
+  // correction move.) post flush: the store has projected the rejection for this seat by then.
+  const id = String((dialog as { dialogId?: unknown } | null)?.dialogId ?? '');
+  if (!dialog || dialog === previous) return;
+  if (id === 'setupError' || (id === 'invalidSolidDefence' && solidDefenceError.value)) setupCardClosed.value = false;
+}, { flush: 'post' });
 const savedSetupName = ref('');
 const lastLoadedSavedSetupName = ref<string | null>(null);
 const setupTemplatePanelEl = ref<HTMLElement | null>(null);
@@ -7463,6 +7577,91 @@ watch(() => String((gameStore.game.value?.actingPlayer as { playerId?: string | 
   showFriendlyLeftClickMenu(pending.playerId, pending.x, pending.y);
 }, { flush: 'post' });
 
+// Owner 10-05 (Settings > Mouse, default off): "delay the end activation for the previously used player until a
+// command has been sent on the new one". The first click on another of my players only ARMS the switch (no wire);
+// the previous player's end is sent by the second click on that player, immediately ahead of its declaration.
+const deferredFriendlySwitch = ref<DeferredFriendlySwitch | null>(null);
+/** The declaration that follows a committed switch. It belongs to ONE end: this game, this previous actor, sent by
+ *  this commit - and runs only on that actor's own clear (Astra review 10-05). */
+let deferredSwitchFollowUp: { playerId: string; fromId: string; gameId: string; run: () => void; at: number } | null = null;
+function dropDeferredFriendlySwitch() {
+  deferredFriendlySwitch.value = null;
+  deferredSwitchFollowUp = null;
+}
+/** Right click / Esc: drop an armed switch. Never while a confirmation is open - that prompt owns the gesture (and
+ *  opening one drops the switch anyway, see the watch below). */
+/** The Jump / Leap / Pogo badge. Held under an open confirmation (Astra pass 5, 10-04); and it is the coach
+ *  carrying on with the acting player, so a pending player switch is dropped whether or not the send goes out
+ *  (Astra pass 4, 10-05). */
+function toggleJumpFromBadge() {
+  if (pitchHeldByConfirmation()) return;
+  deferredFriendlySwitch.value = null;
+  gameStore.toggleJump();
+}
+function cancelDeferredFriendlySwitch(): boolean {
+  if (!settings.deferFriendlySwitchEnd || !deferredFriendlySwitch.value || pitchHeldByConfirmation()
+    || gameStore.game.value?.dialogParameter) return false;
+  deferredFriendlySwitch.value = null;
+  return true;
+}
+const deferredSwitchNames = computed(() => {
+  const pending = deferredFriendlySwitch.value; const g = gameStore.game.value;
+  if (!pending || !g) return null;
+  const name = (id: string) => [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === id)?.playerName ?? 'that player';
+  return { to: name(pending.playerId), from: name(pending.fromId) };
+});
+/** Is the previous player still executing a move (a planner walk, or a sent step the server has not answered)? The
+ *  switch neither arms nor commits then: the store would otherwise WAIT and end later, on its own clock. */
+function deferredSwitchActorBusy(fromId: string): boolean {
+  return gameStore.isPlanWalking(fromId) || gameStore.state.movementIntent?.playerId === fromId;
+}
+/** First click: arm. Never under a server dialog (that prompt owns Esc / right-click - Astra pass 2). The acting
+ *  player's input surface is left exactly as it is (clearing its previews here also switched off its square
+ *  clicks); instead every confirm of the previous player's own preview drops the pending switch first - see
+ *  dropDeferredSwitchForActorConfirm. */
+function armDeferredFriendlySwitch(playerId: string, fromId: string) {
+  if (deferredSwitchActorBusy(fromId) || gameStore.game.value?.dialogParameter) return;
+  ctxMenu.visible = false;
+  deferredFriendlySwitch.value = { playerId, fromId, sentAtArm: gameStore.emittedCommandCount() };
+  showPopup(playerId);
+}
+/** Second click: send the previous player's end now (synchronously, through the store's own switch seam, which
+ *  re-checks the server-derived disposition), then run the new player's declaration on that actor's clear. */
+function commitDeferredFriendlySwitch(playerId: string, fromId: string, run: () => void) {
+  deferredFriendlySwitch.value = null;
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!g || !settings.deferFriendlySwitchEnd || actingId !== fromId || pitchHeldByConfirmation() || deferredSwitchActorBusy(fromId)
+    || g.dialogParameter) return;
+  clearO66Arms();
+  gameStore.cancelPlan();
+  pendingFriendlyLeftClickMenu.value = null;
+  deferredSwitchFollowUp = { playerId, fromId, gameId: String(g.gameId ?? ''), run, at: Date.now() };
+  // Astra pass 2 (P1): the store seam reports success even when its end was refused at the send gate. The
+  // follow-up is kept only when a command really went out during this call.
+  const sentBefore = gameStore.emittedCommandCount();
+  const accepted = gameStore.switchFriendlyActivation(playerId, 'end');
+  if (!accepted || gameStore.emittedCommandCount() === sentBefore) deferredSwitchFollowUp = null;
+}
+watch(() => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''), (actingId, previousId) => {
+  if (!deferredSwitchStillValid(deferredFriendlySwitch.value, actingId)) deferredFriendlySwitch.value = null;
+  const followUp = deferredSwitchFollowUp;
+  if (!followUp) return;
+  deferredSwitchFollowUp = null; // one transition decides it: this actor's clear runs it, anything else retires it
+  const g = gameStore.game.value;
+  if (!g || actingId || previousId !== followUp.fromId || String(g.gameId ?? '') !== followUp.gameId) return;
+  // stale (the end was held up), no longer my turn, a prompt took over, or the server is not at "select a player":
+  // the end stands and nothing is declared - the coach clicks the player again.
+  if (!settings.deferFriendlySwitchEnd || !deferredSwitchFollowUpFresh(followUp.at, Date.now())
+    || !gameStore.isPlaying.value || !gameStore.myTurn.value || !gameStore.iControl(followUp.playerId)
+    || pitchHeldByConfirmation() || g.dialogParameter || deriveClientState(g, o66Ctx()) !== 'SELECT_PLAYER') return;
+  followUp.run();
+}, { flush: 'post' });
+// Astra wide-rail pass (10-05): a star's activation election is CLIENT state, not a server dialog - when one opens,
+// an armed switch is dropped (the election owns the next click, Esc and right-click).
+watch(wideRailActivationPrompt, (prompt) => { if (prompt) deferredFriendlySwitch.value = null; }, { flush: 'sync' });
+onBeforeUnmount(dropDeferredFriendlySwitch);
+
 /** Server-owned held-mate identity. This restores an unfinished TTM selector after a reconnect without guessing
  * legality, and stays null once the throw begins because the PICKED_UP state is removed authoritatively. */
 function serverHeldThrowMateId(): string | null {
@@ -7693,6 +7892,9 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // It now only answers the prompt with its safe option ("Go back") and does nothing else.
   if (endActConfirm.value) { ctxMenu.visible = false; cancelEndActivation(); return; }
   if (endTurnWarnCount.value !== null) { ctxMenu.visible = false; cancelEndTurnWarn(); return; }
+  // Owner 10-05: a right-click with a player switch pending only cancels it (never an end of the activation). After
+  // the confirmation branches above (Astra): an open prompt owns the gesture.
+  if (cancelDeferredFriendlySwitch()) { ctxMenu.visible = false; popup.visible = false; return; }
   const controlledActingTarget = !!actingId && target.playerId === actingId && gameStore.iControl(actingId);
   const rows = controlledActingTarget ? assembleActingPlayerRows(target, x, y) : [];
   // Spec S23: a live Activate intent on the acting Big Guy surfaces the menu; only its roll row (or confirm) rolls.
@@ -8233,6 +8435,7 @@ onBeforeUnmount(() => {
  *  the End TURN warning. A button commits its own planner arm, and nothing at all while a confirmation is up. */
 function confirmPlannerFromButton(): boolean {
   if (pitchHeldByConfirmation() || setupConfirm.value) return false;
+  deferredFriendlySwitch.value = null; // owner 10-05: confirming the acting player's own action drops a pending switch
   return o66ConfirmPending();
 }
 /** Astra re-review 10-04: an open client confirmation outranks every planner arm (a staged Block / Blitz used to
@@ -8396,6 +8599,7 @@ function confirmAggroStage(): boolean {
   // Astra pass 3 (10-04): the Confirm Block / Blitz button (click, or its own Space handler) committed the attack
   // under an open End Turn / End Activation confirmation. Every caller is held here.
   if (pitchHeldByConfirmation()) return false;
+  deferredFriendlySwitch.value = null; // owner 10-05: confirming the acting player's own attack drops a pending switch
   const st = o66AggroStage.value;
   if (!st) return false;
   const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -8626,7 +8830,9 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     // #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
     // END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical.
-    if (settings.order66 && gameStore.isPlaying.value) {
+    if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
+      popup.visible = false;
+    } else if (settings.order66 && gameStore.isPlaying.value) {
       escO66Cascade();
     } else if (ctxMenu.visible) {
       ctxMenu.visible = false;
@@ -8648,7 +8854,10 @@ function onKeydown(event: KeyboardEvent) {
     // otherwise it falls through to the legacy queued-path confirm. preventDefault only when we actually consume it
     // (Space would otherwise scroll / re-click a focused button).
     // Astra re-review 10-04: an open End Turn / End Activation confirmation is answered BEFORE a staged attack.
-    if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
+    // Owner 10-05: with a player switch pending, the confirm key only drops it (it never sends the previous
+    // player's retained preview behind the "Switch player?" cue).
+    if (cancelDeferredFriendlySwitch()) { event.preventDefault(); popup.visible = false; }
+    else if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) { event.preventDefault(); }
     else if (queuedSteps.value > 0) { event.preventDefault(); confirmMove(); }
   } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target)) {
     // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04; arrow keys 09-14): W/A pan
@@ -8900,6 +9109,7 @@ onMounted(async () => {
   renderer.onPlayerClick = (playerId, clickX = 0, clickY = 0) => {
     if (pitchHeldByConfirmation()) return; // Astra review 10-04: answer the open confirmation first
     renderer?.clearUnactivatedCues(); // owner 09-08: any player click ends the End-Turn idle-player cue
+    if (deferredFriendlySwitch.value && deferredFriendlySwitch.value.playerId !== playerId) deferredFriendlySwitch.value = null; // owner 10-05
     if (wideRailActivationPrompt.value) return;
     if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
     if (o66PendingLeftClickBlitzPlan.value
@@ -8994,6 +9204,19 @@ onMounted(async () => {
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
         if (ix.kind === 'switchFriendlyActivation') {
           if (requiresBlitzEndConfirmation(clickState)) { requestEndActivation(); return; }
+          // Owner 10-05 (setting, default off): an activation that has already been used is NOT ended by this click.
+          // The click arms the switch; the end goes out when the new player is activated. An untouched declaration
+          // (refund) keeps the direct switch below - nothing is lost there.
+          if (settings.deferFriendlySwitchEnd && ix.disposition === 'end') {
+            if (deferredSwitchClick(deferredFriendlySwitch.value, ix.playerId, clickActingId, gameStore.emittedCommandCount()) === 'arm') {
+              armDeferredFriendlySwitch(ix.playerId, clickActingId);
+            } else {
+              // second click on the same player: end the previous activation, then this click's normal handling
+              // (auto-Move declare, or the player's action menu with "Left click opens context menu")
+              commitDeferredFriendlySwitch(ix.playerId, clickActingId, () => renderer?.onPlayerClick?.(ix.playerId, clickX, clickY));
+            }
+            return;
+          }
           // Stop future planner edges; an already-sent edge remains represented by movementIntent, so the store
           // waits for its server result before deciding refund vs end.
           clearO66Arms();
@@ -9444,6 +9667,7 @@ onMounted(async () => {
     // Astra review 10-04: answer the open confirmation first. Re-review: a SERVER-requested square pick is never
     // swallowed - the server is waiting on it.
     if (pitchHeldByConfirmation() && !gameStore.state.squarePick && !unknownPickingTile.value) return;
+    deferredFriendlySwitch.value = null; // owner 10-05: a square click means the acting player carries on
     if (wideRailActivationPrompt.value) return;
     if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
     if (o66PendingLeftClickBlitzPlan.value) return;
@@ -9651,6 +9875,7 @@ onMounted(async () => {
     const g = gameStore.game.value;
     if (!g || !settings.order66 || !gameStore.isPlaying.value) return;
     if (pitchHeldByConfirmation()) return; // Astra re-review 10-04: no aim under an open confirmation
+    deferredFriendlySwitch.value = null; // Astra pass 3: a direction click means the acting player carries on
     const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!actingId) return;
     const st = deriveClientState(g, o66Ctx());
@@ -9698,9 +9923,11 @@ onMounted(async () => {
     plannedAction.value = null;
     if (!playerId) popup.visible = false;
   };
+  renderer.onRightClickReset = () => { deferredFriendlySwitch.value = null; }; // Astra pass 4: renderer-consumed double right-click
   renderer.onWaypointPlanCancel = () => {
     clearO66Arms();
     ctxMenu.visible = false;
+    deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
   };
   renderer.onContextMenu = openContextMenu;
   renderer.onActionRejected = showToast;
@@ -11290,6 +11517,17 @@ const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActi
   generic: { text: 'End activation?', confirmLabel: 'End activation' },
 };
 const endActConfirm = ref<EndActivationConfirm | null>(null);
+// (placed below the refs it reads: a watch source above them would hit the temporal dead zone at setup)
+// Astra review 10-05: an armed switch never outlives the moment it was armed in. A client confirmation, a server
+// dialog, a change of turn mode / turn / game, or the setting being switched off all drop it (and any follow-up).
+watch(() => [
+  pitchHeldByConfirmation(), settings.deferFriendlySwitchEnd, gameStore.myTurn.value,
+  String(gameStore.game.value?.turnMode ?? ''), String(gameStore.game.value?.gameId ?? ''),
+  String((gameStore.game.value?.dialogParameter as { dialogId?: string } | null | undefined)?.dialogId ?? ''),
+].join('|'), () => {
+  if (deferredFriendlySwitch.value) deferredFriendlySwitch.value = null;
+  if (!settings.deferFriendlySwitchEnd || String(gameStore.game.value?.gameId ?? '') !== (deferredSwitchFollowUp?.gameId ?? '')) deferredSwitchFollowUp = null;
+});
 watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
 // Astra review 10-04: the prompt belongs to ONE activation. It remembers whose it is and closes itself when the
 // acting player changes (the activation ended server-side, a turnover, the turn passed), so "End hand-off" can never
@@ -11320,6 +11558,7 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
       kind,
       text: 'Cancel your blitz? This player has not moved or blocked yet, so your Blitz action will be refunded for this turn.',
       confirmLabel: 'Cancel Blitz',
+      title: 'Cancel Blitz', // owner 10-05: the pane read "END ACTIVATION"
     };
     return;
   }
@@ -11329,6 +11568,7 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
       kind,
       text: kind === 'handOver' ? 'Cancel your hand-off? This player has not moved yet.' : 'Cancel your pass? This player has not moved yet.',
       confirmLabel: kind === 'handOver' ? 'Cancel Hand-off' : 'Cancel Pass',
+      title: kind === 'handOver' ? 'Cancel Hand-off' : 'Cancel Pass',
     };
     return;
   }
@@ -11338,6 +11578,7 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
       kind,
       text: 'Cancel your punt? This player has not moved yet.',
       confirmLabel: 'Cancel Punt',
+      title: 'Cancel Punt',
     };
     return;
   }
@@ -12474,7 +12715,7 @@ function sendChat() {
              are gone (reserves are now dragged straight from the dugout "reserves box" on the right, cond-b),
              and this is now a COMPACT rules+actions card pinned to the RIGHT, over the dugout. -->
         <!-- SPEC setup-templates §1 (Madden panel), §3-3o (the 15 templates), MIRROR OPTION §3c. -->
-        <section v-if="setupPhase && setupTemplateSide" ref="setupTemplatePanelEl"
+        <section v-if="setupPhase && setupTemplateSide && !setupBrowserClosed" ref="setupTemplatePanelEl"
           class="setup-template-panel" aria-label="Setup formations" :style="setupBrowserStyle"
           @pointerdown="startSetupBrowserResize">
           <div class="setup-template-title setup-template-windowbar" @pointerdown="startSetupBrowserDrag">
@@ -12490,6 +12731,8 @@ function sendChat() {
               @click.stop="savedSetupsCollapsed = !savedSetupsCollapsed">
               {{ savedSetupsCollapsed ? 'Expand' : 'Collapse' }}
             </button>
+            <button class="setup-close-button" type="button" aria-label="Close formations panel" title="Close"
+              data-testid="setup-browser-close" @pointerdown.stop @click.stop="setupBrowserClosed = true">✕</button>
           </div>
           <div v-if="setupPanelSection === 'templates'" class="setup-template-list">
             <div v-for="card in setupTemplateCards" :key="card.template.id" class="setup-template-card"
@@ -12557,7 +12800,17 @@ function sendChat() {
           </div>
         </section>
 
-        <div v-if="setupPhase" class="setup-panel setup-card">
+        <div v-if="setupPhase && (setupCardClosed || (setupTemplateSide && setupBrowserClosed))" class="setup-reopen-tabs"
+          data-testid="setup-reopen-tabs">
+          <button v-if="setupCardClosed" class="setup-btn" type="button" data-testid="setup-card-reopen"
+            @click="setupCardClosed = false">Setup rules</button>
+          <button v-if="setupTemplateSide && setupBrowserClosed" class="setup-btn" type="button" data-testid="setup-browser-reopen"
+            @click="setupBrowserClosed = false">Formations</button>
+        </div>
+
+        <div v-if="setupPhase && !setupCardClosed" class="setup-panel setup-card">
+          <button class="setup-close-button setup-card-close" type="button" aria-label="Close setup panel" title="Close"
+            data-testid="setup-card-close" @click="setupCardClosed = true">✕</button>
           <div class="setup-title">{{ solidDefenceSetup ? 'SOLID DEFENCE — RE-SET UP' : 'SET UP YOUR TEAM' }}</div>
           <!-- StepApplyKickoffResult.handleSolidDefense: only the players the server selected may be moved;
                everything else on the pitch is deactivated and inert. -->
@@ -13304,6 +13557,12 @@ function sendChat() {
           </template>
         </PitchConfirmationPanel>
 
+        <PitchConfirmationPanel v-if="deferredFriendlySwitch && deferredSwitchNames" title="Switch player?"
+          label="Pending player switch" test-id="deferred-friendly-switch" compact>
+          Click {{ deferredSwitchNames.to }} again to activate. {{ deferredSwitchNames.from }}'s activation ends when you do.
+          Right click or Esc to cancel.
+        </PitchConfirmationPanel>
+
         <PitchConfirmationPanel v-if="furySecondBlockTargeting" title="Fury of the Blood God"
           label="Fury of the Blood God second block target" test-id="fury-second-block-targeting" compact>
           Select another player to block or right click to cancel.
@@ -13470,7 +13729,7 @@ function sendChat() {
         <div v-if="jumpTogglePos" class="jump-toggle on"
           :style="{ left: jumpTogglePos.x + 'px', top: jumpTogglePos.y + 'px' }"
           :title="`${jumpGerund} — click to turn off`"
-          @click="pitchHeldByConfirmation() || gameStore.toggleJump()">🦘 {{ jumpGerund }}</div>
+          @click="toggleJumpFromBadge()">🦘 {{ jumpGerund }}</div>
 
         <!-- #236: server-confirmed Fumblerooski election badge. StepInitMoving.java:270-278 emits ballMoving=true +
              ReportFumblerooskie(used=true) without entering a picker; StepResetFumblerooskie.java:89-117 emits the
@@ -16016,6 +16275,34 @@ function sendChat() {
 }
 .setup-collapse-button:hover,
 .setup-collapse-button:focus-visible { border-color: rgba(159, 192, 255, 0.9); }
+.setup-close-button {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  color: rgba(223, 230, 255, 0.82);
+  background: rgba(22, 29, 40, 0.82);
+  border: 1px solid rgba(120, 150, 190, 0.5);
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.setup-close-button:hover,
+.setup-close-button:focus-visible { border-color: rgba(159, 192, 255, 0.9); color: #fff; }
+.setup-card { position: absolute; }
+.setup-card-close { position: absolute; top: 6px; right: 6px; }
+.setup-card .setup-title { padding-right: 26px; }
+.setup-reopen-tabs {
+  position: absolute;
+  z-index: 42;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .setup-template-list {
   flex: 1 1 auto;
   display: grid;

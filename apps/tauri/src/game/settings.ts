@@ -257,6 +257,8 @@ export interface AppSettings extends ConfirmationSettings {
   declareBlitzBehavior: 'modern' | 'fumbbl';
   /** Clicking another friendly during a declared movement rail refunds or ends the current activation. */
   friendlyPlayerSwitch: boolean;
+  /** Owner 10-05: the previous player's end is sent only when the newly clicked player is actually activated. */
+  deferFriendlySwitchEnd: boolean;
   /** Friendly player left-clicks show their legal action menu instead of auto-declaring Move. */
   leftClickOpensContextMenu: boolean;
   /** Owner 2026-07-10: DEVELOPER mode — unlocked by the `-dev` exe arg / `?dev`. Gates the
@@ -568,6 +570,7 @@ const DEFAULTS: AppSettings = {
   order66: true, // owner 2026-07-13: the 0.3.0 release IS the ORDER 66 port — ON by default (was dev-only default-off). Legacy path only via the toggle (devMode).
   declareBlitzBehavior: 'fumbbl',
   friendlyPlayerSwitch: true,
+  deferFriendlySwitchEnd: false,
   leftClickOpensContextMenu: false,
   ...CONFIRMATION_DEFAULTS,
   devMode: false,
@@ -976,6 +979,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       ? raw.flyBrainUrl.trim() : DEFAULTS.flyBrainUrl;
     merged.declareBlitzBehavior = raw.declareBlitzBehavior === 'modern' ? 'modern' : 'fumbbl';
     merged.friendlyPlayerSwitch = raw.friendlyPlayerSwitch !== false;
+    merged.deferFriendlySwitchEnd = raw.deferFriendlySwitchEnd === true;
     merged.leftClickOpensContextMenu = raw.leftClickOpensContextMenu === true;
     Object.assign(merged, normalizeConfirmationSettings(raw as Record<string, unknown>)); // only an explicit false turns a prompt off
     // v5 (owner 2026-07-14): the theme engine. Existing installs adopt the Black/Red default; a later user
