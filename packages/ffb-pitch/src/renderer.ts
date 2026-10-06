@@ -1133,6 +1133,18 @@ export function kickBallAirborne(input: { carried: boolean; hanging: boolean; ai
 export const REROLL_RESULT_PIN_CAP_MS = 5000;
 /** A token within this many world pixels of a square's rest position is drawn ON that square. */
 export const PLAYER_ARRIVED_PX = 3;
+/** Owner 10-06 (anim-skips): has a running move tween already carried its token ONTO `point`? True once the tween's
+ *  clock has reached the waypoint that sits on the point (a walk that passes over it, or a step that starts from it).
+ *  A tween whose path does not touch the point - or one still on its way to it - has not. */
+export function moveTweenReachedPoint(
+  tween: { waypoints: readonly { x: number; y: number }[]; start: number; segmentMs: number },
+  point: { x: number; y: number },
+  now: number,
+): boolean {
+  if (tween.start <= 0) return false; // an unanchored clock (a presentation tile before its first tick) has not moved
+  const index = tween.waypoints.findIndex((w) => Math.hypot(w.x - point.x, w.y - point.y) <= PLAYER_ARRIVED_PX);
+  return index >= 0 && now - tween.start >= index * tween.segmentMs;
+}
 /** A failed die shown this recently is taken to be the roll a just-opened reroll prompt is about. */
 export const PROMPT_DIE_FRESH_MS = 4000;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
@@ -7203,13 +7215,23 @@ export class PitchRenderer {
   /** Owner 09-27: host-facing form of the 09-23 probe. Live play runs the order-66 tile route (the legacy planner
    *  below is off there), so the view asks before it plots, extends or commits a walk. `progress` is the token's
    *  rendered position — a host holding clicks on this can fail open once nothing on screen is advancing. */
-  /** Owner 10-05: has this player's token ARRIVED on that square on screen (drawn there, no move tween running)?
-   *  The pickup die waits for this. Fail-open: an unknown / rebuilt token counts as arrived. */
+  /** Owner 10-05: has this player's token ARRIVED on that square on screen? The pickup die waits for this.
+   *  Fail-open: an unknown / rebuilt token counts as arrived.
+   *  Owner 10-06 (anim-skips): a mover that picks the ball up and walks ON is never at rest on the ball square - the
+   *  next step's tween starts from it - so "no tween running" kept the die waiting out its 4 s cap and it popped late,
+   *  squares behind the runner. A running tween that has reached the square (passing over it, or leaving from it)
+   *  counts as arrived. */
   playerDrawnAt(playerId: string, square: readonly [number, number]): boolean {
     const token = this.tokensById.get(playerId);
     if (!token || token.destroyed) return true;
-    if (this.moveTweens.has(playerId)) return false;
     const rest = this.tokenPos(square[0], square[1]);
+    const tween = this.moveTweens.get(playerId);
+    if (tween) {
+      // Astra (10-06): a presentation tile is armed before the ticker stamps its clock (anchorPresentationTileOnFirstTweenPass);
+      // until then the token has not started that step, whatever the record's start says.
+      if (this.presentationTileStartPending && this.presentationStep?.playerId === playerId) return false;
+      return moveTweenReachedPoint(tween, rest, performance.now());
+    }
     return Math.hypot(token.position.x - rest.x, token.position.y - rest.y) <= PLAYER_ARRIVED_PX;
   }
   movementOnScreen(playerId: string): { inFlight: boolean; progress: string } {
