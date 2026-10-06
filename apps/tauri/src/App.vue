@@ -2860,12 +2860,13 @@ function captureKey(event: KeyboardEvent) {
             <li><span>Pitch textures (grass, dugout stone) — Acasas and unTied, licensed via GameDev Market. Sign fans — licensed purchase.</span></li>
             <li><span>Sound effects — The Sound Guild, Gamemaster Audio and Khron Studio libraries (licensed purchases), plus owner recordings.</span></li>
             <li><span>Player sprites, star players, team crests and dugout cobble — original pixel art produced with PixelLab. Skill badges — Super FUMBBL originals; the illustrated set via Codex image generation.</span></li>
+            <li><span>KrisB block dice faces (the "KrisB (built-in)" block dice option) — by Kristofer Bengtsson (KrisB), used with permission.</span></li>
             <li><span>Kickoff banners, stadium skybox, crest and decoration art — generated with OpenAI, Codex and Gemini image models from Super FUMBBL prompts; no third-party source imagery.</span></li>
             <li><span>FUMBBL logo — used under FUMBBL's branding guidelines (FUMBBL Branding page). FUMBBL is Christer Kaivo-oja's site; Super FUMBBL is an independent client.</span></li>
           </ul>
           <h3 class="credits-head license-head">License</h3>
           <p class="hint">Super FUMBBL's code is released under the MIT License (also in the LICENSE file at the project root).</p>
-          <p class="hint">Super FUMBBL's original artwork (sprites, crests, skill badges, decorations, pitches, banners, dice, wordmark) is licensed under the Super FUMBBL Media License: use, modify and distribute for non-commercial purposes; no selling the assets or using them on merchandise; credit Super FUMBBL with a link and indicate any changes. Full text: docs/licenses/super-fumbbl-media-license.md.</p>
+          <p class="hint">Super FUMBBL's original artwork (sprites, crests, skill badges, decorations, pitches, banners, dice, wordmark) is licensed under the Super FUMBBL Media License: use, modify and distribute for non-commercial purposes; no selling the assets or using them on merchandise; credit Super FUMBBL with a link and indicate any changes. Full text: docs/licenses/super-fumbbl-media-license.md. The KrisB block dice faces are © Kristofer Bengtsson (KrisB), used with permission, and are not covered by the Super FUMBBL Media License.</p>
           <pre class="license-text">{{ CLIENT_MIT_LICENSE }}</pre>
           <h3 class="credits-head license-head">Upstream FFB license</h3>
           <p class="hint">Super FUMBBL builds on the FFB client/server by Christer Kaivo-oja, also released under the MIT License.</p>

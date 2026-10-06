@@ -6,6 +6,9 @@ sprites, team crests, skill badges (flat and illustrated), pitch decorations and
 wordmark and app icon, and any other artwork or sound produced for Super FUMBBL and not listed under a
 third-party licence in this folder.
 
+The KrisB block dice faces (the "KrisB (built-in)" block dice option) are © Kristofer Bengtsson (KrisB), used with
+permission, and are NOT covered by this licence.
+
 It follows the Modern FUMBBL Media License, with Super FUMBBL as the licensor. (Owner ruling 2026-09-10; this
 supersedes the earlier statement that the original art was MIT-licensed. The client's code remains MIT, see
 `LICENSE` at the repository root.)

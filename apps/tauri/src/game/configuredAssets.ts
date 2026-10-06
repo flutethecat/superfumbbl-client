@@ -162,6 +162,9 @@ export function buildConfiguredAssets(input: {
   assignments: AssetPackAssignments;
   soundCatalog: readonly { id: string; label: string }[];
   raceLogos: Readonly<Record<string, string>>;
+  /** Owner 10-06: the bundled block-dice family serving faces no pack/user file covers, and its face art by face id. */
+  blockDiceFamily?: 'default' | 'krisb';
+  bundledBlockFaceUrls?: Readonly<Record<string, string>>;
 }): ConfiguredAssetsState {
   const spritePack = selectedPack(input.installed, input.assignments.playerSprites);
   const soundPack = selectedPack(input.installed, input.assignments.soundEvents);
@@ -226,9 +229,10 @@ export function buildConfiguredAssets(input: {
     const user = userPack?.blockDiceBindings?.[face!] ?? null;
     const packed = blockDicePack?.blockDiceBindings?.[face!] ?? null;
     return {
-      face: face!, label: label!, url: user ?? packed,
+      face: face!, label: label!, url: user ?? packed ?? input.bundledBlockFaceUrls?.[face!] ?? null,
       source: user ? 'Your file' : packed && blockDicePack
-        ? `${blockDicePack.name} ${blockDicePack.version}` : 'Built-in Super FUMBBL faces',
+        ? `${blockDicePack.name} ${blockDicePack.version}`
+        : input.blockDiceFamily === 'krisb' ? 'Built-in KrisB faces' : 'Built-in Super FUMBBL faces',
       userOverride: !!user,
     };
   });

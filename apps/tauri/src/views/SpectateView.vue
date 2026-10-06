@@ -3823,15 +3823,26 @@ const BLOCK_STAMP_URLS: Record<string, string> = {
   'defender-stumbles': new URL('../assets/blockdice-log/defender-stumbles.png', import.meta.url).href,
   pow: new URL('../assets/blockdice-log/pow.png', import.meta.url).href,
 };
+// Owner 10-06: with the KrisB family the stamp uses KrisB's bundled faces (symbol -> face in tumble order
+// [skull, bothdown, push, powpush, pow]); default otherwise.
+const KRISB_STAMP_FACE_INDEX: Record<string, number> = { 'attacker-down': 0, 'both-down': 1, push: 2, 'defender-stumbles': 3, pow: 4 };
+function blockStampUrl(symbol: string): string | null {
+  if (settings.blockDiceFamily === 'krisb') {
+    const index = KRISB_STAMP_FACE_INDEX[symbol];
+    return index === undefined ? null : PitchRenderer.bundledBlockFaceUrls('krisb')[index] ?? null;
+  }
+  return BLOCK_STAMP_URLS[symbol] ?? null;
+}
 // Owner 10-04: the blocked player's fist becomes the applied block-die face (cleared when the stamp is retired).
-watch(() => gameStore.state.blockResultStamp?.seq, () => {
+// Owner 10-06: re-applied when the block-dice family changes while the stamp is held.
+watch(() => [gameStore.state.blockResultStamp?.seq, settings.blockDiceFamily], () => {
   const stamp = gameStore.state.blockResultStamp;
-  renderer?.setAppliedBlockResult(stamp ? BLOCK_STAMP_URLS[stamp.symbol] ?? null : null, stamp?.playerIds ?? []);
+  renderer?.setAppliedBlockResult(stamp ? blockStampUrl(stamp.symbol) : null, stamp?.playerIds ?? []);
 }, { flush: 'sync' });
 watch(() => gameStore.state.blockResultStamp?.seq, () => {
   const stamp = gameStore.state.blockResultStamp;
   if (!stamp || !renderer || settings.spectatorClean) return;
-  const url = BLOCK_STAMP_URLS[stamp.symbol];
+  const url = blockStampUrl(stamp.symbol);
   if (url) renderer.playBlockResultStamp(stamp.playerIds, url);
 });
 // Owner 09-05: gold pulse ring on a token placed during setup by another seat (spectator / opposing coach).

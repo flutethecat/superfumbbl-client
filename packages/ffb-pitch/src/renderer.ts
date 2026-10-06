@@ -1547,6 +1547,7 @@ type TokenDecoFollow = {
 };
 
 type BlockFace = 'skull' | 'bothdown' | 'push' | 'powpush' | 'pow';
+export type BlockFaceFamily = 'default' | 'krisb';
 
 /**
  * SNES-style 3/4-view pitch renderer (App15/App16). Placeholder token art
@@ -1614,6 +1615,8 @@ export class PitchRenderer {
   private static readonly BLOCK_FACE_NAMES = ['face_skull', 'face_bothdown', 'face_push', 'face_powpush', 'face_pow'];
   private static readonly BLOCK_FACE_IDS: BlockFace[] = ['skull', 'bothdown', 'push', 'powpush', 'pow'];
   private static blockFaceSources: Partial<Record<BlockFace, string>> = {};
+  /** Owner 10-06: the BUNDLED face family that serves every face no pack binding covers. */
+  private static blockFaceFamily: BlockFaceFamily = 'default';
   private static readonly instances = new Set<PitchRenderer>();
   // #16 (owner 07-22, BB2025 unification): the official source-verified block-face names, matching Tarkin's
   // reportFormatter.blockResultFaceName (log/cine result) so a result and its dice preview never split-name.
@@ -1627,9 +1630,24 @@ export class PitchRenderer {
   }
   /** All five face-art urls in tumble order (skull→bothdown→push→powpush→pow). */
   static blockFaceUrls(): string[] {
-    return PitchRenderer.BLOCK_FACE_NAMES.map((name, index) =>
-      PitchRenderer.blockFaceSources[PitchRenderer.BLOCK_FACE_IDS[index]!]
-        ?? new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
+    const bundled = PitchRenderer.bundledBlockFaceUrls();
+    return PitchRenderer.BLOCK_FACE_IDS.map((face, index) => PitchRenderer.blockFaceSources[face] ?? bundled[index]!);
+  }
+  /** Owner 10-06: the BUNDLED face art of a family (default: the active one), tumble order, no pack bindings. */
+  static bundledBlockFaceUrls(family: BlockFaceFamily = PitchRenderer.blockFaceFamily): string[] {
+    return PitchRenderer.BLOCK_FACE_NAMES.map((name) => family === 'krisb'
+      ? new URL(`../assets/blockdice-krisb/${name}.png`, import.meta.url).href
+      : new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
+  }
+  /** Owner 10-06: switch the bundled fallback face family ('krisb' = Kristofer Bengtsson's faces). Pack bindings
+   *  still win per face. Same reload semantics as `setBlockFaceSources`: every live instance reloads its textures;
+   *  DOM surfaces and the 3D die re-read `blockFaceUrls()` on the app's block-dice revision. */
+  static setBlockFaceFamily(family: BlockFaceFamily): void {
+    const next: BlockFaceFamily = family === 'krisb' ? 'krisb' : 'default';
+    if (next === PitchRenderer.blockFaceFamily) return;
+    PitchRenderer.blockFaceFamily = next;
+    if (typeof document === 'undefined') return;
+    for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
   }
   static setBlockFaceSources(sources: Partial<Record<BlockFace, string>> | null): void {
     const next = sources ? { ...sources } : {};

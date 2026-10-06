@@ -101,3 +101,10 @@ marks).
 - **Whatball** — Pitches: Default (edited by Garion)
 - **Angelux** — Pitches: Tomb Kings (edited by Garion)
 - **ZioCrock** — Pitches: Amazon, High Elf, Lizardman (all edited by Garion)
+
+## Super FUMBBL assets
+
+Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), used with the creator's permission.
+
+- **Kristofer Bengtsson (KrisB)** — Block dice faces (the "KrisB (built-in)" block dice option), used with
+  permission.

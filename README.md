@@ -77,9 +77,11 @@ the assets or putting them on merchandise, credit FUMBBL with a link and indicat
   tree as derivative crops); Acasas / unTied pitch textures via GameDev Market; The Sound Guild, Gamemaster Audio and
   Khron Studio sound libraries. The textures and library-derived sounds ship in the installer only.
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
+- **KrisB block dice faces** — © Kristofer Bengtsson (KrisB), used with permission; not under the Super FUMBBL Media
+  License (`packages/ffb-pitch/assets/blockdice-krisb/`, `apps/tauri/src/assets/blockdice-log-krisb/`).
 
 **Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
-decorations, pitches, banners, block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
+decorations, pitches, banners, the default block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,
 Codex and Gemini image models from Super FUMBBL prompts. It is licensed under the Super FUMBBL Media License
 (`docs/licenses/super-fumbbl-media-license.md`): free to use, modify and distribute for non-commercial purposes, no selling
 the assets or putting them on merchandise, credit Super FUMBBL with a link and indicate changes. The code is MIT.

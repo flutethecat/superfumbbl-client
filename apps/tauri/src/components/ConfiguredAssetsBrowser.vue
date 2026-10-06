@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { PitchRenderer } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
 import { assetMods, removeUserOverride, writeUserOverride } from '../game/assetMods';
 import type { AssetTargetCatalog } from '../game/assetModUi';
@@ -13,6 +14,7 @@ import {
 } from '../game/configuredAssets';
 
 const props = defineProps<{ targetCatalog: AssetTargetCatalog }>();
+const BLOCK_FACE_IDS = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const; // PitchRenderer tumble order
 const expandedTeams = ref(new Set<string>());
 const errors = ref<Record<string, string>>({});
 const busyKey = ref('');
@@ -27,6 +29,9 @@ const state = computed(() => {
     assignments: settings.assetPackAssignments,
     soundCatalog: SOUND_CATALOG,
     raceLogos: RACE_LOGOS,
+    blockDiceFamily: settings.blockDiceFamily, // owner 10-06: rows show the bundled family's face when nothing overrides it
+    bundledBlockFaceUrls: Object.fromEntries(PitchRenderer.bundledBlockFaceUrls(settings.blockDiceFamily)
+      .map((url, index) => [BLOCK_FACE_IDS[index]!, url])),
   });
 });
 

@@ -24,6 +24,7 @@ const FUMBBL_ASSET_GROUPS: ReadonlyArray<{ group: string; names: string }> = [
 
 const SUPER_FUMBBL: ReadonlyArray<{ name: string; role: string }> = [
   { name: 'Flutethecat', role: 'Super FUMBBL project lead — client, fork server, and tournament services' },
+  { name: 'Kristofer Bengtsson (KrisB)', role: 'Block dice face art (the KrisB block dice option)' },
   { name: 'The Super FUMBBL contributors', role: 'Everyone credited in the project LICENSE and commit history' },
 ];
 </script>

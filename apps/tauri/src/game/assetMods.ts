@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { reactive, watch } from 'vue';
 import {
   activateAssetPresentationPack,
   activateSkillIconPack,
@@ -20,6 +20,7 @@ import { activateSoundEventPack, prepareSoundEventPack, waitForSoundUrlsRetireme
 import { setLocalFumbblLogoBindings, setSelectedLocalFumbblAssetBindings } from './fumbblAssetCache';
 import {
   completeV26UserOverrideMigration,
+  settings,
   takeV26UserOverrideMigration,
   type V26UserOverrideMigration,
 } from './settings';
@@ -240,6 +241,7 @@ export function blockFaceSource(face: string): string | null {
 }
 
 export function publishBlockDiceBindings(): void {
+  PitchRenderer.setBlockFaceFamily(settings.blockDiceFamily); // owner 10-06: the bundled fallback family (KrisB)
   PitchRenderer.setBlockFaceSources(Object.fromEntries(
     ['skull', 'bothdown', 'push', 'powpush', 'pow']
       .map((face) => [face, blockFaceSource(face)])
@@ -247,6 +249,14 @@ export function publishBlockDiceBindings(): void {
   ));
   assetMods.blockDiceRevision++;
 }
+
+/** Owner 10-06: the bundled block-dice family (Settings > Asset packs > Block dice, "KrisB (built-in)") applies at
+ *  startup through `publishBlockDiceBindings()` (boot's `refreshAssetPacks()`) and here on every change — the bump of
+ *  `blockDiceRevision` re-feeds the 3D die and the DOM face surfaces. */
+watch(() => settings.blockDiceFamily, (family) => {
+  PitchRenderer.setBlockFaceFamily(family);
+  assetMods.blockDiceRevision++;
+});
 
 let activationGeneration = 0;
 let assignmentGeneration = 0;

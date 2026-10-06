@@ -96,6 +96,9 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 09-09: which BUNDLED skill-badge family serves when no pack is assigned to the skill-icon slot —
    *  'default' = the flat badges ("Built-in default"), 'illustrated' = the illustrated set ("Illustrated - Default"). */
   skillBadgeFamily: 'default' | 'illustrated';
+  /** Owner 10-06: which BUNDLED block-dice face family serves when no pack is assigned to the block-dice slot —
+   *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("KrisB (built-in)"). */
+  blockDiceFamily: 'default' | 'krisb';
   /** Immutable native installation identity for the selected skill-icon mod pack.
    *  Never a filesystem path; empty uses generated initials. */
   skillIconPackInstallId: string | null;
@@ -494,6 +497,7 @@ const DEFAULTS: AppSettings = {
   checkerLetterFont: 'arial',
   skillIconStyle: 'bb3',
   skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
+  blockDiceFamily: 'default', // owner 10-06: KrisB faces are opt-in
   skillIconPackInstallId: null,
   assetPackAssignments: { skillIcons: '', playerSprites: '', walkSheets: '', soundEvents: '', teamLogos: '', blockDice: '' },
   url: FORK_EDITION ? FORK_WS_URL : FUMBBL_WS_URL, // owner 2026-07-13: match the default target ('fork' below; public edition = Official FUMBBL) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
@@ -946,6 +950,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       blockDice: installedIdentity(rawAssignments?.blockDice),
     };
     merged.skillBadgeFamily = raw.skillBadgeFamily === 'default' ? 'default' : 'illustrated'; // owner 09-10: illustrated unless the flat set was chosen
+    merged.blockDiceFamily = raw.blockDiceFamily === 'krisb' ? 'krisb' : 'default'; // owner 10-06: default unless KrisB was chosen
     // Owner 2026-07-05 migration: FORCE the new defaults onto pre-v2 installs (whose
     // persisted settings still carry the old walk / 60% values). Runs once — after
     // it stamps settingsVersion, future user changes to these keys stick.

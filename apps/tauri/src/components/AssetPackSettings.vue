@@ -334,16 +334,25 @@ async function exportSection(section: AssetPackSection): Promise<void> {
 /** Owner 09-09: the skill-icon slot offers a second BUNDLED family, "Illustrated - Default", beside "Built-in
  *  default". Both are pack-less (assignment ''); the family choice lives in `settings.skillBadgeFamily`. */
 const ILLUSTRATED_BUILTIN = 'builtin:illustrated';
+/** Owner 10-06: the block-dice slot likewise offers "KrisB (built-in)" (Kristofer Bengtsson's faces) beside "Built-in
+ *  default"; pack-less (assignment ''), the family lives in `settings.blockDiceFamily`. An installed pack still wins
+ *  over the family, so picking one leaves the family alone. */
+const KRISB_BUILTIN = 'builtin:krisb';
 function assignmentSelectValue(capability: AssetAssignmentCapability): string {
   const id = settings.assetPackAssignments[capability];
+  if (capability === 'blockDice' && id === '' && settings.blockDiceFamily === 'krisb') return KRISB_BUILTIN;
   return capability === 'skillIcons' && id === '' && settings.skillBadgeFamily === 'illustrated' ? ILLUSTRATED_BUILTIN : id;
 }
 async function changeAssignment(capability: AssetAssignmentCapability, event: Event): Promise<void> {
   const value = (event.target as HTMLSelectElement).value;
-  const builtin = value === ILLUSTRATED_BUILTIN;
+  const builtin = value === ILLUSTRATED_BUILTIN || value === KRISB_BUILTIN;
   const next = { ...settings.assetPackAssignments, [capability]: builtin ? '' : value };
   if (!await publishAssignments(next)) { editorError.value = assetMods.error; return; }
   if (capability === 'skillIcons') settings.skillBadgeFamily = builtin ? 'illustrated' : 'default';
+  if (capability === 'blockDice') {
+    if (value === KRISB_BUILTIN) settings.blockDiceFamily = 'krisb';
+    else if (value === '') settings.blockDiceFamily = 'default';
+  }
 }
 
 async function useAll(pack: InstalledAssetPack): Promise<void> {
@@ -461,6 +470,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
         @change="changeAssignment(capability.key, $event)">
         <option value="">{{ capability.key === 'skillIcons' ? 'Flat badges (built-in)' : 'Built-in default' }}</option>
         <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">Illustrated (built-in default)</option>
+        <option v-if="capability.key === 'blockDice'" :value="KRISB_BUILTIN">KrisB (built-in)</option>
         <option v-for="pack in installedPacks.filter((candidate) => packSupports(candidate, capability.key))"
           :key="pack.installId" :value="pack.installId">{{ pack.name }} {{ pack.version }}</option>
       </select>

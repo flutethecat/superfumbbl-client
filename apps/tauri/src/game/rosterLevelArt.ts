@@ -58,7 +58,7 @@ export function rosterInjuryArtFrom(files: Readonly<Record<string, string>>, bad
 
 /** Owner 10-02: a player killed this game shows the RIP text art centred over the block die's skull (the log's
  *  attacker-down face) - the roster composes the two; rosterInjuryArt('rip') is the text. */
-export const ROSTER_RIP_SKULL_URL = blockDieFaceUrl(1);
+export const ROSTER_RIP_SKULL_URL = blockDieFaceUrl(1, 'default'); // a roster RIP marker, not a die: never follows the dice family
 
 export function rosterInjuryArt(badge: RosterInjuryBadge): RosterLevelArt | null {
   return rosterInjuryArtFrom(INJURY_FILES, badge);

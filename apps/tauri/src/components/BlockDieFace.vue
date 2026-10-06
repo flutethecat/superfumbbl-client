@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { blockDieLogSymbol, isBlockDieFaceValue, type BlockDieLogSymbol } from '../game/blockDieLog';
+import { blockDieLogSymbol, isBlockDieFaceValue } from '../game/blockDieLog';
+import { blockDieSymbolUrl } from '../game/blockDieFaceArt';
+import { settings } from '../game/settings';
 
 const props = defineProps<{
   value: number;
@@ -9,19 +11,12 @@ const props = defineProps<{
 
 // Owner 09-08: the log draws the 64 px content-trimmed faces (`*-64.png`, Lanczos from the owner masters that sit
 // beside them) — the 1254 px masters sampled nearest-neighbour down to ~19 px lost most of the art (decimated).
-const symbolUrls: Record<BlockDieLogSymbol, string> = {
-  'attacker-down': new URL('../assets/blockdice-log/attacker-down-64.png', import.meta.url).href,
-  'both-down': new URL('../assets/blockdice-log/both-down-64.png', import.meta.url).href,
-  push: new URL('../assets/blockdice-log/push-64.png', import.meta.url).href,
-  'defender-stumbles': new URL('../assets/blockdice-log/defender-stumbles-64.png', import.meta.url).href,
-  pow: new URL('../assets/blockdice-log/pow-64.png', import.meta.url).href,
-};
-
+// Owner 10-06: the set follows the bundled block-dice family (Settings > Asset packs > Block dice).
 const valid = computed(() => isBlockDieFaceValue(props.value));
 const symbol = computed(() => isBlockDieFaceValue(props.value) ? blockDieLogSymbol(props.value) : null);
-const url = computed(() => symbol.value ? symbolUrls[symbol.value] : '');
+const url = computed(() => symbol.value ? blockDieSymbolUrl(symbol.value, settings.blockDiceFamily) : '');
 const failed = ref(false);
-watch(() => props.value, () => { failed.value = false; });
+watch(() => [props.value, settings.blockDiceFamily], () => { failed.value = false; });
 </script>
 
 <template>
