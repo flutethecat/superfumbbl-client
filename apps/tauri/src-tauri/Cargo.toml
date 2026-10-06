@@ -1,6 +1,6 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.108"
+version = "1.0.109"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 

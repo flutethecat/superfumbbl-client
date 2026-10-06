@@ -134,6 +134,7 @@ import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/log
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
 import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
+import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
 import { allowsFumblerooskieAction, bigGuyRollEndLabel } from '../game/logic/availableActions';
@@ -3071,60 +3072,46 @@ watch(() => (gameStore.state.reRollPrompt?.mine ? gameStore.state.reRollPrompt.s
 });
 onBeforeUnmount(() => { if (rerollOfferFailOpenTimer) clearTimeout(rerollOfferFailOpenTimer); });
 const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
-let pickupDieTimer = 0;
-onBeforeUnmount(() => { if (pickupDieTimer) clearTimeout(pickupDieTimer); });
 /** The player the model has standing on that square (the mover a pickup roll belongs to), or null. */
 function pickupMoverAt(square: readonly [number, number]): string | null {
   const data = gameStore.game.value?.fieldModel?.playerDataArray?.find((d) => d.playerCoordinate
     && d.playerCoordinate[0] === square[0] && d.playerCoordinate[1] === square[1]);
   return data ? data.playerId : null;
 }
+// Owner 10-06 (spec-dice-queue): the per-batch cue logic (camera nudge, #24 / owner 10-05 pickup-on-arrival wait keyed
+// by the batch's seq, onDiceCue) lives in a pure drain so two batches landing in one tick both render. A pickup die
+// waits until the mover's token is drawn on the ball square (polled, 4 s fail-open cap); a newer cue makes it show at once
+// (before that cue), only a seek / reset drops it; every other cause keeps its timing.
+const actionDiceDrain = createActionDiceQueueDrain({
+  renderer: () => renderer,
+  lifecycle: actionDiceLifecycle,
+  scheduler: { set: (fn, ms) => window.setTimeout(fn, ms), clear: (id) => window.clearTimeout(id) },
+  now: () => performance.now(),
+  newestSeq: () => gameStore.state.actionDice?.seq,
+  pickupMoverAt,
+  pickupBeatMs: () => presentationMs(settings.moveSpeedMs),
+  arrivalCapMs: PICKUP_DIE_ARRIVAL_CAP_MS,
+});
+onBeforeUnmount(() => actionDiceDrain.cancelPickupWaits());
+// Batches published before this view mounted are history, not cues: drop them so the first live cue does not replay them.
+if (gameStore.state.actionDiceQueue.length) gameStore.state.actionDiceQueue.splice(0);
 // On-pitch action d6 (owner 2026-07-03 r3) — pop a die with the rolled value
 // next to each acting player's square. Shown regardless of spectator-clean (it's
 // a roll RESULT, not a planner preview).
 watch(
-  () => gameStore.state.actionDice?.seq,
+  () => [gameStore.state.actionDiceQueue.length, !gameStore.state.actionDice] as const,
   () => {
     const a = gameStore.state.actionDice;
-    // Astra round 4: a pending pickup wait belongs to the cue that armed it - ANY newer cue or reset cancels it (the
-    // seq restarts after a reset, so a number alone cannot tell an old cue from a new one).
-    if (pickupDieTimer) { clearTimeout(pickupDieTimer); pickupDieTimer = 0; }
     // Owner 09-28 (S7 v3): a live catch-up / reset nulls state.actionDice — tear the renderer's dice down with it AND
     // neuter any pending deferred show (advance the epoch), so no held die and no stale timer survives the boundary.
-    if (!a) { actionDiceLifecycle.onDiceCleared(); return; }
-    if (!renderer) return;
-    // Owner 2026-07-06 (event pacing): if the roll is OFF camera in auto-director mode,
-    // nudge the camera to it FIRST, then show the die once the pan has arrived — so an
-    // off-screen dodge/GFI isn't rendered where the viewer can't see it.
-    const delay = a.rolls[0] ? renderer.ensureOnCamera(a.rolls[0].square) : 0;
-    // #24 (tester, owner; Voss-scoped): a PICKUP roll reveals a BEAT after the mover settles
-    // on the ball square (arrive→[beat]→reveal) instead of popping the instant the token lands.
-    // ONLY pickups get the beat — dodge/GFI/block/catch keep their timing. ⚖ delays WHEN a
-    // resolved report shows, never what's known; the beat scales with the movement-speed setting.
-    // Owner 10-05: "I'm seeing the die toast happen early for pickups, this should only occur when the token enters
-    // the square." The beat above was a fixed one-step delay from the roll's ARRIVAL; with several queued steps still
-    // being walked the die popped while the mover was squares away. A pickup die now waits until the mover's token is
-    // drawn on the ball square (polled, 4 s fail-open cap), and is dropped if a newer cue / reset replaced it.
-    const pickup = a.rolls.find((r) => r.cause === 'pickup');
-    const moverId = pickup ? pickupMoverAt(pickup.square) : null;
-    if (!pickup || !moverId) {
-      const pickupBeat = pickup ? presentationMs(settings.moveSpeedMs) : 0; // mover unknown: the old fixed beat
-      actionDiceLifecycle.onDiceCue(a.rolls, delay + pickupBeat);
+    if (!a) {
+      actionDiceDrain.cancelPickupWaits();
+      actionDiceLifecycle.onDiceCleared();
+      if (gameStore.state.actionDiceQueue.length) gameStore.state.actionDiceQueue.splice(0); // nothing survives a reset
       return;
     }
-    const seq = a.seq;
-    const epoch = actionDiceLifecycle.epoch; // a seek / teardown advances it: the wait dies with its presentation
-    const started = performance.now();
-    const showOnArrival = () => {
-      pickupDieTimer = 0;
-      if (!renderer || gameStore.state.actionDice?.seq !== seq || actionDiceLifecycle.epoch !== epoch) return; // superseded or torn down
-      if (!renderer.playerDrawnAt(moverId, pickup.square) && performance.now() - started < PICKUP_DIE_ARRIVAL_CAP_MS) {
-        pickupDieTimer = window.setTimeout(showOnArrival, 50);
-        return;
-      }
-      actionDiceLifecycle.onDiceCue(a.rolls, Math.max(0, delay - (performance.now() - started)));
-    };
-    showOnArrival();
+    // Drain EVERY queued batch in order (no renderer: they are dropped, as a lone cue was before).
+    actionDiceDrain.drain(gameStore.state.actionDiceQueue);
   },
 );
 
@@ -8319,6 +8306,7 @@ let toastTimer = 0;
 /** Cancel match-owned work synchronously before a different replay position is published. */
 function cancelViewMatchPresentation() {
   actionDiceLifecycle.cancelPending(); // Owner 09-28 (S7 v3): advance the epoch + cancel pending deferred die shows
+  actionDiceDrain.cancelPickupWaits(); // owner 10-06: and every per-batch pickup-on-arrival wait
   for (const timer of [riotousRookiesSplashTimer, negatraitCueTimer,
     stallerSplashTimer, fallOverHideTimer, toastTimer, infoNoticeTimer]) window.clearTimeout(timer);
   riotousRookiesSplashTimer = negatraitCueTimer = 0;

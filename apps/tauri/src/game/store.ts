@@ -471,6 +471,11 @@ function replaceVisibleLogEntries(entries: LogEntry[]): void {
 }
 
 const spectatorPublication = new SpectatorPublication();
+/** One published action-dice batch (`state.actionDice` / an `state.actionDiceQueue` element). */
+type ActionDiceBatchState = { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[]; seq: number };
+/** Owner 10-06 (spec-dice-queue): the queue only bridges one tick to the view's drain; cap it so an unmounted view
+ *  (lobby, headless tests) cannot grow it without bound. */
+const ACTION_DICE_QUEUE_CAP = 16;
 const legacyState = reactive({
   sessionState: 'idle' as SessionState,
   get log(): LogEntry[] { return composeLogLanes(visibleLogLanes); },
@@ -603,7 +608,11 @@ const legacyState = reactive({
    * survives a reconnect and its setters early-return on unchanged values, so nothing repainted until a click). */
   snapshotEpoch: 0,
   /** Owner 07-03 r3: single-die skill/agility rolls this frame — a d6 pops at each acting square (pickup/dodge/GFI/catch/pass…). */
-  actionDice: null as { rolls: { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }[]; seq: number } | null,
+  actionDice: null as ActionDiceBatchState | null,
+  /** Owner 10-06 (spec-dice-queue): EVERY batch published to `actionDice`, in order (same objects, same seq). Two
+   *  batches in one tick overwrite the single slot before the view's batched watcher runs; the view drains this queue
+   *  instead so the first die still renders. Emptied wherever `actionDice` is nulled. */
+  actionDiceQueue: [] as ActionDiceBatchState[],
   /** o66 #7: PASS/CATCH roll as an over-head MODAL (passRoll.playerId = passer, catchRoll.playerId = catcher — the modal lands on the right head). */
   rollModal: null as { playerId: string; square: [number, number]; kind: 'pass' | 'catch'; roll: number; needed?: number; ok: boolean; reRolled?: boolean; seq: number } | null,
   /** #18a: DERIVED each frame, not latched (Meero C-18a): opponent is the block-dice decider — keyed on the dialog's `choosingTeamId` so a Side-Step defender's OWN pick suppresses it. Existence-only, never the dice values. */
@@ -1299,7 +1308,7 @@ const spectatorConnectionKeys = new Set<PropertyKey>([
   'devLog', 'wireLogFile', 'demoMode',
 ] satisfies (keyof typeof legacyState)[]);
 const spectatorTransientKeys = new Set<PropertyKey>([
-  'actionDice', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'blockResultStamp',
+  'actionDice', 'actionDiceQueue', 'rollModal', 'armorDice', 'skillUsed', 'rerollSplash', 'blockResultStamp',
   'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
   'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
   'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
@@ -1366,6 +1375,21 @@ const state = new Proxy(legacyState, {
 
 function clearFallOver(): void {
   state.fallOver = null;
+}
+
+/** Owner 10-06 (spec-dice-queue): publish a NEW action-dice batch to the newest-batch slot AND the in-order queue the
+ *  view drains. Assigns a fresh array (never mutates in place): in a spectator publication an empty queue reads the
+ *  frozen neutral default, and the assignment lands in the reactive transient state like `actionDice` does. */
+function publishActionDice(rolls: ActionDiceBatchState['rolls']): void {
+  const batch: ActionDiceBatchState = { rolls, seq: (state.actionDice?.seq ?? 0) + 1 };
+  state.actionDice = batch;
+  const queue = state.actionDiceQueue;
+  state.actionDiceQueue = [...queue.slice(Math.max(0, queue.length - (ACTION_DICE_QUEUE_CAP - 1))), batch];
+}
+/** Null the newest-batch slot and empty the queue together (every reset / teardown site). */
+function clearActionDice(): void {
+  state.actionDice = null;
+  state.actionDiceQueue = [];
 }
 
 watch(
@@ -4000,7 +4024,7 @@ async function pauseSpectatorView(): Promise<void> {
           if (roll.trait) state.negatraitCue = { ...roll.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
           if (roll.modal) state.rollModal = { ...roll.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
         }
-        if (dice.length) state.actionDice = { rolls: dice, seq: (state.actionDice?.seq ?? 0) + 1 };
+        if (dice.length) publishActionDice(dice);
       };
       const hasFail = firstRolls.some((roll) => roll.die?.failed || roll.modal?.ok === false || roll.trait?.successful === false);
       const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
@@ -4563,7 +4587,7 @@ const CATCHUP_GAP_MS = 4; // near-instant drain while catching up
 let blastinNoticeKey: string | null = null; // S46: the beat instance the picker notice already fired for
 function clearCatchupTransients(): void {
   state.blockTargetCue = null; state.foulTargetCue = null; state.pushArrows = null;
-  state.actionDice = null; state.rollModal = null; state.injurySplash = null; state.turnover = null;
+  clearActionDice(); state.rollModal = null; state.injurySplash = null; state.turnover = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
   clearRerollSplash(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
@@ -4971,7 +4995,14 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       presentation.presenting = null;
       resolve();
       if (!watchdog && state.presentationStep?.seq === presentedStep.seq) state.presentationStep = null;
-      if (deferredFailedFence?.playerId === ev.playerId) releaseDeferredFailedFence(true); // owner 09-06: the failed walk drained
+      // owner 09-06: the failed walk drained. Owner 10-06 (g1950459): only once every step the held fence owns has walked -
+      // a planned run arrives as one burst, so the failure of step 7 is held while steps 2-6 are still queued; releasing
+      // it at the first earlier tile published the fence, dropped the queued tiles and snapped the token to the end.
+      // Astra P2a: while its tiles are still walking, each completed tile restarts the inactivity cap.
+      if (deferredFailedFence?.playerId === ev.playerId) {
+        if (deferredFailedFenceStepsQueued()) armDeferredFailedFenceCap();
+        else releaseDeferredFailedFence(true);
+      }
     };
     const capMs = Math.max(STEP_GATE_CAP_MS, presentationMs(settings.moveSpeedMs) * 2);
     const cap = scheduleGameTimeout(() => release(true), capMs);
@@ -5536,7 +5567,12 @@ function publishBoardPresentationFence(): void {
  * an activation flush: decision/cinematic FIFO entries survive, other players are untouched, and the run ledger
  * remains available if a successful reroll continues the same activation. The exact walk gate is released now,
  * independently of STEP_GATE_CAP_MS, because the already-applied model coordinate is authoritative. */
-let deferredFailedFence: { playerId: string; occurrenceId: number; phase: 'failed' | 'resolved' } | null = null;
+let deferredFailedFence: {
+  playerId: string; occurrenceId: number; phase: 'failed' | 'resolved';
+  /** Identity of THIS held fence: the cap callback acts only on the fence it was armed for (Astra P2b). */
+  token: number; cap: ReturnType<typeof setTimeout> | null;
+} | null = null;
+let deferredFailedFenceToken = 0;
 let failedActionHoldSeq = 0;
 const FAILED_DRAIN_CAP_MS = 4000;
 /** Owner 09-06: a FAILED roll no longer tears the walk down — the token still walks into the square it fell on
@@ -5555,20 +5591,42 @@ function fenceMovementPresentation(
     && event.occurrenceId !== undefined && event.occurrenceId <= occurrenceId);
   if ((presentingOwns || queuedOwns) && (phase === 'failed' || deferredFailedFence?.playerId === playerId)) {
     if (presenting && presentingOwns && presenting.kind === 'rollBeat') presenting.release(false); // roll resolved → confirmed walk
-    if (!deferredFailedFence) {
-      scheduleGameTimeout(() => { if (deferredFailedFence?.playerId === playerId) releaseDeferredFailedFence(true); }, presentationMs(FAILED_DRAIN_CAP_MS));
+    if (deferredFailedFence) {
+      deferredFailedFence.occurrenceId = Math.max(occurrenceId, deferredFailedFence.occurrenceId);
+      deferredFailedFence.phase = phase;
+    } else {
+      deferredFailedFence = { playerId, occurrenceId, phase, token: ++deferredFailedFenceToken, cap: null };
+      armDeferredFailedFenceCap();
     }
-    deferredFailedFence = { playerId, occurrenceId: Math.max(occurrenceId, deferredFailedFence?.occurrenceId ?? 0), phase };
     if (!state.failedActionHold) state.failedActionHold = { playerId, occurrenceId, seq: ++failedActionHoldSeq };
     return;
   }
   if (deferredFailedFence?.playerId === playerId) releaseDeferredFailedFence(false); // this fence supersedes the held one
   publishMovementPresentationFence(playerId, occurrenceId, phase);
 }
+/** Owner 10-06 (g1950459): a queued step the held failed fence still owns (same player, occurrence at or before it). */
+function deferredFailedFenceStepsQueued(): boolean {
+  const held = deferredFailedFence;
+  return !!held && presentation.queue.some((event) => event.kind === 'step' && event.playerId === held.playerId
+    && event.occurrenceId !== undefined && event.occurrenceId <= held.occurrenceId);
+}
+/** (Re)start the held fence's fail-open cap. An INACTIVITY cap (Astra P2a): the walk gate re-arms it each time one
+ *  of the player's owned tiles completes, so a long run at a slow move speed is never cut short - it fires only when
+ *  presentation genuinely stalls. The closure is bound to this fence's token (Astra P2b). */
+function armDeferredFailedFenceCap(): void {
+  const held = deferredFailedFence;
+  if (!held) return;
+  if (held.cap) cancelGameTimeout(held.cap);
+  const token = held.token;
+  held.cap = scheduleGameTimeout(() => {
+    if (deferredFailedFence?.token === token) releaseDeferredFailedFence(true);
+  }, presentationMs(FAILED_DRAIN_CAP_MS));
+}
 /** Publish (or drop) the fence held behind a failed roll's walk: walk-gate release, cap, or teardown. */
 function releaseDeferredFailedFence(publish: boolean): void {
   const held = deferredFailedFence;
   deferredFailedFence = null;
+  if (held?.cap) cancelGameTimeout(held.cap);
   const wasHolding = !!state.failedActionHold;
   if (state.failedActionHold) state.failedActionHold = null;
   if (held && publish) publishMovementPresentationFence(held.playerId, held.occurrenceId, held.phase);
@@ -7650,7 +7708,7 @@ function applyFrameContents(frame: QueuedFrame) {
     }
     const pushDice = (batch: typeof firstRolls) => {
       if (batch.length === 0) return;
-      const surface = () => { state.actionDice = { rolls: batch, seq: (state.actionDice?.seq ?? 0) + 1 }; };
+      const surface = () => { publishActionDice(batch); };
       const surfaceNow = () => { if (!fireballSpellEffect || !enqueueBehindFireball(`fireballRoll:${String((cmd as { commandNr?: unknown }).commandNr)}`, surface)) surface(); };
       if (gazeDeclared && !playback.catchingUp && batch.some((die) => die.cause === 'gaze')) {
         holdPlayback(presentationMs(GAZE_REVEAL_MS));
@@ -9154,7 +9212,7 @@ function clearLeaveGameResidualState(): void {
   state.wireLogFile = '';
   state.log = [];
   state.injurySplash = null;
-  state.actionDice = null;
+  clearActionDice();
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
@@ -13650,7 +13708,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   state.fireballAnim = null;
   state.injurySplash = null;
   state.armorDice = null;
-  state.actionDice = null;
+  clearActionDice();
 
   return {
     apply(command) {
@@ -13682,6 +13740,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
       state.injurySplash = priorInjury;
       state.armorDice = priorArmour;
       state.actionDice = priorActionDice;
+      state.actionDiceQueue = [];
       soundCueActive = priorSoundCueActive;
       settings.order66 = priorOrder66;
       play.active = priorPlay.active;
