@@ -126,7 +126,7 @@ import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../
 gameStore.setInteractiveReRolls(true);
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, ballActionEndConfirmKind, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -6592,6 +6592,12 @@ watch(() => { const g = gameStore.game.value; return g && settings.order66 && ga
       if (actingId && gameStore.iControl(actingId)) o66ArmPassTemplate(actingId);
     }
   });
+// g1950364 (mudarra93, Frenzy blitz): the activation's block is on the wire (hasBlocked) - any Block/Blitz confirm
+// stage armed before it is spent. Without this it outlived the block (and a Frenzy second block) into the
+// blitzMove rail: "Confirm Block" on the bar, Space sending a second clientBlock, and no Confirm Blitz for a dodge.
+watch(() => actingHasBlocked(gameStore.game.value), (blocked) => {
+  if (blocked) { o66AggroStage.value = null; o66PendingBlock.value = null; }
+});
 // At a plain Block/Blitz nominate stage, surface the block-dice preview over the target. A selected special attack
 // uses BlockAttackConfirmModal instead; both retire from the same aggro stage.
 watch(o66AggroStage, (st) => {

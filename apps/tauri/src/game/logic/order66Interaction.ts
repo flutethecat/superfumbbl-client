@@ -538,6 +538,11 @@ function actingPlayerId(game: GameJson): string {
   return String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
 }
 
+/** The acting player's block is on the wire (server actingPlayerSetHasBlocked) - the activation's block is spent. */
+export function actingHasBlocked(game: GameJson | null | undefined): boolean {
+  return (game?.actingPlayer as { hasBlocked?: boolean } | undefined)?.hasBlocked === true;
+}
+
 /** Shared Swoop coordinate election. The server's moveSquareArray is the legal set; the cardinal/adjacent and
  * pitch-bounds checks mirror upstream SwoopLogicModule's final client guard and keep malformed/stale snapshots
  * from producing wire commands. Coordinates remain in the recipient's server frame (away-seat transformation is
@@ -1034,6 +1039,10 @@ export function onPlayerClick(
         if (blockTargetDecorated(game, clickedPlayerId)) return { kind: 'block', defenderId: clickedPlayerId };
         return { kind: 'ignore', reason: 'not a decorated vicious-vines target' };
       }
+      // g1950364 (mudarra93, Frenzy blitz): once the block is on the wire (hasBlocked) the server owns the rest of
+      // it - dice, pushback, follow-up and a Frenzy second block. A defender click in that window armed a
+      // "Confirm Block" stage that outlived the block into the blitzMove rail afterwards.
+      if (actingHasBlocked(game)) return { kind: 'ignore', reason: 'the block is already resolving' };
       if (acting && adjacentStandingEnemyIds(game, acting).includes(clickedPlayerId)) {
         return { kind: 'block', defenderId: clickedPlayerId };
       }
@@ -1141,7 +1150,9 @@ export function onPlayerClick(
   if (state === 'BLITZ') {
     if (!isMine(clickedPlayerId)) {
       const acting = actingPlayerId(game);
-      if (acting && adjacentStandingEnemyIds(game, acting).includes(clickedPlayerId)) {
+      // Upstream BlitzLogicModule.playerInteraction offers the block only while !actingPlayer.hasBlocked(): after
+      // the blitz block (BB2025 lets the blitzer keep moving) an adjacent opponent is just another opponent.
+      if (acting && !actingHasBlocked(game) && adjacentStandingEnemyIds(game, acting).includes(clickedPlayerId)) {
         return { kind: 'block', defenderId: clickedPlayerId };
       }
       return { kind: 'inspect', playerId: clickedPlayerId };
