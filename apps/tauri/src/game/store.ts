@@ -5902,6 +5902,31 @@ const PER_INSTANCE_PCHOICE_MODES = new Set(['assignTouchdown', 'mvp', 'shadowing
 // command: unrelated frames while the dialog stands must not re-arm the pick or wipe a partial selection, and the
 // server can set the same choice again in one turn (cancelled, refunded activation).
 const WISDOM_PCHOICE_MODE = 'wisdomOfTheWhiteDwarf';
+// g1950390 (Runbad vs reelhooman, 10-05): Pick-Me-Up is RE-OFFERED by the server in the same turn - after the coach
+// confirms one of two eligible players the roll report comes back with a fresh playerChoice for the remaining player
+// (dialog null -> new dialog in ONE frame). Keyed per turn it read as already handled, nothing surfaced, and the
+// server waited until a reconnect. Same instance keying as Wisdom; the hold/watchdog path re-enters with the same
+// dialog object, so its key is unchanged.
+const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp']);
+/** Owner 10-05 (g1950390): "We should be declining future offers from the server if the user did not select them ...
+ *  Only on pick me up". The players the coach LEFT OUT of a confirmed Pick-Me-Up selection, with the turn it was
+ *  confirmed in. A same-turn re-offer made up only of those players is declined for them (empty clientPlayerChoice)
+ *  instead of asking again; an offer with any other player still surfaces. This is the one owner-authorised
+ *  exception to "the client never answers a server dialog by itself", and it only ever DECLINES. */
+let pickMeUpUnselected: { turnKey: string; playerIds: Set<string> } | null = null;
+function pickMeUpTurnKey(g: GameJson | null | undefined): string {
+  const gt = g as { half?: number; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } } | null | undefined;
+  return `${gt?.half ?? 0}:${gt?.turnDataHome?.turnNr ?? 0}:${gt?.turnDataAway?.turnNr ?? 0}`;
+}
+/** Pure: is this re-offer made up only of players the coach already left unselected this turn? */
+export function pickMeUpReofferAutoDeclined(
+  unselected: { turnKey: string; playerIds: Set<string> } | null,
+  turnKey: string,
+  offered: readonly string[],
+): boolean {
+  if (!unselected || unselected.turnKey !== turnKey || offered.length === 0) return false;
+  return offered.every((id) => unselected.playerIds.has(id));
+}
 const dialogObjectIds = new WeakMap<object, number>();
 let dialogObjectSeq = 0;
 function dialogObjectId(dialog: object | null | undefined): number {
@@ -6547,6 +6572,8 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 09-17: the per-game dice tally (end screen Dice tab + failed blocks / dodges) reads the same
   // de-duplicated reports; commandNr keys out frames a replay seek re-applies.
   ingestDiceReports(diceStats, currentGameId(), typeof (cmd as { commandNr?: number }).commandNr === 'number' ? (cmd as { commandNr: number }).commandNr : null, reports, game.value);
+  // owner 10-05: the turn's left-out Pick-Me-Up record ends with the turn (a new turn's offer always surfaces)
+  if (pickMeUpUnselected && reports.some((r) => String(r.reportId ?? '') === 'turnEnd')) pickMeUpUnselected = null;
   // Owner 09-27: a Pick Me Up roll retires that player's held selection ring; a turn end retires the rest.
   if (state.pickMeUpPending) {
     const rolled = new Set(reports.filter((r) => String(r.reportId ?? '') === 'pickMeUp').map((r) => String(r.playerId ?? '')));
@@ -8789,6 +8816,7 @@ function resetPlayback() {
   selectSkillHandledInstanceKey = null; state.selectSkill = null; // fresh game — no stale Intensive Training latch/card
   weatherMageRoll = null;
   pregameHandled.clear(); // g330: fresh game (incl. a REMATCH on the same connection) — else stale pchoice keys (pickMeUp) auto-decline all game
+  pickMeUpUnselected = null; // Astra 10-05: the left-out record never crosses a fresh-game / reconnect seed (same ids + same turn key on a rematch)
   state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null; // S46: a second beat never crosses a game boundary or reconnect seed
   visibleBoardProjection = createBoardProjection(); state.actedPlayers = []; // fresh game (acted set is now bit-derived per-frame)
   state.recoveringPlayers = []; // fresh game — drop any #10 recovering latch
@@ -9073,6 +9101,7 @@ function clearLeaveGameResidualState(): void {
   state.activePlayerId = null;
   state.pickMeUpEligible = null;
   state.pickMeUpPending = null;
+  pickMeUpUnselected = null; // owner 10-05: the left-out record is per turn; a game change drops it
   state.adminMessage = null;
   state.injuryPuff = null;
   state.apothecaryD16 = null;
@@ -11978,6 +12007,7 @@ export function installPlayerChoiceTestHarness(
       ? 'watcher-not-on-either-roster'
       : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveSetup = seat === 'player' || seat === 'opponent';
+  const priorPickMeUpUnselected = pickMeUpUnselected; pickMeUpUnselected = null; // owner 10-05: per-harness
   session = {
     send(command: Record<string, unknown>) {
       if (send(command) === false) throw new Error('test transport refusal');
@@ -12066,6 +12096,7 @@ export function installPlayerChoiceTestHarness(
     dispose() {
       pregameHandled.clear();
       for (const key of priorHandled) pregameHandled.add(key);
+      pickMeUpUnselected = priorPickMeUpUnselected;
       state.playerPick = priorPick;
       state.endGame = priorEndGame;
       state.bloodlust = priorBloodlust;
@@ -18559,7 +18590,7 @@ function drivePregameStep() {
       // dialog object even when its stable key/payload are otherwise byte-identical.
       const answerInstanceKey = dialogInstanceKey(g);
       const answerInstanceRef = g.dialogParameter as object | null;
-      if (pcm === WISDOM_PCHOICE_MODE && dialogAlreadyAnswered()) return; // answered instance: a later frame must not re-arm or re-send
+      if (DIALOG_INSTANCE_PCHOICE_MODES.has(pcm) && dialogAlreadyAnswered()) return; // answered instance: a later frame must not re-arm or re-send
       const isEndGameChoice = pcm === 'assignTouchdown' || pcm === 'mvp';
       const endGameDecision = isEndGameChoice
         ? deriveEndGameDecision(state.endGame, outgoingDecisionContext(g))
@@ -18573,7 +18604,7 @@ function drivePregameStep() {
       // Add commandNr to repeated same-turn MVP choices so every round re-arms.
       const key = `pchoice:${pcm}:${gt.half ?? 0}:${gt.turnDataHome?.turnNr ?? 0}:${gt.turnDataAway?.turnNr ?? 0}`
         + (PER_INSTANCE_PCHOICE_MODES.has(pcm) ? `:${lastAppliedCommandNr}` : '')
-        + (pcm === WISDOM_PCHOICE_MODE ? `:i${dialogObjectId(answerInstanceRef)}` : '');
+        + (DIALOG_INSTANCE_PCHOICE_MODES.has(pcm) ? `:i${dialogObjectId(answerInstanceRef)}` : '');
       const eligible = (dpc?.playerIds ?? []).filter(Boolean);
       if (pcm === 'feed' && eligible.length === 0) {
         if (state.bloodlust?.stage === 'bite') state.bloodlust = null;
@@ -18599,6 +18630,18 @@ function drivePregameStep() {
         return;
       }
       if (interactivePlayerChoice && eligible.length > 0 && !pregameHandled.has(key)) {
+        // Owner 10-05 (g1950390): the coach already confirmed this turn's Pick-Me-Up and left these players out; the
+        // server's re-offer for them is declined on their behalf (Pick-Me-Up only - other choices still surface).
+        if (pcm === 'pickMeUp' && pickMeUpReofferAutoDeclined(pickMeUpUnselected, pickMeUpTurnKey(g), eligible)) {
+          if (once(key)) {
+            const declined = sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_PLAYER_CHOICE, playerChoiceMode: pcm, playerIds: [] }, answerInstanceKey, answerInstanceRef);
+            if (declined) {
+              log('system', `play: Pick-Me-Up re-offer declined - ${eligible.map((id) => playerName(g, id)).join(', ')} were left out of this turn's selection`);
+              return;
+            }
+            pregameHandled.delete(key); // Astra 10-05: a refused send fails OPEN - fall through and surface the pick as before
+          } else return;
+        }
         // Hold Pick-Me-Up behind the turn-end splash, replacing older pending arms without latching them.
         if (pcm === 'pickMeUp' && turnSplashBusy()) {
           const armLater = () => drivePregameStep(); // re-enter and take the normal path, splash now clear
@@ -19003,7 +19046,7 @@ watch(
     // Include playerChoice mode and commandNr so repeated same-turn MVP dialogs re-arm.
     if (dp?.dialogId === 'playerChoice') key += `:${pcm}`;
     if (PER_INSTANCE_PCHOICE_MODES.has(pcm)) key += `:${lastAppliedCommandNr}`;
-    if (pcm === WISDOM_PCHOICE_MODE) key += `:i${dialogObjectId(g.dialogParameter as object | null)}`;
+    if (DIALOG_INSTANCE_PCHOICE_MODES.has(pcm)) key += `:i${dialogObjectId(g.dialogParameter as object | null)}`;
     // S43: a replacement of an UNKNOWN dialog by another instance of the same id/team must re-run the surfacer (known dialogs keep their key).
     if (dp?.dialogId && isUnknownDialogId(dp.dialogId)) key += `:u${dialogObjectId(g.dialogParameter as object | null)}`;
     // Rejections can be byte-identical to the previous one; disambiguate each server occurrence. During
@@ -20511,6 +20554,7 @@ export const gameStore = {
     if (playerId === null) {
       if (!p.declinable) return;
       const fn = playerPickResolver;
+      if (p.key.startsWith('pchoice:pickMeUp')) pickMeUpUnselected = { turnKey: pickMeUpTurnKey(game.value), playerIds: new Set(p.eligibleIds) }; // owner 10-05
       clearPlayerPick();
       log('system', `play: player pick declined (${p.key})`);
       fn?.([]);
@@ -20546,8 +20590,11 @@ export const gameStore = {
     if (!p || !p.confirm || p.picked.length < p.minPicks) return;
     const picked = [...p.picked];
     const fn = playerPickResolver;
-    if (p.key.startsWith('pchoice:pickMeUp') && picked.length) {
-      state.pickMeUpPending = { playerIds: picked, seq: (state.pickMeUpPending?.seq ?? 0) + 1 };
+    if (p.key.startsWith('pchoice:pickMeUp')) {
+      if (picked.length) state.pickMeUpPending = { playerIds: picked, seq: (state.pickMeUpPending?.seq ?? 0) + 1 };
+      // owner 10-05: remember who was left out - a same-turn re-offer of only those players is declined for them
+      const left = p.eligibleIds.filter((id) => !picked.includes(id));
+      pickMeUpUnselected = left.length ? { turnKey: pickMeUpTurnKey(game.value), playerIds: new Set(left) } : null;
     }
     clearPlayerPick();
     log('system', `play: player pick confirmed — ${picked.map((id) => playerName(game.value, id)).join(', ') || 'none'} (${p.key})`);
