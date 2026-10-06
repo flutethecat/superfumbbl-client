@@ -22,6 +22,9 @@ import AccountSettings from './components/AccountSettings.vue';
 import { FORK_EDITION } from './game/edition';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
+import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
+import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
+import { openExternal } from './game/openExternal';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
@@ -33,7 +36,7 @@ import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from
 import { decideAppPatch, installAppPatch, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
 import { parseSpectateSecret, presenceFor } from './game/discordPresence';
 import { CONFIRMATION_SETTING_ROWS } from './game/confirmationSettings';
-import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, FUMBBL_SITE, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { botConfigBaseUrl, flushSettingsFile, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { coachPassword, coachPasswordModel, credentialStore, flushCoachPassword, setCoachPassword } from './game/credentials';
@@ -81,8 +84,7 @@ onBeforeUnmount(() => {
   removeNativeContextMenuSuppression?.();
   removeNativeContextMenuSuppression = null;
 });
-import { authenticateAccount, rehydrateAccountSession, signInWithDiscordAccount } from './game/accountApi';
-import { DesktopSignInCancelled } from './game/desktopAuth';
+import { authenticateAccount, rehydrateAccountSession } from './game/accountApi';
 import {
   dismissTournamentNotification,
   startTournamentNotificationPolling,
@@ -302,7 +304,33 @@ const legalNoticeOpen = computed(() => legalNoticeBusy.value || needsLegalAcknow
 // a failed persist closes it anyway (it simply reappears next launch).
 const CONTRIBUTIONS_VERSION = 1;
 const contributionsOpen = computed(() => !legalNoticeOpen.value && settings.contributionsSeenVersion < CONTRIBUTIONS_VERSION);
-const firstOpenGateOpen = computed(() => betaSplashOpen.value || legalNoticeOpen.value || contributionsOpen.value);
+// First-launch setup wizard (owner 10-06): once per SETUP_WIZARD_VERSION, for EVERY install, AFTER the contributions
+// screen — it replaces the old account-setup splash. Part of the gate (shell unmounted, JNLPs held) on first launch; a
+// re-run from Settings → General draws the same component over the live shell instead (ui.setupWizardRerunOpen —
+// in `ui` so SpectateView's gameplay keyboard guard stands down while it is up).
+const skipSplash =
+  import.meta.env.VITE_SKIP_SPLASH === 'true' ||
+  (typeof location !== 'undefined' && new URLSearchParams(location.search).has('skipSplash'));
+const setupWizardOpen = computed(() => !skipSplash && !legalNoticeOpen.value && !contributionsOpen.value && setupWizardNeeded(settings.setupWizardSeenVersion));
+const firstOpenGateOpen = computed(() => betaSplashOpen.value || legalNoticeOpen.value || contributionsOpen.value || setupWizardOpen.value);
+async function finishSetupWizard(): Promise<void> {
+  const firstLaunch = setupWizardOpen.value;
+  completeSetupWizard(settings);
+  const wasRerun = ui.setupWizardRerunOpen;
+  ui.setupWizardRerunOpen = false;
+  if (wasRerun) void nextTick(() => { restoreDialogFocus(null, appMenuFocusFallback()); });
+  try {
+    await nextTick();
+    await flushSettingsFile();
+  } catch {
+    // Same as contributions: a persist failure closes it anyway; it simply reappears next launch.
+  }
+  if (firstLaunch && !settings.hideTutorialSplash) guideOpen.value = true; // the existing post-first-run path
+}
+function rerunSetupWizard(): void {
+  ui.settingsOpen = false;
+  ui.setupWizardRerunOpen = true;
+}
 async function continueContributions(): Promise<void> {
   settings.contributionsSeenVersion = CONTRIBUTIONS_VERSION;
   try {
@@ -446,7 +474,8 @@ function openTournamentNotification() {
   dismissTournamentNotification(notification.id);
 }
 import { SOUND_CATALOG, previewSound, invalidateSoundCache } from './game/sounds';
-import { applyImportedMarkings, prefillMarkerTextFromJson } from './game/skillDisplay';
+import { prefillMarkerTextFromJson } from './game/skillDisplay';
+import { importFumbblMarkings } from './game/fumbblMarkingsImport';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
@@ -488,14 +517,9 @@ onMounted(() => {
   });
 });
 
-const skipSplash =
-  import.meta.env.VITE_SKIP_SPLASH === 'true' ||
-  (typeof location !== 'undefined' && new URLSearchParams(location.search).has('skipSplash'));
-// Owner 2026-07-14: the welcome/creds splash stays ON by default (shown until an account is set). The
-// getting-started TUTORIAL, however, no longer auto-opens — it's surfaced on demand from the hamburger's
-// "Help / Tutorial" entry (see guideOpen below).
-const startAtCreds = !skipSplash && !settings.hideCredsSplash && (!settings.completedFirstRun || !settings.coach.trim()); // owner 08-18: hideCredsSplash = the splash's own opt-out
-const credsOpen = ref(startAtCreds);
+// Owner 10-06: the first-run account-setup splash is gone — the first-launch setup wizard
+// (components/FirstLaunchSetup.vue) asks for the logins now. The getting-started TUTORIAL still does not auto-open
+// except after that wizard's Finish when hideTutorialSplash is off (see finishSetupWizard).
 // Owner 2026-07-04: the tabbed credentials menu (FUMBBL | Super FUMBBL), opened by a
 // button from the launch splash or Settings → Connection.
 const credsMenuOpen = ref(false);
@@ -538,57 +562,12 @@ async function checkFumbblCoach() {
   fumbblChallenge.value = { kind: 'checking', message: fumbblCheckingMessage(settings.coach) };
   fumbblChallenge.value = await runFumbblChallenge(settings.coach, inTauri ? (tauriFetch as typeof fetch) : fetch);
 }
-// Owner 2026-07-14: the welcome splash now offers TWO setup entries — "Set Up FUMBBL" (official account creds
-// + disclaimers) and "Set up Super FUMBBL" (create fork account / log in / how to set up teams). setupMenu
-// drives which splash sub-menu is open; superLoginOpen reveals the fork login fields; teamHelpOpen is the
-// "how to set up teams" pop-up (explains the Import Team + Roster Builder flows).
-const setupMenu = ref<null | 'fumbbl' | 'super'>(null);
-const superLoginOpen = ref(false);
-const teamHelpOpen = ref(false);
-const setupDiscordBusy = ref(false);
-const setupDiscordStatus = ref('');
-let setupDiscordAbort: AbortController | null = null;
-
-async function startSetupDiscordSignIn() {
-  if (setupDiscordBusy.value) return;
-  const coach = settings.coach40k.trim();
-  if (!coach) {
-    setupDiscordStatus.value = 'Enter your existing Super FUMBBL coach name below first.';
-    superLoginOpen.value = true;
-    return;
-  }
-  const controller = new AbortController();
-  setupDiscordAbort = controller;
-  setupDiscordBusy.value = true;
-  setupDiscordStatus.value = `Waiting for Discord authorization for ${coach}…`;
-  try {
-    const identity = await signInWithDiscordAccount({
-      coach,
-      signal: controller.signal,
-      openAuthorization: openExternal,
-    });
-    settings.coach40k = identity.ffbCoachId;
-    setupDiscordStatus.value = `Signed in as ${identity.ffbCoachId}.`;
-    stopTournamentNotificationPolling = startTournamentNotificationPolling();
-  } catch (error) {
-    setupDiscordStatus.value = error instanceof DesktopSignInCancelled
-      ? 'Discord sign-in cancelled.'
-      : error instanceof Error ? error.message : String(error);
-  } finally {
-    if (setupDiscordAbort === controller) setupDiscordAbort = null;
-    setupDiscordBusy.value = false;
-  }
-}
-
-function cancelSetupDiscordSignIn() { setupDiscordAbort?.abort(); }
-onBeforeUnmount(() => setupDiscordAbort?.abort());
 
 // The fork password field debounces its keychain write by 400ms (game/credentials.ts). Dismissing
 // the panel that holds it is faster than that, so EVERY close path flushes first — otherwise the
 // last thing typed is dropped with no error to show for it, which reads to the user as "the app
-// doesn't save my credentials". Covers Done, ✕ and backdrop, for both surfaces that host the field.
+// doesn't save my credentials". Covers Done, ✕ and backdrop.
 function closeCredsMenu() { void flushCoachPassword(); credsMenuOpen.value = false; }
-function closeSetupMenu() { void flushCoachPassword(); setupMenu.value = null; }
 
 // Fork registration uses a distinct password and config-web's idempotent registration endpoint.
 const registerModalOpen = ref(false);
@@ -641,11 +620,6 @@ const splashOpen = ref(false); // welcome splash deprecated — shown only via r
 // hardcoded off so it's suppressed even for existing installs whose hideTutorialSplash is persisted false.
 // Still reachable on demand via Settings → Connection ("Replay the intro screens") / Play Tutorial.
 const guideOpen = ref(false);
-function finishCreds() {
-  settings.completedFirstRun = true;
-  credsOpen.value = false;
-  if (!settings.hideTutorialSplash) guideOpen.value = true; // straight to the tutorial (welcome deprecated)
-}
 function nextSplash() {
   splashOpen.value = false;
   if (!settings.hideTutorialSplash) guideOpen.value = true;
@@ -664,7 +638,6 @@ async function playTutorial() {
 /** Re-show the welcome + tutorial splashes on demand (Settings → Connection). */
 function replayIntro() {
   ui.settingsOpen = false;
-  credsOpen.value = false;
   guideOpen.value = false;
   splashOpen.value = true;
 }
@@ -679,20 +652,7 @@ const twitchChannelUrl = 'https://twitch.tv/flutethecat';
 // Show the live embed only on the web/dev origin; the desktop build gets a clickable
 // "Watch on Twitch" card that opens the channel in the system browser instead. (inTauri itself is declared
 // at the top of the script — owner 09-25: the presence watcher reads it during setup.)
-/** Open an external URL in the system browser (Tauri opener plugin; window.open on
- *  the web). External links don't navigate/embed inside the packaged webview. */
-async function openExternal(url: string): Promise<void> {
-  if (inTauri) {
-    try {
-      const { openUrl } = await import('@tauri-apps/plugin-opener');
-      await openUrl(url);
-      return;
-    } catch {
-      /* fall through to window.open */
-    }
-  }
-  window.open(url, '_blank', 'noopener');
-}
+// openExternal (system browser; window.open fallback) lives in game/openExternal.ts — shared with the setup wizard.
 
 // Owner ruling (console shell restructure): Hub is deprecated — Play is the console shell's landing/home blade.
 type AppView = 'spectate' | 'play' | 'replay' | 'console' | 'team' | 'tournaments' | 'statistics' | 'league' | 'players' | 'store';
@@ -713,9 +673,9 @@ function openTournamentTeamBuilder(rulesetPackName: string): void {
   tournamentBuilderLaunchRevision.value += 1;
   view.value = 'team';
 }
-/** Owner 09-25: the public edition has no Replay blade — a replay route lands on Play; the loaded game takes over. */
-const replayHomeView: AppView = FORK_EDITION ? 'replay' : 'play';
-if (!FORK_EDITION) watch(view, (v) => { if (v === 'replay') view.value = 'play'; }); // a restored/stale 'replay' view never strands the shell
+/** Owner 10-06 (replay pane revamp): the Replay blade is back in BOTH editions (search any coach / game id) — a
+ *  replay route lands on it; the loaded game takes over. (Owner 09-25 had pulled it from the public edition.) */
+const replayHomeView: AppView = 'replay';
 function applyJnlpResultView(result: JnlpRouteResult): void {
   if (result === 'replay') view.value = replayHomeView;
   else if (result === 'spectate') view.value = 'spectate';
@@ -781,7 +741,7 @@ function openConsole() {
 // Owner 09-10: the hamburger menu is retired. Outside a game, Esc opens the same Game Menu the pitch uses (Settings,
 // Help / Field Manual) so the console keeps a keyboard route to them; in-game SpectateView owns the Esc binding.
 function escConsoleMenu(e: KeyboardEvent): void {
-  if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || guideOpen.value || credsMenuOpen.value) return;
+  if (e.code !== 'Escape' || gameStore.game.value || ui.settingsOpen || ui.setupWizardRerunOpen || guideOpen.value || credsMenuOpen.value) return;
   if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
   ui.gameMenuOpen = !ui.gameMenuOpen;
 }
@@ -1159,29 +1119,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenHotkey, 
 // #16 (owner 08-11): the import coach — AUTOFILLED with the user's own FUMBBL coach, freely editable to any coach.
 const importCoach = ref(settings.coach);
 async function importMarkings() {
-  const coach = importCoach.value.trim();
-  if (!coach) {
-    markingsStatus.value = 'Enter a coach name to import markings from.';
-    return;
-  }
-  markingsStatus.value = `Fetching markings for ${coach}…`;
-  try {
-    // ⚖ upstream-does-it: the Java client reads this same endpoint (user-initiated fetch of a coach's client options).
-    const res = await fetch(`${FUMBBL_SITE}/api/clientoptions/get/${encodeURIComponent(coach)}`);
-    if (!res.ok) throw new Error(`fumbbl.com returned ${res.status}`);
-    const text = await res.text();
-    const parsed = JSON.parse(text) as { autoMarkingRecords?: { skillArray?: string[]; marking?: string }[] };
-    if (!Array.isArray(parsed.autoMarkingRecords)) throw new Error('this coach has no markings configured');
-    settings.markingsConfig = JSON.stringify(parsed);
-    // Owner 09-25: the import REPLACES what an earlier import wrote (glyph AND behaviour, gainedOnly/applyTo honoured)
-    // and retires rules deleted on fumbbl.com; combo / injury rules stay in the JSON and draw from there.
-    const { next, imported, combos } = applyImportedMarkings(parsed.autoMarkingRecords, settings.skillConfig);
-    settings.skillConfig = next; // one reassign → persist + re-render
-    markingsStatus.value = `Imported ${imported} skill marking${imported === 1 ? '' : 's'} from ${coach}`
-      + (combos ? ` (+${combos} combo/injury rule${combos === 1 ? '' : 's'} from the JSON)` : '') + '.';
-  } catch (error) {
-    markingsStatus.value = `Import failed for ${coach}: ${error instanceof Error ? error.message : String(error)}`;
-  }
+  // Owner 10-06: the routine lives in game/fumbblMarkingsImport.ts so the first-launch setup wizard runs the same one.
+  markingsStatus.value = await importFumbblMarkings(importCoach.value, (status) => { markingsStatus.value = status; });
 }
 
 const settingsDialog = ref<HTMLElement | null>(null);
@@ -1189,7 +1128,9 @@ let settingsOpener: HTMLElement | null = null;
 
 function appMenuFocusFallback(): HTMLElement | null {
   return document.querySelector<HTMLElement>('.blade[data-active="true"]')
-    ?? document.querySelector<HTMLElement>('.icon-button[title="Settings"]');
+    ?? document.querySelector<HTMLElement>('.icon-button[title="Settings"]')
+    // In a game the console blades are gone and the quick bar's menu button is the Settings route.
+    ?? document.querySelector<HTMLElement>('.icon-button[title="Game menu (Esc)"]');
 }
 function settingsModalFocusFallback(): HTMLElement | null {
   return settingsDialog.value?.querySelector<HTMLElement>('.settings-x') ?? appMenuFocusFallback();
@@ -1307,6 +1248,9 @@ watch(() => ui.settingsOpen, (open) => {
   } else {
     const opener = settingsOpener;
     settingsOpener = null;
+    // Owner 10-06: "Run first-launch setup again" closes Settings and opens the wizard overlay, which takes focus
+    // itself — restoring to the opener here would land behind it. The wizard's Finish restores to the shell instead.
+    if (ui.setupWizardRerunOpen) return;
     void nextTick(() => { restoreDialogFocus(opener, appMenuFocusFallback()); });
   }
 });
@@ -1577,8 +1521,6 @@ function captureKey(event: KeyboardEvent) {
       </div>
       <!-- owner 2026-07-03 r5: stencil "ALPHA RELEASE" stamp -->
       <span class="alpha-stamp" aria-label="Beta release">BETA</span> <!-- owner 09-24: was ALPHA RELEASE -->
-      <!-- owner 2026-07-14: build credit + Twitch link MOVED off the menu bar to the bottom-left of the
-           opening credentials splash panel (.splash-build-credit below). -->
       <!-- session state + Disconnect, moved off the removed connect bar (Option A) -->
       <!-- Owner ruling (08-18): the "Signed in as" identity block and the "Alpha — spectate & play
            vX" tagline both move OUT of the header — identity relocates to the bottom-right corner
@@ -1601,9 +1543,9 @@ function captureKey(event: KeyboardEvent) {
       <template v-else>
         <button class="blade" type="button" :data-active="view === 'play'" @click="selectBlade('play')">Play</button>
         <button class="blade" type="button" :data-active="view === 'spectate'" @click="selectBlade('spectate')">Spectate</button>
-        <!-- Owner 09-25: the Replay blade is deprecated from the PUBLIC edition — the Play blade's recent games carry
-             Details/Replay and Open JNLP routes replay JNLPs; the fork keeps the launcher (local files, fork replays). -->
-        <button v-if="FORK_EDITION" class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
+        <!-- Owner 10-06 (replay pane revamp): the Replay blade is in BOTH editions again, after Play / Spectate — its
+             search finds any coach's games or a game id (owner 09-25 had made it fork-only; reverse here if wanted). -->
+        <button class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
         <template v-if="FORK_EDITION">
         <span class="blade-ribbon-sep" aria-hidden="true"></span>
         <button class="blade" type="button" :data-active="view === 'team'" @click="selectBlade('team')">Team</button>
@@ -1668,7 +1610,7 @@ function captureKey(event: KeyboardEvent) {
     <KeepAlive v-else include="TeamBuilderView">
       <PlayView v-if="view === 'play'" />
       <SpectateBrowserView v-else-if="view === 'spectate'" @spectate="openSpectateGame" />
-      <ReplayLauncherView v-else-if="FORK_EDITION && view === 'replay'" />
+      <ReplayLauncherView v-else-if="view === 'replay'" />
       <TeamBuilderView v-else-if="FORK_EDITION && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
       <TournamentsView v-else-if="FORK_EDITION && view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
       <StatisticsView v-else-if="FORK_EDITION && view === 'statistics'" />
@@ -1869,10 +1811,10 @@ function captureKey(event: KeyboardEvent) {
           <fieldset class="settings-group">
             <legend>Launch screens</legend>
             <label class="row"><input v-model="settings.hideWelcomeSplash" type="checkbox" /> <span>Hide the welcome splash on launch</span></label>
-            <label class="row"><input v-model="settings.hideCredsSplash" type="checkbox" /> <span>Hide the account-setup splash on launch</span></label>
             <label class="row"><input v-model="settings.hideTutorialSplash" type="checkbox" /> <span>Hide the getting-started tutorial on launch</span></label>
             <div class="actions" style="justify-content: flex-start">
               <button type="button" @click="replayIntro()">Replay the intro screens now</button>
+              <button type="button" @click="rerunSetupWizard()">Run first-launch setup again</button>
             </div>
           </fieldset>
 
@@ -2353,7 +2295,7 @@ function captureKey(event: KeyboardEvent) {
             <label class="row">
               <span>D6 style</span>
               <select v-model="settings.d6FaceVariant">
-                <option value="brushed-metal">Brushed metal (default)</option>
+                <option value="brushed-metal">Black (default)</option>
                 <option value="black">White</option>
               </select>
             </label>
@@ -2597,6 +2539,7 @@ function captureKey(event: KeyboardEvent) {
               <input v-model="settings.showFieldLogos" type="checkbox" />
               <span>Show on-field team logos</span>
             </label>
+            <label class="row"><input v-model="settings.dugoutCounts" type="checkbox" /> <span>Player counts on dugout labels (e.g. "2 RESERVES")</span></label>
             <!-- Owner 08-19: showPlayerNumbers + showBlockDice rows RETIRED from Settings > UI
                  (settings keep their defaults; toggles no longer surfaced). -->
             <!-- owner 2026-07-08: end-zone label — team name (FUMBBL) or TOUCHDOWN -->
@@ -2973,153 +2916,9 @@ function captureKey(event: KeyboardEvent) {
       </div>
     </div>
 
-    <!-- First-run FUMBBL credentials prompt (owner 2026-07-03 r6f). Backdrop does
-         NOT dismiss — the user must Continue or Skip. -->
-    <!-- owner 2026-07-14: welcome splash — a BLACK backdrop featuring the Super FUMBBL logo; the TABBL
-         watermark is dropped. Two setup entries (FUMBBL creds / Super FUMBBL account + teams) replace the
-         single (broken) "Enter login credentials" button. -->
-    <div v-if="credsOpen" class="launch-splash splash-dark">
-      <form class="splash-content splash-creds" @submit.prevent="finishCreds()">
-        <img class="splash-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
-        <p v-if="FORK_EDITION">Set up your accounts — a <b>FUMBBL</b> login lets you spectate live matches; a <b>Super FUMBBL</b>
-          account lets you play on the fork. You can change these any time in <b>Settings → General</b>.</p>
-        <p v-else>Set up your <b>FUMBBL</b> login — it lets you spectate live matches and play from a FUMBBL game link.
-          You can change it any time in <b>Settings → General</b>.</p>
-        <div class="setup-entries">
-          <button type="button" class="setup-btn" @click="setupMenu = 'fumbbl'">
-            <span class="setup-title">Set Up FUMBBL</span>
-            <span class="setup-sub">Official account — spectate live · <b>{{ settings.coach.trim() || 'not set' }}</b></span>
-          </button>
-          <button v-if="FORK_EDITION" type="button" class="setup-btn setup-super" @click="setupMenu = 'super'; superLoginOpen = false">
-            <span class="setup-title">Set Up Super FUMBBL</span>
-            <span class="setup-sub">Fork account &amp; teams — play on the fork · <b>{{ settings.coach40k.trim() || 'not set' }}</b></span>
-          </button>
-        </div>
-        <p class="splash-credit">Stored locally on this machine only — never sent anywhere but the server you connect to.</p>
-        <label class="row splash-skip-next"><input v-model="settings.hideCredsSplash" type="checkbox" /> <span>Skip this next time</span></label>
-        <div class="guide-actions">
-          <button type="submit" class="splash-continue guide-tour">Save &amp; continue ▸</button>
-          <!-- owner 2026-07-03: FUMBBL credentials are required to spectate, so
-               skipping isn't "just spectate" — warn the user with a tooltip. -->
-          <span class="skip-wrap">
-            <button type="button" class="splash-continue guide-start"
-              title="FUMBBL credentials are required to spectate live games — skip only to explore the demo."
-              @click="finishCreds()">Skip for now</button>
-            <span class="skip-tooltip" role="tooltip">
-              ⚠ FUMBBL credentials are <b>required to spectate</b> live matches. Skipping only lets you explore
-              the <b>demo</b> — you won't be able to watch live games until you add them (Settings&nbsp;→&nbsp;Connection).
-            </span>
-          </span>
-        </div>
-        <!-- owner 2026-07-14: build credit + Twitch link, moved here from the menu bar — small, bottom-left. -->
-        <div class="splash-build-credit">
-          Client built by FluteTheCat
-          <a class="twitch-link" href="https://twitch.tv/flutethecat" title="twitch.tv/flutethecat"
-            @click.prevent="openExternal('https://twitch.tv/flutethecat')">
-            <svg viewBox="0 0 24 24" width="12" height="12" aria-label="Twitch" role="img">
-              <path fill="currentColor" d="M4.3 0 1 3.3v17.4h5.9V24l3.3-3.3h4.9L21.9 14V0H4.3Zm15.4 13.1-3.3 3.3h-3.3l-2.9 2.9v-2.9H6.3V1.6h13.4v11.5Z"/>
-              <path fill="currentColor" d="M15.7 4.9h-1.6v4.9h1.6V4.9Zm-4.4 0H9.7v4.9h1.6V4.9Z"/>
-            </svg>
-          </a>
-        </div>
-      </form>
-
-      <!-- "Set Up FUMBBL" sub-menu: official-account creds + the spectate disclaimer. -->
-      <div v-if="setupMenu === 'fumbbl'" class="modal-backdrop creds-menu-backdrop" @click.self="setupMenu = null">
-        <div class="creds-menu">
-          <div class="creds-menu-head">
-            <h2>Set Up FUMBBL</h2>
-            <button type="button" class="creds-menu-close" @click="setupMenu = null">✕</button>
-          </div>
-          <section class="creds-panel">
-            <p class="hint">Your official <b>FUMBBL</b> account — required to spectate live matches. Enter the same
-              coach name you use on <b>fumbbl.com</b> so opponents recognise you.</p>
-            <label class="creds-field">Coach name
-              <input v-model="settings.coach" type="text" autocomplete="username" placeholder="your FUMBBL coach name" />
-            </label>
-            <label class="creds-field">Password
-              <input v-model="settings.password" type="password" autocomplete="current-password" placeholder="FUMBBL password" />
-            </label>
-            <p class="hint">⚠ Live spectating needs these credentials. Stored locally only.</p>
-          </section>
-          <div class="creds-menu-actions">
-            <button type="button" class="creds-menu-done" @click="setupMenu = null">Done</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- "Set Up Super FUMBBL" sub-menu: create a fork account / log in / how to set up teams. -->
-      <div v-if="FORK_EDITION && setupMenu === 'super'" class="modal-backdrop creds-menu-backdrop" @click.self="closeSetupMenu">
-        <div class="creds-menu">
-          <div class="creds-menu-head">
-            <h2>Set Up Super FUMBBL</h2>
-            <button type="button" class="creds-menu-close" @click="closeSetupMenu">✕</button>
-          </div>
-          <section class="creds-panel">
-            <p class="hint">Your <b>Super FUMBBL</b> (fork) account lets you play on the test server.</p>
-            <div class="setup-options">
-              <button type="button" class="setup-option" :disabled="setupDiscordBusy" @click="startSetupDiscordSignIn()">
-                <span class="setup-title">{{ setupDiscordBusy ? 'Waiting for Discord…' : 'Sign in with Discord' }}</span>
-                <span class="setup-sub">Authorize in your system browser; this client securely claims the session.</span>
-              </button>
-              <button v-if="setupDiscordBusy" type="button" class="setup-option" @click="cancelSetupDiscordSignIn()">
-                <span class="setup-title">Cancel sign-in</span>
-                <span class="setup-sub">Invalidate the pending desktop claim.</span>
-              </button>
-              <p v-if="setupDiscordStatus" class="hint" aria-live="polite">{{ setupDiscordStatus }}</p>
-              <button type="button" class="setup-option" @click="openRegisterModal()">
-                <span class="setup-title">Create an account</span>
-                <span class="setup-sub">No fork account yet? Register one — no FUMBBL account needed.</span>
-              </button>
-              <button type="button" class="setup-option" @click="superLoginOpen = !superLoginOpen">
-                <span class="setup-title">Log in to an existing account {{ superLoginOpen ? '▾' : '▸' }}</span>
-                <span class="setup-sub">Already have a fork account? Enter its credentials.</span>
-              </button>
-              <div v-if="superLoginOpen" class="super-login">
-                <label class="creds-field">Coach name
-                  <input v-model="settings.coach40k" type="text" autocomplete="username" placeholder="your Super FUMBBL coach name" />
-                </label>
-                <label class="creds-field">Password
-                  <input v-model="coachPasswordModel" type="password" autocomplete="current-password" placeholder="Super FUMBBL password" />
-                  <!-- Same honesty as the Login Credentials dialog: this surface hosts the SAME field,
-                       so an unusable credential store has to say so here too or it looks like silence. -->
-                  <p v-if="credentialStore.notice" class="hint">{{ credentialStore.notice }}</p>
-                </label>
-              </div>
-              <button type="button" class="setup-option" @click="teamHelpOpen = true">
-                <span class="setup-title">How to set up teams</span>
-                <span class="setup-sub">Import a team from FUMBBL or build one in the Roster Builder.</span>
-              </button>
-            </div>
-          </section>
-          <div class="creds-menu-actions">
-            <button type="button" class="creds-menu-done" @click="closeSetupMenu">Done</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- "How to set up teams" pop-up: explains the Import Team + Roster Builder flows. -->
-      <div v-if="teamHelpOpen" class="modal-backdrop creds-menu-backdrop" @click.self="teamHelpOpen = false">
-        <div class="creds-menu team-help">
-          <div class="creds-menu-head">
-            <h2>Setting up teams</h2>
-            <button type="button" class="creds-menu-close" @click="teamHelpOpen = false">✕</button>
-          </div>
-          <section class="creds-panel">
-            <p class="hint">Once you're signed in to Super FUMBBL, open <b>Team Management</b> from the header
-              (under the Super FUMBBL menu). You have two ways to get a team onto the fork:</p>
-            <p><b>Import Team</b> — bring in an existing team from FUMBBL by its <b>Team ID</b> or URL. The team's
-              details are previewed from the website, then bound to your fork coach on confirm.</p>
-            <p><b>Create Team (Roster Builder)</b> — build a legal BB2025 team from any of the races: pick a race,
-              add players within the 1000k budget, and it's installed straight onto the fork.</p>
-            <p class="hint">Your teams then appear in <b>Team Management → Your teams</b>.</p>
-          </section>
-          <div class="creds-menu-actions">
-            <button type="button" class="creds-menu-done" @click="teamHelpOpen = false">Got it</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- Owner 10-06: "Run first-launch setup again" (Settings → General) — the same wizard as the first-launch gate,
+         drawn over the live shell. (It replaced the first-run account-setup splash that lived here.) -->
+    <FirstLaunchSetup v-if="ui.setupWizardRerunOpen" overlay @finish="finishSetupWizard" />
 
     <!-- Owner 2026-07-04: tabbed LOGIN CREDENTIALS menu — FUMBBL (official account)
          + Super FUMBBL (fork account), each entered separately. Opened by the button
@@ -3306,7 +3105,8 @@ function captureKey(event: KeyboardEvent) {
     :error="legalNoticeError"
     @acknowledge="acknowledgeLegalNotice"
   />
-  <FirstOpenContributions v-else @continue="continueContributions" />
+  <FirstOpenContributions v-else-if="contributionsOpen" @continue="continueContributions" />
+  <FirstLaunchSetup v-else @finish="finishSetupWizard" />
 </template>
 
 <style>
@@ -4414,7 +4214,6 @@ textarea:focus-visible,
 .splash-twitch-card .twitch-cta { font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); }
 .splash-twitch-card .twitch-cta b { color: #fff; }
 .splash-twitch-card .twitch-host { font-size: max(var(--ui-min-text-size, 12px), 0.78rem); opacity: 0.85; letter-spacing: 0.02em; }
-.splash-skip-next { justify-content: center; margin: 6px 0 2px; color: var(--ui-muted); font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); }
 .splash-credit { font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem) !important; color: #9aa8a0; margin-top: 0.9rem !important; }
 .splash-continue {
   margin-top: 1rem;
@@ -4431,71 +4230,6 @@ textarea:focus-visible,
 }
 .splash-continue:hover { background: #3a8350; }
 @keyframes splash-hint { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
-/* owner 2026-07-14: the welcome splash on a BLACK backdrop (Super FUMBBL logo up top, no TABBL watermark). */
-.launch-splash.splash-dark { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--ui-secondary) 92%, #202024) 0%, var(--ui-secondary) 72%); }
-.launch-splash.splash-dark .splash-content { background: var(--ui-surface); border-color: var(--ui-border); }
-.splash-logo { display: block; width: min(62vmin, 300px); height: auto; margin: 2px auto 10px; user-select: none; }
-.setup-entries { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 4px; }
-.setup-btn {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  text-align: left;
-  padding: 12px 16px;
-  border-radius: 9px;
-  border: 1px solid var(--ui-border);
-  background: var(--ui-surface-2);
-  color: var(--ui-text);
-  cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
-}
-.setup-btn:hover { border-color: var(--ui-primary); background: var(--ui-hover); }
-.setup-btn.setup-super { border-color: var(--ui-primary); background: var(--ui-hover); }
-.setup-btn.setup-super:hover { border-color: var(--ui-primary); filter: brightness(1.15); }
-.setup-title { font-weight: 700; font-size: max(var(--ui-min-primary-text-size, 16px), 0.98rem); }
-.setup-sub { font-size: max(var(--ui-min-text-size, 12px), 0.78rem); color: var(--ui-muted); }
-.setup-options { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
-.setup-option {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  text-align: left;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--ui-border);
-  background: var(--ui-surface);
-  color: var(--ui-text);
-  cursor: pointer;
-}
-.setup-option:hover { border-color: var(--ui-primary); background: var(--ui-hover); }
-.super-login { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px 2px; }
-.team-help .creds-panel p { text-align: left; }
-/* Getting-started guide markup replaced by components/FieldManual.vue (owner 08-27);
-   .guide-actions/.guide-tour/.guide-start stay — the credentials splash CTAs use them. */
-.guide-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; justify-content: center; margin-top: 1rem; }
-.guide-actions .splash-continue { margin-top: 0; animation: none; }
-/* owner 2026-07-14: SWAPPED the splash CTAs — Save & Continue = GREEN (go), Skip for now = RED (caution). */
-.guide-tour { background: #2f6b3e; border-color: #4a8a58; color: #eafbea; }
-.guide-tour:hover { background: #3a8350; }
-.guide-start { background: var(--ui-primary); border-color: var(--ui-accent); color: var(--ui-text-on-primary); }
-.guide-start:hover { background: var(--ui-accent); }
-/* first-run credentials prompt */
-.splash-creds { max-width: 420px; padding-bottom: 30px; }
-/* owner 2026-07-14: build credit anchored to the panel's bottom-left (moved off the menu bar), small +
-   muted. The action buttons are centered so the far-left corner is clear — no overlap. */
-.splash-build-credit {
-  position: absolute;
-  left: 16px;
-  bottom: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.62rem);
-  color: var(--ui-muted);
-  letter-spacing: 0.01em;
-}
-.splash-build-credit .twitch-link { display: inline-flex; align-items: center; color: #9146ff; }
-.splash-build-credit .twitch-link:hover { color: #b48cff; }
 /* owner 2026-07-04: the credentials button + status on the splash / Connection tab */
 .creds-open-btn {
   padding: 0.55rem 1rem;
@@ -4607,42 +4341,6 @@ textarea:focus-visible,
 }
 .register-cancel:hover { filter: brightness(1.2); }
 .creds-menu-done:disabled { opacity: 0.6; cursor: default; }
-/* owner 2026-07-03: warning tooltip on "Skip for now" — FUMBBL credentials are
-   required to spectate, so skipping only reaches the demo. Shows on hover/focus. */
-.skip-wrap { position: relative; display: inline-flex; }
-.skip-tooltip {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: 250px;
-  padding: 8px 11px;
-  background: var(--ui-surface-2);
-  border: 1px solid var(--ui-accent);
-  border-radius: 7px;
-  color: var(--ui-text);
-  font-size: max(var(--ui-min-text-size, 12px), 0.76rem);
-  line-height: 1.4;
-  text-align: left;
-  box-shadow: 0 8px 22px #000c;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.15s ease;
-  z-index: 5;
-  pointer-events: none;
-}
-.skip-tooltip b { color: var(--ui-accent); }
-.skip-tooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: var(--ui-accent);
-}
-.skip-wrap:hover .skip-tooltip,
-.skip-wrap:focus-within .skip-tooltip { opacity: 1; visibility: visible; }
 .creds-field { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin: 0.6rem 0; text-align: left; font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); color: var(--ui-muted); }
 .creds-field input {
   width: 100%; box-sizing: border-box;

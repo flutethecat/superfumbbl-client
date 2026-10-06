@@ -2054,6 +2054,7 @@ watch(() => settings.flatRender, (flat) => renderer?.setFlatMode(flat));
 // Owner 09-10: uniform figures is per orientation — the effective flag follows the pitch orientation.
 const uniformFiguresEffective = computed(() => (settings.pitchOrientation === 'ew' ? settings.uniformFiguresEw : settings.uniformFigures));
 watch(uniformFiguresEffective, (on) => renderer?.setUniformFigures(on)); // owner 09-09: option 3
+watch(() => settings.dugoutCounts, (on) => renderer?.setDugoutCounts(on)); // owner 10-06
 watch(() => settings.showStadium, (on) => renderer?.setStadiumEnabled(on)); // owner 08-19: Settings > UI stadium toggle
 watch(() => settings.turnTrack, (on) => renderer?.setTurnTrackEnabled(on)); // owner 2026-07-07
 watch(() => settings.modernHudStyle, (style) => renderer?.setOnPitchPresentationStyle(style));
@@ -8854,7 +8855,7 @@ function escO66Cascade() {
 function onKeydown(event: KeyboardEvent) {
   // App-shell modals own the keyboard while open. In particular, Settings Esc must
   // run its transactional rollback path rather than this gameplay handler closing it.
-  if (appShellModalOwnsKeyboard(ui.settingsOpen)) return;
+  if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen)) return;
   // S43: while the unanswered-prompt panel is up, Enter / Space / Esc reach no game command (Esc may close its confirmation).
   const ucKey = unknownPanelKeyDecision({
     panelUp: !!gameStore.state.unknownCall && !gameStore.state.unknownCall.hidden, confirming: unknownConfirm.value !== null,
@@ -9146,6 +9147,7 @@ onMounted(async () => {
   renderer.setPitchOrientation(settings.pitchOrientation); // B8-8
   renderer.setFlatMode(settings.flatRender); // owner 2026-07-04f: flat (non-iso) mode
   renderer.setUniformFigures(uniformFiguresEffective.value); // owner 09-09: one figure scale + softer far edge (per orientation 09-10)
+  renderer.setDugoutCounts(settings.dugoutCounts); // owner 10-06: before the first draw (no app yet -> no redraw)
   renderer.stadiumEnabled = settings.showStadium; // owner 08-19: applied pre-first-draw, no redraw needed
   // Owner 09-05: a bundled stadium GLB pack (assets/stadium/<id>/), rendered once to a plan and laid on the pitch quad.
   renderer.setStadiumPack(bundledStadiumPacks()[0] ?? null);

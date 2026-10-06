@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
-import { matchResultArt } from '../../game/matchResultArt';
+import MatchRow from '../../components/MatchRow.vue';
 import {
   clearFumbblLobby,
   fumbblJoinByName,
@@ -22,7 +22,7 @@ import {
 } from '../../game/jnlpRouting';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { teamLogoUrl } from '../../game/teamLogos';
-import { fetchRecentFumbblMatches, type FumbblRecentMatch } from '../../game/fumbblRecentMatches';
+import { fetchRecentFumbblMatches, recentTeamCapNote, type FumbblRecentMatch, type RecentTeamCap } from '../../game/fumbblRecentMatches';
 import { parseActiveGames, phaseLabel, relativeTime, resultLetter, toBrowserMatch, type FumbblActiveGame, type FumbblActiveTeam } from '../../game/fumbblPlayBlade';
 import { gameStore } from '../../game/store';
 import { sharedReplayFileImporter } from '../../game/replay/replayFileImport';
@@ -119,12 +119,15 @@ watch(fumbblLobbyState, (state) => {
 const recent = ref<FumbblRecentMatch[]>([]);
 const recentError = ref('');
 const recentLoading = ref(false);
+/** Owner 10-06: a coach with more than RECENT_TEAM_CAP teams sees games from the most recently active ones - said so */
+const recentTeamCap = ref<RecentTeamCap | undefined>(undefined);
 async function refreshRecent(): Promise<void> {
   if (!coach.value) { recent.value = []; return; }
   recentLoading.value = true;
   try {
-    const { matches } = await fetchRecentFumbblMatches(coach.value, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch);
+    const { matches, teamCap } = await fetchRecentFumbblMatches(coach.value, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch);
     recent.value = matches;
+    recentTeamCap.value = teamCap;
     recentError.value = '';
   } catch (error) {
     recentError.value = `Could not load your recent games: ${error instanceof Error ? error.message : String(error)}`;
@@ -295,10 +298,6 @@ function markLogoFailed(side: 'own' | 'opponent'): void {
   failedLogos.value = next;
 }
 function crest(team: FumbblActiveTeam): string | null { return teamLogoUrl({ race: team.race, side: team.side }); }
-function recentCrest(row: FumbblRecentMatch, who: 'my' | 'opponent'): string | null {
-  const race = who === 'my' ? row.myRace : row.opponentRace;
-  return race ? teamLogoUrl({ race, side: who === 'my' ? 'home' : 'away' }) : null;
-}
 function initials(name: string | undefined): string {
   const words = (name ?? '').trim().split(/\s+/).filter(Boolean);
   if (!words.length) return '—';
@@ -567,40 +566,24 @@ function crestFailed(url: string | null): void {
            opponent | action), stacked under it. Races/TV come from the FUMBBL match API (fumbblRecentMatches). -->
       <section class="card list-card recent-card" aria-labelledby="recent-title">
         <h2 id="recent-title">My Recent Games <span class="count">{{ recent.length }}</span></h2>
+        <p v-if="coach && recentTeamCap" class="team-cap-note">{{ recentTeamCapNote(recentTeamCap) }}</p>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings.</p>
         <p v-else-if="recentError" class="load-error" role="alert">{{ recentError }}</p>
         <p v-else-if="recentLoading && !recent.length" class="empty">Loading&hellip;</p>
         <p v-else-if="!recent.length" class="empty">No recent games</p>
         <div v-else class="recent-list">
-          <article v-for="row in recent" :key="row.matchId" class="game-row recent-row" :data-cached="hasDetails(row)">
-            <div class="row-team home">
-              <img v-if="recentCrest(row, 'my')" class="row-logo" :src="recentCrest(row, 'my')!" alt="" />
-              <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.myTeam) }}</span>
-              <span class="row-text">
-                <strong class="row-name">{{ row.myTeam }}</strong>
-                <small class="row-meta row-coach">{{ coach }}</small>
-                <small v-if="row.myRace" class="row-meta row-race">{{ row.myRace }}</small>
-                <small v-if="formatTeamValue(row.myTv)" class="row-meta">{{ formatTeamValue(row.myTv) }}</small>
-              </span>
-            </div>
-            <div class="row-centre">
-              <!-- Owner 09-25: the result above the score, the relative time under it. Owner 10-01 (S77): the result is the
-                   WIN / LOSS / DRAW label art (alt text names it), from MY side of the match. -->
-              <img class="row-result-art" :data-result="myRecent(row)" :src="matchResultArt(myRecent(row)).src" :srcset="matchResultArt(myRecent(row)).srcset"
-                :width="matchResultArt(myRecent(row)).width" :height="matchResultArt(myRecent(row)).height" :alt="matchResultArt(myRecent(row)).alt" />
-              <span class="row-score"><span class="row-score-n">{{ row.myScore }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ row.opponentScore }}</span></span>
-            </div>
-            <div class="row-right">
-              <div class="row-team away">
-                <img v-if="recentCrest(row, 'opponent')" class="row-logo" :src="recentCrest(row, 'opponent')!" alt="" />
-                <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(row.opponentTeam) }}</span>
-                <span class="row-text">
-                  <strong class="row-name">{{ row.opponentTeam }}</strong>
-                  <small class="row-meta row-coach">{{ row.opponentCoach }}</small>
-                  <small v-if="row.opponentRace" class="row-meta row-race">{{ row.opponentRace }}</small>
-                  <small v-if="formatTeamValue(row.opponentTv)" class="row-meta">{{ formatTeamValue(row.opponentTv) }}</small>
-                </span>
-              </div>
+          <!-- Owner 10-06: the row markup lives in components/MatchRow.vue (shared with the Replay pane's search results). -->
+          <MatchRow
+            v-for="row in recent"
+            :key="row.matchId"
+            class="recent-row"
+            :data-cached="hasDetails(row)"
+            :left="{ name: row.myTeam, coach, race: row.myRace, tv: row.myTv }"
+            :right="{ name: row.opponentTeam, coach: row.opponentCoach, race: row.opponentRace, tv: row.opponentTv }"
+            :score="{ left: row.myScore, right: row.opponentScore }"
+            :result="myRecent(row)"
+          >
+            <template #actions>
               <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
               <div class="row-actions">
                 <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
@@ -608,8 +591,8 @@ function crestFailed(url: string | null): void {
                 <!-- Owner 10-01 (S78): when it was played sits under the buttons, not in the result box. -->
                 <span class="row-when">{{ relativeTime(row.when) }}</span>
               </div>
-            </div>
-          </article>
+            </template>
+          </MatchRow>
         </div>
       </section>
     </div>
@@ -704,6 +687,7 @@ h1 { color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-s
 .list-card { display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; }
 h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; text-shadow: 2px 2px 0 rgba(26, 64, 28, .18); }
 .count { padding: 2px 10px; border-radius: 999px; color: var(--pb-text); background: color-mix(in srgb, var(--ui-forest, #1A401C) 14%, transparent); font-size: 14px; text-shadow: none; }
+.team-cap-note { color: var(--pb-muted); font-size: 14px; }
 .empty { width: 100%; padding: 22px 0; color: var(--pb-muted); font-family: 'Nuffle', system-ui, sans-serif; font-size: 26px; letter-spacing: .04em; text-align: center; } /* owner 09-25: larger */
 .load-error { color: #8f111b; font-size: 14px; }
 .card-foot { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 14px; }

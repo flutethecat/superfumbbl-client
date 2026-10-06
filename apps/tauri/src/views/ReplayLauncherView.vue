@@ -1,55 +1,209 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import fumbblLogoUrl from '../assets/resources/fumbbl-logo.png';
-import { FORK_EDITION } from '../game/edition';
 import { gameStore } from '../game/store';
-import { activeServerTarget, applyServerTarget, resolveJoinCreds, settings } from '../game/settings';
-import { coachPassword } from '../game/credentials';
+import { activeServerTarget, applyServerTarget, settings } from '../game/settings';
 import {
   classifyReplayFileContent,
   sharedReplayFileImporter,
 } from '../game/replay/replayFileImport';
 import { jnlpEntryError, readJnlpFile, routeJnlpRequest } from '../game/jnlpRouting';
-import {
-  createMyGamesState,
-  loadMyGames,
-  type CoachGameRow,
-  type MyGamesState,
-} from '../game/forkChallenge';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
-import { fetchRecentFumbblMatches, type FumbblRecentMatch } from '../game/fumbblRecentMatches';
+import { recentTeamCapNote } from '../game/fumbblRecentMatches';
+import {
+  ReplaySearchTimeout, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
+  type AbortableFetch, type FumbblGroup, type ReplayRow, type ReplaySearchResult,
+} from '../game/replaySearch';
+import { relativeTime } from '../game/fumbblPlayBlade';
+import { CONSOLE_PALETTE, THEME_PRESETS, deriveTheme } from '../game/theme';
+import MatchRow from '../components/MatchRow.vue';
+import PostGamePanel from '../components/PostGamePanel.vue';
+import { loadPostGameSnapshot, postGameSnapshotKeys } from '../game/postGameCache';
+import { postGameKey, type PostGameSnapshot } from '../game/postGameProjection';
 
-const localError = ref('');
-const fileInput = ref<HTMLInputElement | null>(null);
-const fileLoading = ref(false);
-const myGames = reactive<MyGamesState>(createMyGamesState());
-// Owner 09-24: "Your FUMBBL games" — the coach's most recent official matches (public API, no auth), each a
-// one-click replay through the same connectReplay the fork list uses, against the fumbbl.com target.
+/**
+ * Owner 10-06 (spec-replay-pane-revamp.md): the Replay pane. One search field ("Coach, league or game ID",
+ * game/replaySearch.ts), a "Hide scores and outcomes" checkbox, the results as the Play blade's recent-game rows
+ * (components/MatchRow.vue) with Details / Replay, then the replay-file import. FUMBBL only - owner 10-06: no fork
+ * games or fork-server copy in this pane, in either edition. Nothing connects until the user clicks Replay.
+ */
+
+// ---- FUMBBL colour scheme, scoped to this pane (whatever the global theme) ----
+// The `fumbbl` preset's two colours through the same deriveTheme the global theme uses, written as --ui-* on the
+// pane root; the --pb-* row colours are the Play blade's (PlayView .play-view), whose rows MatchRow draws.
+const paneTheme = computed<Record<string, string>>(() => {
+  const preset = THEME_PRESETS.fumbbl;
+  const forest = CONSOLE_PALETTE['--ui-forest'];
+  return {
+    ...deriveTheme(preset.primary, preset.secondary),
+    '--pb-text': forest,
+    '--pb-muted': `color-mix(in srgb, ${forest} 62%, transparent)`,
+    '--pb-line': `color-mix(in srgb, ${forest} 28%, transparent)`,
+    '--pb-carmine': THEME_PRESETS['brand-red'].primary, // the Play blade's carmine action accent (#790004)
+  };
+});
+
+// ---- search ----
 const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
-const fumbblRecent = reactive({ loading: false, error: '', matches: [] as FumbblRecentMatch[], loaded: false });
-async function refreshFumbblRecent(): Promise<void> {
-  const coach = settings.coach.trim();
-  if (!coach) return;
-  fumbblRecent.loading = true; fumbblRecent.error = '';
-  try {
-    const { matches } = await fetchRecentFumbblMatches(coach, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch);
-    fumbblRecent.matches = matches;
-    fumbblRecent.loaded = true;
-  } catch (error) {
-    fumbblRecent.error = error instanceof Error ? error.message : String(error);
-  } finally { fumbblRecent.loading = false; }
+// window.fetch is wrapped so it is never invoked with a foreign `this`.
+const baseFetch: AbortableFetch = inTauri
+  ? (input, init) => (tauriFetch as typeof fetch)(input, init)
+  : (input, init) => fetch(input, init);
+const query = ref('');
+const search = reactive({ loading: false, error: '', result: null as ReplaySearchResult | null });
+let searchSeq = 0;
+let searchAbort: AbortController | null = null;
+async function runSearch(): Promise<void> {
+  cancelReplayLookup();
+  const text = query.value.trim();
+  await showSearch((f) => runReplaySearch(text, settings.coach, f));
 }
-function loadFumbblReplay(row: FumbblRecentMatch): void {
+/** A league from the pick list (several leagues matched the name). */
+async function pickGroup(group: FumbblGroup): Promise<void> {
+  cancelReplayLookup();
+  const text = search.result?.query ?? group.name;
+  await showSearch((f) => searchGroup(group, f, text));
+}
+/** Owner 10-06: one search at a time - a newer search aborts the older one's requests, and every search settles
+ *  within REPLAY_SEARCH_TIMEOUT_MS ("Search timed out") so the button always comes back. */
+async function showSearch(run: (f: (input: string) => Promise<Response>) => Promise<ReplaySearchResult>): Promise<void> {
+  searchAbort?.abort();
+  const controller = new AbortController();
+  searchAbort = controller;
+  const seq = ++searchSeq;
+  search.loading = true; search.error = '';
+  try {
+    const result = await withSearchTimeout(run, baseFetch, undefined, controller);
+    if (seq !== searchSeq) return;
+    search.result = result;
+  } catch (error) {
+    if (seq !== searchSeq) return;
+    search.result = null;
+    search.error = error instanceof ReplaySearchTimeout ? error.message : `Couldn't search — ${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    if (seq === searchSeq) { search.loading = false; searchAbort = null; }
+  }
+}
+const rows = computed<ReplayRow[]>(() => search.result?.rows ?? []);
+const hideScores = computed(() => settings.replaySearchHideScores);
+const resultsTitle = computed(() => {
+  const r = search.result;
+  if (!r) return 'Results';
+  switch (r.kind) {
+    case 'own': return 'Your recent games';
+    case 'coach': return `Recent games for ${r.coach ?? r.query}`;
+    case 'match': return `Match ${r.query}`;
+    case 'replay': return `Game ${r.query}`;
+    case 'league': return `League: ${r.group?.name ?? r.query}`;
+    default: return 'Results';
+  }
+});
+const needsOwnCoach = computed(() => search.result?.kind === 'own' && !search.result.coach);
+const pickGroups = computed<FumbblGroup[]>(() => (search.result?.kind === 'league-pick' ? search.result.groups ?? [] : []));
+/** pick-list names shown more than once (compared like the name match: case- and whitespace-insensitive) carry the
+ *  group id as secondary text */
+function pickKey(group: FumbblGroup): string { return normalizeQuery(group.name).toLowerCase(); }
+const duplicatePickNames = computed(() => {
+  const counts = new Map<string, number>();
+  for (const g of pickGroups.value) counts.set(pickKey(g), (counts.get(pickKey(g)) ?? 0) + 1);
+  return new Set([...counts].filter(([, n]) => n > 1).map(([name]) => name));
+});
+/** a bare number read as a match or a league: one-line links to the other readings (explicit prefixes) */
+const altReadings = computed<{ label: string; query: string }[]>(() => {
+  const r = search.result;
+  if (!r?.bareId) return [];
+  const id = r.bareId;
+  const alts = [{ label: `replay ${id}`, query: `replay:${id}` }];
+  if (r.kind === 'match') alts.push({ label: `league ${id}`, query: `league:${id}` });
+  return alts;
+});
+function searchFor(text: string): void {
+  query.value = text;
+  void runSearch();
+}
+const emptyMessage = computed(() => {
+  const r = search.result;
+  if (!r || rows.value.length || r.kind === 'league-pick') return '';
+  if (r.kind === 'none') return `No coach or league found for ${r.query}`;
+  if (r.kind === 'league') return `No played games in the recent tournaments of ${r.group?.name ?? r.query}`;
+  return `No games found for ${r.query || r.coach}`;
+});
+
+function rowWhen(row: ReplayRow): { rel: string; abs: string } {
+  if (!row.when) return { rel: '', abs: '' };
+  const date = new Date(row.when.replace(' ', 'T'));
+  return { rel: relativeTime(row.when), abs: Number.isNaN(date.valueOf()) ? row.when : date.toLocaleString() };
+}
+const replayLookupError = ref('');
+/** the row whose replay id is being looked up (only that row's Replay is busy) */
+const lookupRowKey = ref<string | null>(null);
+let lookupAbort: AbortController | null = null;
+let replayClickSeq = 0;
+let unmounted = false;
+/** a newer Replay click, a new search or leaving the pane cancels a pending lookup */
+function cancelReplayLookup(): void {
+  replayClickSeq += 1;
+  lookupAbort?.abort();
+  lookupAbort = null;
+  lookupRowKey.value = null;
+}
+async function replayRow(row: ReplayRow): Promise<void> {
+  replayLookupError.value = '';
+  // Astra P1 (10-06): every click takes a token; a lookup that resolves after a newer click, after the pane is left,
+  // or after the session changed (another replay / a game opened meanwhile) is dropped - it never connects.
+  cancelReplayLookup();
+  const token = replayClickSeq;
+  let gameId = row.replayId;
+  if (!gameId && row.replayLookup) {
+    // League rows whose schedule carried no replay id look it up (/api/match/get) on this click only - with the
+    // search's 15 s timeout + abort (Astra 10-06), busy on this row alone.
+    const before = sessionSnapshot();
+    const controller = new AbortController();
+    lookupAbort = controller;
+    lookupRowKey.value = row.key;
+    let timedOut = false;
+    try {
+      gameId = await withSearchTimeout((f) => resolveReplayId(row, f), baseFetch, undefined, controller);
+    } catch (error) {
+      timedOut = error instanceof ReplaySearchTimeout;
+      gameId = 0;
+    } finally {
+      if (token === replayClickSeq) { lookupRowKey.value = null; lookupAbort = null; }
+    }
+    if (unmounted || token !== replayClickSeq || !sessionIsCurrent(before)) return;
+    if (timedOut) { replayLookupError.value = `Looking up the replay for match ${row.matchId} timed out.`; return; }
+  }
+  if (!gameId) { if (row.replayLookup) replayLookupError.value = `FUMBBL has no replay for match ${row.matchId}.`; return; }
   sharedReplayFileImporter.invalidate();
   applyServerTarget('fumbbl');
   const target = activeServerTarget();
   localError.value = '';
-  void gameStore.connectReplay({ url: target.url, compression: target.compression, coach: settings.coach.trim(), gameId: row.replayId });
+  detailsRow.value = null;
+  void gameStore.connectReplay({ url: target.url, compression: target.compression, coach: settings.coach.trim(), gameId });
 }
-function matchWhen(row: FumbblRecentMatch): string {
-  const date = new Date(row.when.replace(' ', 'T'));
-  return Number.isNaN(date.valueOf()) ? row.when : date.toLocaleDateString();
+
+// ---- Details (PlayView's post-game cache popup). Hide-scores hides the button: the end-of-game pane is the result. ----
+const detailsKeys = ref<Set<string>>(new Set());
+const detailsRow = ref<ReplayRow | null>(null);
+const detailsSnapshot = ref<PostGameSnapshot | null>(null);
+const detailsLoading = ref(false);
+function detailsKeyFor(row: ReplayRow): string { return postGameKey('fumbbl', row.replayId); }
+function hasDetails(row: ReplayRow): boolean { return !!row.replayId && detailsKeys.value.has(detailsKeyFor(row)); }
+async function refreshDetailsKeys(): Promise<void> { detailsKeys.value = await postGameSnapshotKeys(); }
+async function openDetails(row: ReplayRow): Promise<void> {
+  detailsRow.value = row; detailsSnapshot.value = null; detailsLoading.value = true;
+  try { detailsSnapshot.value = await loadPostGameSnapshot(detailsKeyFor(row)); } finally { detailsLoading.value = false; }
 }
+function closeDetails(): void { detailsRow.value = null; detailsSnapshot.value = null; }
+function onDetailsKey(event: KeyboardEvent): void { if (event.key === 'Escape') closeDetails(); }
+function detailsSide(row: ReplayRow, snapshot: PostGameSnapshot): 'home' | 'away' {
+  return snapshot.game.teamHome.teamId === String(row.left.teamId ?? '') ? 'home' : 'away';
+}
+
+// ---- replay file import (unchanged) ----
+const localError = ref('');
+const fileInput = ref<HTMLInputElement | null>(null);
+const fileLoading = ref(false);
 const stopFileBusy = sharedReplayFileImporter.subscribeBusy((busy) => { fileLoading.value = busy; });
 interface LauncherSessionSnapshot {
   game: typeof gameStore.game.value;
@@ -79,53 +233,13 @@ function sessionIsCurrent(snapshot: LauncherSessionSnapshot): boolean {
     && current.replayActive === snapshot.replayActive;
 }
 onBeforeUnmount(() => {
+  unmounted = true;
+  cancelReplayLookup();
+  searchSeq += 1;
+  searchAbort?.abort();
   stopFileBusy();
   sharedReplayFileImporter.invalidate();
 });
-
-// Owner ruling 08-18: Game ID typing is gone — coaches can't find a game id on Super FUMBBL
-// unassisted. Replaced with a clickable list of the coach's fork games (config-web my-games,
-// same source CreateGameModal.vue's "games in progress" panel uses), requesting `scope: 'finished'`
-// so this list is the coach's finished-game history rather than the active/rejoin set. The
-// `finished` field on a row is how a not-yet-upgraded server is detected: an old server ignores
-// `scope` and returns the active set (rows without `finished` at all), so the honest "history
-// isn't available yet" note is shown only in that case — once the config-web deploy carrying the
-// scope contract lands, real finished rows arrive and the note drops on its own.
-function forkCredentials(): { coach: string; password: string } {
-  return { coach: settings.coach40k.trim(), password: coachPassword() };
-}
-function refreshMyGames(force = false): void {
-  void loadMyGames(myGames, forkCredentials(), force, undefined, 'finished');
-}
-function formatTimestamp(value: string | null | undefined): string {
-  if (!value) return '';
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
-}
-function gameTime(game: CoachGameRow): string {
-  return formatTimestamp(game.finished || game.scheduled || game.started);
-}
-// Old server (pre-scope-contract): rows come back without a `finished` key at all. Once the
-// server is upgraded every row carries `finished` (string or null), so this flips off on its own.
-const historyUnavailable = computed(() => {
-  const first = myGames.games[0];
-  return first !== undefined && !('finished' in first);
-});
-function loadGameReplay(game: CoachGameRow): void {
-  sharedReplayFileImporter.invalidate();
-  // Same store call the old Game ID button used (gameStore.connectReplay), just fed by a click
-  // against the fork (the games list's source) instead of a typed id against whatever target was
-  // active — ported from CreateGameModal.vue:33-44's rejoin wire.
-  applyServerTarget('fork');
-  const target = activeServerTarget();
-  localError.value = '';
-  void gameStore.connectReplay({
-    url: target.url,
-    compression: target.compression,
-    coach: resolveJoinCreds().coach,
-    gameId: game.gameId,
-  });
-}
 function openFilePicker(): void {
   localError.value = '';
   fileInput.value?.click();
@@ -157,126 +271,140 @@ async function loadFile(event: Event): Promise<void> {
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
-onMounted(() => { if (FORK_EDITION) refreshMyGames(); void refreshFumbblRecent(); }); // owner 09-10: no fork games list in the public edition
+onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty query = the user's own recent games
 </script>
 
 <template>
-  <section class="replay-launcher">
+  <section class="replay-launcher" :style="paneTheme" data-scheme="fumbbl">
     <div class="replay-console">
       <header class="replay-heading">
         <div>
           <span class="replay-kicker">Match archive</span>
-          <h1>Open a match replay</h1>
-          <p v-if="FORK_EDITION">Choose one of your FUMBBL or Super FUMBBL matches, or open a replay file from this device.</p>
-          <p v-else>Choose one of your recent FUMBBL matches, or open a replay file from this device.</p>
+          <h1>Replays</h1>
+          <p>Search a FUMBBL coach, league or game ID, or open a replay file from this device.</p>
         </div>
         <span class="read-only-chip">Read only</span>
       </header>
 
-      <!-- Presentational port of CreateGameModal.vue:62-84. -->
-      <div class="replay-grid" :data-panels="FORK_EDITION ? 3 : 2">
-        <!-- Owner 09-24: the coach's recent official FUMBBL matches, one click to replay. -->
-        <section class="replay-panel gb-mygames" aria-labelledby="fumbbl-games-title" data-testid="fumbbl-recent">
-          <div class="panel-head gb-mygames-head">
-            <div class="panel-title">
-              <span class="panel-index" aria-hidden="true">01</span>
-              <div>
-                <span class="panel-label">FUMBBL</span>
-                <h2 id="fumbbl-games-title">Your FUMBBL games</h2>
-              </div>
-            </div>
-            <button class="file-button refresh" type="button" :disabled="fumbblRecent.loading" @click="refreshFumbblRecent()">
-              <span aria-hidden="true">↻</span> {{ fumbblRecent.loading ? 'Loading…' : 'Refresh' }}
-            </button>
-          </div>
-          <div class="games-well" aria-live="polite">
-            <p v-if="!settings.coach.trim()" class="note">Set your FUMBBL coach name in Settings to see your recent games.</p>
-            <p v-else-if="fumbblRecent.loading && !fumbblRecent.loaded" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Loading your games…</p>
-            <p v-else-if="fumbblRecent.error" class="error">Couldn't load your games — {{ fumbblRecent.error }}</p>
-            <p v-else-if="!fumbblRecent.matches.length" class="note">No FUMBBL matches with a replay found for this coach.</p>
-            <ul v-else class="gb-mygames-list">
-              <li v-for="row in fumbblRecent.matches" :key="row.matchId" class="gb-mygames-row">
-                <button class="gb-mygames-open" type="button" :disabled="gameStore.replay.loading" @click="loadFumbblReplay(row)">
-                  <span class="gb-mygames-vs">
-                    <strong>{{ row.myTeam }}</strong>
-                    <span class="opponent-line">vs {{ row.opponentTeam }} <em>({{ row.opponentCoach }})</em></span>
-                    <time>{{ matchWhen(row) }}</time>
-                  </span>
-                  <span class="gb-mygames-status" data-finished="true">{{ row.myScore }}&ndash;{{ row.opponentScore }}</span>
-                  <span class="open-glyph" aria-hidden="true">▶</span>
-                </button>
-              </li>
-            </ul>
-          </div>
-        </section>
+      <section class="replay-panel search-panel" aria-labelledby="replay-search-title" data-testid="replay-search">
+        <h2 id="replay-search-title" class="visually-hidden">Search replays</h2>
+        <form class="search-row" role="search" @submit.prevent="runSearch">
+          <input
+            v-model="query"
+            class="search-input"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Coach, league or game ID"
+            aria-label="Coach, league or game ID"
+          />
+          <!-- enabled while a search runs: a new search supersedes (aborts) the running one -->
+          <button class="bevel search-button" type="submit" :aria-busy="search.loading">{{ search.loading ? 'Searching…' : 'Search' }}</button>
+          <label class="hide-scores">
+            <input v-model="settings.replaySearchHideScores" type="checkbox" />
+            <span>Hide scores and outcomes</span>
+          </label>
+        </form>
+        <div class="search-state" aria-live="polite">
+          <p v-if="search.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Searching…</p>
+          <p v-else-if="search.error" class="error">{{ search.error }}</p>
+          <p v-else-if="needsOwnCoach" class="note">Set your FUMBBL coach name in Settings to see your recent games, or search for a coach or game ID.</p>
+          <p v-else-if="emptyMessage" class="note">{{ emptyMessage }}</p>
+          <p v-if="!search.loading && search.result?.notice" class="note search-notice" role="status">{{ search.result.notice }}</p>
+          <p v-if="!search.loading && search.result?.teamCap" class="note team-cap-note">{{ recentTeamCapNote(search.result.teamCap) }}</p>
+          <p v-if="!search.loading && altReadings.length" class="note alt-readings">
+            Looking for
+            <template v-for="(alt, i) in altReadings" :key="alt.query"><template v-if="i"> or </template><button class="link" type="button" @click="searchFor(alt.query)">{{ alt.label }}</button></template>
+            instead?
+          </p>
+        </div>
+      </section>
 
-        <section v-if="FORK_EDITION" class="replay-panel gb-mygames" aria-labelledby="my-games-title">
-          <div class="panel-head gb-mygames-head">
-            <div class="panel-title">
-              <span class="panel-index" aria-hidden="true">02</span>
-              <div>
-                <span class="panel-label">Super FUMBBL</span>
-                <h2 id="my-games-title">Your Super FUMBBL games</h2>
-              </div>
-            </div>
-            <button class="file-button refresh" type="button" :disabled="myGames.loading" @click="refreshMyGames(true)">
-              <span aria-hidden="true">↻</span> {{ myGames.loading ? 'Loading…' : 'Refresh' }}
+      <section v-if="pickGroups.length" class="replay-panel results-panel" aria-labelledby="replay-pick-title" data-testid="replay-league-pick">
+        <h2 id="replay-pick-title" class="results-title">Leagues matching “{{ search.result?.query }}” <span class="count">{{ pickGroups.length }}</span></h2>
+        <ul class="league-pick">
+          <li v-for="group in pickGroups" :key="group.id">
+            <button class="plain league-pick-button" type="button" :disabled="search.loading" :title="`League ${group.id}`" @click="pickGroup(group)">
+              {{ group.name }}<small v-if="duplicatePickNames.has(group.name.toLowerCase())" class="pick-id"> #{{ group.id }}</small>
             </button>
-          </div>
-          <div class="games-well" aria-live="polite">
-            <p v-if="!settings.coach40k.trim()" class="note">Set your coach name in Settings to see your Super FUMBBL games.</p>
-            <p v-else-if="myGames.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Loading your games…</p>
-            <p v-else-if="myGames.error" class="error">Couldn't load your games — {{ myGames.error }}</p>
-            <p v-else-if="!myGames.games.length" class="note">No games found on the fork for this coach.</p>
-            <ul v-else class="gb-mygames-list">
-              <li v-for="game in myGames.games" :key="game.gameId" class="gb-mygames-row">
-                <button class="gb-mygames-open" type="button" :disabled="gameStore.replay.loading" @click="loadGameReplay(game)">
-                  <span class="gb-mygames-vs">
-                    <strong>{{ game.myTeamName }}</strong>
-                    <span class="opponent-line">vs {{ game.opponentTeamName }} <em>({{ game.opponentCoach }})</em></span>
-                    <time v-if="game.finished || game.scheduled || game.started">{{ gameTime(game) }}</time>
-                  </span>
-                  <span class="gb-mygames-status" :data-inprogress="game.inProgress" :data-finished="!!game.finished">
-                    {{ game.finished ? 'finished' : (game.inProgress ? (game.half ? `H${game.half} T${game.turn}` : 'in progress') : 'scheduled') }}
-                  </span>
-                  <span class="open-glyph" aria-hidden="true">▶</span>
-                </button>
-              </li>
-            </ul>
-          </div>
-          <p v-if="historyUnavailable" class="note history-note">Only games still open on the server are listed — finished-game history isn't available from Super FUMBBL yet.</p>
-        </section>
+          </li>
+        </ul>
+      </section>
 
-        <section class="replay-panel file-panel" aria-labelledby="file-replay-title">
-          <div class="panel-head">
-            <div class="panel-title">
-              <span class="panel-index" aria-hidden="true">{{ FORK_EDITION ? '03' : '02' }}</span>
-              <div>
-                <span class="panel-label">Local archive</span>
-                <h2 id="file-replay-title">Open a replay file</h2>
+      <section v-if="rows.length" class="replay-panel results-panel" aria-labelledby="replay-results-title" data-testid="replay-results">
+        <h2 id="replay-results-title" class="results-title">{{ resultsTitle }} <span class="count">{{ rows.length }}</span></h2>
+        <div class="results-list">
+          <MatchRow
+            v-for="row in rows"
+            :key="row.key"
+            class="search-row-item"
+            :data-kind="search.result?.kind"
+            :left="row.left"
+            :right="row.right"
+            :score="maskRow(row, hideScores).score"
+            :result="maskRow(row, hideScores).result"
+          >
+            <template #actions>
+              <div class="row-actions">
+                <button v-if="hasDetails(row) && !hideScores" class="bevel resume-button details-button" type="button"
+                  :title="`End-of-game details for game ${row.replayId}`" @click="openDetails(row)">Details</button>
+                <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading || lookupRowKey === row.key || (!row.replayId && !row.replayLookup)"
+                  :title="row.replayId ? `Replay game ${row.replayId}` : row.replayLookup ? `Replay match ${row.matchId}` : 'FUMBBL has no replay for this match'" @click="replayRow(row)">Replay</button>
+                <span v-if="row.when" class="row-when" :title="rowWhen(row).abs">{{ rowWhen(row).rel }}</span>
+                <span v-if="row.division" class="row-division">{{ row.division }}</span>
               </div>
-            </div>
-          </div>
-          <div class="file-well">
-            <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /></span>
+            </template>
+          </MatchRow>
+        </div>
+      </section>
+
+      <section class="replay-panel file-panel" aria-labelledby="file-replay-title">
+        <div class="file-well">
+          <span class="logo-plate fumbbl-plate"><img :src="fumbblLogoUrl" alt="FUMBBL" /></span>
+          <div class="file-text">
+            <h2 id="file-replay-title">Open a replay file</h2>
             <p class="file-copy">Open a FUMBBL replay, JSON replay bundle, or replay JNLP.</p>
-            <button class="file-button fumbbl-open" type="button" :disabled="fileLoading || gameStore.replay.loading"
-              :aria-busy="fileLoading" @click="openFilePicker">
-              <span aria-hidden="true">▣</span>
-              <span>{{ fileLoading ? 'Reading…' : 'Open FUMBBL Replay' }}</span>
-            </button>
           </div>
-        </section>
-      </div>
+          <button class="file-button fumbbl-open" type="button" :disabled="fileLoading || gameStore.replay.loading"
+            :aria-busy="fileLoading" @click="openFilePicker">
+            <span aria-hidden="true">▣</span>
+            <span>{{ fileLoading ? 'Reading…' : 'Open FUMBBL Replay' }}</span>
+          </button>
+        </div>
+      </section>
       <input ref="fileInput" type="file" hidden tabindex="-1" aria-hidden="true"
         accept="application/json,application/x-java-jnlp-file,text/xml,.json,.ffbreplay,.jnlp" @change="loadFile" />
-      <p v-if="gameStore.replay.error || localError" class="error" role="alert" aria-live="assertive">{{ gameStore.replay.error || localError }}</p>
+      <p v-if="gameStore.replay.error || localError || replayLookupError" class="error" role="alert" aria-live="assertive">{{ gameStore.replay.error || localError || replayLookupError }}</p>
       <p class="read-only-note"><span aria-hidden="true">◆</span> Replay mode is read-only. No gameplay command can leave the client.</p>
+    </div>
+
+    <!-- Details popup (PlayView's): the cached end-of-game pane. Never reachable while scores are hidden. -->
+    <div v-if="detailsRow && !hideScores" class="details-modal" role="dialog" aria-modal="true" :aria-label="`Details: ${detailsRow.left.name} vs ${detailsRow.right?.name ?? ''}`" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
+      <div class="details-card">
+        <header class="details-head">
+          <span class="details-title">{{ detailsRow.left.name }} <span class="vs">vs</span> {{ detailsRow.right?.name ?? '' }}</span>
+          <small class="details-when">{{ rowWhen(detailsRow).rel }}<template v-if="detailsRow.matchId"> &middot; match {{ detailsRow.matchId }}</template></small>
+          <button class="details-close" type="button" aria-label="Close details" @click="closeDetails">&#x2715;</button>
+        </header>
+        <div class="details-body">
+          <p v-if="detailsLoading" class="note">Loading&hellip;</p>
+          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSide(detailsRow, detailsSnapshot)" :local-side="detailsSnapshot.seat === 'play' ? detailsSide(detailsRow, detailsSnapshot) : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <div v-else class="details-missing">
+            <p class="note">No details stored for this game.</p>
+            <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>
+          </div>
+        </div>
+        <footer class="details-foot">
+          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)">Replay</button>
+        </footer>
+      </div>
     </div>
   </section>
 </template>
 
 <style scoped>
+/* Owner 10-06: the FUMBBL scheme - the --ui-* / --pb-* tokens are set on the root by paneTheme (script). Card and
+   row language follows the Play blade (PlayView): old-lace cards on eggshell, forest text, carmine bevel actions. */
 .replay-launcher {
   box-sizing: border-box;
   min-height: calc(100vh - 95px);
@@ -285,14 +413,12 @@ onMounted(() => { if (FORK_EDITION) refreshMyGames(); void refreshFumbblRecent()
   justify-content: center;
   width: 100%;
   padding: clamp(18px, 2vw, 34px);
-  color: var(--ui-text);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--ui-surface-2) 42%, transparent), transparent 180px),
-    var(--ui-surface);
+  color: var(--pb-text);
+  background: var(--ui-eggshell);
 }
 .replay-console {
   box-sizing: border-box;
-  width: min(1180px, 100%);
+  width: min(2200px, 94vw);
   display: flex;
   flex-direction: column;
   gap: clamp(14px, 1.4vw, 22px);
@@ -305,157 +431,129 @@ onMounted(() => { if (FORK_EDITION) refreshMyGames(); void refreshFumbblRecent()
   padding: 2px 2px 14px;
   border-bottom: 3px solid var(--ui-primary);
 }
-.replay-kicker,
-.panel-label {
+.replay-kicker {
   display: block;
-  color: var(--ui-heading);
+  color: var(--pb-carmine);
   font-size: max(var(--ui-min-text-size, 12px), 10px);
   font-weight: 700;
   letter-spacing: .18em;
   text-transform: uppercase;
 }
 h1, h2, p { margin: 0; }
-h1 { margin-top: 3px; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), clamp(24px, 2.3vw, 36px)); letter-spacing: .035em; }
-.replay-heading p { margin-top: 5px; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 12px); line-height: 1.45; }
+h1 { margin-top: 3px; color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; }
+.replay-heading p { margin-top: 5px; color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 13px); line-height: 1.45; }
 .read-only-chip {
   flex: 0 0 auto;
   padding: 6px 10px 5px;
   color: var(--ui-text-on-primary);
-  border: 2px outset color-mix(in srgb, var(--ui-text) 28%, var(--ui-primary));
   border-radius: 4px;
   background: var(--ui-primary);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--ui-secondary) 70%, transparent);
   font-size: max(var(--ui-min-text-size, 12px), 10px);
   font-weight: 700;
   letter-spacing: .14em;
   text-transform: uppercase;
 }
-.replay-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, .8fr); gap: clamp(14px, 1.4vw, 22px); align-items: stretch; }
-/* Owner 09-10: the public edition has only the local archive — one centred panel, sized to the viewport. */
-.replay-grid[data-panels="1"] { grid-template-columns: minmax(280px, min(520px, 100%)); justify-content: center; }
-.replay-grid[data-panels="3"] { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(260px, .7fr); } /* owner 09-24: FUMBBL · Super FUMBBL · file */
-.replay-panel {
+.replay-panel { box-sizing: border-box; min-width: 0; border: 1px solid var(--pb-text); border-radius: 6px; background: var(--ui-old-lace); box-shadow: 0 4px 14px color-mix(in srgb, var(--pb-text) 18%, transparent); }
+.search-panel { display: grid; gap: 10px; padding: 16px 20px; }
+.search-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.search-input {
+  flex: 1 1 320px;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  border: 3px solid color-mix(in srgb, var(--ui-border) 72%, var(--ui-surface));
-  border-radius: 8px;
-  background: linear-gradient(160deg, var(--ui-surface-2), var(--ui-surface));
-  box-shadow:
-    inset 1px 1px 0 color-mix(in srgb, var(--ui-text) 22%, transparent),
-    inset -2px -2px 0 color-mix(in srgb, var(--ui-secondary) 72%, transparent),
-    0 8px 24px color-mix(in srgb, var(--ui-secondary) 72%, transparent);
-  overflow: hidden;
-}
-.panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--ui-border);
-  background: color-mix(in srgb, var(--ui-surface-2) 88%, var(--ui-primary));
+  border: 1px solid var(--pb-text);
+  border-radius: 2px;
+  color: var(--pb-text);
+  background: var(--ui-old-lace);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 18px);
 }
-.panel-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.panel-index {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  color: var(--ui-gold-bright);
-  border: 1px solid var(--ui-border);
-  border-radius: 5px;
-  background: var(--ui-surface);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-text) 8%, transparent);
-  font-size: max(var(--ui-min-text-size, 12px), 11px);
-  font-variant-numeric: tabular-nums;
+.search-input:focus { outline: 2px solid var(--pb-carmine); outline-offset: 1px; }
+.hide-scores { display: inline-flex; align-items: center; gap: 8px; color: var(--pb-text); font-size: max(var(--ui-min-text-size, 12px), 15px); white-space: nowrap; cursor: pointer; }
+.hide-scores input { width: 18px; height: 18px; accent-color: var(--ui-primary); }
+.search-state:empty { display: none; }
+.link { padding: 0; color: var(--pb-carmine); border: 0; background: none; font: inherit; text-decoration: underline; cursor: pointer; }
+.pick-id { color: var(--pb-muted); font-size: 12px; letter-spacing: 0; }
+.league-pick { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.plain { padding: 8px 14px; color: var(--pb-text); border: 1px solid color-mix(in srgb, var(--pb-text) 30%, transparent); border-radius: 6px; background: var(--ui-old-lace);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -3px 0 rgba(26, 64, 28, .12), 0 2px 5px rgba(26, 64, 28, .2);
+  font-family: 'Nuffle', system-ui, sans-serif; font-size: 15px; font-weight: 800; letter-spacing: .06em; cursor: pointer; }
+.plain:hover:not(:disabled) { border-color: var(--pb-carmine); color: var(--pb-carmine); }
+.plain:disabled { opacity: .45; cursor: default; }
+.results-panel { display: flex; flex-direction: column; gap: 10px; padding: 18px 22px; }
+.results-title { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); font-family: 'Nuffle', system-ui, sans-serif; font-size: 24px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.count { padding: 2px 10px; border-radius: 999px; color: var(--pb-text); background: color-mix(in srgb, var(--pb-text) 14%, transparent); font-size: 14px; }
+.results-list { display: grid; align-content: start; gap: 10px; max-height: min(64vh, 1200px); overflow-y: auto; scrollbar-gutter: stable both-edges; }
+.bevel {
+  padding: 12px 26px;
+  border: 2px outset color-mix(in srgb, var(--pb-carmine) 70%, white);
+  border-radius: 4px;
+  color: #fff;
+  background: var(--pb-carmine);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .35);
+  font-family: 'Nuffle', system-ui, sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow: 2px 2px 0 #000;
+  cursor: pointer;
 }
-.panel-title h2 { margin-top: 2px; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 14px); font-weight: 600; letter-spacing: .04em; }
+.bevel:hover:not(:disabled) { filter: brightness(1.25); }
+.bevel:disabled { opacity: .45; cursor: default; filter: none; }
+.bevel:focus-visible { outline: 2px solid var(--pb-carmine); outline-offset: 2px; }
+.search-button { font-size: 20px; padding: 11px 22px; }
+.resume-button { font-size: 22px; padding: 10px 22px; white-space: nowrap; }
+.row-division { color: var(--pb-muted); font-size: 14px; letter-spacing: .06em; text-align: center; text-transform: uppercase; white-space: nowrap; }
 button { font: inherit; }
 .file-button {
   color: var(--ui-text);
   border: 2px outset color-mix(in srgb, var(--ui-text) 24%, var(--ui-surface-2));
   border-radius: 5px;
   background: linear-gradient(180deg, var(--ui-surface-2), var(--ui-surface));
-  box-shadow: 0 2px 5px color-mix(in srgb, var(--ui-secondary) 68%, transparent);
   cursor: pointer;
 }
 .file-button:hover:not(:disabled) { border-color: var(--ui-accent); filter: brightness(1.14); }
 .file-button:active:not(:disabled) { border-style: inset; transform: translateY(1px); }
 .file-button:disabled { opacity: .45; cursor: wait; }
-.file-button:focus-visible,
-.gb-mygames-open:focus-visible {
-  outline: 2px solid var(--ui-focus);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px var(--ui-focus-halo);
-}
-.error { color: var(--ui-danger); font-size: max(var(--ui-min-text-size, 12px), 12px); line-height: 1.45; }
-.note { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 11px); line-height: 1.45; }
-.refresh { flex: 0 0 auto; padding: 6px 10px; font-size: max(var(--ui-min-text-size, 12px), 10px); letter-spacing: .04em; }
-.games-well {
-  flex: 1;
-  min-height: 250px;
-  margin: 12px;
-  padding: 7px;
-  border: 2px inset color-mix(in srgb, var(--ui-border) 70%, var(--ui-surface));
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--ui-surface) 88%, var(--ui-secondary));
-}
-.games-well > .note,
-.games-well > .error { padding: 18px 12px; text-align: center; }
-.state-line { display: flex; align-items: center; justify-content: center; gap: 7px; }
+.file-button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; box-shadow: 0 0 0 4px var(--ui-focus-halo); }
+.error { color: var(--ui-danger); font-size: max(var(--ui-min-text-size, 12px), 13px); line-height: 1.45; }
+.note { color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 14px); line-height: 1.45; }
+.state-line { display: flex; align-items: center; gap: 7px; }
 .status-light { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-success); box-shadow: 0 0 7px var(--ui-success); }
 .status-light.loading { animation: replay-pulse 1.2s ease-in-out infinite; }
-.gb-mygames-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: min(48vh, 430px); overflow-y: auto; }
-.gb-mygames-row { display: grid; }
-.gb-mygames-open {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 18px;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 12px;
-  color: var(--ui-text);
-  border: 1px solid var(--ui-border);
-  border-radius: 4px;
-  background: var(--ui-surface-2);
-  cursor: pointer;
-}
-.gb-mygames-row:nth-child(even) .gb-mygames-open { background: color-mix(in srgb, var(--ui-surface-2) 76%, var(--ui-surface)); }
-.gb-mygames-open:hover:not(:disabled) { border-color: var(--ui-accent); background: var(--ui-hover); }
-.gb-mygames-open:disabled { opacity: .45; cursor: default; }
-.gb-mygames-vs { min-width: 0; text-align: left; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 12px); }
-.gb-mygames-vs strong { display: block; overflow: hidden; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 13px); text-overflow: ellipsis; white-space: nowrap; }
-.opponent-line { display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gb-mygames-vs em { color: var(--ui-text-dim); }
-.gb-mygames-vs time { display: block; margin-top: 4px; color: var(--ui-text-dim); font-size: max(var(--ui-min-text-size, 12px), 9px); }
-.gb-mygames-status { color: var(--ui-gold); font-size: max(var(--ui-min-text-size, 12px), 9px); letter-spacing: .1em; text-transform: uppercase; white-space: nowrap; }
-.gb-mygames-status[data-inprogress="true"] { color: var(--ui-success); }
-.gb-mygames-status[data-finished="true"] { color: var(--ui-muted); }
-.open-glyph { color: var(--ui-accent); font-size: max(var(--ui-min-text-size, 12px), 11px); }
-.history-note { padding: 0 14px 13px; }
-.file-well { display: flex; flex: 1; flex-direction: column; align-items: stretch; justify-content: center; gap: 15px; padding: clamp(22px, 3vw, 42px); text-align: center; }
-.file-copy { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 11px); line-height: 1.5; }
+.file-well { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 14px 20px; }
+.file-text { flex: 1 1 260px; display: grid; gap: 4px; }
+.file-text h2 { color: var(--pb-text); font-size: max(var(--ui-min-primary-text-size, 16px), 16px); font-weight: 600; letter-spacing: .04em; }
+.file-copy { color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 12px); line-height: 1.5; }
 .fumbbl-open { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 10px 14px; color: var(--ui-text-on-primary); border-color: var(--ui-primary); background: var(--ui-primary); font-size: max(var(--ui-min-text-size, 12px), 12px); font-weight: 700; letter-spacing: .045em; }
 .fumbbl-open:hover:not(:disabled) { border-color: var(--ui-accent); background: var(--ui-active); }
-.logo-plate { display: grid; place-items: center; min-width: 0; padding: 13px; border: 2px outset color-mix(in srgb, var(--ui-forest) 45%, var(--ui-old-lace)); border-radius: 6px; }
-.logo-plate img { display: block; max-width: 100%; max-height: 54px; object-fit: contain; }
+.logo-plate { display: grid; place-items: center; min-width: 0; padding: 10px; border: 2px outset color-mix(in srgb, var(--ui-forest) 45%, var(--ui-old-lace)); border-radius: 6px; }
+.logo-plate img { display: block; max-width: 160px; max-height: 44px; object-fit: contain; }
 .fumbbl-plate { background: var(--ui-eggshell); }
-.read-only-note { align-self: center; display: flex; align-items: center; gap: 7px; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 10px); letter-spacing: .04em; text-align: center; }
+.read-only-note { align-self: center; display: flex; align-items: center; gap: 7px; color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 10px); letter-spacing: .04em; text-align: center; }
 .read-only-note span { color: var(--ui-success); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Details popup (PlayView's) */
+.details-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
+.details-card { display: flex; flex-direction: column; width: min(1100px, 94vw); max-height: 92vh; border: 1px solid var(--pb-text); border-radius: 8px; background: var(--ui-old-lace); color: var(--pb-text); box-shadow: 0 20px 60px #000c; overflow: hidden; }
+.details-head { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--pb-line); }
+.details-title { color: var(--pb-text); font-size: 22px; font-weight: 500; min-width: 0; overflow-wrap: break-word; }
+.details-title .vs { color: var(--pb-muted); }
+.details-when { color: var(--pb-muted); font-size: 14px; white-space: nowrap; }
+.details-close { margin-left: auto; width: 34px; height: 34px; border: 1px solid var(--pb-text); border-radius: 6px; color: var(--pb-text); background: var(--ui-eggshell); font-size: 16px; cursor: pointer; }
+.details-close:hover { border-color: var(--pb-carmine); color: #fff; background: var(--pb-carmine); }
+.details-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 18px; }
+.details-missing { display: grid; gap: 6px; justify-items: center; padding: 40px 0; color: var(--pb-muted); text-align: center; }
+.details-foot { display: flex; justify-content: flex-end; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--pb-line); }
 @keyframes replay-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
-@media (max-width: 820px) {
-  .replay-grid { grid-template-columns: 1fr; }
-  .games-well { min-height: 180px; }
-  .gb-mygames-list { max-height: 300px; }
+@media (max-width: 1500px) {
+  .resume-button { font-size: 20px; padding: 10px 12px; }
 }
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   .replay-launcher { padding: 12px; }
+  h1 { font-size: 32px; }
   .replay-heading { align-items: flex-start; }
   .replay-heading p { display: none; }
-  .read-only-chip { margin-top: 5px; }
-  .panel-head { align-items: flex-start; }
-  .gb-mygames-open { grid-template-columns: minmax(0, 1fr) auto; }
-  .open-glyph { display: none; }
+  .bevel { font-size: 18px; padding: 10px 18px; }
 }
 </style>

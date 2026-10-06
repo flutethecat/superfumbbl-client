@@ -1200,6 +1200,17 @@ const FOUL_CUE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 26, d
 // Owner 2026-08-17: the roster-row attention arrow — a bouncing YELLOW ▼ over a token picked from
 // the ROSTER panel (not the pitch), same cue family as the foul boot/block crosshair above.
 const ROSTER_CUE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 22, fill: 0xffd23f, dropShadow: { color: 0x000000, alpha: 0.6, blur: 3, distance: 1 } });
+/** Owner 10-06: dugout band label with an optional leading player count ("2 RESERVES"; 0 included). Off = unchanged. */
+export function dugoutLabel(label: string, count: number, on: boolean): string {
+  return on ? `${Math.max(0, Math.trunc(count) || 0)} ${label}` : label;
+}
+/** Owner 10-06: scale for a dugout band label so its on-screen length (`textWidth` = unscaled, `scale` = the
+ *  scale it would draw at) stays inside `bandLength` (the projected band's long axis, any orientation). Never grows. */
+export function fitDugoutLabelScale(textWidth: number, scale: number, bandLength: number): number {
+  const drawn = textWidth * scale;
+  const cap = bandLength * 0.9;
+  return drawn > cap && drawn > 0 ? scale * (cap / drawn) : scale;
+}
 const DUGOUT_LABEL_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif',
   fontSize: 11,
@@ -3877,6 +3888,8 @@ export class PitchRenderer {
   decorEnabled = true;
   /** Stadium bowl and dressing. On by default; Classic disables it. */
   stadiumEnabled = true;
+  /** Owner 10-06: Settings > On-field markings "player counts on dugout labels" (default OFF). */
+  private dugoutCountsOn = false;
   /** Owner 2026-07-08 (FUMBBL Classic): draw the on-pitch dugout boxes
    *  (reserves/KO/casualties beside the sidelines). Classic turns this OFF — the
    *  classic sidebars carry the box info, so the on-pitch dugouts are redundant. */
@@ -6740,7 +6753,7 @@ export class PitchRenderer {
     this.setActionMode('auto'); // O5: each activation starts in Auto
     this.onSelectionChange?.(playerId);
     this.setPath([]);
-    this.drawDugouts(); // dugout selection halo tracks the selection
+    this.redrawDugoutsWithArrows(); // dugout selection halo tracks the selection; pick arrows must survive
   }
 
   /** O4: declares the action mode for the selected player (hotbar buttons). */
@@ -9588,6 +9601,17 @@ export class PitchRenderer {
         const members = section.label === 'INJURED'
           ? [...unsortedMembers].sort((a, b) => severity(b) - severity(a))
           : unsortedMembers;
+        if (this.dugoutCountsOn) {
+          // Owner 10-06: leading player count; shrink (never abbreviate) if the longer text would overflow the 3-column band.
+          label.text = dugoutLabel(section.label, members.length, true);
+          // Cap against the PROJECTED band's long axis (in E-W the text runs along the band's depth, not TILE_W).
+          const bandLen = Math.hypot(
+            (bandQuad[2]! + bandQuad[4]!) / 2 - (bandQuad[0]! + bandQuad[6]!) / 2,
+            (bandQuad[3]! + bandQuad[5]!) / 2 - (bandQuad[1]! + bandQuad[7]!) / 2,
+          );
+          const sx = label.scale.x || 1;
+          label.scale.set(fitDugoutLabelScale(label.width / sx, sx, bandLen));
+        }
         // Owner 2026-07-07: HARD-BOUNDED zones — every player that belongs in a section
         // stays VISIBLE inside it (no clipping/occlusion). When the count exceeds the slots
         // (rows below the label × columns), the rows PACK tighter into the section and the
@@ -9821,7 +9845,7 @@ export class PitchRenderer {
     this.modernPitchPresentation = true;
     this.chromePitchPresentation = chrome;
     if (!changed) return;
-    this.drawDugouts();
+    this.redrawDugoutsWithArrows();
     this.drawTurnTrack();
   }
 
@@ -11396,6 +11420,13 @@ export class PitchRenderer {
   }
 
   /** Selected prayer/setup-style nominations remain visible when the offered player is in a dugout box. */
+  /** drawDugouts() destroys every dugoutLayer child, pick arrows included - so any standalone redraw must rebuild them. */
+  private redrawDugoutsWithArrows(): void {
+    this.drawDugouts();
+    this.pickArrows = this.pickArrows.filter((a) => !a.node.destroyed);
+    this.drawDugoutPlayerPickArrows();
+  }
+
   private drawDugoutPlayerPickArrows(): void {
     if (!this.playerPickIds || !this.playerPickFriendlyIds) return;
     for (const playerId of this.playerPickIds) {
@@ -14822,12 +14853,12 @@ export class PitchRenderer {
     const generation = ++this.stadiumModelGeneration;
     const prior = this.stadiumModel;
     this.stadiumModel = null;
-    if (prior) { if (this.app) { this.drawStadium(); this.drawDugouts(); } prior.texture.destroy(true); } // 09-06: procedural dugouts return with the pack gone
+    if (prior) { if (this.app) { this.drawStadium(); this.redrawDugoutsWithArrows(); } prior.texture.destroy(true); } // 09-06: procedural dugouts return with the pack gone
     if (!pack) return;
     void renderStadiumPack(pack.manifest, pack.modelUrl).then((rendered) => {
       if (generation !== this.stadiumModelGeneration || this.destroyed) { rendered.texture.destroy(true); return; }
       this.stadiumModel = rendered;
-      if (this.app) { this.drawStadium(); this.drawDugouts(); } // 09-06: a `dugouts.provided` pack takes over the dugout ground
+      if (this.app) { this.drawStadium(); this.redrawDugoutsWithArrows(); } // 09-06: a `dugouts.provided` pack takes over the dugout ground
     }).catch((error: unknown) => {
       console.warn(`Stadium pack ${pack.manifest.id} failed to render`, error);
     });
@@ -14889,12 +14920,18 @@ export class PitchRenderer {
   /** Settings > UI "Stadium" toggle (owner 08-19): live set + redraw; camera refit keeps the pitch filling.
    *  09-06: "No Stadium" keeps its established meaning (the stone apron, no stands) — and with a plan pack
    *  hidden by it the procedural dugout ground returns, since the pack's 3D dugouts went with the plan. */
+  setDugoutCounts(on: boolean): void {
+    if (this.dugoutCountsOn === on) return;
+    this.dugoutCountsOn = on;
+    if (this.app) this.redrawDugoutsWithArrows();
+  }
+
   setStadiumEnabled(on: boolean): void {
     if (this.stadiumEnabled === on) return;
     this.stadiumEnabled = on;
     if (!this.app) return;
     this.drawStadium();
-    if (this.stadiumModel?.dugoutsProvided) this.drawDugouts();
+    if (this.stadiumModel?.dugoutsProvided) this.redrawDugoutsWithArrows();
     this.resetCamera();
   }
 

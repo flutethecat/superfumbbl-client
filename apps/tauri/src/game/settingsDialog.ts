@@ -128,8 +128,9 @@ export function settingsTransactionIsBusy(state: {
   return state.discarding || state.applying || state.creatorApplying || state.assignmentPending;
 }
 
-export function appShellModalOwnsKeyboard(settingsOpen: boolean): boolean {
-  return settingsOpen;
+/** Settings, or the setup wizard re-run over the live shell (owner 10-06), owns the keyboard: gameplay keys stand down. */
+export function appShellModalOwnsKeyboard(settingsOpen: boolean, setupWizardOpen = false): boolean {
+  return settingsOpen || setupWizardOpen;
 }
 
 export type SettingsEscapeAction = 'cancel-key-capture' | 'close-registration' | 'close-credentials' | 'cancel-settings' | null;

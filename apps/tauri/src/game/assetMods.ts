@@ -390,6 +390,16 @@ export function beginAssetAssignmentIntent(): number {
   return ++assignmentGeneration;
 }
 
+/**
+ * Owner 10-06 (setup wizard, Astra): give up on an assignment activation that has not settled. Supersedes every
+ * in-flight intent (so a late completion can never persist) AND clears the pending marker — a superseded activation's
+ * own cleanup only clears it while it is still current, so without this Settings > Assets would stay busy.
+ */
+export function abandonAssetAssignmentIntent(): void {
+  beginAssetAssignmentIntent();
+  assetMods.pendingAssignments = null;
+}
+
 export function isCurrentAssetAssignmentIntent(intent: number): boolean {
   return intent === assignmentGeneration;
 }

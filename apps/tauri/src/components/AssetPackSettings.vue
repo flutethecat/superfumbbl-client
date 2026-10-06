@@ -14,7 +14,6 @@ import {
   assertNever,
   assetMods,
   beginAssetAssignmentIntent,
-  commitAssetAssignments,
   createAssetDraft,
   deleteAssetDraft,
   exportAssetDraft,
@@ -42,6 +41,7 @@ import {
   type InstalledAssetPack,
   type InspectedAssetPack,
 } from '../game/assetMods';
+import { ASSET_ASSIGNMENT_CAPABILITIES, publishAssetAssignments, useWholeAssetPack } from '../game/assetPackActions';
 
 const props = defineProps<{ builderMode?: boolean; liveGame?: unknown }>();
 
@@ -76,14 +76,7 @@ const weatherChoices = [
   { id: 'heat', label: 'Sweltering heat' },
 ] as const;
 
-const capabilities: Array<{ key: AssetAssignmentCapability; label: string }> = [
-  { key: 'skillIcons', label: 'Skill icons' },
-  { key: 'playerSprites', label: 'Player sprites' },
-  { key: 'walkSheets', label: 'Walk sheets' },
-  { key: 'soundEvents', label: 'Sound events' },
-  { key: 'teamLogos', label: 'Team logos' }, // owner 09-07
-  { key: 'blockDice', label: 'Block dice' },
-];
+const capabilities = ASSET_ASSIGNMENT_CAPABILITIES; // owner 10-06: shared with the first-launch setup wizard
 const exportSections: Array<{ key: AssetPackSection; label: string }> = [
   { key: 'player-sprites', label: 'Sprites only' },
   { key: 'walk-sheets', label: 'Walk sheets only' },
@@ -295,10 +288,7 @@ function nextAssignmentsForPack(pack: InstalledAssetPack, section: AssetPackSect
 }
 
 async function publishAssignments(next: AssetPackAssignments, intent = beginAssetAssignmentIntent()): Promise<boolean> {
-  return commitAssetAssignments(next, (active) => {
-    settings.assetPackAssignments = active;
-    settings.skillIconPackInstallId = active.skillIcons;
-  }, intent);
+  return publishAssetAssignments(next, intent);
 }
 
 async function applySection(section: AssetPackSection): Promise<void> {
@@ -357,9 +347,7 @@ async function changeAssignment(capability: AssetAssignmentCapability, event: Ev
 
 async function useAll(pack: InstalledAssetPack): Promise<void> {
   if (!isAssignableAssetPack(pack)) return;
-  const next = { ...settings.assetPackAssignments };
-  for (const capability of capabilities) if (packSupports(pack, capability.key)) next[capability.key] = pack.installId;
-  if (!await publishAssignments(next)) editorError.value = assetMods.error;
+  if (!await useWholeAssetPack(pack)) editorError.value = assetMods.error;
 }
 
 function isRollbackVersion(pack: InstalledAssetPack): boolean {

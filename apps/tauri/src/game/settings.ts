@@ -241,6 +241,8 @@ export interface AppSettings extends ConfirmationSettings {
   /** Replay transport geometry. Null retains the centered responsive default. */
   replayControlsPos: EdgePanelPosition | null;
   replayControlsSize: { w: number; h: number } | null;
+  /** Owner 10-06: Replay pane search - show "vs" instead of scores / results (spoiler-free browsing). */
+  replaySearchHideScores: boolean;
   /** B5-2: spectator-clean — hide planner + dice previews while spectating. */
   spectatorClean: boolean;
   /** B6-4: when cinematic injury playback fires.
@@ -323,6 +325,8 @@ export interface AppSettings extends ConfirmationSettings {
   showSweetSpot: boolean;
   /** Show the faded on-field team logos at the sweet spots. */
   showFieldLogos: boolean;
+  /** Owner 10-06: prefix dugout band labels with the box's player count ("2 RESERVES"). Default OFF. */
+  dugoutCounts: boolean;
   /** Owner 2026-07-08: end-zone label — 'team' (default, mirrors FUMBBL: each end
    *  bears its team's name) or 'touchdown' (just the word "TOUCHDOWN"). */
   endZoneLabel: 'team' | 'touchdown';
@@ -407,9 +411,13 @@ export interface AppSettings extends ConfirmationSettings {
   legalAcceptanceVersion: number;
   /** Last first-open contributions-screen revision seen (owner 08-27); shows once per revision, after the legal notice. */
   contributionsSeenVersion: number;
+  /** Last first-launch setup-wizard revision completed (owner 10-06); the wizard shows while this is below
+   *  SETUP_WIZARD_VERSION (game/setupWizard.ts) — for EVERY install, new or existing — after the contributions screen. */
+  setupWizardSeenVersion: number;
   /** Skip the welcome splash on launch (Settings toggle). */
   hideWelcomeSplash: boolean;
-  /** Owner 08-18: "Skip this next time" on the account-setup splash. */
+  /** Owner 08-18: "Skip this next time" on the account-setup splash. RETIRED 10-06 — the first-launch setup wizard
+   *  replaced that splash; kept only so existing blobs round-trip. Nothing reads it. */
   hideCredsSplash: boolean;
   /** Skip the getting-started/tutorial splash on launch ("don't show again"). */
   hideTutorialSplash: boolean;
@@ -563,6 +571,7 @@ const DEFAULTS: AppSettings = {
   chatPopSize: null,
   replayControlsPos: null,
   replayControlsSize: null,
+  replaySearchHideScores: false,
   spectatorClean: false,
   cinematicMode: 'armor-break',
   pitchOrientation: 'ns',
@@ -608,6 +617,7 @@ const DEFAULTS: AppSettings = {
   showRowMarkers: true,
   showSweetSpot: true,
   showFieldLogos: true,
+  dugoutCounts: false,
   endZoneLabel: 'team',
   endZoneTint: true,
   showPlayerNumbers: false,
@@ -643,6 +653,7 @@ const DEFAULTS: AppSettings = {
   completedFirstRun: false,
   legalAcceptanceVersion: 0,
   contributionsSeenVersion: 0,
+  setupWizardSeenVersion: 0, // owner 10-06: first-launch setup wizard not yet completed
   hideCredsSplash: false, // owner 08-18: opt-out checkbox on the setup splash
   hideWelcomeSplash: true, // owner 2026-07-04: welcome splash deprecated at launch (still in the build; re-enable via Settings → Connection / "Replay the intro screens")
   hideTutorialSplash: true, // owner 2026-07-14: getting-started tour off by default too (needs revising; re-enable via Settings → Connection / "Replay the intro screens")
@@ -898,11 +909,15 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.contributionsSeenVersion = typeof raw.contributionsSeenVersion === 'number' && Number.isSafeInteger(raw.contributionsSeenVersion) && raw.contributionsSeenVersion >= 0
       ? raw.contributionsSeenVersion
       : DEFAULTS.contributionsSeenVersion;
+    merged.setupWizardSeenVersion = typeof raw.setupWizardSeenVersion === 'number' && Number.isSafeInteger(raw.setupWizardSeenVersion) && raw.setupWizardSeenVersion >= 0
+      ? raw.setupWizardSeenVersion
+      : DEFAULTS.setupWizardSeenVersion;
     merged.tackleZoneMode = ['off', 'opposition', 'friendly', 'both'].includes(String(raw.tackleZoneMode))
       ? raw.tackleZoneMode as AppSettings['tackleZoneMode']
       : DEFAULTS.tackleZoneMode;
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' ? 'black' : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
+    merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
     // Keychain move: password40k is no longer a settings field. Lift any stored copy out of the
     // merged object so the deep watcher below never writes it back, and hand it to credentials.ts.
@@ -914,6 +929,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
     merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
+    merged.replaySearchHideScores = raw.replaySearchHideScores === true; // owner 10-06: off unless the user turned it on
     merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;

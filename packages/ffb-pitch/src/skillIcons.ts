@@ -337,6 +337,11 @@ export function bundledSkillBadgeKeys(family: BundledSkillBadgeFamily = 'default
   const families = size === 128 ? BUNDLED_SKILL_BADGE_LARGE_FAMILIES : BUNDLED_SKILL_BADGE_FAMILIES;
   return [...families[family].keys()].sort();
 }
+/** Owner 10-06: the URL of one skill's badge in a SPECIFIC bundled family, ignoring the selected family and any
+ *  installed pack (the setup wizard previews "Illustrated" with it). Undefined when the family has no such badge. */
+export function bundledSkillBadgeUrl(skillName: string, family: BundledSkillBadgeFamily, size: 48 | 128 = 48): string | undefined {
+  return (size === 128 ? BUNDLED_SKILL_BADGE_LARGE_FAMILIES : BUNDLED_SKILL_BADGE_FAMILIES)[family].get(packKey(skillName));
+}
 export function activeBundledSkillBadgeFamily(): BundledSkillBadgeFamily {
   return bundledSkillBadgeFamily;
 }

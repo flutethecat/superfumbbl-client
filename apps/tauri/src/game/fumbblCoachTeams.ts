@@ -11,6 +11,8 @@ export interface FumbblCoachTeam {
   race: string;
   teamValue?: number;
   raceLogos: FumbblRaceLogo[];
+  /** FUMBBL team status ("Active", "Retired", ...) when the API sends it */
+  status?: string;
 }
 
 export type FumbblCoachTeamsResult =
@@ -50,7 +52,8 @@ export function parseFumbblCoachTeams(payload: unknown): FumbblCoachTeamsResult 
         })
       : [];
 
-    return [{ id, name: team.name, race: team.race, teamValue, raceLogos }];
+    const status = typeof team.status === 'string' && team.status ? team.status : undefined;
+    return [status ? { id, name: team.name, race: team.race, teamValue, raceLogos, status } : { id, name: team.name, race: team.race, teamValue, raceLogos }];
   });
 
   return {

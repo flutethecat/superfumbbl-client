@@ -19,4 +19,6 @@ export const ui = reactive({
    *  (game-id / game-name entry now lives inside the browser). App.vue toggles
    *  this; SpectateView renders the browser and refreshes its list when opened. */
   browserOpen: false,
+  /** Owner 10-06: the first-launch setup wizard re-run from Settings is open over the live shell (it owns the keyboard). */
+  setupWizardRerunOpen: false,
 });
