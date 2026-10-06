@@ -271,7 +271,7 @@ async function loadFile(event: Event): Promise<void> {
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
-onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty query = the user's own recent games
+onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is searched until the user presses Search (an empty query then = their own recent games)
 </script>
 
 <template>
@@ -283,7 +283,6 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
           <h1>Replays</h1>
           <p>Search a FUMBBL coach, league or game ID, or open a replay file from this device.</p>
         </div>
-        <span class="read-only-chip">Read only</span>
       </header>
 
       <section class="replay-panel search-panel" aria-labelledby="replay-search-title" data-testid="replay-search">
@@ -310,6 +309,7 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
           <p v-if="search.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Searching…</p>
           <p v-else-if="search.error" class="error">{{ search.error }}</p>
           <p v-else-if="needsOwnCoach" class="note">Set your FUMBBL coach name in Settings to see your recent games, or search for a coach or game ID.</p>
+          <p v-else-if="!search.result" class="note idle-note">Search a coach, league or game ID above — or press Search with the box empty for your own recent games.</p>
           <p v-else-if="emptyMessage" class="note">{{ emptyMessage }}</p>
           <p v-if="!search.loading && search.result?.notice" class="note search-notice" role="status">{{ search.result.notice }}</p>
           <p v-if="!search.loading && search.result?.teamCap" class="note team-cap-note">{{ recentTeamCapNote(search.result.teamCap) }}</p>
@@ -376,7 +376,6 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
       <input ref="fileInput" type="file" hidden tabindex="-1" aria-hidden="true"
         accept="application/json,application/x-java-jnlp-file,text/xml,.json,.ffbreplay,.jnlp" @change="loadFile" />
       <p v-if="gameStore.replay.error || localError || replayLookupError" class="error" role="alert" aria-live="assertive">{{ gameStore.replay.error || localError || replayLookupError }}</p>
-      <p class="read-only-note"><span aria-hidden="true">◆</span> Replay mode is read-only. No gameplay command can leave the client.</p>
     </div>
 
     <!-- Details popup (PlayView's): the cached end-of-game pane. Never reachable while scores are hidden. -->
@@ -443,17 +442,6 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
 h1, h2, p { margin: 0; }
 h1 { margin-top: 3px; color: var(--pb-text); font-family: 'Nuffle', system-ui, sans-serif; font-size: 40px; font-weight: 800; letter-spacing: .04em; line-height: 1; text-transform: uppercase; }
 .replay-heading p { margin-top: 5px; color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 13px); line-height: 1.45; }
-.read-only-chip {
-  flex: 0 0 auto;
-  padding: 6px 10px 5px;
-  color: var(--ui-text-on-primary);
-  border-radius: 4px;
-  background: var(--ui-primary);
-  font-size: max(var(--ui-min-text-size, 12px), 10px);
-  font-weight: 700;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-}
 .replay-panel { box-sizing: border-box; min-width: 0; border: 1px solid var(--pb-text); border-radius: 6px; background: var(--ui-old-lace); box-shadow: 0 4px 14px color-mix(in srgb, var(--pb-text) 18%, transparent); }
 .search-panel { display: grid; gap: 10px; padding: 16px 20px; }
 .search-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -539,8 +527,6 @@ button { font: inherit; }
 .logo-plate { display: grid; place-items: center; min-width: 0; padding: 10px; border: 2px outset color-mix(in srgb, var(--ui-forest) 45%, var(--ui-old-lace)); border-radius: 6px; }
 .logo-plate img { display: block; max-width: 160px; max-height: 44px; object-fit: contain; }
 .fumbbl-plate { background: var(--ui-eggshell); }
-.read-only-note { align-self: center; display: flex; align-items: center; gap: 7px; color: var(--pb-muted); font-size: max(var(--ui-min-text-size, 12px), 10px); letter-spacing: .04em; text-align: center; }
-.read-only-note span { color: var(--ui-success); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* Details popup (PlayView's) */
 .details-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
