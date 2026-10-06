@@ -14,6 +14,7 @@ import { importAssetPackForApply, packCapabilityLabels, publishAssetAssignments,
 import { abandonAssetAssignmentIntent, assetMods, beginAssetAssignmentIntent, type InstalledAssetPack } from '../game/assetMods';
 import {
   PACK_SWITCH_TIMEOUT_MS,
+  FONT_SAMPLE,
   applySetupOption,
   prefillSetupOption,
   setupOptionAssignmentToClear,
@@ -263,6 +264,11 @@ function finish(): void {
                     <figcaption>{{ skill }}</figcaption>
                   </figure>
                 </div>
+                <div v-else-if="option.fontStack" class="setup-font-sample" :style="{ fontFamily: option.fontStack }">
+                  <span class="setup-font-title">{{ FONT_SAMPLE.title }}</span>
+                  <span>{{ FONT_SAMPLE.sentence }}</span>
+                  <span class="setup-font-digits">{{ FONT_SAMPLE.digits }}</span>
+                </div>
                 <div v-else-if="option.d6Variant" class="setup-images setup-d6">
                   <D6Face v-for="value in D6_FACE_VALUES" :key="value" :value="value" :variant="option.d6Variant" />
                 </div>
@@ -434,6 +440,20 @@ function finish(): void {
 .setup-images img { display: block; max-width: 100%; max-height: min(40vh, 420px); object-fit: contain; border-radius: 4px; }
 .setup-dice { justify-content: flex-start; }
 .setup-dice img { width: 72px; height: 72px; image-rendering: auto; }
+.setup-font-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  color: var(--ui-text);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 1rem);
+  line-height: 1.35;
+  background: var(--ui-secondary, #000);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+}
+.setup-font-title { color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem); letter-spacing: 0.04em; }
+.setup-font-digits { letter-spacing: 0.08em; }
 .setup-d6 { justify-content: flex-start; --d6-size: 56px; }
 .setup-skill-icons { flex-wrap: wrap; justify-content: center; align-content: center; gap: 8px 10px; max-width: 460px; margin: 6px auto 4px; }
 .setup-skill-icons figure { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 3px; width: 66px; }

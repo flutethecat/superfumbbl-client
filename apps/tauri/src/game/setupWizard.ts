@@ -1,4 +1,5 @@
 import type { AppSettings } from './settings';
+import { UI_FONTS } from './uiFonts';
 
 /**
  * First-launch setup wizard (owner 10-06): the pure step model behind components/FirstLaunchSetup.vue — steps,
@@ -15,6 +16,7 @@ export const SETUP_WIZARD_VERSION = 1;
 export const PACK_SWITCH_TIMEOUT_MS = 15_000;
 
 export type SetupStepId =
+  | 'font'
   | 'leftClick'
   | 'blitz'
   | 'blockDice'
@@ -29,6 +31,7 @@ export type SetupStepId =
 
 /** Settings a wizard option may write (the subset the step model touches). */
 export type SetupSettings = Pick<AppSettings,
+  | 'uiFont'
   | 'leftClickOpensContextMenu'
   | 'declareBlitzBehavior'
   | 'blockDiceFamily'
@@ -48,6 +51,8 @@ export interface SetupOption {
   images: readonly string[];
   /** A row of the six real d6 faces of this variant (drawn from @fumbbl40k/ffb-pitch's d6FaceUrl, not a screenshot). */
   d6Variant?: AppSettings['d6FaceVariant'];
+  /** A sample block rendered in this CSS font stack (the Font step; the same stacks App.vue applies as --ui-font). */
+  fontStack?: string;
   /** The plain setting writes this option makes when selected. */
   writes: Partial<SetupSettings>;
   /** Asset-pack slot to clear to '' (built-in) when chosen, mirroring AssetPackSettings.changeAssignment's
@@ -69,7 +74,26 @@ export interface SetupStep {
 
 const DICE_FACES = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const;
 
+/** The Font step's sample block (owner 10-06 copy). */
+export const FONT_SAMPLE = {
+  title: 'Super FUMBBL',
+  sentence: 'Blitz the ball carrier and run it in for the touchdown.',
+  digits: '0 1 2 3 4 5 6 7 8 9',
+} as const;
+
 export const SETUP_STEPS: readonly SetupStep[] = [
+  {
+    id: 'font',
+    kind: 'choice',
+    title: 'Font',
+    lede: "Choose the typeface for the client's menus and panels.",
+    options: [
+      { id: 'nuffle', title: 'Nuffle (Default)', images: [], fontStack: UI_FONTS.nuffle, writes: { uiFont: 'nuffle' } },
+      { id: 'system', title: 'System', images: [], fontStack: UI_FONTS.system, writes: { uiFont: 'system' } },
+      { id: 'arial', title: 'Arial', images: [], fontStack: UI_FONTS.arial, writes: { uiFont: 'arial' } },
+    ],
+    prefill: (s) => (s.uiFont === 'system' || s.uiFont === 'arial' ? s.uiFont : 'nuffle'),
+  },
   {
     id: 'leftClick',
     kind: 'choice',

@@ -305,6 +305,7 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
             <span>Hide scores and outcomes</span>
           </label>
         </form>
+        <div class="search-progress" :class="{ active: search.loading }" aria-hidden="true"><div class="search-progress-bar"></div></div>
         <div class="search-state" aria-live="polite">
           <p v-if="search.loading" class="note state-line"><span class="status-light loading" aria-hidden="true"></span>Searching…</p>
           <p v-else-if="search.error" class="error">{{ search.error }}</p>
@@ -333,7 +334,7 @@ onMounted(() => { void runSearch(); void refreshDetailsKeys(); }); // empty quer
 
       <section v-if="rows.length" class="replay-panel results-panel" aria-labelledby="replay-results-title" data-testid="replay-results">
         <h2 id="replay-results-title" class="results-title">{{ resultsTitle }} <span class="count">{{ rows.length }}</span></h2>
-        <div class="results-list">
+        <div class="results-list" :class="{ 'results-stale': search.loading }">
           <MatchRow
             v-for="row in rows"
             :key="row.key"
@@ -521,6 +522,14 @@ button { font: inherit; }
 .state-line { display: flex; align-items: center; gap: 7px; }
 .status-light { width: 7px; height: 7px; border-radius: 50%; background: var(--ui-success); box-shadow: 0 0 7px var(--ui-success); }
 .status-light.loading { animation: replay-pulse 1.2s ease-in-out infinite; }
+/* Owner 10-06: an unmistakable "refreshing" bar under the search field while a search runs; results dim until the new set lands. */
+.search-progress { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--pb-carmine, #790004) 18%, transparent); overflow: hidden; opacity: 0; transition: opacity .15s; }
+.search-progress.active { opacity: 1; }
+.search-progress-bar { width: 38%; height: 100%; border-radius: 2px; background: var(--pb-carmine, #790004); transform: translateX(-120%); }
+.search-progress.active .search-progress-bar { animation: replay-search-sweep 1.1s ease-in-out infinite; }
+@keyframes replay-search-sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
+.results-list.results-stale { opacity: .45; filter: saturate(.6); transition: opacity .2s; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .search-progress.active .search-progress-bar { animation: none; width: 100%; transform: none; opacity: .7; } }
 .file-well { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 14px 20px; }
 .file-text { flex: 1 1 260px; display: grid; gap: 4px; }
 .file-text h2 { color: var(--pb-text); font-size: max(var(--ui-min-primary-text-size, 16px), 16px); font-weight: 600; letter-spacing: .04em; }

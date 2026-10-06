@@ -571,7 +571,7 @@ const DEFAULTS: AppSettings = {
   chatPopSize: null,
   replayControlsPos: null,
   replayControlsSize: null,
-  replaySearchHideScores: false,
+  replaySearchHideScores: true, // owner 10-06: on by default (spoiler-safe)
   spectatorClean: false,
   cinematicMode: 'armor-break',
   pitchOrientation: 'ns',
@@ -929,7 +929,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
     merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
-    merged.replaySearchHideScores = raw.replaySearchHideScores === true; // owner 10-06: off unless the user turned it on
+    merged.replaySearchHideScores = raw.replaySearchHideScores !== false; // owner 10-06: ON by default; only an explicit false turns it off
     merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;

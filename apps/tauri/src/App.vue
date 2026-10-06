@@ -25,6 +25,7 @@ import FirstOpenContributions from './components/FirstOpenContributions.vue';
 import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
+import { UI_FONTS } from './game/uiFonts';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
@@ -1039,13 +1040,9 @@ function resetSkillConfig() {
 
 /** B3-8: UI-wide font choice — drives the CSS variable the root font uses.
  *  Nuffle ships embedded (public/fonts, FontFace-loaded in main.ts). */
-const UI_FONTS: Record<string, string> = {
-  nuffle: "'Nuffle', system-ui, sans-serif",
-  system: 'system-ui, sans-serif',
-  arial: 'Arial, Helvetica, sans-serif',
-};
+// UI_FONTS lives in game/uiFonts.ts (shared with the setup wizard's Font step).
 watchEffect(() => {
-  document.documentElement.style.setProperty('--ui-font', UI_FONTS[settings.uiFont] ?? UI_FONTS.nuffle!);
+  document.documentElement.style.setProperty('--ui-font', UI_FONTS[settings.uiFont] ?? UI_FONTS.nuffle);
   document.documentElement.style.setProperty('--ui-min-text-size', `${settings.uiTextSize}px`);
   // Two-tier floor (owner 08-27): PRIMARY text never drops below 16px; sub-headers/annotations
   // keep the slider floor (12px default). The slider still raises both once it passes 16.
