@@ -263,6 +263,8 @@ function finish(): void {
                     <img v-if="illustratedIconUrl(skill)" :src="illustratedIconUrl(skill)" :alt="skill" />
                     <figcaption>{{ skill }}</figcaption>
                   </figure>
+                  <!-- Owner 10-06: how the icons read on the pitch, over the players' heads -->
+                  <img v-if="imageUrl('icons-illustrated')" class="setup-skill-icons-pitch" :src="imageUrl('icons-illustrated')" alt="Players with skill icons over their heads" />
                 </div>
                 <div v-else-if="option.fontStack" class="setup-font-sample" :style="{ fontFamily: option.fontStack }">
                   <span class="setup-font-title">{{ FONT_SAMPLE.title }}</span>
@@ -457,7 +459,8 @@ function finish(): void {
 .setup-d6 { justify-content: flex-start; --d6-size: 56px; }
 .setup-skill-icons { flex-wrap: wrap; justify-content: center; align-content: center; gap: 8px 10px; max-width: 460px; margin: 6px auto 4px; }
 .setup-skill-icons figure { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 3px; width: 66px; }
-.setup-skill-icons img { width: 52px; height: 52px; }
+.setup-skill-icons-pitch { flex-basis: 100%; width: min(100%, 440px); height: auto; max-height: 200px; object-fit: cover; margin: 8px auto 0; border-radius: 4px; }
+.setup-skill-icons figure img { width: 52px; height: 52px; }
 .setup-skill-icons figcaption { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); white-space: nowrap; }
 .setup-markings-import { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
 .setup-markings-import .setup-hint { flex-basis: 100%; }
