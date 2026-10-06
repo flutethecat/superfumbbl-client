@@ -732,7 +732,6 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
   background: var(--ui-old-lace, #F8F5E7);
   font-family: Helvetica, Arial, sans-serif;
   font-size: 14px;
-  text-transform: uppercase;
 }
 .join-row input:focus { outline: 2px solid var(--pb-carmine); outline-offset: 1px; }
 .lobby-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
