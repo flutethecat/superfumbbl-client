@@ -7231,23 +7231,27 @@ function applyFrameContents(frame: QueuedFrame) {
   // successful = the MOVER escaped} (upstream TentaclesBehaviour). A failed escape raises the skill pill on the
   // tentacled player ("used Tentacles", icon fade) AND a second pill on the held mover (actingPlayer), like Horns
   // on both ends of a block. Presentation only; a re-roll produces its own report.
+  // Owner 10-05: an ESCAPE (successful = the mover got away) reads "<Holder>'s tentacles fail to hold strong!" on the
+  // holder - the owner's wording - instead of the generic "uses Tentacles!" pill (that generic skillUse toast is
+  // skipped for Tentacles whenever this report is in the frame, so this block owns both outcomes).
   {
-    const held = reports.find((r) => String(r.reportId) === 'tentaclesShadowingRoll'
-      && String((r as { skill?: unknown }).skill ?? '') === 'Tentacles' && (r as { successful?: unknown }).successful === false);
-    if (held) {
+    const tentacles = reports.find((r) => String(r.reportId) === 'tentaclesShadowingRoll'
+      && String((r as { skill?: unknown }).skill ?? '') === 'Tentacles' && typeof (r as { successful?: unknown }).successful === 'boolean');
+    if (tentacles) {
+      const escaped = (tentacles as { successful?: unknown }).successful === true;
       const g = game.value;
       const squareOf = (id: string): [number, number] | null => {
         const c = g.fieldModel.playerDataArray.find((d) => d.playerId === id)?.playerCoordinate;
         return c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
       };
-      const holderId = String((held as { defenderId?: unknown }).defenderId ?? '');
+      const holderId = String((tentacles as { defenderId?: unknown }).defenderId ?? '');
       const moverId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       const holderSq = holderId ? squareOf(holderId) : null;
-      const moverSq = moverId && moverId !== holderId ? squareOf(moverId) : null;
+      const moverSq = !escaped && moverId && moverId !== holderId ? squareOf(moverId) : null;
       if (holderSq) {
         state.skillUsed = {
           playerId: holderId, skill: 'Tentacles', square: holderSq, name: playerName(g, holderId),
-          toast: `${playerName(g, holderId)} used Tentacles!`,
+          toast: escaped ? `${playerName(g, holderId)}'s tentacles fail to hold strong!` : `${playerName(g, holderId)} used Tentacles!`,
           also: moverSq ? { playerId: moverId, square: moverSq, toast: `${playerName(g, moverId)} is held by Tentacles!` } : undefined,
           seq: (state.skillUsed?.seq ?? 0) + 1,
         };
@@ -7606,6 +7610,8 @@ function applyFrameContents(frame: QueuedFrame) {
         }
       }
       if (isSkillUse || isSkillDecline) {
+        // Owner 10-05: the Tentacles roll report owns its toast (hold / "fail to hold strong") - no generic pill over it
+        if (isSkillUse && declinedSkillNorm === 'tentacles' && reports.some((x) => String(x.reportId) === 'tentaclesShadowingRoll')) continue;
         const cue = skillUsePresentation(report, raw, visibleBlockContext, playerName(game.value, String(pid)));
         if (cue) state.skillUsed = { ...cue, seq: (state.skillUsed?.seq ?? 0) + 1 };
       }

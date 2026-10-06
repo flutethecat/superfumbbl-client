@@ -4605,8 +4605,9 @@ function trackShadowingPill() {
     const c = sq ? renderer.squareToCanvas(sq) : null;
     if (c && reactivePromptHeld.value !== 'shadowing') shadowingPos.value = {
       // OFFSET beside the shadower so the token + its crosshair stay visible while the coach decides (followup math).
-      x: Math.min(Math.max(c.x + 44, 8), Math.max(host.clientWidth - 176, 8)),
-      y: Math.min(Math.max(c.y - 112, 8), host.clientHeight - 72 - 84),
+      // owner 10-05: the modern panel (compact, ~360 px) replaces the 160 px chip - clamp its left edge accordingly
+      x: Math.min(Math.max(c.x + 44, 8), Math.max(host.clientWidth - 376, 8)),
+      y: Math.min(Math.max(c.y - 112, 8), host.clientHeight - 72 - 96),
     };
     shadowingRaf = requestAnimationFrame(step);
   };
@@ -4615,6 +4616,13 @@ function trackShadowingPill() {
 watch(() => shadowingPick.value?.seq, () => { reactivePromptDragPos.shadowing = null; trackShadowingPill(); });
 onBeforeUnmount(() => cancelAnimationFrame(shadowingRaf));
 /** Answer the SHADOWING pill on the same playerPick wire: Shadow = pick the eligible shadower + commit; Decline = skip. */
+// Owner 10-05: the panel names the shadower (the server's first eligible id, as the pill anchor does)
+const shadowerName = computed(() => {
+  const id = shadowingPick.value?.eligibleIds[0]; const g = gameStore.game.value;
+  if (!id || !g) return 'Your player';
+  const pl = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((x) => x.playerId === id);
+  return pl?.playerName || 'Your player';
+});
 function answerShadowing(shadow: boolean) {
   const p = gameStore.state.playerPick;
   if (!p) return;
@@ -13416,15 +13424,17 @@ function sendChat() {
 
         <!-- Triage #4 (owner 08-11): SHADOWING pill — a position-anchored Confirm/Decline at the shadower (the
              reactive-election / follow-up idiom), replacing the bottom bar for this class. Same playerPick wire. -->
-        <div v-if="shadowingPick && shadowingPos" class="followup-chip"
-          :style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y })"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('shadowing', $event)">
-          <div class="fu-title">Shadow the runner?</div>
-          <div class="fu-actions">
-            <button class="fu-btn follow" @click="answerShadowing(true)">Shadow</button>
-            <button v-if="shadowingPick.declinable" class="fu-btn stay" @click="answerShadowing(false)">Decline</button>
-          </div>
-        </div>
+        <!-- Owner 10-05: the Shadowing chip rides the modern confirmation panel too (Tentacles / pick-me-up language). -->
+        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" title="Shadow the runner?" label="Shadowing decision"
+          compact draggable test-id="shadowing-panel"
+          :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
+          @drag-start="startReactivePromptDrag('shadowing', $event)">
+          <span>{{ shadowerName }} can follow the runner</span>
+          <template #actions>
+            <button class="rr-use" @click="answerShadowing(true)">Shadow</button>
+            <button v-if="shadowingPick.declinable" class="rr-decline" @click="answerShadowing(false)">Decline</button>
+          </template>
+        </PitchConfirmationPanel>
 
         <!-- TENTACLES (owner 08-12): picker retired → token-anchored reactive card over the auto-selected tentacler
              (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects).
