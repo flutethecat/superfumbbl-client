@@ -345,6 +345,7 @@ import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
 import superFumbblLogoUrl from '../assets/resources/super-fumbbl-logo.png';
+import { useDelayedPresence } from '../game/delayedPresence';
 import { activeServerTarget, applyServerTarget, botConfigBaseUrl, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { coachPassword } from '../game/credentials';
 import {
@@ -993,6 +994,10 @@ const configBarStyle = computed(() => {
     ...(box ? { minWidth: `${Math.round(box.width)}px` } : {}),
   };
 });
+
+// Owner 10-06: the push-direction waiting notice holds 1.5 s before it shows (a quick choice never flashes it).
+const PUSH_WAITING_HOLD_MS = 1500;
+const { shown: pushWaitingShown } = useDelayedPresence(() => gameStore.state.pushWaiting?.message ?? null, PUSH_WAITING_HOLD_MS);
 
 // --- Owner 2026-07-04e: UI-customize mode (grip/resizer on the corner panels) ---
 // Owner 10-06: the mode is entered from Settings > "Customize UI Layout" and ended by the centred Confirm Layout button.
@@ -13499,7 +13504,7 @@ function sendChat() {
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- Owner 10-05: "Waiting for <Coach> to choose a push direction" - every seat but the choosing coach. -->
-        <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting" title="Push" notice-id="push-waiting"
+        <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting && pushWaitingShown" title="Push" notice-id="push-waiting"
           :message="gameStore.state.pushWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
