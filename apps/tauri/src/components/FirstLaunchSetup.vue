@@ -3,15 +3,11 @@
  *  replaces the old account-setup splash; re-runnable from Settings → General. A gate like the legal notice: no
  *  dismiss, Esc does nothing. Every choice step is prefilled from the current settings and writes ONLY when an option
  *  is selected (immediately, so Back/Next never loses a choice). The step model lives in game/setupWizard.ts. */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { D6_FACE_VALUES, bundledSkillBadgeUrl } from '@fumbbl40k/ffb-pitch';
 import D6Face from './D6Face.vue';
 import { settings } from '../game/settings';
-import { FORK_EDITION } from '../game/edition';
-import { coachPasswordModel, credentialStore, flushCoachPassword, flushFumbblPassword } from '../game/credentials';
-import { signInWithDiscordAccount } from '../game/accountApi';
-import { DesktopSignInCancelled } from '../game/desktopAuth';
-import { startTournamentNotificationPolling } from '../game/tournamentNotificationClient';
+import { flushFumbblPassword } from '../game/credentials';
 import { importFumbblMarkings } from '../game/fumbblMarkingsImport';
 import { openExternal } from '../game/openExternal';
 import { importAssetPackForApply, packCapabilityLabels, publishAssetAssignments, useWholeAssetPack } from '../game/assetPackActions';
@@ -39,7 +35,8 @@ const onboardingImages = import.meta.glob<string>('../assets/onboarding/*.png', 
 const imageByKey = new Map(Object.entries(onboardingImages).map(([path, url]) => [path.replace(/^.*\/([^/]+)\.png$/, '$1'), url]));
 function imageUrl(key: string): string | undefined { return imageByKey.get(key); }
 
-const SKILL_EXAMPLES = ['Block', 'Guard', 'Dodge', 'Horns'] as const;
+// Owner 10-06: a fuller spread of the illustrated set (two rows of six), centred in the card.
+const SKILL_EXAMPLES = ['Block', 'Guard', 'Dodge', 'Horns', 'Tackle', 'Frenzy', 'Wrestle', 'Leap', 'Catch', 'Claw', 'Dauntless', 'Fend'] as const;
 /** The Illustrated card previews the ILLUSTRATED family explicitly — never the active pack or the flat set. */
 function illustratedIconUrl(skill: string): string | undefined { return bundledSkillBadgeUrl(skill, 'illustrated'); }
 const TWITCH_URL = 'https://twitch.tv/flutethecat';
@@ -154,48 +151,11 @@ async function importMarkings(): Promise<void> {
   }
 }
 
-// Step 7 (FORK edition): the Super FUMBBL entry the old setup splash had — Discord sign-in + existing-account login.
-const superLoginOpen = ref(false);
-const discordBusy = ref(false);
-const discordStatus = ref('');
-let discordAbort: AbortController | null = null;
-async function startDiscordSignIn(): Promise<void> {
-  if (discordBusy.value) return;
-  const coach = settings.coach40k.trim();
-  if (!coach) {
-    discordStatus.value = 'Enter your existing Super FUMBBL coach name below first.';
-    superLoginOpen.value = true;
-    return;
-  }
-  const controller = new AbortController();
-  discordAbort = controller;
-  discordBusy.value = true;
-  discordStatus.value = `Waiting for Discord authorization for ${coach}…`;
-  try {
-    const identity = await signInWithDiscordAccount({
-      coach,
-      signal: controller.signal,
-      openAuthorization: openExternal, // same as the old splash: system browser, window.open fallback
-    });
-    settings.coach40k = identity.ffbCoachId;
-    discordStatus.value = `Signed in as ${identity.ffbCoachId}.`;
-    startTournamentNotificationPolling();
-  } catch (error) {
-    discordStatus.value = error instanceof DesktopSignInCancelled
-      ? 'Discord sign-in cancelled.'
-      : error instanceof Error ? error.message : String(error);
-  } finally {
-    if (discordAbort === controller) discordAbort = null;
-    discordBusy.value = false;
-  }
-}
-function cancelDiscordSignIn(): void { discordAbort?.abort(); }
-onBeforeUnmount(() => discordAbort?.abort());
+// Owner 10-06: the Super FUMBBL (fork) account entry is NOT part of the wizard; Settings → General keeps it.
 
 // Both password fields debounce their keychain write (400 ms); leaving the step is faster than that, so flush.
 function flushPasswords(): void {
   void flushFumbblPassword();
-  void flushCoachPassword();
 }
 
 // Step 9: "Import Mod Pack" — the same native importer Settings → Assets uses, result inline (packBusy is above).
@@ -340,30 +300,6 @@ function finish(): void {
             </label>
             <p class="setup-hint">Stored locally on this machine only — never sent anywhere but the server you connect to.</p>
           </section>
-          <section v-if="FORK_EDITION" class="setup-panel" aria-label="Super FUMBBL account">
-            <h2>Super FUMBBL</h2>
-            <p class="setup-hint">Your <b>Super FUMBBL</b> (fork) account lets you play on the test server.</p>
-            <div class="setup-actions-row">
-              <button type="button" class="setup-secondary" :disabled="discordBusy" @click="startDiscordSignIn()">
-                {{ discordBusy ? 'Waiting for Discord…' : 'Sign in with Discord' }}
-              </button>
-              <button v-if="discordBusy" type="button" class="setup-secondary" @click="cancelDiscordSignIn()">Cancel sign-in</button>
-              <button type="button" class="setup-secondary" @click="superLoginOpen = !superLoginOpen">
-                Log in to an existing account {{ superLoginOpen ? '▾' : '▸' }}
-              </button>
-            </div>
-            <p v-if="discordStatus" class="setup-hint" aria-live="polite">{{ discordStatus }}</p>
-            <div v-if="superLoginOpen" class="setup-super-login">
-              <label class="setup-field">Coach name
-                <input v-model="settings.coach40k" type="text" autocomplete="username" placeholder="your Super FUMBBL coach name" />
-              </label>
-              <label class="setup-field">Password
-                <input v-model="coachPasswordModel" type="password" autocomplete="current-password" placeholder="Super FUMBBL password" />
-              </label>
-              <p v-if="credentialStore.notice" class="setup-hint">{{ credentialStore.notice }}</p>
-            </div>
-            <p class="setup-hint">No fork account yet? Register one any time from <b>Settings → General → Login credentials</b>.</p>
-          </section>
         </template>
 
         <!-- Step 8: only when the host provides a Home pane. -->
@@ -499,9 +435,10 @@ function finish(): void {
 .setup-dice { justify-content: flex-start; }
 .setup-dice img { width: 72px; height: 72px; image-rendering: auto; }
 .setup-d6 { justify-content: flex-start; --d6-size: 56px; }
-.setup-skill-icons figure { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 4px; }
-.setup-skill-icons img { width: 64px; height: 64px; }
-.setup-skill-icons figcaption { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
+.setup-skill-icons { flex-wrap: wrap; justify-content: center; align-content: center; gap: 8px 10px; max-width: 460px; margin: 6px auto 4px; }
+.setup-skill-icons figure { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 3px; width: 66px; }
+.setup-skill-icons img { width: 52px; height: 52px; }
+.setup-skill-icons figcaption { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); white-space: nowrap; }
 .setup-markings-import { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
 .setup-markings-import .setup-hint { flex-basis: 100%; }
 .setup-panel { display: flex; flex-direction: column; gap: 10px; max-width: 560px; margin-bottom: 16px; }
