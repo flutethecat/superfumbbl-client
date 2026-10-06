@@ -1,5 +1,5 @@
 import type { GameJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
-import { playerSkillDisplayEntries, playerSkillNames } from '@fumbbl40k/ffb-protocol';
+import { decodePlayerSkills, normalizeSkillName, playerSkillDisplayEntries, playerSkillNames } from '@fumbbl40k/ffb-protocol';
 import type { AutoMarkingConfig, AutoMarkingRecord } from './markings';
 import {
   settings,
@@ -108,6 +108,20 @@ function characteristicStatusIcons(team: TeamJson, player: PlayerJson): string[]
   return icons;
 }
 
+/** Upstream SkillValueEvaluator.ROLL skills (Loner, Bloodlust, Hypnotic Gaze, Secret Weapon): the wire carries the bare
+ *  target number ("4"); the Java client shows it as a roll ("4+"). Owner 10-06: "Loner (3+) / (4+) / (5+)" on the card. */
+const ROLL_VALUED_SKILLS = new Set(['loner', 'bloodlust', 'hypnoticgaze', 'secretweapon']);
+/** Upstream SkillValueEvaluator.MODIFIER skills (Mighty Blow, Dirty Player): bare "1" on the wire, shown as "(+1)". */
+const MODIFIER_VALUED_SKILLS = new Set(['mightyblow', 'dirtyplayer']);
+export function formatSkillValue(skill: string, value: string): string {
+  const v = value.trim();
+  const key = normalizeSkillName(skill);
+  if (!/^\d+$/.test(v)) return v;
+  if (ROLL_VALUED_SKILLS.has(key)) return `${v}+`;
+  if (MODIFIER_VALUED_SKILLS.has(key)) return `+${v}`;
+  return v;
+}
+
 export interface PlayerDetailSkill {
   /** Canonical key retained for icons and rules text. */
   name: string;
@@ -122,14 +136,17 @@ export function playerDetailSkills(
   player: PlayerJson,
   baselineSkills: ReadonlySet<string> = new Set(),
 ): PlayerDetailSkill[] {
+  // Owner 10-06: the value comes through the canonical decoder (display map > display array > value map > value
+  // array) - a team serialization carries Loner's roll only in the parallel `skillValues`, which the map-only read
+  // missed, so the card said "Loner" with no roll.
+  const decoded = decodePlayerSkills(player);
   return playerSkillDisplayEntries(player).map((entry) => {
-    const rawDisplayValue = player.skillDisplayValuesMap?.[entry.name];
-    const displayValue = rawDisplayValue == null ? '' : String(rawDisplayValue).trim();
+    const value = decoded.find((skill) => skill.name === entry.name && skill.value?.trim())?.value?.trim() ?? '';
     return {
       name: entry.name,
       label: entry.label !== entry.name
         ? entry.label
-        : displayValue ? `${entry.name} (${displayValue})` : entry.name,
+        : value ? `${entry.name} (${formatSkillValue(entry.name, value)})` : entry.name,
       added: !baselineSkills.has(entry.name),
     };
   });
@@ -148,8 +165,11 @@ export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDeta
 /** Owner 10-05: a valued skill's value - Hatred's keyword ("Hatred (Orc)" -> "Orc") - is written in small text under the
  *  card chip's icon so it says WHO the hatred is for without the tooltip. Other labels carry no value (null). */
 export function chipSubtext(skill: Pick<PlayerDetailSkill, 'label'>): string | null {
-  const m = /^Hatred \((.+)\)$/.exec(skill.label);
-  return m ? m[1]!.trim() : null;
+  const m = /^(.+?) \((.+)\)$/.exec(skill.label);
+  if (!m) return null;
+  const skillName = normalizeSkillName(m[1]!);
+  // Hatred's keyword, and a roll-valued skill's target ("Loner (4+)" -> "4+"); other parentheses are not values.
+  return skillName === 'hatred' || ROLL_VALUED_SKILLS.has(skillName) ? m[2]!.trim() : null;
 }
 
 /** Owner 10-01 (S87): added skills go to the END of a card's list; the order inside each group is kept. */

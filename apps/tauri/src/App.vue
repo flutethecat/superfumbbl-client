@@ -1349,6 +1349,14 @@ function trapSettingsFocus(event: KeyboardEvent) {
 function trapCredsFocus(event: KeyboardEvent) { if (!registerModalOpen.value) trapDialogFocus(event, credsMenuDialog.value); }
 function trapRegisterFocus(event: KeyboardEvent) { trapDialogFocus(event, registerDialog.value); }
 
+/** Owner 10-06: enter the live panel-layout mode from Settings. Goes through the Settings transaction so unsaved
+ *  edits are not kept as the new baseline (same rule as the walkthrough buttons); the mode itself is a persisted
+ *  setting so the Confirm Layout button (SpectateView) can end it. */
+async function startUiCustomize(): Promise<void> {
+  if (ui.settingsOpen && !(await cancelSettingsChanges())) return;
+  settings.uiCustomize = true;
+}
+
 function resetPanelLayoutImmediately() {
   runConfirmedImmediateOperation(
     () => window.confirm('Reset every panel position and size now? This immediate layout change is not undone by Cancel.'),
@@ -2624,17 +2632,16 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">The roster opens from the helmet button on the Quick bar. Tick this to also keep the old
               Roster tab next to Log and Chat.</p>
-            <label class="row">
-              <input v-model="settings.uiCustomize" type="checkbox" />
-              <span>Customize UI layout (move / resize panels)</span>
-            </label>
-            <div v-if="settings.uiCustomize" class="actions" style="justify-content: flex-start">
+            <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
+                 a centred "Confirm Layout" button on the game screen exits it (SpectateView). -->
+            <div class="actions" style="justify-content: flex-start">
+              <button type="button" @click="startUiCustomize">Customize UI Layout</button>
               <button type="button" @click="resetPanelLayoutImmediately">Reset all panels now…</button>
             </div>
-            <p v-if="settings.uiCustomize" class="settings-immediate-note">Resetting every panel changes the live layout immediately and is not undone by Cancel.</p>
-            <p v-if="settings.uiCustomize" class="hint">Drag the ⠿ grip (top-left) to move a panel, the
-              ⤡ handle (bottom-right) to resize it (contents scale with it), or ↺ to reset one. Panels:
-              both coach corners, the scoreboard, and the quick bar.</p>
+            <p class="settings-immediate-note">Resetting every panel changes the live layout immediately and is not undone by Cancel.</p>
+            <p class="hint">Customize UI Layout closes this dialog and shows a ⠿ grip (top-left) on each panel to move it, a
+              ⤡ handle (bottom-right) to resize it (contents scale with it), and ↺ to reset one. Panels: both coach
+              corners, the scoreboard, and the quick bar. Press <b>Confirm Layout</b> in the middle of the screen when done.</p>
           </fieldset>
 
           <fieldset class="settings-group">

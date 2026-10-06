@@ -345,7 +345,7 @@ import apothecaryIconUrl from '../assets/resources/apothecary.png';
 import helmetIconUrl from '../assets/resources/football-helmet.png';
 import refereeIconUrl from '../assets/resources/biased_ref.png';
 import superFumbblLogoUrl from '../assets/resources/super-fumbbl-logo.png';
-import { activeServerTarget, applyServerTarget, botConfigBaseUrl, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
+import { activeServerTarget, applyServerTarget, botConfigBaseUrl, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, serializeSettingsForFile, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { coachPassword } from '../game/credentials';
 import {
   BUG_REPORT_DESCRIPTION_MAX,
@@ -995,6 +995,11 @@ const configBarStyle = computed(() => {
 });
 
 // --- Owner 2026-07-04e: UI-customize mode (grip/resizer on the corner panels) ---
+// Owner 10-06: the mode is entered from Settings > "Customize UI Layout" and ended by the centred Confirm Layout button.
+function confirmUiLayout(): void {
+  settings.uiCustomize = false;
+  void flushSettingsFile(); // the panel positions/sizes already live in settings.uiLayout; persist them now
+}
 /** Style override for a customizable panel — absolute position + scale from
  *  settings.uiLayout, or null (keep the CSS default) until the user moves it. */
 function uiPanelStyle(id: string): Record<string, string> | null {
@@ -11741,6 +11746,11 @@ function sendChat() {
 
 <template>
   <div class="spectate" :style="presentationCssVars">
+    <!-- Owner 10-06: live panel-layout mode (entered from Settings > Customize UI Layout) ends with this centred button. -->
+    <div v-if="settings.uiCustomize" class="ui-customize-bar" role="toolbar" aria-label="Panel layout">
+      <span class="ui-customize-hint">Drag the ⠿ grips to move panels and the ⤡ handles to resize them.</span>
+      <button type="button" class="ui-customize-confirm" @click="confirmUiLayout">Confirm Layout</button>
+    </div>
     <!-- owner 2026-07-03 r6f Option A: the green connect bar is REMOVED. The header
          "Browse" button (App.vue) opens the game browser below as the primary
          game-entry; the server toggle + game-id / game-name entry now live inside
@@ -16567,6 +16577,10 @@ function sendChat() {
 .yesno-card.end-turn-warn { transform: translate(-50%, -50%) scale(1.3); }
 /* Owner 2026-07-04e: UI-customize mode — grip/resizer/reset on the corner panels */
 .ui-panel.ui-customizing { outline: 1px dashed color-mix(in srgb, var(--ui-accent) 53%, transparent); outline-offset: 2px; }
+.ui-customize-bar { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9000; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 18px; border-radius: 8px; background: color-mix(in srgb, var(--ui-surface, #111) 88%, #000); border: 1px solid color-mix(in srgb, var(--ui-accent) 60%, transparent); box-shadow: 0 8px 28px rgba(0, 0, 0, .55); pointer-events: auto; }
+.ui-customize-hint { color: var(--ui-muted, #bbb); font-size: max(var(--ui-min-text-size, 12px), .9rem); }
+.ui-customize-confirm { padding: 10px 22px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--ui-accent) 70%, #000); background: var(--ui-accent, #790004); color: #fff; font-family: var(--ui-font, inherit); font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem); font-weight: 700; letter-spacing: .04em; cursor: pointer; }
+.ui-customize-confirm:hover { filter: brightness(1.12); }
 .ui-panel.ui-resizing { transition: none !important; }
 .ui-grip, .ui-resizer, .ui-reset {
   position: absolute;
