@@ -17,7 +17,10 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
 /** Owner 10-02: "wrap after 'selecting'" - a "<who> is selecting / repositioning players for ..." line breaks after
  *  the verb and the card shrinks to its two lines (centred under the panel) instead of spanning the panel's width. */
 const lines = computed<string[] | null>(() => {
-  const m = /^(.+? is (?:selecting|repositioning)) (players .+)$/.exec(props.message);
+  // Owner 10-06: the push notice breaks after the coach name ("Waiting for Jayward" / "to choose a push direction")
+  // and the plate fits those two lines instead of wrapping a long single line.
+  const m = /^(.+? is (?:selecting|repositioning)) (players .+)$/.exec(props.message)
+    ?? /^(Waiting for .+?) (to choose a push direction)$/.exec(props.message);
   return m ? [m[1]!, m[2]!] : null;
 });
 </script>
