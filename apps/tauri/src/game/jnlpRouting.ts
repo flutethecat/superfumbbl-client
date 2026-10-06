@@ -465,6 +465,11 @@ function proceedFumbblPlayer(
     teamName: lobby.teamName || undefined,
     coach: lobby.coach,
     opponentCoach: target.opponentCoach,
+    // owner 10-06 VS banner: the ids this join knows (the store sets the same shape once connectAsPlayer runs)
+    ...(target.gameId && target.gameId > 0 ? { gameId: target.gameId } : {}),
+    ...(lobby.teamId ? { teamId: lobby.teamId } : {}),
+    ...(target.opponentTeamId ? { opponentTeamId: target.opponentTeamId } : {}),
+    official: true,
   };
   watchOfficialRefusal(prepared, launch, {
     url: activeParams.url, compression: activeParams.compression, coach: lobby.coach,

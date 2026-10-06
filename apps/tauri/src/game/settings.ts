@@ -1609,8 +1609,12 @@ export interface ServerTarget {
   compression: boolean;
 }
 
-/** Match/API origin only. Media CDN requests are deliberately disabled. */
-export const FUMBBL_SITE = import.meta.env.DEV ? '/fumbbl-site' : 'https://fumbbl.com';
+/** Match/API origin only. Media CDN requests are deliberately disabled.
+ *  Owner 10-05 (dev build: "Check name" refused with "URL not allowed on the configured scope:
+ *  http://localhost:1420/fumbbl-site/..."): the vite `/fumbbl-site` proxy exists for the BROWSER dev server (CORS).
+ *  Inside Tauri the http plugin fetches fumbbl.com directly and its capability scope allows only that origin, so a
+ *  `tauri dev` run must not route through the proxy path. */
+export const FUMBBL_SITE = import.meta.env.DEV && !inTauri ? '/fumbbl-site' : 'https://fumbbl.com';
 
 /** The backend presets the launch picker offers. The hosted public server
  *  (self-host-plan §1 row 3) is added once a host exists. */

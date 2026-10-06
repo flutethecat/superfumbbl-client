@@ -4,12 +4,18 @@
 // and the server sends none until both coaches are in). This standalone view mounts the pitch renderer over an
 // EMPTY game as a backdrop and shows the same waiting modal on a lighter scrim. It owns no game logic: the store's
 // waitingForMatch drives it, and the App swaps to SpectateView the moment the real game state arrives.
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { PitchRenderer } from '@fumbbl40k/ffb-pitch';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
-import { settings } from '../game/settings';
+import { FUMBBL_SITE, settings } from '../game/settings';
 import { gameStore } from '../game/store';
+import { fumbblLobbyGames } from '../game/jnlpRouting';
+import WaitingVsBanner from '../components/WaitingVsBanner.vue';
+import {
+  clearFumbblTeamCache, projectWaitingBanner, resolveBannerTeams, type FumbblTeamInfo,
+} from '../game/waitingVsBanner';
 
 const host = ref<HTMLElement | null>(null);
 let renderer: PitchRenderer | null = null;
@@ -56,8 +62,40 @@ onMounted(async () => {
   }
 });
 watch(() => gameStore.state.waitingForMatch, paint, { deep: true });
+
+// ---- Owner 10-06: TEAM VS TEAM banner on every waiting board; FUMBBL lookups (team API, lobby list) only for an
+// official FUMBBL join — a fork/standalone server has no FUMBBL API, so its banner shows the join's names only ----
+const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+const fetchedMine = ref<FumbblTeamInfo | null>(null);
+const fetchedOpponent = ref<FumbblTeamInfo | null>(null);
+let bannerLoad = 0;
+let unmounted = false;
+const banner = computed(() => {
+  const wait = gameStore.state.waitingForMatch;
+  if (!wait) return null;
+  return projectWaitingBanner(wait, fumbblLobbyGames.value, { mine: fetchedMine.value, opponent: fetchedOpponent.value });
+});
+/** Fills race/TV as the team records arrive. Runs on a waiting-state change or a lobby-list refresh - never on a timer;
+ *  each team id is fetched once per wait (loadFumbblTeam caches). Never touches the waiting card. */
+async function loadBannerData(): Promise<void> {
+  const load = ++bannerLoad;
+  const wait = gameStore.state.waitingForMatch;
+  if (!wait?.official) { fetchedMine.value = null; fetchedOpponent.value = null; return; }
+  const fetcher = (inTauri ? (tauriFetch as typeof fetch) : fetch) as (input: string) => Promise<Response>;
+  const result = await resolveBannerTeams({ ...wait }, fumbblLobbyGames.value, FUMBBL_SITE, fetcher,
+    () => !unmounted && load === bannerLoad && gameStore.state.waitingForMatch === wait);
+  if (!result) return;
+  fetchedMine.value = result.mine;
+  fetchedOpponent.value = result.opponent;
+}
+watch([() => gameStore.state.waitingForMatch, fumbblLobbyGames], () => { void loadBannerData(); }, { deep: true, immediate: true });
+// the wait ended: a later match must fetch its teams afresh (the view also unmounts - see onBeforeUnmount)
+watch(() => gameStore.state.waitingForMatch, (wait) => { if (!wait) clearFumbblTeamCache(); });
 onBeforeUnmount(() => {
   active = false;
+  unmounted = true;
+  bannerLoad += 1; // an in-flight banner lookup must not start its follow-up request after Cancel
+  clearFumbblTeamCache();
   const r = renderer;
   renderer = null;
   try { r?.destroy(); } catch { /* already torn down */ }
@@ -67,7 +105,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="waiting-board">
     <div ref="host" class="waiting-board-pitch" aria-hidden="true"></div>
-    <div v-if="gameStore.state.waitingForMatch" class="waiting-board-overlay" role="alertdialog" aria-modal="true">
+    <div v-if="gameStore.state.waitingForMatch" class="waiting-board-overlay" :class="{ 'with-banner': banner }" role="alertdialog" aria-modal="true">
+      <WaitingVsBanner v-if="banner" :model="banner" />
       <div class="waiting-board-card">
         <h2 v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for {{ gameStore.state.waitingForMatch.opponentCoach }}</h2>
         <h2 v-else>Waiting for the other coach</h2>
@@ -95,6 +134,8 @@ onBeforeUnmount(() => {
   position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
   padding: 4vh 4vw; background: radial-gradient(ellipse at center, #0b122099 0%, #05070cc4 80%);
 }
+/* the VS banner sits across the top; keep the centred card clear of it on short windows */
+.waiting-board-overlay.with-banner { padding-top: max(4vh, 120px); }
 .waiting-board-card {
   max-width: 380px; background: var(--ui-surface-2); border: 1px solid #6a2b2b; border-radius: 12px;
   padding: 22px 26px; box-shadow: 0 16px 44px #000c; color: var(--ui-text); text-align: center;

@@ -83,7 +83,7 @@ export function isNotYourTeamStatus(status: unknown): boolean {
 function titleFor(launch: RejoinLaunch, kind: 'progress' | 'waiting' | 'failed'): string {
   const join = launch.action === 'join';
   if (kind === 'failed') return join ? 'Join failed' : 'Rejoin failed';
-  if (kind === 'waiting') return join ? 'Joined — waiting' : 'Rejoined — waiting';
+  if (kind === 'waiting') return 'Waiting for Opponent'; // owner 10-06: the coach is in and waiting for the other coach to arrive
   return join ? 'Joining your game' : 'Rejoining your game';
 }
 
@@ -196,9 +196,8 @@ export function deriveRejoinModal(launch: RejoinLaunch | null, snap: RejoinSnaps
       kind: 'waiting',
       title: titleFor(launch, 'waiting'),
       steps: markProgress(steps, 2),
-      message: launch.opponent
-        ? `Joined — waiting for ${launch.opponent} to reconnect.`
-        : 'Joined — waiting for the other coach to reconnect.',
+      // owner 10-06: no "Joined — waiting ... to reconnect" subtext (the opponent has usually not joined at all yet)
+      message: '',
       notes: notesFor(launch, false),
     };
   }

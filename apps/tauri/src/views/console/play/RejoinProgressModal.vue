@@ -23,7 +23,7 @@ const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' 
           <span>{{ step.label }}</span>
         </li>
       </ul>
-      <p v-if="modal.kind === 'waiting'" class="hint">{{ modal.message }}</p>
+      <p v-if="modal.kind === 'waiting' && modal.message" class="hint">{{ modal.message }}</p>
       <template v-else-if="modal.kind === 'failed'">
         <p class="hint rejoin-fail-message">{{ modal.message }}</p>
         <p v-if="modal.detail" class="hint rejoin-fail-detail">{{ modal.detail }}</p>

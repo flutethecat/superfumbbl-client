@@ -482,7 +482,7 @@ const legacyState = reactive({
   /** Owner 07-07: UNEXPECTED mid-game socket close — "Connection closed" prompt + reconnect action (PLAY auto-retries, `reconnecting`). Cleared on fresh gameState or user Disconnect. */
   connectionClosed: null as { mode: 'spectator' | 'player'; label: string; code: number; reconnecting: boolean; /** S44: the server's own close reason, when it sent one */ reason?: string; /** S44: an official FUMBBL game — Reconnect is a password rejoin, never automatic */ official?: boolean } | null,
   /** Owner 07-09: FUMBBL matchmaking wait (connected, pre-gameState) — drives the "Waiting for the other coach…" modal; cleared on gameState/close/error/timeout/Disconnect. */
-  waitingForMatch: null as { gameName?: string; teamName?: string; coach?: string; opponentCoach?: string } | null,
+  waitingForMatch: null as { gameName?: string; teamName?: string; coach?: string; opponentCoach?: string; /** owner 10-06 VS banner: ids the join knew + whether it is an official FUMBBL join */ gameId?: number; teamId?: string; opponentTeamId?: string; official?: boolean } | null,
   /** Owner 07-08: live spectator count (serverJoin broadcast) for the LIVE badge; `livePulse` bumps per new join → on-air flash. */
   spectatorCount: 0,
   /** Owner 09-09: the spectating coaches (upstream `spectatorNames` on serverJoin / serverLeave) — the LIVE badge lists them. */
@@ -4374,6 +4374,16 @@ type PlayerParams = {
   opponentTeamId?: string;
   opponentCoach?: string;
 };
+/** Owner 10-06: the waiting board's VS banner reads the ids this join knew (no credential is copied). */
+function waitingFromParams(params: PlayerParams, official: boolean): NonNullable<typeof state.waitingForMatch> {
+  return {
+    gameName: params.gameName, teamName: params.teamName, coach: params.coach, opponentCoach: params.opponentCoach,
+    ...(params.gameId && params.gameId > 0 ? { gameId: params.gameId } : {}),
+    ...(params.teamId ? { teamId: params.teamId } : {}),
+    ...(params.opponentTeamId ? { opponentTeamId: params.opponentTeamId } : {}),
+    ...(official ? { official: true } : {}),
+  };
+}
 type PreparedPlayerConnection = {
   session: GameSession; launch: () => void; onAccepted?: (servedGameId?: number) => void;
   /** S44 round 2: the server accepted the join (serverJoin), before any game state */
@@ -21659,7 +21669,7 @@ export const gameStore = {
         // clears this modal the moment the opponent returns. Only a truly silent join (no serverJoin) or the
         // FUMBBL matchmaking window still surfaces the unreachable/no-match error.
         if (joinAckedThisConnect) {
-          state.waitingForMatch = { gameName: params.gameName, teamName: params.teamName, coach: params.coach, opponentCoach: params.opponentCoach };
+          state.waitingForMatch = waitingFromParams(params, officialFumbbl);
           log('system', 'joined — waiting for the other coach to (re)connect');
           return;
         }
@@ -21674,7 +21684,7 @@ export const gameStore = {
       // Joined FUMBBL's matchmaking — the game state arrives when the match is set up; until then we wait (the connection is live). Tell the user so the "joining" state doesn't look hung.
       log('system', `waiting for the game to start — you'll drop in when your match is ready (up to ${Math.round(joinTimeoutMs / 60000)} min)`);
       // Surface the "Waiting for the other coach…" modal while matchmaking hasn't produced a game yet.
-      state.waitingForMatch = { gameName: params.gameName, teamName: params.teamName, coach: params.coach, opponentCoach: params.opponentCoach };
+      state.waitingForMatch = waitingFromParams(params, officialFumbbl);
       // FUMBBL live join: a prepared lobby spends the JNLP token only after the coach chooses
       // a named game or a server-listed game. Direct calls are accepted only with an explicit
       // gameId/gameName; team-only matchmaking is intentionally prohibited.
