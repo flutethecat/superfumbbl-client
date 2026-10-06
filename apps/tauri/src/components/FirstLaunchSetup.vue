@@ -187,29 +187,31 @@ function flushPasswords(): void {
 // Step 9: "Import Mod Pack" — the same native importer Settings → Assets uses, result inline (packBusy is above).
 const packStatus = ref('');
 const packError = ref('');
-const importedPack = ref<InstalledAssetPack | null>(null);
+// Owner 10-06: every pack imported during this run stays listed (it used to be replaced by the next import).
+interface ImportedPackEntry { pack: InstalledAssetPack; status: string; applied: boolean }
+const importedPacks = ref<ImportedPackEntry[]>([]);
+const importedPack = computed<InstalledAssetPack | null>(() => importedPacks.value.find((e) => !e.applied)?.pack ?? null);
 async function importModPack(): Promise<void> {
   if (packBusy.value) return;
   packBusy.value = true;
   packError.value = '';
   packStatus.value = '';
-  importedPack.value = null;
   try {
     const result = await importAssetPackForApply();
-    importedPack.value = result.pack;
-    packStatus.value = result.status;
+    if (result.pack) importedPacks.value = [...importedPacks.value.filter((e) => e.pack.installId !== result.pack!.installId), { pack: result.pack, status: result.status, applied: false }];
+    else packStatus.value = result.status;
     packError.value = result.error;
   } finally {
     packBusy.value = false;
   }
 }
-async function applyImportedPack(): Promise<void> {
-  const pack = importedPack.value;
+async function applyImportedPack(target?: InstalledAssetPack): Promise<void> {
+  const pack = target ?? importedPack.value;
   if (!pack || packBusy.value) return;
   packBusy.value = true;
   try {
     const result = await withPackTimeout((intent) => useWholeAssetPack(pack, intent));
-    if (result === true) { packStatus.value = `${pack.name} ${pack.version} applied.`; importedPack.value = null; }
+    if (result === true) importedPacks.value = importedPacks.value.map((e) => (e.pack.installId === pack.installId ? { ...e, applied: true, status: `${pack.name} ${pack.version} applied.` } : e));
     else packError.value = result === 'timeout' ? PACK_SWITCH_TIMEOUT_MESSAGE : (assetMods.error || 'The pack could not be applied.');
   } finally {
     packBusy.value = false;
@@ -356,10 +358,15 @@ function finish(): void {
         <template v-else-if="step.kind === 'modPacks'">
           <div class="setup-actions-row">
             <button type="button" class="setup-secondary" :disabled="packBusy || assetMods.busy" @click="importModPack">Import Mod Pack</button>
-            <button v-if="importedPack" type="button" class="setup-secondary" :disabled="packBusy" @click="applyImportedPack">
-              Use it now ({{ packCapabilityLabels(importedPack).join(', ') }})
-            </button>
           </div>
+          <ul v-if="importedPacks.length" class="setup-pack-list" aria-live="polite">
+            <li v-for="entry in importedPacks" :key="entry.pack.installId" class="setup-pack-row">
+              <span class="setup-hint">{{ entry.status }}</span>
+              <button v-if="!entry.applied && packCapabilityLabels(entry.pack).length" type="button" class="setup-secondary" :disabled="packBusy" @click="applyImportedPack(entry.pack)">
+                Use it now ({{ packCapabilityLabels(entry.pack).join(', ') }})
+              </button>
+            </li>
+          </ul>
           <p v-if="packStatus" class="setup-hint" aria-live="polite">{{ packStatus }}</p>
           <p v-if="packError" class="setup-error" role="alert">{{ packError }}</p>
         </template>
@@ -474,6 +481,9 @@ function finish(): void {
 .setup-option-title { font-size: max(var(--ui-min-primary-text-size, 16px), 1.05rem); }
 .setup-option-desc { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.9rem); line-height: 1.4; }
 .setup-images { display: flex; justify-content: center; gap: 8px; }
+/* Owner 10-06: screenshot cards share one image-box height so titles and descriptions line up across the row. */
+.setup-images:not(.setup-dice):not(.setup-d6):not(.setup-skill-icons) { height: min(40vh, 420px); align-items: center; }
+.setup-images:not(.setup-dice):not(.setup-d6):not(.setup-skill-icons) img { max-height: 100%; }
 .setup-images img { display: block; max-width: 100%; max-height: min(40vh, 420px); object-fit: contain; border-radius: 4px; }
 .setup-dice { justify-content: flex-start; }
 .setup-dice img { width: 72px; height: 72px; image-rendering: auto; }
@@ -498,9 +508,12 @@ function finish(): void {
 .setup-font-title { color: var(--ui-heading); font-size: max(var(--ui-min-primary-text-size, 16px), 1.5rem); letter-spacing: 0.04em; }
 .setup-font-digits { letter-spacing: 0.08em; }
 .setup-d6 { justify-content: flex-start; --d6-size: 56px; }
-.setup-skill-icons { flex-wrap: wrap; justify-content: center; align-content: center; gap: 8px 10px; max-width: 460px; margin: 6px auto 4px; }
+/* Owner 10-06: a grid so the pitch shot takes exactly the height left under the two icon rows (same box as the markings card). */
+.setup-skill-icons { display: grid; grid-template-columns: repeat(6, 66px); grid-template-rows: auto auto minmax(0, 1fr); justify-content: center; align-content: start; gap: 8px 10px; max-width: 460px; margin: 0 auto; height: min(40vh, 420px); }
+/* Owner 10-06 ("same visual weight"): the markings card's screenshot fills the same box as the icon grid + pitch shot. */
+.setup-option[data-option='markings'] .setup-images img { height: 100%; width: 100%; max-width: 480px; object-fit: cover; }
 .setup-skill-icons figure { display: flex; flex-direction: column; align-items: center; margin: 0; gap: 3px; width: 66px; }
-.setup-skill-icons-pitch { flex-basis: 100%; width: min(100%, 440px); height: auto; max-height: 200px; object-fit: cover; margin: 8px auto 0; border-radius: 4px; }
+.setup-skill-icons-pitch { grid-column: 1 / -1; grid-row: 3; width: 100%; height: 100%; min-height: 0; max-height: none !important; object-fit: cover; margin: 0; border-radius: 4px; }
 .setup-skill-icons figure img { width: 52px; height: 52px; }
 .setup-skill-icons figcaption { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.72rem); white-space: nowrap; }
 .setup-markings-import { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }
@@ -522,6 +535,8 @@ function finish(): void {
 .setup-check { display: flex; align-items: center; gap: 8px; }
 .setup-super-login { display: flex; flex-direction: column; gap: 10px; }
 .setup-actions-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.setup-pack-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.setup-pack-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .setup-hint { margin: 0; color: var(--ui-text-dim, var(--ui-muted)); font-size: max(var(--ui-min-text-size, 12px), 0.85rem); }
 .setup-error { margin: 8px 0 0; color: var(--ui-danger, #e06c6c); font-size: max(var(--ui-min-text-size, 12px), 0.85rem); }
 .setup-footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
