@@ -32,7 +32,7 @@ function onKeydown(event: KeyboardEvent) {
       <button v-for="section in SETTINGS_SECTIONS" :id="`settings-tab-${section.id}`" :key="section.id"
         type="button" role="tab" :aria-selected="modelValue === section.id"
         :aria-controls="`settings-panel-${section.id}`" :tabindex="modelValue === section.id ? 0 : -1"
-        :data-active="modelValue === section.id" @click="choose(section.id)">{{ section.label }}</button>
+        :data-active="modelValue === section.id" :data-tour="`settings-tab-${section.id}`" @click="choose(section.id)">{{ section.label }}</button>
     </nav>
   </aside>
 </template>

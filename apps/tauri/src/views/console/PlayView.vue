@@ -30,6 +30,7 @@ import PostGamePanel from '../../components/PostGamePanel.vue';
 import { loadPostGameSnapshot, postGameSnapshotKeys } from '../../game/postGameCache';
 import { postGameKey, type PostGameSnapshot } from '../../game/postGameProjection';
 import CreateGameModal from './play/CreateGameModal.vue';
+import { EXAMPLE_GAME_ID, exampleSnapshot } from '../../game/clientTourExample';
 import { FORK_EDITION } from '../../game/edition';
 
 /**
@@ -153,7 +154,36 @@ async function openDetails(row: FumbblRecentMatch): Promise<void> {
   detailsRow.value = row; detailsSnapshot.value = null; detailsLoading.value = true;
   try { detailsSnapshot.value = await loadPostGameSnapshot(detailsKeyFor(row)); } finally { detailsLoading.value = false; }
 }
-function closeDetails(): void { detailsRow.value = null; detailsSnapshot.value = null; }
+function closeDetails(): void { detailsRow.value = null; detailsSnapshot.value = null; detailsExample.value = false; }
+
+// Owner 10-06 (client walkthrough, game/clientTour.ts): the tour opens the Details popup of the first recent game with a
+// stored snapshot, then its Dice tab; with none stored it shows a bundled EXAMPLE game (header "Example game").
+const detailsExample = ref(false);
+const detailsPanel = ref<{ openDice: () => void } | null>(null);
+const EXAMPLE_ROW: FumbblRecentMatch = {
+  matchId: 0, replayId: 0, when: '', myTeamId: 0, myTeam: 'Riverside Reavers', myScore: 2,
+  opponentTeam: 'Ironjaw Krumpaz', opponentCoach: 'AnotherCoach', opponentScore: 1, myRace: 'Human', opponentRace: 'Orc',
+};
+async function tourOpenDetails(): Promise<'real' | 'example'> {
+  try { await refreshDetailsKeys(); } catch { /* no cache: the example below */ }
+  const row = recent.value.find((r) => hasDetails(r));
+  if (row) {
+    await openDetails(row);
+    if (detailsSnapshot.value) return 'real';
+  }
+  detailsRow.value = EXAMPLE_ROW;
+  detailsSnapshot.value = exampleSnapshot();
+  detailsLoading.value = false;
+  detailsExample.value = true;
+  return 'example';
+}
+function tourOpenDice(): boolean {
+  if (!detailsPanel.value) return false;
+  detailsPanel.value.openDice();
+  return true;
+}
+defineExpose({ tourOpenDetails, tourOpenDice, tourCloseDetails: closeDetails });
+void EXAMPLE_GAME_ID;
 function onDetailsKey(event: KeyboardEvent): void { if (event.key === 'Escape') closeDetails(); }
 
 // Owner 09-25: no auto-refresh — the Refresh button re-queries on demand.
@@ -402,7 +432,7 @@ function crestFailed(url: string | null): void {
         <div class="card-head">
           <h2 id="active-title">My Active Games <span class="count">{{ activeCount }}</span></h2>
           <!-- Owner 09-25: Refresh sits top-right of the card, in line with the title. -->
-          <button v-if="coach" class="bevel small" type="button" :disabled="activeLoading" @click="refreshAll">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
+          <button v-if="coach" class="bevel small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll">{{ activeLoading ? 'Refreshing…' : 'Refresh' }}</button>
         </div>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings to see your games here.</p>
 
@@ -564,7 +594,7 @@ function crestFailed(url: string | null): void {
 
       <!-- Owner 09-25: My Recent Games mirrors the Active Games card — same rows (crest · name · coach · TV | score |
            opponent | action), stacked under it. Races/TV come from the FUMBBL match API (fumbblRecentMatches). -->
-      <section class="card list-card recent-card" aria-labelledby="recent-title">
+      <section class="card list-card recent-card" aria-labelledby="recent-title" data-tour="play-recent">
         <h2 id="recent-title">My Recent Games <span class="count">{{ recent.length }}</span></h2>
         <p v-if="coach && recentTeamCap" class="team-cap-note">{{ recentTeamCapNote(recentTeamCap) }}</p>
         <p v-if="!coach" class="empty">Set your FUMBBL coach name in Settings.</p>
@@ -586,8 +616,8 @@ function crestFailed(url: string | null): void {
             <template #actions>
               <!-- Owner 10-01 (S74): Details and Replay stacked, the same width, centred in the row. -->
               <div class="row-actions">
-                <button class="bevel resume-button details-button" type="button" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
-                <button class="bevel resume-button row-replay-button" type="button" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
+                <button class="bevel resume-button details-button" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :data-cached="hasDetails(row)" :title="hasDetails(row) ? `End-of-game details for match ${row.matchId}` : `No stored details for match ${row.matchId} — replay it from here`" @click="openDetails(row)">Details</button>
+                <button class="bevel resume-button row-replay-button" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="`Replay match ${row.matchId}`" @click="replayMatch(row)">Replay</button>
                 <!-- Owner 10-01 (S78): when it was played sits under the buttons, not in the result box. -->
                 <span class="row-when">{{ relativeTime(row.when) }}</span>
               </div>
@@ -601,13 +631,13 @@ function crestFailed(url: string | null): void {
     <div v-if="detailsRow" class="details-modal" role="dialog" aria-modal="true" :aria-label="`Details: ${detailsRow.myTeam} vs ${detailsRow.opponentTeam}`" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
       <div class="details-card">
         <header class="details-head">
-          <span class="details-title">{{ detailsRow.myTeam }} <span class="vs">vs</span> {{ detailsRow.opponentTeam }}</span>
-          <small class="details-when">{{ relativeTime(detailsRow.when) }} &middot; match {{ detailsRow.matchId }}</small>
+          <span class="details-title"><template v-if="detailsExample"><span class="details-example">Example game</span> </template>{{ detailsRow.myTeam }} <span class="vs">vs</span> {{ detailsRow.opponentTeam }}</span>
+          <small v-if="!detailsExample" class="details-when">{{ relativeTime(detailsRow.when) }} &middot; match {{ detailsRow.matchId }}</small>
           <button class="details-close" type="button" aria-label="Close details" @click="closeDetails">&#x2715;</button>
         </header>
         <div class="details-body">
           <p v-if="detailsLoading" class="empty">Loading&hellip;</p>
-          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
             <p class="empty">No details stored for this game.</p>
             <small>Details are kept for games finished in this client during the last 7 days. Replay it to watch it again.</small>
@@ -615,7 +645,7 @@ function crestFailed(url: string | null): void {
         </div>
         <footer class="details-foot">
           <!-- Owner 10-01 (S73): no Dice button here - the pane's own Dice tab opens it. -->
-          <button class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)">Replay</button>
+          <button v-if="!detailsExample" class="bevel replay-button" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)">Replay</button>
         </footer>
       </div>
     </div>
@@ -787,6 +817,7 @@ h2 { display: flex; align-items: center; gap: 10px; color: var(--pb-carmine); fo
 /* owner 09-25: every Details is the carmine bevel (the green "no stored details" variant read as a different action); the popup says when nothing is stored */
 
 /* Owner 09-25: Details popup — large, centred; the pane inside keeps its own look (PostGamePanel embedded). */
+.details-example { padding: 1px 8px; margin-right: 6px; color: #fff; font-size: 0.8em; letter-spacing: 0.05em; text-transform: uppercase; background: var(--ui-primary, #b0242a); border-radius: 4px; }
 .details-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; background: #05070cc8; backdrop-filter: blur(2px); }
 .details-card { display: flex; flex-direction: column; width: min(1100px, 94vw); max-height: 92vh; border: 1px solid var(--pb-text); border-radius: 8px; background: var(--ui-old-lace, #F8F5E7); color: var(--pb-text); box-shadow: 0 20px 60px #000c; overflow: hidden; }
 .details-head { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--pb-line); }

@@ -232,8 +232,8 @@ export const SETUP_STEPS: readonly SetupStep[] = [
   {
     id: 'homeLogin',
     kind: 'homeLogin',
-    title: 'Sign in on the Home pane',
-    lede: 'Sign in to fumbbl.com in the Home pane to join games with one click.',
+    title: 'Sign in on FUMBBL.COM',
+    lede: 'Sign in on FUMBBL.COM to join games with one click.',
   },
   {
     id: 'modPacks',

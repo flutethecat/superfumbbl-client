@@ -1,0 +1,390 @@
+{
+ "snapshot": "2026-10-06",
+ "source": "https://fumbbl.com/p/groups + /api/group/get",
+ "groups": [
+  {
+   "id": 9941,
+   "name": "Eurobowl Training"
+  },
+  {
+   "id": 18934,
+   "name": "WC27 Training"
+  },
+  {
+   "id": 16630,
+   "name": "NAF Squad Tournaments"
+  },
+  {
+   "id": 15615,
+   "name": "The Super League"
+  },
+  {
+   "id": 18603,
+   "name": "Secret League 2025"
+  },
+  {
+   "id": 18606,
+   "name": "145 2025"
+  },
+  {
+   "id": 13713,
+   "name": "FUMBOWL LEAGUE"
+  },
+  {
+   "id": 18365,
+   "name": "Old World Amorical Federation "
+  },
+  {
+   "id": 15449,
+   "name": "Ukraine BB League"
+  },
+  {
+   "id": 647,
+   "name": "Southern Wastes League"
+  },
+  {
+   "id": 15085,
+   "name": "JBL"
+  },
+  {
+   "id": 14726,
+   "name": "NWBL"
+  },
+  {
+   "id": 14949,
+   "name": "White Isle League"
+  },
+  {
+   "id": 14741,
+   "name": "Deserted Isles Blood Bowl Leeg"
+  },
+  {
+   "id": 18298,
+   "name": "Cobra Kai"
+  },
+  {
+   "id": 17397,
+   "name": "WOBBL"
+  },
+  {
+   "id": 19078,
+   "name": "Practicas torneo"
+  },
+  {
+   "id": 13630,
+   "name": "Major Blood Bowl League"
+  },
+  {
+   "id": 19228,
+   "name": "Occitanie BloodBowl"
+  },
+  {
+   "id": 19024,
+   "name": "Liga Mexicana de FUMBBL "
+  },
+  {
+   "id": 10068,
+   "name": "DLE - Draft League Europe"
+  },
+  {
+   "id": 15668,
+   "name": "NBFL"
+  },
+  {
+   "id": 18855,
+   "name": "Mugello Leagues Blood Bowl"
+  },
+  {
+   "id": 18989,
+   "name": "The Clueless Cup"
+  },
+  {
+   "id": 19005,
+   "name": "Pathway Events"
+  },
+  {
+   "id": 18632,
+   "name": "Vlood Vall online"
+  },
+  {
+   "id": 15469,
+   "name": "National College BloodBowl III"
+  },
+  {
+   "id": 15326,
+   "name": "SNOT LEAGUE"
+  },
+  {
+   "id": 18941,
+   "name": "Stunty LEEG 2025"
+  },
+  {
+   "id": 19321,
+   "name": "Nuffle's Nomads"
+  },
+  {
+   "id": 17392,
+   "name": "Aragón Team BB"
+  },
+  {
+   "id": 19214,
+   "name": "Lisova Pisnia"
+  },
+  {
+   "id": 14793,
+   "name": "Nieżywiec Superliga"
+  },
+  {
+   "id": 12879,
+   "name": "Entrainement tournois BB 2025"
+  },
+  {
+   "id": 19236,
+   "name": "Squad Chaos League"
+  },
+  {
+   "id": 19054,
+   "name": "Osbbl 2025"
+  },
+  {
+   "id": 15266,
+   "name": "Tasting Blood VI"
+  },
+  {
+   "id": 19199,
+   "name": "Tourney TRaining Arena"
+  },
+  {
+   "id": 19377,
+   "name": "Chaos Cup Practice 2026"
+  },
+  {
+   "id": 12801,
+   "name": "GHBBL FUMBBL League"
+  },
+  {
+   "id": 17628,
+   "name": "Greenskins Draft Rumble"
+  },
+  {
+   "id": 10455,
+   "name": "CIBBL"
+  },
+  {
+   "id": 18707,
+   "name": "Open [L]eague Challenge 2025"
+  },
+  {
+   "id": 18619,
+   "name": "DEX New Rules"
+  },
+  {
+   "id": 18883,
+   "name": "Snail Cup (BB2025)"
+  },
+  {
+   "id": 19312,
+   "name": "Bowl of Thrones"
+  },
+  {
+   "id": 18400,
+   "name": "Pavlovian Invitational League"
+  },
+  {
+   "id": 18284,
+   "name": "Lliga Catalana"
+  },
+  {
+   "id": 11296,
+   "name": "Suomiliiga"
+  },
+  {
+   "id": 15203,
+   "name": "Eire BB"
+  },
+  {
+   "id": 18621,
+   "name": "Spainbowl"
+  },
+  {
+   "id": 19285,
+   "name": "Silly Secret"
+  },
+  {
+   "id": 10863,
+   "name": "D-A-CH"
+  },
+  {
+   "id": 19106,
+   "name": "Flamenking"
+  },
+  {
+   "id": 19177,
+   "name": "Liga Dixebra "
+  },
+  {
+   "id": 7412,
+   "name": "Das Waterbowl"
+  },
+  {
+   "id": 1825,
+   "name": "Champion's Cup Challenge"
+  },
+  {
+   "id": 14708,
+   "name": "Secret League 2020"
+  },
+  {
+   "id": 18640,
+   "name": "SweBBA Road to EuroBowl 2026"
+  },
+  {
+   "id": 16005,
+   "name": "Remas League"
+  },
+  {
+   "id": 18576,
+   "name": "Team England Testing"
+  },
+  {
+   "id": 17578,
+   "name": "/v/"
+  },
+  {
+   "id": 18819,
+   "name": "The Perpetual and Serene Commi"
+  },
+  {
+   "id": 17496,
+   "name": "Peking Bloodbowl- Eternal "
+  },
+  {
+   "id": 18879,
+   "name": "UBFL"
+  },
+  {
+   "id": 19248,
+   "name": "Bramley Close"
+  },
+  {
+   "id": 19351,
+   "name": "GARANTISTES"
+  },
+  {
+   "id": 18789,
+   "name": "Scottish Online BB League 2025"
+  },
+  {
+   "id": 19286,
+   "name": "LBN"
+  },
+  {
+   "id": 18721,
+   "name": "II Copa Magistral "
+  },
+  {
+   "id": 18765,
+   "name": "ÖBBB-Österreichische Blood Bow"
+  },
+  {
+   "id": 17432,
+   "name": "FUM³BBL"
+  },
+  {
+   "id": 10263,
+   "name": "Secret League Open"
+  },
+  {
+   "id": 19168,
+   "name": "Malta World Cup 2027 Summer Fu"
+  },
+  {
+   "id": 19126,
+   "name": "F365: Den of Iniquity (2025)"
+  },
+  {
+   "id": 14081,
+   "name": "CIBBL+"
+  },
+  {
+   "id": 8559,
+   "name": "O[L]C 2016 Nostalgia Bowl"
+  },
+  {
+   "id": 19265,
+   "name": "Noob Bowl FR"
+  },
+  {
+   "id": 18652,
+   "name": "Comic Quest Season 1 (2026)"
+  },
+  {
+   "id": 9298,
+   "name": "NAF Online! Tournaments"
+  },
+  {
+   "id": 15398,
+   "name": "Madrid Blood Bowl"
+  },
+  {
+   "id": 19019,
+   "name": "Bilbali & WCTraining"
+  },
+  {
+   "id": 18587,
+   "name": "GHBBL Amorical Practice"
+  },
+  {
+   "id": 18774,
+   "name": "Penguin Pirates Invitational"
+  },
+  {
+   "id": 12654,
+   "name": "Throne of Blood"
+  },
+  {
+   "id": 15786,
+   "name": "Elves Leaving the Forest II"
+  },
+  {
+   "id": 7335,
+   "name": "Fumbbl Cup (L)"
+  },
+  {
+   "id": 15767,
+   "name": "O[L]C  Open League"
+  },
+  {
+   "id": 11285,
+   "name": "Scribbl Fan Club"
+  },
+  {
+   "id": 1928,
+   "name": "UI Dark Qualifying Tournament"
+  },
+  {
+   "id": 7437,
+   "name": "145 League"
+  },
+  {
+   "id": 18601,
+   "name": "145 Grad 2025"
+  },
+  {
+   "id": 511,
+   "name": "Stunty Cup"
+  },
+  {
+   "id": 1275,
+   "name": "Ulthuan Invitational"
+  },
+  {
+   "id": 2299,
+   "name": "Grotty Little Tournament"
+  },
+  {
+   "id": 18872,
+   "name": "Post-Redraft Open"
+  }
+ ]
+}

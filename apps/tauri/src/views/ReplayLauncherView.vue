@@ -11,7 +11,7 @@ import { jnlpEntryError, readJnlpFile, routeJnlpRequest } from '../game/jnlpRout
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { recentTeamCapNote } from '../game/fumbblRecentMatches';
 import {
-  REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
+  REPLAY_SEARCH_RESOLVERS, REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
   type AbortableFetch, type FumbblGroup, type ReplayRow, type ReplaySearchResult,
 } from '../game/replaySearch';
 import { relativeTime } from '../game/fumbblPlayBlade';
@@ -56,7 +56,8 @@ let searchAbort: AbortController | null = null;
 async function runSearch(): Promise<void> {
   cancelReplayLookup();
   const text = query.value.trim();
-  await showSearch((f) => runReplaySearch(text, settings.coach, f));
+  // the live league-list refresh gets the raw fetch: its own signal + timer, not this search's (Astra P2-2)
+  await showSearch((f) => runReplaySearch(text, settings.coach, f, REPLAY_SEARCH_RESOLVERS, { liveFetch: baseFetch }));
 }
 /** A league from the pick list (several leagues matched the name). */
 async function pickGroup(group: FumbblGroup): Promise<void> {
@@ -314,6 +315,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           <input
             v-model="query"
             class="search-input"
+            data-tour="replay-search"
             type="search"
             autocomplete="off"
             spellcheck="false"
@@ -322,7 +324,7 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           />
           <!-- enabled while a search runs: a new search supersedes (aborts) the running one -->
           <button class="bevel search-button" type="submit" :aria-busy="search.loading">{{ search.loading ? 'Searching…' : 'Search' }}</button>
-          <label class="hide-scores">
+          <label class="hide-scores" data-tour="replay-hide-scores">
             <input v-model="settings.replaySearchHideScores" type="checkbox" />
             <span>Hide scores and outcomes</span>
           </label>

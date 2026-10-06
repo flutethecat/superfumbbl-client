@@ -6,14 +6,16 @@
  *     FFB replay (game) id: one "Game <id>" row with unknown teams whose Replay connects straight to that id.
  *   - anything else -> a coach name, verbatim (fetchRecentFumbblMatches; the searched coach is the LEFT side); when
  *     FUMBBL knows no such coach, a league / group name (owner 10-06: "Group search is the same as League search"):
- *     the public API has no group search, so the names come from the public /p/groups page (cached per session),
- *     matched case-insensitively as a substring - one match lists its recent tournament games, several give a pick list.
+ *     the public API has no group search, so the names come from the BUNDLED league index (assets/data/league-index.json;
+ *     /p/groups is bot-walled, its live fetch is only an optional refresh that merges new leagues), matched
+ *     case-insensitively as a substring - one match lists its recent tournament games, several give a pick list.
  *   - empty -> the user's own recent games (settings.coach).
  * Never connects anything itself: the user clicks Replay.
  */
 import { fetchRecentFumbblMatches, type FumbblRecentMatch, type RecentTeamCap } from './fumbblRecentMatches';
 import { resultLetter } from './fumbblPlayBlade';
 import { FUMBBL_SITE } from './settings';
+import leagueIndexData from '../assets/data/league-index.json';
 
 export interface ReplayRowTeam {
   name: string;
@@ -249,12 +251,17 @@ export function parseGroupsPage(html: string): FumbblGroup[] {
   return groups;
 }
 
-/** Case-insensitive substring match; an exact (case-insensitive) name wins outright. */
+/** Matching key: whitespace-collapsed, lower case, diacritics folded (NFD minus combining marks: "Nieżywiec" ->
+ *  "niezywiec", "ÖBBB" -> "obbb"), so a search typed without accents finds the league (Astra P3). */
+export function leagueMatchKey(text: string): string {
+  return normalizeQuery(text).normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+/** Case-insensitive, accent-insensitive substring match; an exact name wins outright. */
 export function matchGroups(groups: readonly FumbblGroup[], query: string): FumbblGroup[] {
-  const q = normalizeQuery(query).toLowerCase();
+  const q = leagueMatchKey(query);
   if (!q) return [];
   const named = groups.filter((g) => g.name);
-  const key = (g: FumbblGroup): string => normalizeQuery(g.name).toLowerCase();
+  const key = (g: FumbblGroup): string => leagueMatchKey(g.name);
   const exact = named.filter((g) => key(g) === q);
   if (exact.length === 1) return exact;
   return named.filter((g) => key(g).includes(q));
@@ -263,45 +270,119 @@ export function matchGroups(groups: readonly FumbblGroup[], query: string): Fumb
 export class LeagueIndexUnavailable extends Error {
   constructor() { super('League names could not be loaded from FUMBBL'); this.name = 'LeagueIndexUnavailable'; }
 }
-export const LEAGUE_INDEX_NOTICE = 'League names could not be loaded from FUMBBL right now. Search a league by its id instead, e.g. league:13713.';
 
-let groupsCache: Promise<FumbblGroup[]> | null = null;
-let groupsCacheFetcher: FetchLike | null = null;
-function isAbort(error: unknown): boolean { return error instanceof Error && error.name === 'AbortError'; }
 /**
- * /p/groups is fetched once per session (a failed fetch is retried next time). Astra 10-06: the pending fetch belongs
- * to the search that started it - if that search is aborted (superseded / timed out) while a newer search is waiting
- * on the same promise, the newer search drops the aborted entry and fetches again with its own requests.
+ * Owner 10-06: the BUNDLED league index (src/assets/data/league-index.json, refreshed by scripts/snapshot-league-index.mjs
+ * from a browser-saved copy of /p/groups). fumbbl.com/p/groups sits behind an Anubis proof-of-work bot check, so the app
+ * cannot read it with a plain fetch - league names resolve against this snapshot FIRST; the live page is only an
+ * opportunistic refresh that merges leagues the snapshot does not know.
  */
-export async function loadFumbblGroups(fetcher: FetchLike): Promise<FumbblGroup[]> {
-  const cached = groupsCache;
-  if (cached && groupsCacheFetcher !== fetcher) {
-    try { return await cached; } catch (error) {
-      if (!isAbort(error)) throw error;
-      if (groupsCache === cached) { groupsCache = null; groupsCacheFetcher = null; }
+export const LEAGUE_INDEX_SNAPSHOT: string = typeof leagueIndexData.snapshot === 'string' ? leagueIndexData.snapshot : '';
+export const BUNDLED_LEAGUE_INDEX: readonly FumbblGroup[] = (Array.isArray(leagueIndexData.groups) ? leagueIndexData.groups : [])
+  .filter((g) => Number.isSafeInteger(g?.id) && g.id > 0 && typeof g.name === 'string')
+  .map((g) => ({ id: g.id, name: g.name.replace(/\s+/g, ' ').trim() }));
+/** Shown when the bundled index has no match AND the live /p/groups refresh failed (bot check, HTTP error). */
+export const LEAGUE_INDEX_NOTICE = `No league named like that in the bundled list (FUMBBL league list from ${LEAGUE_INDEX_SNAPSHOT || 'an unknown date'}). Search by id instead, e.g. league:13713.`;
+
+/** Bundled leagues + the leagues a successful live refresh added (new ids only; a bundled name always wins). */
+let mergedIndex: FumbblGroup[] = [...BUNDLED_LEAGUE_INDEX];
+/** the live /p/groups refresh this session: 'failed' = bot check / HTTP error seen (not retried until reset) */
+let liveState: 'idle' | 'merged' | 'failed' = 'idle';
+/** `base` plus the leagues of `live` whose ids `base` lacks (live order kept; known ids keep their base name). */
+export function mergeLiveGroups(base: readonly FumbblGroup[], live: readonly FumbblGroup[]): FumbblGroup[] {
+  const known = new Set(base.map((g) => g.id));
+  const added: FumbblGroup[] = [];
+  for (const g of live) {
+    if (known.has(g.id)) continue;
+    known.add(g.id);
+    added.push(g);
+  }
+  return [...base, ...added];
+}
+/** The league index a name search matches against right now (bundled + merged live). */
+export function currentLeagueIndex(): readonly FumbblGroup[] { return mergedIndex; }
+
+/** /p/groups answered with an HTTP error status: FUMBBL said no - not retried this session (unlike a transport error). */
+export class LeagueIndexHttpError extends Error {
+  constructor(readonly status: number) { super(`HTTP ${status}`); this.name = 'LeagueIndexHttpError'; }
+}
+/** One /p/groups read -> its leagues. A bot-check page (no `div.group` blocks) throws LeagueIndexUnavailable. */
+export async function fetchGroupsPage(fetcher: FetchLike): Promise<FumbblGroup[]> {
+  const res = await fetcher(`${FUMBBL_SITE}/p/groups`);
+  if (!res.ok) throw new LeagueIndexHttpError(res.status);
+  const groups = parseGroupsPage(await res.text());
+  // FUMBBL answers this HTML page with an Anubis bot-check page for anything that is not a real browser session;
+  // the JSON API is not affected. Never worked around - reported as unavailable.
+  if (!groups.length) throw new LeagueIndexUnavailable();
+  return groups;
+}
+/** Bot check or HTTP 4xx/5xx: FUMBBL's answer, remembered for the session. Anything else (TypeError: fetch failed,
+ *  a timeout, an abort) is transport trouble and stays retryable on the next search (Astra P2-1). */
+function isPermanentLiveFailure(error: unknown): boolean {
+  return error instanceof LeagueIndexUnavailable || error instanceof LeagueIndexHttpError;
+}
+
+/** The live refresh's own bound - independent of the search that started it (Astra P2-2). */
+export const LIVE_REFRESH_TIMEOUT_MS = 15_000;
+class LiveRefreshTimeout extends Error {
+  constructor() { super('League list refresh timed out'); this.name = 'TimeoutError'; }
+}
+interface LiveRefresh { promise: Promise<boolean>; stop(): void }
+let liveRefresh: LiveRefresh | null = null;
+/**
+ * One live /p/groups read with its OWN AbortController and timer. With `liveFetch` (the pane's raw fetch) the request
+ * is not tied to the search's signal at all, so superseding the search does not kill a shared refresh; without it
+ * (tests, callers that only have a search fetcher) the timer still bounds how long anyone waits on it.
+ */
+function startLiveRefresh(ctx: ReplaySearchContext): LiveRefresh {
+  const controller = new AbortController();
+  const liveFetch = ctx.liveFetch;
+  const fetcher: FetchLike = liveFetch ? (input) => liveFetch(input, { signal: controller.signal }) : ctx.fetcher;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectStop: (error: Error) => void = () => undefined;
+  const bound = new Promise<never>((_resolve, reject) => {
+    rejectStop = reject;
+    timer = setTimeout(() => { controller.abort(); reject(new LiveRefreshTimeout()); }, LIVE_REFRESH_TIMEOUT_MS);
+  });
+  const entry: LiveRefresh = {
+    promise: Promise.resolve(false),
+    stop() { clearTimeout(timer); controller.abort(); rejectStop(Object.assign(new Error('aborted'), { name: 'AbortError' })); },
+  };
+  entry.promise = (async () => {
+    try {
+      const live = await Promise.race([fetchGroupsPage(fetcher), bound]);
+      mergedIndex = mergeLiveGroups(mergedIndex, live);
+      liveState = 'merged';
+      return true;
+    } catch (error) {
+      if (isPermanentLiveFailure(error)) liveState = 'failed';
+      return false;
+    } finally {
+      clearTimeout(timer);
+      if (liveRefresh === entry) liveRefresh = null;
     }
-  }
-  return startGroupsFetch(fetcher);
+  })();
+  liveRefresh = entry;
+  return entry;
 }
-function startGroupsFetch(fetcher: FetchLike): Promise<FumbblGroup[]> {
-  if (!groupsCache || groupsCacheFetcher !== fetcher) {
-    const pending = (async () => {
-      const res = await fetcher(`${FUMBBL_SITE}/p/groups`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const html = await res.text();
-      const groups = parseGroupsPage(html);
-      // 10-06 rig: FUMBBL can answer this HTML page with a bot-check / error page instead of the list (seen for a
-      // headless browser; the JSON API is not affected). Never retried or worked around - reported as unavailable.
-      if (!groups.length) throw new LeagueIndexUnavailable();
-      return groups;
-    })();
-    groupsCache = pending;
-    groupsCacheFetcher = fetcher;
-    pending.catch(() => { if (groupsCache === pending) { groupsCache = null; groupsCacheFetcher = null; } });
-  }
-  return groupsCache;
+/**
+ * The optional live refresh: merges NEW leagues from /p/groups into the index when the page loads. Resolves to whether
+ * the live list is merged. `background` (a bundled hit) joins a refresh already in flight; an awaited refresh (a
+ * bundled miss) never waits on an older pending one - it stops it and issues its own request, so one hung refresh
+ * cannot stall later searches (Astra P2-2).
+ */
+export async function refreshLeagueIndex(ctx: ReplaySearchContext, background = false): Promise<boolean> {
+  if (liveState === 'merged') return true;
+  if (liveState === 'failed') return false;
+  if (liveRefresh && background) return liveRefresh.promise;
+  liveRefresh?.stop();
+  return startLiveRefresh(ctx).promise;
 }
-export function resetReplaySearchCache(): void { groupsCache = null; groupsCacheFetcher = null; logoNames.clear(); enrichedMatches.clear(); }
+export function resetReplaySearchCache(): void {
+  liveRefresh?.stop(); liveRefresh = null;
+  logoNames.clear(); enrichedMatches.clear();
+  mergedIndex = [...BUNDLED_LEAGUE_INDEX]; liveState = 'idle';
+}
 
 /** The most logo-only leagues whose names one search fetches (the 10-06 page lists 50) - a few at a time. */
 export const LOGO_NAME_CAP = 60;
@@ -388,7 +469,8 @@ async function fetchJson(url: string, fetcher: FetchLike): Promise<unknown> {
 async function fetchGroupName(id: number, fetcher: FetchLike): Promise<string> {
   try {
     const g = record(await fetchJson(`${FUMBBL_SITE}/api/group/get/${id}`, fetcher));
-    return typeof g?.name === 'string' ? g.name : '';
+    // Astra P3: the API can return entity-encoded names ("A &amp; B") - decode like the page's names
+    return typeof g?.name === 'string' ? decodeEntities(g.name).replace(/\s+/g, ' ').trim() : '';
   } catch { return ''; }
 }
 
@@ -414,6 +496,8 @@ export interface ReplaySearchContext {
   /** settings.coach - the empty-query list */
   ownCoach: string;
   fetcher: FetchLike;
+  /** the raw fetch for the live /p/groups refresh, so it gets its own signal instead of the search's (Astra P2-2) */
+  liveFetch?: AbortableFetch;
 }
 
 /**
@@ -486,33 +570,54 @@ export const coachResolver: ReplaySearchResolver = {
     if (q.kind !== 'coach') return null;
     const { matches, found, teamCap } = await fetchRecentFumbblMatches(q.coach, ctx.fetcher);
     if (!found) return null;
+    if (!matches.length) {
+      // rig 10-06: "NAF" is also a FUMBBL coach (34 teams, no games) - a coach with NO games yields to leagues of the
+      // same name (bundled + any merged live index; no live fetch awaited here). A coach WITH games keeps precedence.
+      const leagues = matchGroups(currentLeagueIndex(), q.coach);
+      if (leagues.length) return leagueResultFor(leagues, q.coach, ctx, coachNoGamesNote(q.coach));
+    }
     return { kind: 'coach', query: q.coach, coach: q.coach, rows: matches.map((m) => rowFromRecent(m, q.coach)), ...(teamCap ? { teamCap } : {}) };
   },
 };
-/** A league / group name: one match -> its games; several -> a pick list; none -> fall through ("no coach or league"). */
+/**
+ * A league / group name: one match -> its games; several -> a pick list; none -> fall through ("no coach or league").
+ * Owner 10-06: the bundled index answers first, with no fetch. When it matched, the live /p/groups refresh runs in the
+ * background only (merging new leagues for later searches); when it did not, the refresh is awaited (a league newer
+ * than the snapshot), and if that refresh failed too the result carries LEAGUE_INDEX_NOTICE.
+ */
 export const leagueNameResolver: ReplaySearchResolver = {
   kind: 'league',
   accepts: (query) => classifyQuery(query).kind === 'coach',
   async resolve(query, ctx) {
-    let index: FumbblGroup[];
-    try {
-      index = await loadFumbblGroups(ctx.fetcher);
-    } catch (error) {
-      // the text was not a coach either: say why no league could be matched instead of a bare "not found"
-      if (error instanceof LeagueIndexUnavailable || (error instanceof Error && /^HTTP \d+$/.test(error.message))) {
-        return { kind: 'none', query: normalizeQuery(query), notice: LEAGUE_INDEX_NOTICE, rows: [] };
-      }
-      throw error;
-    }
-    let matched = matchGroups(index, query);
-    // no hit on the page's text: the logo-only leagues are indexed by advert (or nothing) - try their real names
-    if (!matched.length) matched = matchGroups(await resolveLogoGroupNames(index, ctx.fetcher), query);
     const q = normalizeQuery(query);
+    let matched = matchGroups(currentLeagueIndex(), query);
+    if (matched.length) {
+      void refreshLeagueIndex(ctx, true); // fire-and-forget; never rejects, bounded by its own timer
+    } else if (await refreshLeagueIndex(ctx)) {
+      const index = currentLeagueIndex();
+      matched = matchGroups(index, query);
+      // the live page shows some leagues as a logo only (advert text, or nothing): try those leagues' real names
+      if (!matched.length) matched = matchGroups(await resolveLogoGroupNames(index, ctx.fetcher), query);
+    } else {
+      // the text was not a coach either: say why no league could be matched instead of a bare "not found"
+      return { kind: 'none', query: q, notice: LEAGUE_INDEX_NOTICE, rows: [] };
+    }
     if (!matched.length) return null;
-    if (matched.length === 1) return searchGroup(matched[0]!, ctx.fetcher, q);
-    return { kind: 'league-pick', query: q, groups: matched.slice(0, LEAGUE_PICK_CAP), rows: [] };
+    return leagueResultFor(matched, q, ctx);
   },
 };
+
+/** The one-line note when a known coach with no games gives way to leagues of the same name. */
+export function coachNoGamesNote(coach: string): string { return `Coach ${coach} has no games — showing leagues named like ${coach}`; }
+/** One matched league -> its games; several -> the pick list. An optional note leads any notice of its own. */
+async function leagueResultFor(matched: readonly FumbblGroup[], query: string, ctx: ReplaySearchContext, note?: string): Promise<ReplaySearchResult> {
+  const q = normalizeQuery(query);
+  const result: ReplaySearchResult = matched.length === 1
+    ? await searchGroup(matched[0]!, ctx.fetcher, q)
+    : { kind: 'league-pick', query: q, groups: matched.slice(0, LEAGUE_PICK_CAP), rows: [] };
+  if (note) result.notice = result.notice ? `${note}. ${result.notice}` : note;
+  return result;
+}
 
 /** Resolution order: own games (empty); match id -> group id -> replay id (digits, or one of them by its prefix
  *  match: / league: (group:) / replay:); coach -> league name (text). */
@@ -529,9 +634,10 @@ export async function runReplaySearch(
   ownCoach: string,
   fetcher: FetchLike,
   resolvers: readonly ReplaySearchResolver[] = REPLAY_SEARCH_RESOLVERS,
+  options: { liveFetch?: AbortableFetch } = {},
 ): Promise<ReplaySearchResult> {
   const query = normalizeQuery(raw);
-  const ctx: ReplaySearchContext = { ownCoach, fetcher };
+  const ctx: ReplaySearchContext = { ownCoach, fetcher, ...(options.liveFetch ? { liveFetch: options.liveFetch } : {}) };
   for (const resolver of resolvers) {
     if (!resolver.accepts(query)) continue;
     const result = await resolver.resolve(query, ctx);

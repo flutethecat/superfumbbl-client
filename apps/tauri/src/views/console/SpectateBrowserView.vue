@@ -53,6 +53,8 @@ async function resolveCompetitionNames(matches: readonly BrowserMatch[]): Promis
 const emit = defineEmits<{
   spectate: [id: number];
 }>();
+/** Owner 10-06: the client walkthrough is on this blade - show an example row when there is no live game to point at. */
+defineProps<{ tourExample?: boolean }>();
 
 const browserMatches = ref<BrowserMatch[]>([]);
 const browserStatus = ref('');
@@ -340,21 +342,21 @@ onBeforeUnmount(() => {
         <div v-if="browserStatus" class="list-status">{{ browserStatus }}</div>
         <div v-else-if="filteredMatches.length === 0" class="list-status">No live games match the filter.</div>
         <div v-else class="rows">
-          <template v-for="group in groupedMatches" :key="group.key">
-          <h3 class="competition-heading" :title="group.label">{{ group.label }} <span class="competition-count">{{ group.matches.length }}</span></h3>
-          <article v-for="match in group.matches" :key="match.id" class="game-row">
+          <template v-for="(group, groupIndex) in groupedMatches" :key="group.key">
+          <h3 class="competition-heading" :data-tour="groupIndex === 0 ? 'spectate-league' : undefined" :title="group.label">{{ group.label }} <span class="competition-count">{{ group.matches.length }}</span></h3>
+          <article v-for="(match, matchIndex) in group.matches" :key="match.id" class="game-row">
             <div class="row-team home">
               <img v-if="crest(team(match, 0)?.race, 'home')" class="row-logo" :src="crest(team(match, 0)?.race, 'home')!" alt="" />
               <span v-else class="row-logo logo-fallback" aria-hidden="true">{{ initials(team(match, 0)?.name) }}</span>
               <span class="row-text">
                 <strong class="row-name">{{ team(match, 0)?.name || '—' }}</strong>
-                <small class="row-meta row-coach">{{ team(match, 0)?.coach || '—' }}</small>
+                <small :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-coach' : undefined" class="row-meta row-coach">{{ team(match, 0)?.coach || '—' }}</small>
                 <small v-if="team(match, 0)?.race" class="row-meta row-race">{{ team(match, 0)?.race }}</small>
                 <small v-if="formatTeamValue(team(match, 0)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 0)?.tv) }}</small>
               </span>
             </div>
             <div class="row-centre">
-              <span class="row-phase">{{ phase(match) }}</span>
+              <span :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-phase' : undefined" class="row-phase">{{ phase(match) }}</span>
               <span class="row-score"><span class="row-score-n">{{ team(match, 0)?.score ?? 0 }}</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">{{ team(match, 1)?.score ?? 0 }}</span></span>
             </div>
             <div class="row-right">
@@ -368,10 +370,39 @@ onBeforeUnmount(() => {
                   <small v-if="formatTeamValue(team(match, 1)?.tv)" class="row-meta row-tv">{{ formatTeamValue(team(match, 1)?.tv) }}</small>
                 </span>
               </div>
-              <button class="bevel spectate-button" type="button" @click="spectate(match.id)">Spectate</button>
+              <button class="bevel spectate-button" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)">Spectate</button>
             </div>
           </article>
           </template>
+        </div>
+        <!-- Owner 10-06 (client walkthrough): no live games to point at - a static EXAMPLE row, same classes. -->
+        <div v-if="tourExample && (browserStatus || filteredMatches.length === 0)" class="rows tour-example" data-testid="spectate-tour-example">
+          <h3 class="competition-heading" data-tour="spectate-league">Example League <span class="competition-count">Example</span></h3>
+          <div class="game-row" role="article" aria-label="Example live game">
+            <div class="row-team home">
+              <span class="row-logo logo-fallback" aria-hidden="true">{{ initials('Riverside Reavers') }}</span>
+              <span class="row-text">
+                <strong class="row-name">Riverside Reavers</strong>
+                <small class="row-meta row-coach" data-tour="spectate-coach">ExampleCoach</small>
+                <small class="row-meta row-race">Human</small>
+              </span>
+            </div>
+            <div class="row-centre">
+              <span class="row-phase" data-tour="spectate-phase">H2 T3</span>
+              <span class="row-score"><span class="row-score-n">1</span><span class="row-score-dash">&ndash;</span><span class="row-score-n">1</span></span>
+            </div>
+            <div class="row-right">
+              <div class="row-team away">
+                <span class="row-logo logo-fallback" aria-hidden="true">{{ initials('Ironjaw Krumpaz') }}</span>
+                <span class="row-text">
+                  <strong class="row-name">Ironjaw Krumpaz</strong>
+                  <small class="row-meta row-coach">AnotherCoach</small>
+                  <small class="row-meta row-race">Orc</small>
+                </span>
+              </div>
+              <button class="bevel spectate-button" type="button" data-tour="spectate-button" disabled title="Example">Spectate</button>
+            </div>
+          </div>
         </div>
       </section>
     </template>

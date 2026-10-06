@@ -16,6 +16,9 @@ mod discord_presence;
 mod asset_drafts;
 mod asset_media;
 mod asset_mods;
+// The FUMBBL.COM blade's docked website (owner 10-05; ships in every build since 10-06) - see the module.
+mod fumbbl_home;
+mod window_state;
 
 const MAX_JNLP_BYTES: usize = 128 * 1024;
 const MAX_PENDING_JNLPS: usize = 4;
@@ -168,6 +171,77 @@ fn read_jnlp(reader: &dyn JnlpFileReader, path: &Path) -> Result<String, String>
         return Err("JNLP file is too large".into());
     }
     String::from_utf8(bytes).map_err(|_| "JNLP file is not valid UTF-8".into())
+}
+
+/// The one native JNLP intake seam: queue the item for the page's drain_launch_jnlps consumer and nudge it. Used by the
+/// single-instance forward and by the Home pane's JNLP download (fumbbl_home.rs). No XML, path, or error payload crosses
+/// the event boundary.
+fn offer_launch_jnlp(app: &tauri::AppHandle, item: Result<String, String>) {
+    if let Some(state) = app.try_state::<PendingJnlp>() {
+        let event = if state.push(item).is_ok() {
+            "jnlp-launch-available"
+        } else {
+            "jnlp-launch-failed"
+        };
+        let _ = app.emit_to("main", event, ());
+    }
+    focus_main_window(app);
+}
+
+/// Bring the main window forward. With tauri's `unstable` feature (the fumbbl-home build) the main window holds two
+/// webviews and is no longer a "webview window", so it is looked up as a plain window there.
+fn focus_main_window(app: &tauri::AppHandle) {
+    #[cfg(feature = "fumbbl-home")]
+    let window = app.get_window("main");
+    #[cfg(not(feature = "fumbbl-home"))]
+    let window = app.get_webview_window("main");
+    if let Some(window) = window {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// Read a JNLP the Home pane downloaded into its private temp file, with the same bound and UTF-8 checks as a launch
+/// argument (`read_jnlp`). The caller deletes the file.
+#[cfg_attr(not(feature = "fumbbl-home"), allow(dead_code))]
+fn read_downloaded_jnlp(path: &Path) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        read_jnlp(&PlatformJnlpFileReader, path)
+    }
+    #[cfg(not(windows))]
+    {
+        read_jnlp(&TempJnlpFileReader, path)
+    }
+}
+
+/// Non-Windows reader for the Home pane's own temp file (the launch-argument reader is Windows-only): a regular file,
+/// not a symlink, read with the same byte ceiling.
+#[cfg(not(windows))]
+struct TempJnlpFileReader;
+
+#[cfg(not(windows))]
+impl JnlpFileReader for TempJnlpFileReader {
+    fn read_bounded_no_follow(&self, path: &Path, max: usize) -> Result<Vec<u8>, String> {
+        const READ_ERROR: &str = "JNLP file could not be read";
+        // Open FIRST (refusing a symlink as the final component, and never blocking on a FIFO), then check the handle we
+        // actually hold: no window between a path check and the open for the file to be swapped.
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options.open(path).map_err(|_| READ_ERROR.to_string())?;
+        let meta = file.metadata().map_err(|_| READ_ERROR.to_string())?;
+        if !meta.is_file() {
+            return Err(READ_ERROR.into());
+        }
+        let mut bytes = Vec::new();
+        file.take(max as u64 + 1).read_to_end(&mut bytes).map_err(|_| READ_ERROR.to_string())?;
+        Ok(bytes)
+    }
 }
 
 #[tauri::command]
@@ -597,22 +671,17 @@ pub fn run() {
         // When enabled it must be registered before every other plugin.
         builder = builder.plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
             if let Some(path) = jnlp_path(&args, Path::new(&cwd)) {
-                let item = read_jnlp(callback_reader.as_ref(), &path);
-                if let Some(state) = app.try_state::<PendingJnlp>() {
-                    let event = if state.push(item).is_ok() {
-                        // No XML, path, or error payload crosses the event boundary.
-                        "jnlp-launch-available"
-                    } else {
-                        "jnlp-launch-failed"
-                    };
-                    let _ = app.emit_to("main", event, ());
-                }
-            }
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+                // offer_launch_jnlp also brings the main window forward.
+                offer_launch_jnlp(app, read_jnlp(callback_reader.as_ref(), &path));
+            } else {
+                focus_main_window(app);
             }
         }));
+    }
+    // FUMBBL.COM pane: hide the docked FUMBBL webview whenever the main page (re)loads.
+    #[cfg(feature = "fumbbl-home")]
+    {
+        builder = builder.on_page_load(fumbbl_home::on_page_load);
     }
     builder
         .manage(pending)
@@ -623,6 +692,12 @@ pub fn run() {
         // context menu is suppressed in the UI, so this is the only way to reach the
         // console in a release build (e.g. a blank window on a new platform).
         .setup(|app| {
+            // FUMBBL.COM pane: before the main webview starts, drop a fumbbl.com HSTS entry an earlier dev build left
+            // in the main profile (it turns the game socket into wss:// and every spectate/join fails).
+            #[cfg(all(feature = "fumbbl-home", windows))]
+            if let Ok(local_data) = app.path().app_local_data_dir() {
+                fumbbl_home::purge_default_profile_fumbbl_hsts(&local_data);
+            }
             // Owner 09-30 (S51): the main window is `create: false` in tauri.conf.json (url sfapp://localhost/) and
             // built here, so a dev run keeps loading the dev server (devUrl) instead of the scheme. A config that
             // auto-creates "main" (the asset-builder overlay) is left alone.
@@ -631,7 +706,11 @@ pub fn run() {
                     if cfg!(dev) {
                         config.url = tauri::WebviewUrl::App("index.html".into());
                     }
-                    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
+                    // Owner 10-06: the last window size/position (clamped to its monitor), else the FUMBBL.COM site-fit
+                    // size in a build with the pane (window_state.rs).
+                    let plan = window_state::prepare(app.handle(), &mut config, fumbbl_home::AVAILABLE);
+                    let window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?.build()?;
+                    window_state::finish(&window, plan);
                 }
             }
             if std::env::var_os("FUMBBL_DEVTOOLS").is_some() {
@@ -701,10 +780,24 @@ pub fn run() {
             asset_drafts::asset_draft_apply,
             asset_drafts::asset_draft_migrate_sound_overrides,
             asset_drafts::write_user_override,
-            asset_drafts::remove_user_override
+            asset_drafts::remove_user_override,
+            fumbbl_home::fumbbl_home_available,
+            fumbbl_home::fumbbl_home_show,
+            fumbbl_home::fumbbl_home_hide,
+            fumbbl_home::fumbbl_home_navigate,
+            fumbbl_home::fumbbl_home_tour,
+            fumbbl_home::fumbbl_home_set_zoom,
+            fumbbl_home::fumbbl_home_set_filter
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, _event| {
+            // FUMBBL.COM pane: its private JNLP directory never outlives the app.
+            #[cfg(feature = "fumbbl-home")]
+            if let tauri::RunEvent::Exit = _event {
+                fumbbl_home::on_exit();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -725,6 +818,23 @@ mod tests {
             jnlp_path(&args, Path::new("C:/tmp")),
             Some(PathBuf::from("C:/tmp/match.JNLP"))
         );
+    }
+
+    /// The non-Windows reader for the FUMBBL.COM pane's downloaded JNLP opens first and checks the handle.
+    #[cfg(unix)]
+    #[test]
+    fn temp_jnlp_reader_refuses_symlinks_and_non_files_and_stays_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.jnlp");
+        std::fs::write(&real, b"<jnlp/>").unwrap();
+        assert_eq!(read_jnlp(&TempJnlpFileReader, &real).unwrap(), "<jnlp/>");
+        let link = dir.path().join("link.jnlp");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(read_jnlp(&TempJnlpFileReader, &link).is_err());
+        assert!(read_jnlp(&TempJnlpFileReader, dir.path()).is_err());
+        let big = dir.path().join("big.jnlp");
+        std::fs::write(&big, vec![b'a'; MAX_JNLP_BYTES + 10]).unwrap();
+        assert_eq!(read_jnlp(&TempJnlpFileReader, &big).unwrap_err(), "JNLP file is too large");
     }
 
     #[test]

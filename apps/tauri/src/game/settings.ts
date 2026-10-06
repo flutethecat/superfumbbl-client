@@ -420,6 +420,13 @@ export interface AppSettings extends ConfirmationSettings {
   /** Last first-launch setup-wizard revision completed (owner 10-06); the wizard shows while this is below
    *  SETUP_WIZARD_VERSION (game/setupWizard.ts) — for EVERY install, new or existing — after the contributions screen. */
   setupWizardSeenVersion: number;
+  /** Owner 10-06: last FUMBBL.COM walkthrough revision completed or skipped (game/homeTour.ts
+   *  HOME_TOUR_VERSION); the walkthrough runs while this is lower. Settings > General can reset it. */
+  homeTourSeenVersion: number;
+  /** Owner 10-06: last client walkthrough revision completed or skipped (game/clientTour.ts CLIENT_TOUR_VERSION). */
+  clientTourSeenVersion: number;
+  /** Owner 10-06: zoom of the docked FUMBBL site, 0.75-2 (game/fumbblHome.ts clampHomeZoom). */
+  homePaneZoom: number;
   /** Skip the welcome splash on launch (Settings toggle). */
   hideWelcomeSplash: boolean;
   /** Owner 08-18: "Skip this next time" on the account-setup splash. RETIRED 10-06 — the first-launch setup wizard
@@ -662,6 +669,9 @@ const DEFAULTS: AppSettings = {
   legalAcceptanceVersion: 0,
   contributionsSeenVersion: 0,
   setupWizardSeenVersion: 0, // owner 10-06: first-launch setup wizard not yet completed
+  homeTourSeenVersion: 0,
+  clientTourSeenVersion: 0,
+  homePaneZoom: 1,
   hideCredsSplash: false, // owner 08-18: opt-out checkbox on the setup splash
   hideWelcomeSplash: true, // owner 2026-07-04: welcome splash deprecated at launch (still in the build; re-enable via Settings → Connection / "Replay the intro screens")
   hideTutorialSplash: true, // owner 2026-07-14: getting-started tour off by default too (needs revising; re-enable via Settings → Connection / "Replay the intro screens")
@@ -920,6 +930,16 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.setupWizardSeenVersion = typeof raw.setupWizardSeenVersion === 'number' && Number.isSafeInteger(raw.setupWizardSeenVersion) && raw.setupWizardSeenVersion >= 0
       ? raw.setupWizardSeenVersion
       : DEFAULTS.setupWizardSeenVersion;
+    merged.homeTourSeenVersion = typeof raw.homeTourSeenVersion === 'number' && Number.isSafeInteger(raw.homeTourSeenVersion) && raw.homeTourSeenVersion >= 0
+      ? raw.homeTourSeenVersion
+      : DEFAULTS.homeTourSeenVersion;
+    merged.clientTourSeenVersion = typeof raw.clientTourSeenVersion === 'number' && Number.isSafeInteger(raw.clientTourSeenVersion) && raw.clientTourSeenVersion >= 0
+      ? raw.clientTourSeenVersion
+      : DEFAULTS.clientTourSeenVersion;
+    // Range check only (the slider snaps; the shell clamps again). Anything else - missing, NaN, a string - is 100 %.
+    merged.homePaneZoom = typeof raw.homePaneZoom === 'number' && Number.isFinite(raw.homePaneZoom) && raw.homePaneZoom >= 0.75 && raw.homePaneZoom <= 2
+      ? raw.homePaneZoom
+      : DEFAULTS.homePaneZoom;
     merged.tackleZoneMode = ['off', 'opposition', 'friendly', 'both'].includes(String(raw.tackleZoneMode))
       ? raw.tackleZoneMode as AppSettings['tackleZoneMode']
       : DEFAULTS.tackleZoneMode;

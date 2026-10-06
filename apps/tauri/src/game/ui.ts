@@ -21,4 +21,6 @@ export const ui = reactive({
   browserOpen: false,
   /** Owner 10-06: the first-launch setup wizard re-run from Settings is open over the live shell (it owns the keyboard). */
   setupWizardRerunOpen: false,
+  /** Owner 10-06: the client walkthrough (components/ClientTour.vue) is running - the FUMBBL.COM site stays hidden. */
+  clientTourActive: false,
 });

@@ -350,7 +350,7 @@ function finish(): void {
         <!-- Step 8: only when the host provides a Home pane. -->
         <template v-else-if="step.kind === 'homeLogin'">
           <div class="setup-actions-row">
-            <button type="button" class="setup-secondary" @click="homeLogin?.open()">Open the Home pane</button>
+            <button type="button" class="setup-secondary" @click="homeLogin?.open()">Open FUMBBL.COM</button>
           </div>
         </template>
 

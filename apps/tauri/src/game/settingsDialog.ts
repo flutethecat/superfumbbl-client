@@ -38,6 +38,10 @@ export const SETTINGS_TRANSACTION_EXCLUDED = new Set([
   'logPos', 'logSize', 'setupBrowserPos', 'setupBrowserSize', 'uiLayout', 'chatPoppedOut', 'chatPopPos', 'chatPopSize',
   'coach', 'password', 'coach40k', 'activeServerTarget',
   'completedFirstRun', 'savedSetupPreviews',
+  'clientTourSeenVersion', // the client walkthrough sets it outside the dialog; its "run again" button must survive Cancel
+  // Owner 10-06: the FUMBBL.COM walkthrough / zoom keys.
+  'homeTourSeenVersion', // the walkthrough sets it outside the dialog; its "run again" button must not be undone by Cancel
+  'homePaneZoom', // the Home pane's own zoom strip
 ]);
 
 export function settingsTransactionSnapshot(value: Record<string, unknown>): string {
@@ -106,8 +110,21 @@ export function focusFirstInDialog(root: HTMLElement, preferredSelector?: string
   return !!target;
 }
 
-export function trapDialogFocus(event: KeyboardEvent, root: HTMLElement | null): void {
+/** Tab / Shift+Tab stay inside `root`. `extraRoots` (owner 10-06: the client walkthrough's card docked beside
+ *  Settings) join the cycle after `root`: focus moves explicitly between the groups, so a group outside the dialog in
+ *  the DOM is still reachable by keyboard and the cycle still never leaves them. */
+export function trapDialogFocus(event: KeyboardEvent, root: HTMLElement | null, extraRoots: (HTMLElement | null)[] = []): void {
   if (event.key !== 'Tab' || !root) return;
+  const extras = extraRoots.filter((r): r is HTMLElement => !!r);
+  if (extras.length) {
+    const cycle = [root, ...extras].flatMap((r) => visibleFocusTargets(r));
+    if (!cycle.length) return;
+    const at = cycle.indexOf(document.activeElement as HTMLElement);
+    const next = at < 0 ? 0 : (at + (event.shiftKey ? -1 : 1) + cycle.length) % cycle.length;
+    event.preventDefault();
+    cycle[next]!.focus();
+    return;
+  }
   const focusable = visibleFocusTargets(root);
   if (!focusable.length) return;
   const first = focusable[0]!;

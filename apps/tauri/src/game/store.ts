@@ -23972,6 +23972,21 @@ export const gameStore = {
     log('system', `play: PASS ${playerName(game.value, playerId)} → [${targetCoordinate[0]},${targetCoordinate[1]}] (server resolves)`);
   },
 
+  /** Owner 10-06 (Astra): the game (server url + mode + id) a dropped connection is being re-joined for (auto-retry
+   *  running, a retry scheduled, or the "Connection closed" prompt up), else null. App.vue's Return-to-Menu prompt uses it: a confirm
+   *  during that window still leaves (and so cancels the reconnect) for the game the prompt was opened for. */
+  reconnectTarget(): { mode: 'spectator' | 'player'; url: string; gameId: number | null } | null {
+    if (!lastConnect || !(reconnecting || reconnectTimer || state.connectionClosed)) return null;
+    return { mode: lastConnect.mode, url: lastConnect.params.url, gameId: lastConnect.params.gameId ?? null };
+  },
+
+  /** The live connection the loaded game came from (server url + seat mode), null for the demo / a replay / none. Two
+   *  games on different servers can share a numeric id; this tells them apart. */
+  connectionTarget(): { mode: 'spectator' | 'player'; url: string } | null {
+    if (!lastConnect || state.demoMode) return null;
+    return { mode: lastConnect.mode, url: lastConnect.params.url };
+  },
+
   /** Owner 2026-07-07: re-join the LAST live game after a drop (spectator Reconnect
    *  button, or play-mode auto-retry). No-op if we never had a live connection. */
   reconnect() {

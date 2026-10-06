@@ -461,7 +461,7 @@ onBeforeUnmount(() => {
         :data-expanded="state.expanded"
         :data-dragging="toolbarDragging"
         :style="toolbarStyle">
-        <button v-if="!state.expanded" class="telestrator-collapsed-trigger"
+        <button v-if="!state.expanded" class="telestrator-collapsed-trigger" data-tour="hud-telestrator"
           title="Open telestrator — long-press to move" aria-label="Open telestrator"
           @pointerdown="armToolbarDrag" @pointermove="moveToolbar"
           @pointerup="finishToolbarPress" @pointercancel="finishToolbarPress"

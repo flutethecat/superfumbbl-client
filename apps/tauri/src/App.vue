@@ -8,6 +8,12 @@ const classicModules = import.meta.glob('./views/ClassicView.vue');
 const ClassicView = FORK_EDITION && classicModules['./views/ClassicView.vue']
   ? defineAsyncComponent(classicModules['./views/ClassicView.vue'] as () => Promise<{ default: Component }>)
   : null;
+// The FUMBBL.COM blade (FUMBBL website, docked; owner 10-05) - in every edition since 10-06. Lazy: the pane's code loads
+// only when the blade is opened.
+const fumbblHomeModules = import.meta.glob('./views/FumbblHomePane.vue');
+const FumbblHomePane = fumbblHomeModules['./views/FumbblHomePane.vue']
+  ? defineAsyncComponent(fumbblHomeModules['./views/FumbblHomePane.vue'] as () => Promise<{ default: Component }>)
+  : null;
 import ProtocolConsole from './views/ProtocolConsole.vue';
 import DevPanel from './views/DevPanel.vue';
 import PlayView from './views/console/PlayView.vue';
@@ -22,6 +28,10 @@ import AccountSettings from './components/AccountSettings.vue';
 import { FORK_EDITION } from './game/edition';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
+import ClientTour from './components/ClientTour.vue';
+import { COLORBLIND_FILTER_MODES, COLORBLIND_MATRICES, colorblindCssFilter } from './game/colorblindFilters';
+import { CLIENT_TOUR_VERSION, shouldStartClientTour } from './game/clientTour';
+import type { ClientTourHost } from './game/clientTourController';
 import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
@@ -637,8 +647,10 @@ async function playTutorial() {
   ui.tutorialTick += 1;
 }
 /** Re-show the welcome + tutorial splashes on demand (Settings → Connection). */
-function replayIntro() {
-  ui.settingsOpen = false;
+async function replayIntro(): Promise<void> {
+  // Through the Settings transaction (Astra 10-06): closing the dialog directly would keep unsaved edits as the new
+  // baseline. Cancel reverts them; if it cannot close (busy / restore failed) nothing else happens.
+  if (ui.settingsOpen && !(await cancelSettingsChanges())) return;
   guideOpen.value = false;
   splashOpen.value = true;
 }
@@ -656,8 +668,95 @@ const twitchChannelUrl = 'https://twitch.tv/flutethecat';
 // openExternal (system browser; window.open fallback) lives in game/openExternal.ts — shared with the setup wizard.
 
 // Owner ruling (console shell restructure): Hub is deprecated — Play is the console shell's landing/home blade.
-type AppView = 'spectate' | 'play' | 'replay' | 'console' | 'team' | 'tournaments' | 'statistics' | 'league' | 'players' | 'store';
+type AppView = 'home' | 'spectate' | 'play' | 'replay' | 'console' | 'team' | 'tournaments' | 'statistics' | 'league' | 'players' | 'store';
 const view = ref<AppView>('play');
+/** The FUMBBL.COM blade exists wherever its pane module is in the bundle (every edition since 10-06). */
+const homeBladeEnabled = !!FumbblHomePane;
+if (!homeBladeEnabled) watch(view, (v) => { if (v === 'home') view.value = 'play'; }, { flush: 'sync' });
+/** Owner 10-06 (final): a fresh launch always lands on PLAY; FUMBBL.COM is one click away (the launch window size still
+ *  remembers the last window, else fits the site - window_state.rs). */
+/** Owner 10-06: Settings > General re-runs the Home pane walkthrough - it starts as soon as the
+ *  Home pane shows the site again (FumbblHomePane watches homeTourSeenVersion). */
+async function rerunHomeTour(): Promise<void> {
+  // Through the Settings transaction, like replayIntro (unsaved edits are cancelled, never kept as the baseline).
+  // homeTourSeenVersion is outside the transaction snapshot (settingsDialog.ts), so the reset below survives it.
+  if (ui.settingsOpen && !(await cancelSettingsChanges())) return;
+  settings.homeTourSeenVersion = 0;
+  view.value = 'home';
+}
+// ---- Owner 10-06: the client walkthrough (components/ClientTour.vue, game/clientTour.ts) ----
+type PlayTourApi = { tourOpenDetails(): Promise<'real' | 'example'>; tourOpenDice(): boolean; tourCloseDetails(): void };
+const playViewRef = ref<PlayTourApi | null>(null);
+async function playViewForTour(): Promise<PlayTourApi | null> {
+  // The tour selected Play a moment ago: give the blade a few frames to mount.
+  for (let i = 0; i < 40 && !playViewRef.value; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+  return playViewRef.value;
+}
+type SpectateTourApi = {
+  tourShowLog(): void; tourOpenLogSettings(): void; tourCloseLogSettings(): void;
+  tourOpenRoster(): void; tourCloseRoster(): void; tourOpenPlayerCard(): boolean; tourClosePlayerCard(): void;
+};
+const spectateViewRef = ref<SpectateTourApi | null>(null);
+async function spectateViewForTour(): Promise<SpectateTourApi | null> {
+  // The match view mounts once the demo game (and the art pack) is in: give it a moment.
+  for (let i = 0; i < 80 && !spectateViewRef.value; i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+  return spectateViewRef.value;
+}
+const clientTourHost: ClientTourHost = {
+  hasPane: homeBladeEnabled,
+  selectBlade: (blade) => selectBlade(blade),
+  openSettings: (tab) => openSettings(tab),
+  selectSettingsTab: (tab) => { settingsTab.value = tab; },
+  // Astra 10-06 (F4): false while the Settings transaction is busy - the tour then stays put.
+  closeSettings: async () => (ui.settingsOpen ? cancelSettingsChanges() : true),
+  openDetails: async () => {
+    const play = await playViewForTour();
+    return play ? play.tourOpenDetails() : 'none';
+  },
+  openDice: () => playViewRef.value?.tourOpenDice() ?? false,
+  closeDetails: () => { playViewRef.value?.tourCloseDetails(); },
+  // The HUD steps (spec-client-walkthrough-hud.md): the bundled demo, the same path as "Play Tutorial".
+  loadDemo: async () => {
+    if (gameStore.game.value && !gameStore.state.demoMode) return false; // a real match: never replaced
+    view.value = 'spectate';
+    if (!gameStore.game.value) await gameStore.loadDemo();
+    return !!(await spectateViewForTour());
+  },
+  leaveDemo: () => {
+    if (!gameStore.state.demoMode) return; // only the tour's own demo is ever left, never a real match
+    ui.gameMenuOpen = false;
+    statsOpen.value = false;
+    leaveGamePrompt.value = false; // Astra N1: no Return-to-Menu prompt may outlive the demo
+    leaveGamePromptFor = null;
+    gameStore.leaveGame();
+  },
+  showLog: () => { spectateViewRef.value?.tourShowLog(); },
+  openLogSettings: () => { spectateViewRef.value?.tourOpenLogSettings(); },
+  closeLogSettings: () => { spectateViewRef.value?.tourCloseLogSettings(); },
+  openRoster: () => { spectateViewRef.value?.tourOpenRoster(); },
+  closeRoster: () => { spectateViewRef.value?.tourCloseRoster(); },
+  openPlayerCard: () => spectateViewRef.value?.tourOpenPlayerCard() ?? false,
+  closePlayerCard: () => { spectateViewRef.value?.tourClosePlayerCard(); },
+  // Skip and "Let's play" mark only the CLIENT walkthrough seen (Astra 10-06): the FUMBBL.COM walkthrough has its own
+  // setting and still runs the first time the coach opens that blade.
+  markSeen: async () => {
+    settings.clientTourSeenVersion = CLIENT_TOUR_VERSION;
+    await nextTick();
+    try { await flushSettingsFile(); } catch { /* a persist hiccup: it simply shows again next launch */ }
+  },
+};
+// Owner 10-06 (final): the launch lands on Play, so the client walkthrough runs straight after the setup wizard; the
+// FUMBBL.COM site walkthrough runs whenever the coach first opens that blade.
+const clientTourShouldStart = computed(() => shouldStartClientTour({
+  clientTourSeenVersion: settings.clientTourSeenVersion,
+  setupWizardDone: !setupWizardNeeded(settings.setupWizardSeenVersion),
+}));
+const clientTourSuspended = computed(() => !!gameStore.state.waitingForMatch || ui.setupWizardRerunOpen || view.value === 'console');
+/** Settings > General: run the client walkthrough again (through the Settings transaction, like the other re-runs). */
+async function rerunClientTour(): Promise<void> {
+  if (ui.settingsOpen && !(await cancelSettingsChanges())) return;
+  settings.clientTourSeenVersion = 0;
+}
 function handleScheduledMatchOpen(): void {
   // Notification navigation is intentionally presentation-only. The tournament blade
   // still requires the coach to select Launch, so a popup can never auto-join a match.
@@ -683,6 +782,7 @@ function applyJnlpResultView(result: JnlpRouteResult): void {
   else if (result === 'fork-player' || result === 'fumbbl-player' || result === 'fumbbl-staged') view.value = 'play';
 }
 function routeNativeJnlp(request: JnlpJoinRequest): void {
+  cancelLeaveGame(); // a JNLP intake never inherits a Return-to-Menu prompt opened for the previous game
   const result = routeJnlpRequest(request, {
     deferFumbblPlayer: view.value === 'play' && settings.activeServerTarget === 'fumbbl',
     sourceName: 'Opened .jnlp file',
@@ -1165,7 +1265,7 @@ const FUMBBL_ICONSET_CAPABILITIES = ['player-iconsets', 'fumbbl-id-images'];
 // Owner 09-10: colourblind correction — a shell-wide colour-matrix filter (see the <svg> defs in the template) plus the
 // green→blue UI-accent remap for the red-green modes.
 const colorblindAccent = computed(() => settings.colorblindMode === 'deuteranopia' || settings.colorblindMode === 'protanopia');
-const colorblindFilterStyle = computed(() => settings.colorblindMode === 'off' ? undefined : { filter: `url(#cb-${settings.colorblindMode})` });
+const colorblindFilterStyle = computed(() => { const filter = colorblindCssFilter(settings.colorblindMode); return filter ? { filter } : undefined; });
 const fumbblSpriteModesAvailable = computed(() =>
   assetMods.installed.some((pack) => pack.capabilities.some((name) => FUMBBL_ICONSET_CAPABILITIES.includes(name))));
 const spritePackOptions = computed(() =>
@@ -1344,7 +1444,8 @@ function selectSettingsTab(tab: unknown, focusContent = false) {
 
 function trapSettingsFocus(event: KeyboardEvent) {
   if (credsMenuOpen.value || registerModalOpen.value) return;
-  trapDialogFocus(event, settingsDialog.value);
+  // Owner 10-06: during the client walkthrough's Settings walk its docked card joins the cycle (Back / Skip / Next).
+  trapDialogFocus(event, settingsDialog.value, [document.querySelector<HTMLElement>('.client-tour-card[data-docked="true"]')]);
 }
 function trapCredsFocus(event: KeyboardEvent) { if (!registerModalOpen.value) trapDialogFocus(event, credsMenuDialog.value); }
 function trapRegisterFocus(event: KeyboardEvent) { trapDialogFocus(event, registerDialog.value); }
@@ -1440,18 +1541,53 @@ const leaveGamePromptMessage = computed(() => gameStore.isPlaying.value
   : 'You will stop spectating. The game is saved.');
 
 
+/** Astra 10-06 (N1): the game the Return-to-Menu prompt was opened for. A confirm only ever leaves THAT game - a prompt
+ *  outliving it (the client walkthrough left its demo underneath) can never leave a match that arrived later. */
+type GameIdentity = { gameId: unknown; demo: boolean; server: string | null };
+let leaveGamePromptFor: GameIdentity | null = null;
+/** The loaded game: its id, whether it is the demo, and the server it came from (Astra: ids collide across servers). */
+function currentGameIdentity(): GameIdentity | null {
+  const game = gameStore.game.value;
+  if (!game) return null;
+  const conn = gameStore.connectionTarget();
+  return { gameId: (game as { gameId?: unknown }).gameId ?? null, demo: !!gameStore.state.demoMode, server: conn ? `${conn.mode}|${conn.url}` : null };
+}
+function sameGame(a: GameIdentity, b: GameIdentity): boolean {
+  return String(a.gameId) === String(b.gameId) && a.demo === b.demo && a.server === b.server;
+}
+/** A different game taking the window (a JNLP join, a reconnect onto another server, the demo going) closes a
+ *  Return-to-Menu prompt opened for the previous one; the game going away for a reconnect keeps it. */
+watch(() => gameStore.game.value, (game) => {
+  if (!leaveGamePrompt.value || !game || !leaveGamePromptFor) return;
+  const now = currentGameIdentity();
+  if (now && !sameGame(now, leaveGamePromptFor)) cancelLeaveGame();
+});
 function requestLeaveGame() {
   // Registry-owned as a client-local dialog: opening this gate never resolves or
   // synthesizes a server dialog/wire command.
   if (leaveGameDialog?.handling !== 'client-local-only') return;
+  leaveGamePromptFor = currentGameIdentity();
   leaveGamePrompt.value = true;
 }
 
 function cancelLeaveGame() {
   leaveGamePrompt.value = false;
+  leaveGamePromptFor = null;
 }
 
 function confirmLeaveGame() {
+  const now = currentGameIdentity();
+  const meant = leaveGamePromptFor;
+  leaveGamePromptFor = null;
+  // A dropped connection being re-joined for the prompt's game: the coach still means to leave it - leaving cancels the
+  // reconnect (as it did before the stale-prompt guard).
+  const target = gameStore.reconnectTarget();
+  const reconnectingMeant = !now && !!meant && !meant.demo && meant.gameId != null && !!target
+    && String(target.gameId) === String(meant.gameId) && `${target.mode}|${target.url}` === meant.server;
+  if (!reconnectingMeant && (!now || !meant || !sameGame(now, meant))) {
+    leaveGamePrompt.value = false; // stale prompt: the game it was opened for is gone
+    return;
+  }
   leaveGamePrompt.value = false;
   ui.gameMenuOpen = false;
   statsOpen.value = false;
@@ -1507,10 +1643,9 @@ function captureKey(event: KeyboardEvent) {
     <!-- Owner 09-10: colourblind correction filters (daltonization: the channel difference a dichromat cannot see is
          shifted into channels they can). Applied as a CSS filter on the shell, so the WebGL pitch and the DOM get the
          same treatment with no asset conversion. Matrices = I + M·(I − S), S = Machado 2009 full-severity simulation. -->
+    <!-- Owner 10-06: the matrices live in game/colorblindFilters.ts (shared with the FUMBBL.COM site webview). -->
     <svg class="cb-filter-defs" aria-hidden="true" focusable="false" width="0" height="0">
-      <filter id="cb-deuteranopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0.163 0.725 0.112 0 0  0.455 -0.645 1.191 0 0  0 0 0 1 0" /></filter>
-      <filter id="cb-protanopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0  0.479 0.477 0.044 0 0  0.597 -0.689 1.091 0 0  0 0 0 1 0" /></filter>
-      <filter id="cb-tritanopia" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0.741 -0.407 0.666 0 0  0.075 0.585 0.340 0 0  0 0 1 0 0  0 0 0 1 0" /></filter>
+      <filter v-for="mode in COLORBLIND_FILTER_MODES" :id="`cb-${mode}`" :key="mode" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" :values="COLORBLIND_MATRICES[mode]" /></filter>
     </svg>
     <header v-if="!gameStore.game.value || settings.uiMode === 'classic'" class="shell-header"
       :class="{ 'header-compact': !!gameStore.game.value }">
@@ -1546,11 +1681,13 @@ function captureKey(event: KeyboardEvent) {
         <button class="blade" type="button" :data-active="true" @click="view = 'console'">Protocol console</button>
       </template>
       <template v-else>
-        <button class="blade" type="button" :data-active="view === 'play'" @click="selectBlade('play')">Play</button>
-        <button class="blade" type="button" :data-active="view === 'spectate'" @click="selectBlade('spectate')">Spectate</button>
+        <!-- Owner 10-05: FUMBBL.COM > Play > Spectate (every edition since 10-06). -->
+        <button v-if="homeBladeEnabled" class="blade" type="button" :data-active="view === 'home'" data-tour="blade-home" @click="selectBlade('home')">FUMBBL.COM</button>
+        <button class="blade" type="button" data-tour="blade-play" :data-active="view === 'play'" @click="selectBlade('play')">Play</button>
+        <button class="blade" type="button" data-tour="blade-spectate" :data-active="view === 'spectate'" @click="selectBlade('spectate')">Spectate</button>
         <!-- Owner 10-06 (replay pane revamp): the Replay blade is in BOTH editions again, after Play / Spectate — its
              search finds any coach's games or a game id (owner 09-25 had made it fork-only; reverse here if wanted). -->
-        <button class="blade" type="button" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
+        <button class="blade" type="button" data-tour="blade-replay" :data-active="view === 'replay'" @click="selectBlade('replay')">Replay</button>
         <template v-if="FORK_EDITION">
         <span class="blade-ribbon-sep" aria-hidden="true"></span>
         <button class="blade" type="button" :data-active="view === 'team'" @click="selectBlade('team')">Team</button>
@@ -1598,7 +1735,7 @@ function captureKey(event: KeyboardEvent) {
     </div>
     <template v-if="!!gameStore.game.value && artPack.ready">
       <component :is="ClassicView" v-if="ClassicView && settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
-      <SpectateView v-else :mode="liveGameMode" @end-game-exit="onEndGameExit" />
+      <SpectateView v-else ref="spectateViewRef" :mode="liveGameMode" @end-game-exit="onEndGameExit" />
     </template>
     <!-- Owner ruling (console shell restructure): Play blade is up for BOTH server plates — the "PLAY ON
          SUPER FUMBBL" entry card (CreateGameModal) replaces the old fork stopgap that routed here into
@@ -1613,8 +1750,9 @@ function captureKey(event: KeyboardEvent) {
          it, instead of sitting on the console shell until the game state arrives. -->
     <WaitingBoardView v-else-if="gameStore.state.waitingForMatch" />
     <KeepAlive v-else include="TeamBuilderView">
-      <PlayView v-if="view === 'play'" />
-      <SpectateBrowserView v-else-if="view === 'spectate'" @spectate="openSpectateGame" />
+      <component :is="FumbblHomePane" v-if="FumbblHomePane && view === 'home'" />
+      <PlayView v-else-if="view === 'play'" ref="playViewRef" />
+      <SpectateBrowserView v-else-if="view === 'spectate'" :tour-example="ui.clientTourActive" @spectate="openSpectateGame" />
       <ReplayLauncherView v-else-if="view === 'replay'" />
       <TeamBuilderView v-else-if="FORK_EDITION && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
       <TournamentsView v-else-if="FORK_EDITION && view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
@@ -1742,12 +1880,16 @@ function captureKey(event: KeyboardEvent) {
       </div>
     </div>
 
+    <!-- Astra 10-06 (N5): on <body>, above the client walkthrough (220) and the disclaimer (12500), which are on <body>
+         too - inside the shell a colourblind filter would trap it under them. -->
+    <Teleport to="body">
     <div v-if="tournamentNotificationState.active" class="match-ready-popup" role="alertdialog" aria-live="assertive">
       <button class="match-ready-close" type="button" title="Dismiss" @click="dismissTournamentNotification(tournamentNotificationState.active!.id)">✕</button>
       <h3>{{ tournamentNotificationState.active.kind === 'test' ? 'Notification test' : 'Your opponent is waiting' }}</h3>
       <p>{{ tournamentNotificationState.active.message }}</p>
       <button v-if="tournamentNotificationState.active.kind === 'match-waiting'" class="primary" type="button" @click="openTournamentNotification">Open tournament match</button>
     </div>
+    </Teleport>
     <div v-if="settingsOpen" class="modal-backdrop" @click.self="requestCloseSettings()"
       @keydown.capture="captureKey" tabindex="-1">
       <!-- owner 2026-07-06: large settings window — left sidebar of categories,
@@ -1820,6 +1962,13 @@ function captureKey(event: KeyboardEvent) {
             <div class="actions" style="justify-content: flex-start">
               <button type="button" @click="replayIntro()">Replay the intro screens now</button>
               <button type="button" @click="rerunSetupWizard()">Run first-launch setup again</button>
+            </div>
+            <!-- Owner 10-06: the FUMBBL.COM walkthrough (game/homeTour.ts). -->
+            <div v-if="homeBladeEnabled" class="actions" style="justify-content: flex-start">
+              <button type="button" @click="rerunHomeTour()">Run the FUMBBL.COM walkthrough again</button>
+            </div>
+            <div class="actions" style="justify-content: flex-start">
+              <button type="button" @click="rerunClientTour()">Run the client walkthrough again</button>
             </div>
           </fieldset>
 
@@ -3102,6 +3251,12 @@ function captureKey(event: KeyboardEvent) {
            BARE version so a stray dev letter would be visible here (leak canary). -->
       <div class="version-stamp" :title="`build ${gitSha}`">v{{ appVersion }}</div>
     </div>
+    <!-- Owner 10-06: the client walkthrough - after the first-launch wizard (the shell is only mounted once the
+         first-open gate, wizard included, has cleared) and after the FUMBBL.COM site walkthrough when the pane exists;
+         it ends on the third-party disclaimer. -->
+    <ClientTour :host="clientTourHost" :should-start="clientTourShouldStart" :suspended="clientTourSuspended" :in-game="!!gameStore.game.value" :demo-game="!!gameStore.state.demoMode"
+      :game-menu-open="ui.gameMenuOpen" :settings-open="ui.settingsOpen" :twitch-url="twitchChannelUrl"
+      :colorblind-filter="colorblindFilterStyle?.filter" />
   </main>
   <BetaLaunchSplash v-else-if="betaSplashOpen" @dismiss="betaSplashOpen = false" />
   <div v-else-if="introOpen" class="intro-splash" role="dialog" aria-label="Super FUMBBL intro">
@@ -3173,8 +3328,9 @@ function captureKey(event: KeyboardEvent) {
 .intro-play:hover { color: var(--ui-heading); border-color: var(--ui-heading); }
 
 .match-ready-popup {
+  /* Astra N5: above the walkthrough disclaimer (12500); teleported to <body>. */
   position: fixed;
-  z-index: 12000;
+  z-index: 12600;
   right: 24px;
   top: 72px;
   width: min(380px, calc(100vw - 48px));

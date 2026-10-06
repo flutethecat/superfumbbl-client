@@ -7175,6 +7175,40 @@ function positionKeywords(raw: unknown): string[] {
   return out;
 }
 
+// Owner 10-06 (client walkthrough HUD steps, game/clientTour.ts): what the tour drives on the demo game.
+function tourShowLog(): void { panelTab.value = 'log'; panelCollapsed.value = false; }
+function tourOpenPlayerCard(): boolean {
+  const game = gameStore.game.value;
+  if (!game) return false;
+  const sides = [
+    { team: game.teamHome, results: game.gameResult?.teamResultHome?.playerResults ?? [] },
+    { team: game.teamAway, results: game.gameResult?.teamResultAway?.playerResults ?? [] },
+  ];
+  let pick: string | null = null;
+  // Prefer a player who earned SPP this game (the card then shows the "+N" chip), else the first listed.
+  for (const { team, results } of sides) {
+    for (const player of team.playerArray) {
+      const r = results.find((x) => x.playerId === player.playerId);
+      const earned = r ? sppEarnedThisGame(r as unknown as Record<string, unknown>, (team as { specialRules?: string[] }).specialRules) : 0;
+      if (earned > 0) { pick = player.playerId; break; }
+    }
+    if (pick) break;
+  }
+  pick ??= game.teamHome.playerArray[0]?.playerId ?? game.teamAway.playerArray[0]?.playerId ?? null;
+  if (!pick) return false;
+  showPopup(pick);
+  return true;
+}
+defineExpose({
+  tourShowLog,
+  tourOpenLogSettings: () => { tourShowLog(); panelSettingsOpen.value = true; },
+  tourCloseLogSettings: () => { panelSettingsOpen.value = false; },
+  tourOpenRoster: () => { if (!rosterPopoutOpen.value) toggleRosterPopout(); },
+  tourCloseRoster: () => { rosterPopoutOpen.value = false; },
+  tourOpenPlayerCard,
+  tourClosePlayerCard: () => { popup.visible = false; },
+});
+
 function showPopup(playerId: string) {
   popup.playerId = playerId;
   popup.visible = true;
@@ -12154,7 +12188,7 @@ function sendChat() {
             <div class="coach-name">{{ homePanel.coach }}</div>
             <div class="team-title">{{ homePanel.teamName }}</div>
             <div class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :title="chip.label">
+              <span v-for="chip in homePanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
                 <img :src="resourceIcon(chip.icon)" alt="" />
                 <b class="inducement-quantity">{{ chip.count }}</b>
               </span>
@@ -12189,7 +12223,7 @@ function sendChat() {
             <div class="coach-name">{{ awayPanel.coach }}</div>
             <div class="team-title">{{ awayPanel.teamName }}</div>
             <div class="inducements" aria-label="Team resources and inducements">
-              <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :title="chip.label">
+              <span v-for="chip in awayPanel.chips" :key="chip.label" class="inducement" :data-pool="chip.pool" :data-chip="chip.icon === 're_roll' || chip.icon === 'apothecary' ? chip.icon : 'inducement'" :title="chip.label">
                 <img :src="resourceIcon(chip.icon)" alt="" />
                 <b class="inducement-quantity">{{ chip.count }}</b>
               </span>
@@ -12275,14 +12309,14 @@ function sendChat() {
             <span class="ui-resizer" title="Drag to resize" @pointerdown="startPanelResize('config-bar', $event)"></span>
             <button class="ui-reset" title="Reset to default" @click="resetPanel('config-bar')">↺</button>
           </template>
-          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)"
+          <QuickBarButton disclosure :active="ui.gameMenuOpen" class="icon-button" data-testid="quick-menu-btn" title="Game menu (Esc)" data-tour="hud-menu"
             @click="ui.gameMenuOpen = !ui.gameMenuOpen">⚙</QuickBarButton>
-          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
+          <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" :title="`Tackle zones: ${TZ_LABELS[settings.tackleZoneMode]}`"
             @click="cycleTackleZones()">🛡</QuickBarButton>
-          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button"
+          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites"
             :title="`Sprites: ${spriteChoiceLabel}`"
             @click="cycleSprites()">👤</QuickBarButton>
-          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn"
+          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills"
             :data-skill-mode="skillMode" :aria-label="`Skill display: ${SKILL_MODE_LABELS[skillMode]}`"
             :title="`Skill display: ${SKILL_MODE_LABELS[skillMode]} (toggle Icons/Markings)`"
             @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
@@ -12291,15 +12325,15 @@ function sendChat() {
           <!-- Owner 10-06: the stadium toggle left the quick bar (Settings > Display keeps it). -->
           <!-- Owner 2026-07-03: Auto Director — one toggle for the automatic camera
                work (zoom + track + nudge to the action). Off = a calm static cam. -->
-          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector"
+          <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector" data-tour="hud-director"
             :title="`Auto Director — auto zoom + track the action: ${settings.autoDirector ? 'ON (click to calm the camera)' : 'OFF'}`"
             @click="settings.autoDirector = !settings.autoDirector">🎬</QuickBarButton>
           <!-- Owner 10-02: Helmet = the end-game roster in a pop-out window (RosterPopout); the dock's Roster tab is
                opt-in via Settings > UI. -->
-          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn"
+          <QuickBarButton disclosure :active="rosterPopoutOpen" class="roster-btn icon-button" data-testid="roster-popout-btn" data-tour="hud-roster-btn"
             :title="`Roster (${keyLabel(settings.rosterKey)}) — every player with their added skills`" :aria-label="`Roster (${keyLabel(settings.rosterKey)})`"
             @click="toggleRosterPopout()"><img class="quick-helmet" :src="helmetIconUrl" alt="" /></QuickBarButton>
-          <QuickBarButton class="report-btn" title="Report an issue — sends your description with the wire log"
+          <QuickBarButton class="report-btn" data-tour="hud-report" title="Report an issue — sends your description with the wire log"
             @click="openReport()"><span class="report-bug">🐞</span><span class="report-label">REPORT</span></QuickBarButton>
           <div class="quick-brand-menu">
             <div class="quick-match-controls">
@@ -12362,14 +12396,14 @@ function sendChat() {
         <div ref="panelEl" class="log-panel" :data-collapsed="panelCollapsed" :class="{ 'endgame-front': endGameFront }"
           :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :data-chat-focused="chatFocused" :style="panelStyle"
           @mouseenter="onLogHover(true)" @mouseleave="onLogHover(false)">
-          <span v-if="!panelCollapsed" class="log-resizer" role="button" aria-label="Resize Log window"
+          <span v-if="!panelCollapsed" class="log-resizer" data-tour="hud-log-resize" role="button" aria-label="Resize Log window"
             title="Resize Log window" @pointerdown="startLogResize">⤡</span>
           <!-- Owner 2026-07-03 r6f: stencil tabs — each tab is the stencil word in
                the ALPHA-RELEASE style (white-outlined, opposition-red), Log/Chat
                keeping their 📋/💬 emoji; Roster is the word only. -->
           <nav class="tabs" @pointerdown="startPanelDrag">
-            <span class="drag-grip" title="Drag to move the window" aria-hidden="true">⠿</span>
-            <button class="stencil-tab" title="Log" :data-active="panelTab === 'log'"
+            <span class="drag-grip" data-tour="hud-log-grip" title="Drag to move the window" aria-hidden="true">⠿</span>
+            <button class="stencil-tab" data-tour="hud-log-tab" title="Log" :data-active="panelTab === 'log'"
               @click="panelTab = 'log'; panelCollapsed = false"><span class="tab-emoji">📋</span><span class="tab-stencil">LOG</span></button>
             <!-- Owner 08-19 (2nd): ROSTER before CHAT in the tab row. -->
             <!-- Owner 10-02: opt-in (Settings > UI › Roster tab in the chat dock); the Helmet pop-out is the default. -->
@@ -12379,7 +12413,7 @@ function sendChat() {
             <!-- Owner 08-19: while chat is POPPED OUT the tab leaves the row entirely (the old
                  click-to-redock tab is retired) — the popout's own dock (⤓) button is the sole
                  way back. -->
-            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
+            <button v-if="!settings.chatDisabled && !settings.chatPoppedOut" class="stencil-tab" data-tour="hud-chat-tab" :title="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
               :aria-label="gameStore.spectatorReview.value.active ? 'Live chat' : 'Chat'"
               :data-active="panelTab === 'chat'"
               :class="{ 'has-badge': chatUnread > 0 && (!settings.chatToastsEnabled || reviewChatHidden), 'live-chat-tab': gameStore.spectatorReview.value.active }"
@@ -12391,7 +12425,7 @@ function sendChat() {
             <button v-if="panelTab === 'chat' && !settings.chatDisabled && !settings.chatPoppedOut"
               class="popout-btn" data-testid="chat-popout" title="Pop chat out into a floating window"
               @click="popOutChat">⧉</button>
-            <button class="collapse" title="Window settings"
+            <button class="collapse" data-tour="hud-log-settings" title="Window settings"
               @click="panelSettingsOpen = !panelSettingsOpen">⚙</button>
             <button class="collapse" :title="panelCollapsed ? 'Expand' : 'Minimize (docks to the buttons)'"
               @click="panelCollapsed = !panelCollapsed">{{ panelCollapsed ? '▴' : '▾' }}</button>
@@ -12401,10 +12435,10 @@ function sendChat() {
             <label>Opacity
               <input v-model.number="settings.logOpacity" type="range" min="0.15" max="1" step="0.05" />
             </label>
-            <label>Text size
+            <label data-tour="hud-log-size">Text size
               <input v-model.number="settings.logFontSize" type="range" min="9" max="22" step="0.5" />
             </label>
-            <label>Font
+            <label data-tour="hud-log-font">Font
               <select v-model="settings.logFont">
                 <option value="nuffle">Nuffle</option>
                 <option value="arial">Arial</option>

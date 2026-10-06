@@ -1,12 +1,21 @@
 [package]
 name = "fumbbl40k"
-version = "1.0.126"
+version = "1.0.127"
 description = "Super FUMBBL — cross-platform Blood Bowl client"
 edition = "2021"
 
 [lib]
 name = "fumbbl40k_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# The FUMBBL.COM blade's docked website (src/fumbbl_home.rs) - ships in every build (owner 10-06), so it is a DEFAULT
+# feature. Needs tauri's multi-webview API, which is behind tauri's `unstable` feature. `--no-default-features` builds the
+# shell without it (its commands then report "unavailable" and the blade shows the installer note).
+# The Windows-only webview2-com/windows-core deps (target section below) let the pane cancel its own WebView2 JNLP
+# download on timeout (tauri's on_download exposes no handle); both are already in the lock via wry.
+default = ["fumbbl-home"]
+fumbbl-home = ["tauri/unstable", "dep:webview2-com", "dep:windows-core"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -44,6 +53,9 @@ discord-presence = "3"
 # Per-user HKCU .jnlp file-association writer (Settings > General button).
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+# Windows only, and only with the `fumbbl-home` feature (see [features]). Versions match wry 0.55's.
+webview2-com = { version = "0.38", optional = true }
+windows-core = { version = "0.61", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
