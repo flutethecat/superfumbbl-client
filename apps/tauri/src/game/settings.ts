@@ -596,7 +596,7 @@ const DEFAULTS: AppSettings = {
   // ⚠ RELEASE CANDIDATES / public releases MUST ship this false — flip it back before an RC
   // build (see docs/release-checklist.md). Only affects fresh installs; a user's stored choice wins.
   wireLog: true,
-  autoDirector: true,
+  autoDirector: false, // owner 10-06: off by default - the camera stays where the user put it
   clickDismissCinematics: false,
   playAuthToken: '',
   requirePlayAuthToken: false, // owner 2026-07-04: play auth is server-determined now (token UI deprecated)

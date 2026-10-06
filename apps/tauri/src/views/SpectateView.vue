@@ -12267,9 +12267,7 @@ function sendChat() {
             @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
           <!-- collapse-log button removed (owner 2026-07-03): the log panel has
                its own ▾ collapse button on its title bar. -->
-          <QuickBarButton stateful class="icon-button" :active="settings.showStadium"
-            :title="settings.showStadium ? 'Hide stadium' : 'Show stadium'"
-            @click="settings.showStadium = !settings.showStadium">🏟️</QuickBarButton>
+          <!-- Owner 10-06: the stadium toggle left the quick bar (Settings > Display keeps it). -->
           <!-- Owner 2026-07-03: Auto Director — one toggle for the automatic camera
                work (zoom + track + nudge to the action). Off = a calm static cam. -->
           <QuickBarButton stateful class="director-btn icon-button" :active="settings.autoDirector"
