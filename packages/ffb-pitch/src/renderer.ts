@@ -12716,6 +12716,19 @@ export class PitchRenderer {
       y: a.y * this.world.scale.y + this.world.position.y,
     };
   }
+  /** Owner 10-05 ("any click that's inside the boundary box of the tile should accept the click"): the canvas-px
+   *  bounding box of the square's projected quad, for DOM hit targets that must cover the whole tile (Quick Snap).
+   *  Re-query while the camera moves, like squareToCanvas. */
+  squareBoundsCanvas(square: [number, number]): { left: number; top: number; width: number; height: number } | null {
+    if (!this.app) return null;
+    const pts = squareQuad(square[0], square[1]).points.map(([wx, wy]) => [
+      wx * this.world.scale.x + this.world.position.x,
+      wy * this.world.scale.y + this.world.position.y,
+    ] as [number, number]);
+    const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
+    const left = Math.min(...xs); const top = Math.min(...ys);
+    return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+  }
 
   /** Owner 09-14: the canvas-px TOP of the block-dice PREVIEW drawn over `square` (the staged block target), or
    *  null when no preview sits there. The DOM block-confirm pill (SpectateView .o66-target-cue) used a fixed

@@ -5956,7 +5956,8 @@ const KICKOFF_DRIVE_TURN_MODES = new Set(['setup', 'solidDefence', 'kickoff', 'k
 const inKickoffDrivePhase = computed(() => KICKOFF_DRIVE_TURN_MODES.has(gameStore.game.value?.turnMode ?? ''));
 // Quick Snap selects an owned player, highlights upstream-legal adjacent empty squares, and moves via CLIENT_SETUP_PLAYER.
 const selectedQuickSnap = ref<string | null>(null);
-const quickSnapTargets = ref<{ x: number; y: number; coord: [number, number] }[]>([]);
+// Owner 10-05: each DOM hit target covers the WHOLE tile (the renderer's projected square bounds), not a 26 px dot.
+const quickSnapTargets = ref<{ x: number; y: number; w: number; h: number; coord: [number, number] }[]>([]);
 let quickSnapRaf = 0;
 /** Shared controller projection — the very squares the store's send gate would accept (Classic uses the same call). */
 function quickSnapValidTargets(): [number, number][] {
@@ -5985,8 +5986,8 @@ watch([() => gameStore.state.quickSnapPhase?.seq, selectedQuickSnap], () => {
   const step = () => {
     if (!active()) { quickSnapTargets.value = []; renderer?.setQuickSnapArrows(null, [], 0); return; }
     quickSnapTargets.value = quickSnapValidTargets()
-      .map((c) => { const pos = renderer!.squareToCanvas(c); return pos ? { x: pos.x, y: pos.y, coord: c } : null; })
-      .filter((t): t is { x: number; y: number; coord: [number, number] } => t !== null);
+      .map((c) => { const b = renderer!.squareBoundsCanvas(c); return b ? { x: b.left, y: b.top, w: b.width, h: b.height, coord: c } : null; })
+      .filter((t): t is { x: number; y: number; w: number; h: number; coord: [number, number] } => t !== null);
     quickSnapRaf = requestAnimationFrame(step);
   };
   step();
@@ -13656,7 +13657,7 @@ function sendChat() {
              hit-targets (RAF-followed) — #161 moved the visual to the renderer's push-arrows (setQuickSnapArrows).
              Click one → sendQuickSnapMove (clientSetupPlayer); Confirm ends the phase. -->
         <button v-for="(t, i) in quickSnapTargets" :key="'qs-' + i" class="quicksnap-target"
-          :style="{ left: t.x + 'px', top: t.y + 'px' }" @click="pickQuickSnapTarget(t.coord)"></button>
+          :style="{ left: t.x + 'px', top: t.y + 'px', width: t.w + 'px', height: t.h + 'px' }" @click="pickQuickSnapTarget(t.coord)"></button>
 
         <!-- Non-owning seats: public-safe pending cue (Fives ruling 08-12 — same class as the block-dice
              "opponent is deciding" note; reveals only that a decision is pending, kept per no-private-overlay). -->
@@ -16992,9 +16993,7 @@ function sendChat() {
 .quicksnap-target {
   position: absolute;
   z-index: 15;
-  transform: translate(-50%, -50%);
-  width: 26px;
-  height: 26px;
+  /* owner 10-05: sized to the tile's projected bounding box by the view (was a centred 26 px dot) */
   padding: 0;
   border: 0;
   background: transparent;
