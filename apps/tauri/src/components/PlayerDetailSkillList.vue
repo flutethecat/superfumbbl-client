@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref } from 'vue';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { reactiveSkillIconLarge, reactiveSkillIconUrl } from '../game/assetModUi';
 import { playerSkillCategoryClass } from '../game/skillCategory';
-import { addedSkillsLast, type PlayerDetailSkill } from '../game/skillDisplay';
+import { addedSkillsLast, chipSubtext, type PlayerDetailSkill } from '../game/skillDisplay';
 
 const props = withDefaults(defineProps<{
   skills: readonly PlayerDetailSkill[];
@@ -85,6 +85,7 @@ function hideTip(): void { tip.skill = null; }
     <span v-for="skill in shownSkills" :key="`${skill.name}:${skill.label}`"
       class="skill-chip" :class="mode === 'markings' ? playerSkillCategoryClass(skill.name) : undefined"
       :data-display="mode" :data-added="markAdded && skill.added ? 'true' : undefined"
+      :data-subtext="mode === 'icons' && chipSubtext(skill) ? 'true' : undefined"
       :aria-label="skill.label" role="listitem"
       :data-tooltip="mode === 'icons' ? tooltipText(skill) : undefined"
       :title="mode === 'icons' ? undefined : skill.label"
@@ -94,6 +95,7 @@ function hideTip(): void { tip.skill = null; }
       <template v-if="mode === 'icons'">
         <img v-if="chipIcon(skill.name)" :src="chipIcon(skill.name)!.url" :class="{ 'chip-master': chipIcon(skill.name)!.size === 128 }" :alt="skill.label" />
         <span v-else class="skill-initials">{{ initials(skill.name) }}</span>
+        <span v-if="chipSubtext(skill)" class="chip-subtext" data-testid="chip-subtext">{{ chipSubtext(skill) }}</span>
       </template>
       <span v-else class="skill-text">{{ skill.label }}</span>
     </span>
@@ -141,6 +143,9 @@ function hideTip(): void { tip.skill = null; }
 .skill-chip[data-display='icons'][data-added='true']:hover, .skill-chip[data-display='icons'][data-added='true']:focus-visible { border-color: #ffd75e; box-shadow: 0 0 0 1px #ffd75e, inset 0 0 0 1px rgb(0 0 0 / 55%); }
 .skill-chip img { width: 42.67px; height: 42.67px; image-rendering: pixelated; }
 .skill-chip img.chip-master { image-rendering: auto; } /* a minified illustration: smooth, not decimated */
+/* owner 10-05: Hatred's keyword under its icon - the chip grows a text line; the icon keeps its size */
+.skill-chip[data-display='icons'][data-subtext='true'] { height: auto; min-height: 48px; flex-direction: column; gap: 1px; padding-bottom: 2px; }
+.chip-subtext { max-width: 46px; font-size: max(var(--ui-min-text-size, 12px), 9px); line-height: 1.1; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--ui-text); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-initials { font-size: max(var(--ui-min-text-size, 12px), 0.87em); font-weight: bold; color: var(--ui-text); }
 .skill-chip[data-display='markings'] {
   width: auto;

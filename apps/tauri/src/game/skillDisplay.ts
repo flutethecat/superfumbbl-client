@@ -145,6 +145,13 @@ export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDeta
   return playerDetailSkills(player, new Set(position.skillArray ?? []));
 }
 
+/** Owner 10-05: a valued skill's value - Hatred's keyword ("Hatred (Orc)" -> "Orc") - is written in small text under the
+ *  card chip's icon so it says WHO the hatred is for without the tooltip. Other labels carry no value (null). */
+export function chipSubtext(skill: Pick<PlayerDetailSkill, 'label'>): string | null {
+  const m = /^Hatred \((.+)\)$/.exec(skill.label);
+  return m ? m[1]!.trim() : null;
+}
+
 /** Owner 10-01 (S87): added skills go to the END of a card's list; the order inside each group is kept. */
 export function addedSkillsLast<T extends { added: boolean }>(skills: readonly T[]): T[] {
   return [...skills.filter((skill) => !skill.added), ...skills.filter((skill) => skill.added)];

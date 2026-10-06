@@ -7050,7 +7050,7 @@ const popupInfo = computed(() => {
   // Owner 2026-07-04: an IMPROVED characteristic (advancement) shows GREEN — the
   // reverse of the red reduction. Compare the current stat to the position's base;
   // AG/PA improve when the target DROPS, MA/ST/AV when the value RISES.
-  const pos = (team.roster as { positionArray?: Array<{ positionId: string; movement?: number; strength?: number; agility?: number; passing?: number; armour?: number }> })
+  const pos = (team.roster as { positionArray?: Array<{ positionId: string; movement?: number; strength?: number; agility?: number; passing?: number; armour?: number; keywords?: unknown }> })
     .positionArray?.find((p) => p.positionId === player.positionId);
   const effMa = effectiveMovement(player);
   const effAv = effectiveArmour(player);
@@ -7066,6 +7066,8 @@ const popupInfo = computed(() => {
     name: player.playerName,
     nr: player.playerNr,
     positionName,
+    // Owner 10-05: the position's BB2025 keywords ("Human", "Blitzer"...) read on the card, right of the position line.
+    keywords: positionKeywords(pos?.keywords),
     teamName: team.teamName,
     side,
     // Owner 10-03: star players wear a badge on the portrait; the server's used-skill mark crosses it out.
@@ -7103,6 +7105,17 @@ const popupInfo = computed(() => {
     ],
   };
 });
+
+/** Owner 10-05: the roster position's keyword list as sent (strings; a malformed entry is dropped), de-duplicated. */
+function positionKeywords(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const k of raw) {
+    const text = typeof k === 'string' ? k.trim() : '';
+    if (text && !out.some((o) => o.toLowerCase() === text.toLowerCase())) out.push(text);
+  }
+  return out;
+}
 
 function showPopup(playerId: string) {
   popup.playerId = playerId;
@@ -14280,7 +14293,10 @@ function sendChat() {
           <button class="close" @click="popup.visible = false">×</button>
           <div class="card-name" :data-side="popupInfo.side" title="Drag to move"
             @pointerdown="startCardDrag">#{{ popupInfo.nr }} {{ popupInfo.name }}</div>
-          <div class="card-position">{{ popupInfo.positionName }} · <span class="card-spp">SPP {{ popupInfo.spp }}</span><span v-if="popupInfo.sppEarned > 0" class="card-spp-gain"> +{{ popupInfo.sppEarned }}</span></div>
+          <div class="card-position"><span class="card-position-main">{{ popupInfo.positionName }} · <span class="card-spp">SPP {{ popupInfo.spp }}</span><span v-if="popupInfo.sppEarned > 0" class="card-spp-gain"> +{{ popupInfo.sppEarned }}</span></span>
+            <!-- owner 10-05: the position's keywords ("Human, Blitzer, Norse...") -->
+            <span v-if="popupInfo.keywords.length" class="card-keywords" data-testid="card-keywords" :title="'Keywords: ' + popupInfo.keywords.join(', ')">{{ popupInfo.keywords.join(' · ') }}</span>
+          </div>
           <div v-if="popupInfo.status && popupInfo.status !== 'On pitch'" class="card-status"
             :data-status="popupInfo.status">{{ popupInfo.status }}</div>
           <div v-if="popupInfo.injuries.length" class="card-injuries">
@@ -19292,7 +19308,10 @@ function sendChat() {
 .card-name[data-side='home'] { color: #a0b8e8; }
 .card-name[data-side='away'] { color: #e8a0a0; }
 /* owner 2026-07-03 r5: white text below the name; SPP bumped ~+2pt */
-.card-position { color: #ffffff; margin-bottom: 0.35em; font-size: 1.05em; }
+.card-position { color: #ffffff; margin-bottom: 0.35em; font-size: 1.05em; display: flex; align-items: baseline; justify-content: space-between; gap: 0.6em; flex-wrap: wrap; }
+.card-position-main { min-width: 0; }
+/* owner 10-05: keywords sit right of the position line, small caps, muted */
+.card-keywords { margin-left: auto; font-size: max(var(--ui-min-text-size, 12px), 0.78em); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #c9d0dc; opacity: 0.85; text-align: right; white-space: nowrap; }
 .card-spp { font-size: max(var(--ui-min-text-size, 12px), 1.2em); font-weight: 600; }
 .card-spp-gain { color: var(--ui-success); font-size: max(var(--ui-min-text-size, 12px), 0.85em); font-weight: 600; }
 /* Owner 2026-07-08: current injury/location status on the card (KO amber, casualties red). */
