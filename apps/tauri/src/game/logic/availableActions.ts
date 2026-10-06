@@ -2663,7 +2663,13 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
   const ps = p.playerState ?? 0;
   const base = baseState(ps);
   const side = playerSideIsHome(game, playerId);
-  const standing = base === BASE_STANDING;
+  const isActing = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') === playerId;
+  // Owner 10-05: "right clicking a currently selected player who has not yet moved ... only offers Jump and End
+  // Activation". The server flips a selected player's base to MOVING (0x102) the moment the action is declared, so
+  // the standing-only declares below vanished for the acting player even though nothing had been spent yet
+  // (pristineActivationTypeTransitions re-filters this set to the server-legal action changes). Upstream's
+  // predicates read PlayerState.isAbleToMove() = STANDING || MOVING || PRONE, so MOVING counts as standing here.
+  const standing = base === BASE_STANDING || (isActing && base === BASE_MOVING);
   const prone = base === BASE_PRONE;
   // Owner 2026-07-13 (#10 part 1): a player that is NOT ACTIVE (0x100 clear) can't be activated — upstream gates
   // every declare on isActive(). Offer nothing for an inactive player (a stun-recovering / missed-turn player, OR
@@ -2672,7 +2678,6 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
   // able prone player is 0x103 (ACTIVE), so the gate correctly ALLOWS it; a2 switch-player + inactive-own tests
   // exercise the active/inactive branches. (The bit is set for both teams at a turn flip, but availableActions
   // only builds for MY side on MY turn, so the raw !active read is safe here.)
-  const isActing = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') === playerId;
   if (!(ps & FLAG_ACTIVE) && !isActing) return out; // not activatable → no declares
   // Owner 2026-08-22 / 09-28 (Spec S15B, option B): an otherwise-normal standing Big Guy with an activation
   // negatrait gets an explicit top-row Activate affordance. It declares the ordinary `move` (exactly one

@@ -1933,6 +1933,31 @@ function showWeatherMageSplash(g: GameJson): void {
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 
+/** Owner 10-05: "add a splash to indicate when the mascot works ... the same reroll splash banner ... play for both
+ *  users". Upstream RollMechanic.useMascot reports `mascotUsed` {teamId, minimumRoll, roll, successful, reRollUsed};
+ *  a SUCCESSFUL mascot returns before any ReportReRoll is written (only a Loner check follows), so nothing rode the
+ *  reroll rail. The toast is not seat-gated, so both coaches and every spectator see it. */
+function showMascotSplash(g: GameJson, teamId: string, roll: number | null): void {
+  const side: 'home' | 'away' = String((g.teamAway as { teamId?: string }).teamId ?? '') === teamId ? 'away' : 'home';
+  const team = side === 'home' ? g.teamHome : g.teamAway;
+  const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
+  if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
+  const coach = (team.coach as string | null) ?? 'Coach';
+  state.rerollSplash = {
+    side, coach, logo, source: 'Team Mascot', isTeam: true,
+    text: `${coach}'s Team Mascot comes through${roll != null ? ` (${roll})` : ''} - free reroll!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
+  };
+  rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
+}
+/** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
+ *  ordinary reRoll report's splash; a failed one without fallback shows nothing new). */
+export function mascotSuccessReport(reports: readonly Record<string, unknown>[]): { teamId: string; roll: number | null } | null {
+  const r = reports.find((x) => String(x.reportId ?? '') === 'mascotUsed' && x.successful === true);
+  if (!r) return null;
+  const roll = Number(r.roll);
+  return { teamId: String(r.teamId ?? ''), roll: Number.isFinite(roll) && roll > 0 ? roll : null };
+}
+
 type PendingRailCommand = { offerKey: string };
 const pendingRailCommands = new Map<string, PendingRailCommand>();
 
@@ -7488,6 +7513,14 @@ function applyFrameContents(frame: QueuedFrame) {
         warnedAnimationTypes.add(animationType);
         console.warn(`ffb: unrecognised wire animationType "${animationType}"`);
       }
+    }
+  }
+  // Owner 10-05: a WORKING Team Mascot has no reRoll report of its own - splash it from mascotUsed (both seats).
+  {
+    const mascot = playback.catchingUp ? null : mascotSuccessReport(reports);
+    if (mascot && game.value) {
+      showMascotSplash(game.value, mascot.teamId, mascot.roll);
+      holdPlayback(presentationMs(REROLL_BEAT_MS));
     }
   }
   // Owner 2026-07-06 / 2026-07-08: a RE-ROLL was spent — surface it for ANY source (Team Re-Roll / Pro / Brawler / Leader / skill rerolls…), not just TRR. A blockReRoll splashes immediately (the block cine paces that family); a plain reRoll is handed to the action-dice pass below, which STAGES it behind the failed die so the fail → reroll → new result sequence is readable.

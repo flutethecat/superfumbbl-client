@@ -633,7 +633,7 @@ const DEFAULTS: AppSettings = {
   // surfaces out of the box; the coach opts each one into auto-fire. (Dodge auto lives in dodgeReroll above.)
   autoUseSkills: { fend: false, standFirm: false, tackle: false, sidestep: false, taunt: false },
   uiMode: 'fumbbl40k', // owner 2026-07-08 (FC): current UI is the default
-  modernHudStyle: 'chrome',
+  modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
   classicEffects: false, // owner 2026-07-08 (FC-D3): classic is effects-off by default
   savedSetupPreviews: {},
   completedFirstRun: false,
@@ -822,7 +822,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.hudScoreboardOpacity = opacity(merged.hudScoreboardOpacity, DEFAULTS.hudScoreboardOpacity);
     merged.hudQuickBarOpacity = opacity(merged.hudQuickBarOpacity, DEFAULTS.hudQuickBarOpacity);
     merged.hudToastOpacity = opacity(merged.hudToastOpacity, DEFAULTS.hudToastOpacity);
-    merged.modernHudStyle = raw.modernHudStyle === 'minimalist' ? 'minimalist' : 'chrome';
+    merged.modernHudStyle = raw.modernHudStyle === 'chrome' ? 'chrome' : 'minimalist'; // owner 10-05: a stored chrome pick is kept; everything else is minimalist
     // Current-version blobs bypass migrations, so malformed video values must be
     // normalized independently. Only choices exposed by Settings are accepted;
     // legacy uncapped FPS (0), strings, NaN-like values and arbitrary scales fall
