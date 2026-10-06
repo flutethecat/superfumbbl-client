@@ -2305,6 +2305,14 @@ function captureKey(event: KeyboardEvent) {
               </select>
             </label>
             <label class="row">
+              <span>Block die surface</span>
+              <select v-model="settings.blockDiceSurface">
+                <option value="auto">Match the face set (default)</option>
+                <option value="black">Black</option>
+                <option value="white">White</option>
+              </select>
+            </label>
+            <label class="row">
               <span>Dice tumble ({{ settings.blockTumbleMs }}ms)</span>
               <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
             </label>
@@ -2632,6 +2640,12 @@ function captureKey(event: KeyboardEvent) {
             </label>
             <p class="hint">The roster opens from the helmet button on the Quick bar. Tick this to also keep the old
               Roster tab next to Log and Chat.</p>
+            <label class="row">
+              <input v-model="settings.coachCornerCounts" type="checkbox" />
+              <span>Reserve / Out counts on the coach panels</span>
+            </label>
+            <p class="hint">A small tab on each coach panel showing how many players are in Reserves and how many are
+              out of the game (KO, injured, dead or sent off). Right-click a tab to hide them.</p>
             <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
                  a centred "Confirm Layout" button on the game screen exits it (SpectateView). -->
             <div class="actions" style="justify-content: flex-start">

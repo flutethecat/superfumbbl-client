@@ -136,17 +136,45 @@ export function clampAnchoredPanelPosition(
   position: EdgePanelPosition,
   panel: LayoutSize,
   viewport: LayoutSize,
+  /** Owner 10-06: rendered overhang of hanging children (coach-corner RES/OUT tab) that must stay on-screen too. */
+  overhang: PanelOverhang = NO_OVERHANG,
 ): EdgePanelPosition {
-  if (!hasEdgeAnchor(position)) return anchorPanelPosition(resolvePanelPosition(position, panel, viewport), panel, viewport);
+  if (!hasEdgeAnchor(position)) {
+    return anchorPanelPosition(clampPanelPositionWithOverhang(resolvePanelPosition(position, panel, viewport), panel, viewport, overhang), panel, viewport);
+  }
   const raw = {
     x: position.edgeX === 'right' ? viewport.width - panel.width - finite(position.offsetX) : finite(position.offsetX),
     y: position.edgeY === 'bottom' ? viewport.height - panel.height - finite(position.offsetY) : finite(position.offsetY),
   };
-  const projected = clampPanelPosition(raw, panel, viewport);
+  const projected = clampPanelPositionWithOverhang(raw, panel, viewport, overhang);
   // Projection movement is not persistence movement. A valid right/bottom anchor naturally resolves to new
   // absolute x/y as the viewport changes; retain the compatibility x/y bytes and avoid a settings write.
   if (projected.x === Math.round(raw.x) && projected.y === Math.round(raw.y)) return position;
-  const recovered = anchorPanelPosition(projected, panel, viewport);
+  // `projected` already lies inside the panel-only bounds (clampPanelPositionWithOverhang never leaves them), so this
+  // anchor is exact and the next pass resolves back to `projected` — no write loop (Astra P1 on 7c35944e9).
+  // (No "same resolution" shortcut here: resolvePanelPosition clamps, but edgePanelStyle paints the RAW offsets, so an
+  // out-of-range entry must still be rewritten even when it resolves to the same point.)
+  const anchored = anchorPanelPosition(projected, panel, viewport);
+  // Astra (fractional heights): recover ONLY the axis that actually moved. Re-anchoring an axis that was already in
+  // range re-rounds its offset, and on a .5 boundary that crept the panel 1 px per pass (an X-only recovery walked Y).
+  const keepX = projected.x === Math.round(raw.x);
+  const keepY = projected.y === Math.round(raw.y);
+  const recovered: EdgePanelPosition = {
+    x: keepX ? position.x : anchored.x,
+    y: keepY ? position.y : anchored.y,
+    edgeX: keepX ? position.edgeX : anchored.edgeX,
+    edgeY: keepY ? position.edgeY : anchored.edgeY,
+    offsetX: keepX ? position.offsetX : anchored.offsetX,
+    offsetY: keepY ? position.offsetY : anchored.offsetY,
+  };
+  // Astra (fractional rects): rounding the offset can make the next pass's raw miss `projected` by < 1 px while the
+  // recovery is FIELD-IDENTICAL to what is stored. Identical fields paint identical raw offsets, so keep the same
+  // reference (persistClampedPanelPosition's write check is referential) instead of allocating a fresh copy.
+  if (
+    position.edgeX === recovered.edgeX && position.edgeY === recovered.edgeY
+    && position.offsetX === recovered.offsetX && position.offsetY === recovered.offsetY
+    && position.x === recovered.x && position.y === recovered.y
+  ) return position;
   return {
     ...position,
     ...recovered,
@@ -160,8 +188,9 @@ export function persistClampedPanelPosition<T extends EdgePanelPosition>(
   panel: LayoutSize,
   viewport: LayoutSize,
   persist: (next: T) => void,
+  overhang: PanelOverhang = NO_OVERHANG,
 ): T {
-  const next = clampAnchoredPanelPosition(position, panel, viewport) as T;
+  const next = clampAnchoredPanelPosition(position, panel, viewport, overhang) as T;
   if (next !== position) persist(next);
   return next;
 }
@@ -207,6 +236,49 @@ export function hostBoundScale(unscaled: LayoutSize, at: { x: number; y: number 
   const w = Math.max(1, unscaled.width);
   const h = Math.max(1, unscaled.height);
   return Math.max(0.05, Math.min((host.width - at.x) / w, (host.height - at.y) / h));
+}
+
+/** Owner 10-06 (Astra P2-2): how far a panel's hanging children (e.g. the coach-corner RES/OUT tab) stick out past
+ *  the panel's own rectangle, in rendered px. Panel and children are viewport rects (getBoundingClientRect). */
+export type PanelOverhang = { left: number; right: number; top: number; bottom: number };
+export const NO_OVERHANG: PanelOverhang = { left: 0, right: 0, top: 0, bottom: 0 };
+type ClientRectLike = { left: number; right: number; top: number; bottom: number };
+export function rectOverhang(panel: ClientRectLike, children: readonly ClientRectLike[]): PanelOverhang {
+  const o = { ...NO_OVERHANG };
+  for (const c of children) {
+    o.left = Math.max(o.left, panel.left - c.left);
+    o.right = Math.max(o.right, c.right - panel.right);
+    o.top = Math.max(o.top, panel.top - c.top);
+    o.bottom = Math.max(o.bottom, c.bottom - panel.bottom);
+  }
+  return o;
+}
+
+/** Clamp a panel's top-left so the panel AND its overhang stay inside the viewport. When panel + overhang cannot fit,
+ *  the panel itself wins: the result is ALWAYS inside the panel-only bounds (clampPanelPosition), so anchoring it
+ *  with anchorPanelPosition is exact and a persisted recovery resolves back to the same position. */
+export function clampPanelPositionWithOverhang(
+  position: { x: number; y: number }, panel: LayoutSize, viewport: LayoutSize, overhang: PanelOverhang = NO_OVERHANG,
+): { x: number; y: number } {
+  const inner = clampPanelPositionExact(
+    { x: finite(position.x) - overhang.left, y: finite(position.y) - overhang.top },
+    { width: panel.width + overhang.left + overhang.right, height: panel.height + overhang.top + overhang.bottom },
+    viewport,
+  );
+  return clampPanelPosition({ x: inner.x + overhang.left, y: inner.y + overhang.top }, panel, viewport);
+}
+
+/** hostBoundScale for a panel whose overhang (UNSCALED px) grows with it from the pinned top-left. */
+export function hostBoundScaleWithOverhang(
+  unscaled: LayoutSize, at: { x: number; y: number }, host: LayoutSize, overhang: PanelOverhang = NO_OVERHANG,
+): number {
+  const limits = [
+    (host.width - at.x) / Math.max(1, unscaled.width + overhang.right),
+    (host.height - at.y) / Math.max(1, unscaled.height + overhang.bottom),
+  ];
+  if (overhang.left > 0) limits.push(at.x / overhang.left);
+  if (overhang.top > 0) limits.push(at.y / overhang.top);
+  return Math.max(0.05, Math.min(...limits));
 }
 
 /** Read the scale currently painted by CSS, including a coach's active-seat and responsive variants.
@@ -256,6 +328,8 @@ export function beginScaledPanelResize(options: {
   /** Owner 09-06: per-panel scale floor/ceiling (coach panels: 0.5 = 32 px inducement icons). */
   minScale?: number;
   maxScale?: number;
+  /** Owner 10-06 (Astra P2-2): rendered overhang of hanging children at the start scale; it scales with the panel. */
+  overhang?: PanelOverhang;
 }): () => void {
   const { event, panel, host } = options;
   const rect = panel.getBoundingClientRect();
@@ -272,7 +346,10 @@ export function beginScaledPanelResize(options: {
   const baseScale = current.scale;
   // Owner 09-06: the panel may never grow past the host edge from its pinned top-left (boundary lock).
   const unscaled = { width: rect.width / Math.max(0.01, baseScale), height: rect.height / Math.max(0.01, baseScale) };
-  const ceiling = Math.min(options.maxScale ?? 2.5, hostBoundScale(unscaled, { x: current.x, y: current.y }, { width: hostRect.width, height: hostRect.height }));
+  const k = 1 / Math.max(0.01, baseScale);
+  const o = options.overhang ?? NO_OVERHANG;
+  const unscaledOverhang = { left: o.left * k, right: o.right * k, top: o.top * k, bottom: o.bottom * k };
+  const ceiling = Math.min(options.maxScale ?? 2.5, hostBoundScaleWithOverhang(unscaled, { x: current.x, y: current.y }, { width: hostRect.width, height: hostRect.height }, unscaledOverhang));
   const move = (nextEvent: PointerEvent) => commit({
     ...current,
     scale: scaleFromPointerDelta(baseScale, rect.width, nextEvent.clientX - startX, options.minScale ?? 0.4, ceiling),

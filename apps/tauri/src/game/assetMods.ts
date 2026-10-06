@@ -241,21 +241,34 @@ export function blockFaceSource(face: string): string | null {
 }
 
 export function publishBlockDiceBindings(): void {
-  PitchRenderer.setBlockFaceFamily(settings.blockDiceFamily); // owner 10-06: the bundled fallback family (KrisB)
+  void PitchRenderer.setBlockFaceFamily(settings.blockDiceFamily); // owner 10-06: the bundled fallback family (KrisB)
+  void PitchRenderer.setBlockDieSurface(settings.blockDiceSurface); // owner 10-06: the plate the bundled faces sit on
   PitchRenderer.setBlockFaceSources(Object.fromEntries(
     ['skull', 'bothdown', 'push', 'powpush', 'pow']
       .map((face) => [face, blockFaceSource(face)])
       .filter((entry): entry is [string, string] => !!entry[1]),
   ));
+  bumpBlockDiceRevision();
+}
+
+/** Owner 10-06: bump `blockDiceRevision` now, and once more when the active family x surface has been composed
+ *  (PitchRenderer.prepareBlockFaces, cached) so the DOM surfaces and the 3D die re-read the composed art. */
+function bumpBlockDiceRevision(): void {
   assetMods.blockDiceRevision++;
+  void PitchRenderer.prepareBlockFaces().then(() => { assetMods.blockDiceRevision++; });
 }
 
 /** Owner 10-06: the bundled block-dice family (Settings > Asset packs > Block dice, "KrisB (built-in)") applies at
  *  startup through `publishBlockDiceBindings()` (boot's `refreshAssetPacks()`) and here on every change — the bump of
  *  `blockDiceRevision` re-feeds the 3D die and the DOM face surfaces. */
 watch(() => settings.blockDiceFamily, (family) => {
-  PitchRenderer.setBlockFaceFamily(family);
-  assetMods.blockDiceRevision++;
+  void PitchRenderer.setBlockFaceFamily(family);
+  bumpBlockDiceRevision();
+});
+/** Owner 10-06: the block die surface (Settings > Dice, the setup wizard) — same path as the family. */
+watch(() => settings.blockDiceSurface, (surface) => {
+  void PitchRenderer.setBlockDieSurface(surface);
+  bumpBlockDiceRevision();
 });
 
 let activationGeneration = 0;

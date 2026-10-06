@@ -3,6 +3,7 @@
  * deliberately kept behind this lazily imported module; the ordinary PNG dice
  * path does not pay their startup cost.
  */
+import { BLOCK_DIE_SURFACE_COLOURS, type BlockDieSurface } from './blockDieSurface';
 
 export const BLOCK_DICE_MODEL_URL = new URL('../assets/blockdice/super-fumbbl-block-die.glb', import.meta.url).href;
 export const BLOCK_DICE_CLIP_DURATION_MS = 1650;
@@ -71,6 +72,8 @@ export interface BlockDiceRuntime {
   update(deltaSeconds: number): void;
   render(): void;
   updateFaceTextures(urls: readonly string[]): Promise<void>;
+  /** Owner 10-06: tint the die BODY (every glb material that is not a face material) for the block die surface. */
+  setSurface?(surface: BlockDieSurface): void;
   dispose(): void;
 }
 
@@ -126,6 +129,8 @@ export interface BlockDiceRow {
   play(results: readonly number[], durationMs: number, changedIndices?: readonly number[]): void;
   settle(results: readonly number[]): void;
   updateFaceTextures(urls: readonly string[]): Promise<void>;
+  /** Owner 10-06: the block die surface — body tint (the face art itself comes through updateFaceTextures). */
+  setSurface(surface: BlockDieSurface): void;
   dispose(): void;
 }
 
@@ -200,6 +205,16 @@ class BlockDiceRowController implements BlockDiceRow {
     }).catch((error) => {
       this.fail(error);
     });
+  }
+
+  setSurface(surface: BlockDieSurface): void {
+    if (this.disposed || !this.runtime.setSurface) return;
+    try {
+      this.runtime.setSurface(surface);
+      this.runtime.render();
+    } catch (error) {
+      this.fail(error);
+    }
   }
 
   dispose(): void {
@@ -277,6 +292,18 @@ export function loadSharedBlockDiceModel(): Promise<LoadedModel> {
   }
   return sharedModelPromise;
 }
+
+let loggedBlockDieMaterials = false;
+/** Owner 10-06: the white surface's body look, by glb material name (super-fumbbl-block-die.glb). The red corner
+ *  ticks keep their colour on both surfaces — the 2D white plate keeps its red ticks too. */
+export const WHITE_BODY_TINTS: Readonly<Record<string, { color: string; metalness: number; roughness: number } | null>> = {
+  'Dark gunmetal shell': { color: '#d8d3c7', metalness: 0.2, roughness: 0.45 },
+  'Graphite frame': { color: '#bdb7ab', metalness: 0.3, roughness: 0.4 },
+  'Steel chamfer': { color: '#e6e2da', metalness: 0.55, roughness: 0.3 },
+  'Black inset face': { color: BLOCK_DIE_SURFACE_COLOURS.white.fill, metalness: 0.05, roughness: 0.5 },
+  'Red corner ticks': null,
+};
+const WHITE_BODY_FALLBACK = { color: BLOCK_DIE_SURFACE_COLOURS.white.fill, metalness: 0.1, roughness: 0.5 };
 
 async function createThreeBlockDiceRuntime(
   host: HTMLElement,
@@ -396,6 +423,19 @@ async function createThreeBlockDiceRuntime(
     ['Super FUMBBL client defender-stumbles'],
     ['Super FUMBBL client defender-down'],
   ];
+  // Owner 10-06: the body materials (everything that is not a face) remember their glb look so the black surface
+  // restores it exactly; their names are logged once per session.
+  const faceMaterialNames = new Set(faceMaterials.flat());
+  const bodyOriginals = new Map<import('three').Material, { color: import('three').Color; metalness: number; roughness: number }>();
+  for (const material of ownedMaterials) {
+    if (faceMaterialNames.has(material.name)) continue;
+    const standard = material as import('three').MeshStandardMaterial;
+    if (standard.color) bodyOriginals.set(material, { color: standard.color.clone(), metalness: standard.metalness, roughness: standard.roughness });
+  }
+  if (!loggedBlockDieMaterials) {
+    loggedBlockDieMaterials = true;
+    console.info(`[block-dice-3d] glb materials — body: ${[...bodyOriginals.keys()].map((m) => m.name).join(', ')}; faces: ${[...faceMaterialNames].join(', ')}`);
+  }
 
   const runtime: BlockDiceRuntime = {
     canvas,
@@ -438,6 +478,25 @@ async function createThreeBlockDiceRuntime(
     },
     render() {
       if (!disposed) renderer.render(scene, camera);
+    },
+    setSurface(surface) {
+      for (const material of ownedMaterials) {
+        if (faceMaterialNames.has(material.name)) continue;
+        const standard = material as import('three').MeshStandardMaterial;
+        const original = bodyOriginals.get(material);
+        if (!original || !standard.color) continue;
+        const tint = surface !== 'white' ? null : material.name in WHITE_BODY_TINTS ? WHITE_BODY_TINTS[material.name]! : WHITE_BODY_FALLBACK;
+        if (!tint) {
+          standard.color.copy(original.color);
+          standard.metalness = original.metalness;
+          standard.roughness = original.roughness;
+        } else {
+          standard.color.set(tint.color);
+          standard.metalness = tint.metalness;
+          standard.roughness = tint.roughness;
+        }
+        standard.needsUpdate = true;
+      }
     },
     async updateFaceTextures(urls) {
       if (urls.length !== 5) throw new Error(`Expected five block-face URLs, got ${urls.length}`);

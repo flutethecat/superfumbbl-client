@@ -31,7 +31,7 @@ import {
   bundledStadiumPacks,
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
-  PLACEMENT_TURN_MODES, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
+  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, squareAnchor, worldToSquare } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillNames } from '@fumbbl40k/ffb-protocol';
@@ -48,6 +48,8 @@ import BlockChooserCopy from '../components/BlockChooserCopy.vue';
 import EligibleRosterPicker from '../components/EligibleRosterPicker.vue';
 import ChatDock from '../components/ChatDock.vue';
 import ChatToast from '../components/ChatToast.vue';
+import CoachCornerCounts from '../components/CoachCornerCounts.vue';
+import { teamBoxCounts } from '../game/dugoutCounts';
 import QuickBarButton from '../components/QuickBarButton.vue';
 import OnTheBallWaitingModal from '../components/OnTheBallWaitingModal.vue';
 import { placeCarriedPlayerNotice, placeCarriedPlayerInfoNoticeText, serverMessageForPlacement } from '../game/placeCarriedPlayerNotice';
@@ -366,7 +368,7 @@ import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsM
 import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
-import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition } from '../game/edgePanelLayout';
+import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
@@ -1035,6 +1037,12 @@ function ensurePanelEntry(id: string, el: HTMLElement) {
   settings.uiLayout[id] = entry;
   return entry;
 }
+/** Owner 10-06 (Astra P2-2): rendered overhang of a panel's hanging children (`[data-panel-overhang]`, e.g. the
+ *  coach-corner RES/OUT tab), so move/resize clamp the panel PLUS its tab inside the pitch host. */
+function panelOverhang(panel: HTMLElement): PanelOverhang {
+  const children = Array.from(panel.querySelectorAll<HTMLElement>('[data-panel-overhang]')).map((el) => el.getBoundingClientRect());
+  return rectOverhang(panel.getBoundingClientRect(), children);
+}
 function uiPanelOf(target: EventTarget | null): HTMLElement | null {
   return (target as HTMLElement | null)?.closest('.ui-panel') as HTMLElement | null;
 }
@@ -1048,16 +1056,19 @@ function startPanelMove(id: string, ev: PointerEvent) {
   if (!entry) return;
   const hr = host.getBoundingClientRect();
   const rect = panel.getBoundingClientRect();
+  const overhang = panelOverhang(panel); // Astra P2-2: the hanging RES/OUT tab must stay on-screen too
   const startX = ev.clientX, startY = ev.clientY;
   const current = resolvePanelPosition(entry, { width: rect.width, height: rect.height }, { width: hr.width, height: hr.height });
   const ox = current.x, oy = current.y;
   const move = (e: PointerEvent) => {
+    const size = { width: rect.width, height: rect.height };
+    const viewport = { width: hr.width, height: hr.height };
     settings.uiLayout[id] = {
       ...entry,
       ...anchorPanelPosition(
-        { x: ox + (e.clientX - startX), y: oy + (e.clientY - startY) },
-        { width: rect.width, height: rect.height },
-        { width: hr.width, height: hr.height },
+        clampPanelPositionWithOverhang({ x: ox + (e.clientX - startX), y: oy + (e.clientY - startY) }, size, viewport, overhang),
+        size,
+        viewport,
       ),
     };
   };
@@ -1080,6 +1091,7 @@ function startPanelResize(id: string, ev: PointerEvent) {
     // Owner 09-06: coach corner panels floor at 0.5 — the 64 px inducement icons never draw under 32 px (two per row
     // at the minimum); every panel is boundary-locked inside the pitch host by the controller.
     minScale: id === 'coach-home' || id === 'coach-away' ? 0.5 : undefined,
+    overhang: panelOverhang(panel), // Astra P2-2: the hanging RES/OUT tab grows with the panel and must stay on-screen
     write: (next) => { settings.uiLayout[id] = next; },
     setActive: (active) => {
       if (active) panelScaleResizeActive[id] = true;
@@ -1135,9 +1147,10 @@ function clampUiToViewport() {
     const hr = host?.getBoundingClientRect();
     const rect = el.getBoundingClientRect();
     const viewport = { width: hr?.width ?? window.innerWidth, height: hr?.height ?? window.innerHeight };
+    // Owner 10-06: the panel's hanging RES/OUT tab stays on-screen after a window shrink, same bounds as move/resize.
     persistClampedPanelPosition(L, { width: rect.width, height: rect.height }, viewport, (next) => {
       settings.uiLayout[id] = next;
-    });
+    }, panelOverhang(el));
   }
 }
 
@@ -2232,6 +2245,7 @@ async function loadBlockDice3dRow(): Promise<BlockDiceRow | null> {
       return null;
     }
     bpDice3d = row;
+    row.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface)); // owner 10-06: body tint for the block die surface
     await row.updateFaceTextures(PitchRenderer.blockFaceUrls());
     if (generation !== bpDice3dGeneration || bpDice3d !== row) return null;
     return row;
@@ -2306,6 +2320,7 @@ watch(() => gameStore.state.blockPartial, (bp) => {
   });
 }, { flush: 'post' });
 watch(() => assetMods.blockDiceRevision, () => {
+  bpDice3d?.setSurface(resolveBlockDieSurface(settings.blockDiceFamily, settings.blockDiceSurface)); // owner 10-06: the surface change bumps the revision once composed
   if (bpDice3d) void bpDice3d.updateFaceTextures(PitchRenderer.blockFaceUrls()).catch(failBlockDice3d);
 });
 watch(
@@ -3835,12 +3850,13 @@ const BLOCK_STAMP_URLS: Record<string, string> = {
   pow: new URL('../assets/blockdice-log/pow.png', import.meta.url).href,
 };
 // Owner 10-06: with the KrisB family the stamp uses KrisB's bundled faces (symbol -> face in tumble order
-// [skull, bothdown, push, powpush, pow]); default otherwise.
+// [skull, bothdown, push, powpush, pow]); default otherwise. Both are plain symbols: the block die SURFACE (plate)
+// never applies to the stamp, so it reads the family's ORIGINAL (plate-less) art.
 const KRISB_STAMP_FACE_INDEX: Record<string, number> = { 'attacker-down': 0, 'both-down': 1, push: 2, 'defender-stumbles': 3, pow: 4 };
 function blockStampUrl(symbol: string): string | null {
   if (settings.blockDiceFamily === 'krisb') {
     const index = KRISB_STAMP_FACE_INDEX[symbol];
-    return index === undefined ? null : PitchRenderer.bundledBlockFaceUrls('krisb')[index] ?? null;
+    return index === undefined ? null : PitchRenderer.originalBlockFaceUrls('krisb')[index] ?? null;
   }
   return BLOCK_STAMP_URLS[symbol] ?? null;
 }
@@ -11006,6 +11022,9 @@ function panelFor(side: 'home' | 'away') {
 
 const homePanel = computed(() => panelFor('home'));
 const awayPanel = computed(() => panelFor('away'));
+// Owner 10-06: the coach-corner "N RES / N OUT" tabs — the dugout box membership rules (game/dugoutCounts.ts).
+const homeBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'home'));
+const awayBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'away'));
 const coachDecisionSide = computed(() => decidingCoachSide(gameStore.game.value));
 const passiveSkillDecisionText = computed(() => {
   const choice = gameStore.state.skillChoice;
@@ -12152,6 +12171,7 @@ function sendChat() {
             </div>
           </div>
           <div v-if="coachDecisionSide === 'home'" class="coach-decision-status" role="status" aria-live="polite">is deciding...</div>
+          <CoachCornerCounts side="home" :reserves="homeBoxCounts.reserves" :out="homeBoxCounts.out" :notify="pushReportToast" />
           <!-- owner 2026-07-04e: the per-coach turn number moved to the central
                scoreboard's bottom row (was a corner badge here) -->
         </div>
@@ -12186,6 +12206,7 @@ function sendChat() {
             </div>
           </div>
           <div v-if="coachDecisionSide === 'away'" class="coach-decision-status" role="status" aria-live="polite">is deciding...</div>
+          <CoachCornerCounts side="away" :reserves="awayBoxCounts.reserves" :out="awayBoxCounts.out" :notify="pushReportToast" />
         </div>
 
         <!-- Owner 2026-07-04e: the central scoreboard is a single 2-row × 3-col
@@ -19662,6 +19683,7 @@ function sendChat() {
 .pitch-host.hud-chrome .coach-panel > .active-indicator { position: absolute; z-index: 1; } /* owner 09-14: the hud-chrome reset had undone the one-level lift over the prayer tag */
 .pitch-host.hud-chrome .coach-panel > .prayer-tag { position: absolute; z-index: 0; } /* owner 09-06: docks like the Current Player drawer, takes no panel space */
 .pitch-host.hud-chrome .coach-panel > .coach-decision-status { position: absolute; z-index: 3; }
+.pitch-host.hud-chrome .coach-panel > .coach-corner-counts { position: absolute; z-index: 0; } /* owner 10-06: the RES/OUT tab hangs off the panel edge */
 .pitch-host.hud-chrome .coach-panel::before {
   content: '';
   position: absolute;

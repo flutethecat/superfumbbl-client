@@ -99,6 +99,10 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-06: which BUNDLED block-dice face family serves when no pack is assigned to the block-dice slot —
    *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("KrisB (built-in)"). */
   blockDiceFamily: 'default' | 'krisb';
+  /** Owner 10-06: the plate the bundled block-die faces sit on — 'auto' (default) matches the face set (black for the
+   *  Super FUMBBL faces, white for KrisB; resolveBlockDieSurface), or an explicit 'black' / 'white'. Pack-bound faces
+   *  are complete images and are drawn as they are. */
+  blockDiceSurface: 'auto' | 'black' | 'white';
   /** Immutable native installation identity for the selected skill-icon mod pack.
    *  Never a filesystem path; empty uses generated initials. */
   skillIconPackInstallId: string | null;
@@ -327,6 +331,8 @@ export interface AppSettings extends ConfirmationSettings {
   showFieldLogos: boolean;
   /** Owner 10-06: prefix dugout band labels with the box's player count ("2 RESERVES"). Default OFF. */
   dugoutCounts: boolean;
+  /** Owner 10-06: the "N RES / N OUT" tab hanging off each coach corner panel. Default ON; right-click on it hides it. */
+  coachCornerCounts: boolean;
   /** Owner 2026-07-08: end-zone label — 'team' (default, mirrors FUMBBL: each end
    *  bears its team's name) or 'touchdown' (just the word "TOUCHDOWN"). */
   endZoneLabel: 'team' | 'touchdown';
@@ -506,6 +512,7 @@ const DEFAULTS: AppSettings = {
   skillIconStyle: 'bb3',
   skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
   blockDiceFamily: 'default', // owner 10-06: KrisB faces are opt-in
+  blockDiceSurface: 'auto', // owner 10-06: per face set, so existing users see no change
   skillIconPackInstallId: null,
   assetPackAssignments: { skillIcons: '', playerSprites: '', walkSheets: '', soundEvents: '', teamLogos: '', blockDice: '' },
   url: FORK_EDITION ? FORK_WS_URL : FUMBBL_WS_URL, // owner 2026-07-13: match the default target ('fork' below; public edition = Official FUMBBL) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
@@ -618,6 +625,7 @@ const DEFAULTS: AppSettings = {
   showSweetSpot: true,
   showFieldLogos: true,
   dugoutCounts: false,
+  coachCornerCounts: true,
   endZoneLabel: 'team',
   endZoneTint: true,
   showPlayerNumbers: false,
@@ -918,6 +926,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.d6FaceVariant = raw.d6FaceVariant === 'black' ? 'black' : 'brushed-metal';
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
+    merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
     // Keychain move: password40k is no longer a settings field. Lift any stored copy out of the
     // merged object so the deep watcher below never writes it back, and hand it to credentials.ts.
@@ -967,6 +976,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     };
     merged.skillBadgeFamily = raw.skillBadgeFamily === 'default' ? 'default' : 'illustrated'; // owner 09-10: illustrated unless the flat set was chosen
     merged.blockDiceFamily = raw.blockDiceFamily === 'krisb' ? 'krisb' : 'default'; // owner 10-06: default unless KrisB was chosen
+    merged.blockDiceSurface = raw.blockDiceSurface === 'black' || raw.blockDiceSurface === 'white' ? raw.blockDiceSurface : 'auto'; // owner 10-06: explicit picks kept, else per face set
     // Owner 2026-07-05 migration: FORCE the new defaults onto pre-v2 installs (whose
     // persisted settings still carry the old walk / 60% values). Runs once — after
     // it stamps settingsVersion, future user changes to these keys stick.

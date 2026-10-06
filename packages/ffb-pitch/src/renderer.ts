@@ -4,6 +4,7 @@ import 'pixi.js/gif';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { PIPELINE_TIMINGS } from './blockPipeline';
+import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 import { RING_TYPE_COLORS, ringTypeForName } from './positionTypes';
 import { SETUP_LOS_X, SETUP_OWN_HALF_MAX_X, WIDE_ZONE_WIDTH } from './setup';
 import { loadSprites, spriteFor } from './sprites';
@@ -1628,6 +1629,10 @@ export class PitchRenderer {
   private static blockFaceSources: Partial<Record<BlockFace, string>> = {};
   /** Owner 10-06: the BUNDLED face family that serves every face no pack binding covers. */
   private static blockFaceFamily: BlockFaceFamily = 'default';
+  /** Owner 10-06: the plate setting for the bundled faces; 'auto' resolves per family (resolveBlockDieSurface). */
+  private static blockDieSurfaceSetting: BlockDieSurfaceSetting = 'auto';
+  /** Bumped on every family / surface change: a compose that resolves for an older pair never reloads textures. */
+  private static blockFacePairGeneration = 0;
   private static readonly instances = new Set<PitchRenderer>();
   // #16 (owner 07-22, BB2025 unification): the official source-verified block-face names, matching Tarkin's
   // reportFormatter.blockResultFaceName (log/cine result) so a result and its dice preview never split-name.
@@ -1644,21 +1649,81 @@ export class PitchRenderer {
     const bundled = PitchRenderer.bundledBlockFaceUrls();
     return PitchRenderer.BLOCK_FACE_IDS.map((face, index) => PitchRenderer.blockFaceSources[face] ?? bundled[index]!);
   }
-  /** Owner 10-06: the BUNDLED face art of a family (default: the active one), tumble order, no pack bindings. */
-  static bundledBlockFaceUrls(family: BlockFaceFamily = PitchRenderer.blockFaceFamily): string[] {
+  /** Owner 10-06: the BUNDLED face art of a family (default: the active one) on a surface (default: the active one),
+   *  tumble order, no pack bindings. The family's native surface (default on black) is the original art; any other
+   *  pair is the composed plate + glyph once `prepareBlockFaces` has composed it, the original art until then. */
+  static bundledBlockFaceUrls(family: BlockFaceFamily = PitchRenderer.blockFaceFamily,
+    surface: BlockDieSurface = resolveBlockDieSurface(family, PitchRenderer.blockDieSurfaceSetting)): string[] {
+    if (nativeBlockDieSurface(family) !== surface) {
+      const composed = composedBlockFaceUrls(family, surface);
+      if (composed) return [...composed];
+    }
+    return PitchRenderer.originalBlockFaceUrls(family);
+  }
+  /** The family's original face files (no surface applied). */
+  static originalBlockFaceUrls(family: BlockFaceFamily): string[] {
     return PitchRenderer.BLOCK_FACE_NAMES.map((name) => family === 'krisb'
       ? new URL(`../assets/blockdice-krisb/${name}.png`, import.meta.url).href
       : new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
   }
+  /** The resolved surface of the active family under the active setting. */
+  static activeBlockDieSurface(): BlockDieSurface {
+    return resolveBlockDieSurface(PitchRenderer.blockFaceFamily, PitchRenderer.blockDieSurfaceSetting);
+  }
+  /** Owner 10-06: compose (cached) the faces of a family x surface (default: the active pair) so the synchronous
+   *  readers (`blockFaceUrls`, `bundledBlockFaceUrls`) return them. Resolves true when composed art is available (or
+   *  none is needed), false when composition failed (no DOM, an asset failed) — the original art then stays. */
+  static async prepareBlockFaces(family: BlockFaceFamily = PitchRenderer.blockFaceFamily,
+    surface: BlockDieSurface = resolveBlockDieSurface(family, PitchRenderer.blockDieSurfaceSetting)): Promise<boolean> {
+    // Only the ACTIVE pair is persisted for the next launch (wizard previews are not); a native active pair needs none.
+    // Astra F3: "active" is re-read when the set is in hand, so a superseded compose never rewrites the cache.
+    const isActive = () => family === PitchRenderer.blockFaceFamily && surface === PitchRenderer.activeBlockDieSurface();
+    if (nativeBlockDieSurface(family) === surface) {
+      if (isActive()) clearStoredBlockFaces();
+      return true;
+    }
+    if (blockFacesReady(family, surface)) {
+      if (isActive()) persistComposedBlockFaces(family, surface);
+      return true;
+    }
+    try {
+      await composeBlockFaces(family, surface, { persistIf: isActive });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  /** Owner 10-06: switch the plate the bundled faces sit on. Pack-bound faces are complete images and are drawn as
+   *  they are. Every live instance reloads its face textures once the pair is composed; the returned promise resolves
+   *  after that, so the app can bump its block-dice revision (DOM surfaces, the 3D die) with the composed art ready. */
+  static setBlockDieSurface(setting: BlockDieSurfaceSetting): Promise<unknown> {
+    const next = normalizeBlockDieSurfaceSetting(setting);
+    if (next === PitchRenderer.blockDieSurfaceSetting) return Promise.resolve();
+    const before = PitchRenderer.activeBlockDieSurface();
+    PitchRenderer.blockDieSurfaceSetting = next;
+    if (PitchRenderer.activeBlockDieSurface() === before) return Promise.resolve(); // e.g. auto -> its own resolution
+    return PitchRenderer.reloadBlockFacesWhenReady();
+  }
+  /** Resolves true when this call's pair reloaded the live renderers, false when a newer family / surface change
+   *  superseded it while it was composing (the stale result never wins). */
+  private static async reloadBlockFacesWhenReady(): Promise<boolean> {
+    const pairGeneration = ++PitchRenderer.blockFacePairGeneration;
+    const family = PitchRenderer.blockFaceFamily;
+    const surface = PitchRenderer.activeBlockDieSurface();
+    await PitchRenderer.prepareBlockFaces(family, surface);
+    if (pairGeneration !== PitchRenderer.blockFacePairGeneration) return false; // superseded
+    if (typeof document === 'undefined') return true;
+    for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
+    return true;
+  }
   /** Owner 10-06: switch the bundled fallback face family ('krisb' = Kristofer Bengtsson's faces). Pack bindings
    *  still win per face. Same reload semantics as `setBlockFaceSources`: every live instance reloads its textures;
    *  DOM surfaces and the 3D die re-read `blockFaceUrls()` on the app's block-dice revision. */
-  static setBlockFaceFamily(family: BlockFaceFamily): void {
+  static setBlockFaceFamily(family: BlockFaceFamily): Promise<unknown> {
     const next: BlockFaceFamily = family === 'krisb' ? 'krisb' : 'default';
-    if (next === PitchRenderer.blockFaceFamily) return;
+    if (next === PitchRenderer.blockFaceFamily) return Promise.resolve();
     PitchRenderer.blockFaceFamily = next;
-    if (typeof document === 'undefined') return;
-    for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
+    return PitchRenderer.reloadBlockFacesWhenReady(); // owner 10-06: composed on the active surface first (cached)
   }
   static setBlockFaceSources(sources: Partial<Record<BlockFace, string>> | null): void {
     const next = sources ? { ...sources } : {};
@@ -1706,26 +1771,120 @@ export class PitchRenderer {
       && (this.initializingApp === app || this.app === app);
   }
 
+  /** Astra F4: the whole launch hold (compose + texture loads) is capped. Past it, init proceeds with whatever faces it
+   *  has (logged once per session); the load keeps going and applies its faces when they land. */
+  static BLOCK_FACE_INIT_DEADLINE_MS = 10_000;
+  private static blockFaceDeadlineLogged = false;
+
   private async loadBlockFaceTextures(): Promise<void> {
     const app = this.app ?? this.initializingApp;
     if (!app || this.destroyed) return;
     const generation = this.initGeneration;
     const loadGeneration = ++this.blockFaceLoadGeneration;
-    try {
-      const textures = await Promise.all(
-        PitchRenderer.blockFaceUrls().map((url) => Assets.load<Texture>(url)),
-      );
-      if (!this.initActive(generation, app) || loadGeneration !== this.blockFaceLoadGeneration) return;
-      this.blockFaceTextures = textures;
-      for (const sprite of this.blockDiceSprites) sprite.texture = textures[0]!;
-      for (const sprite of this.blockFaceStaticSprites) {
-        if (sprite.destroyed) this.blockFaceStaticSprites.delete(sprite);
-        else sprite.texture = textures[0]!;
-      }
-    } catch (error) {
-      if (!this.initActive(generation, app) || loadGeneration !== this.blockFaceLoadGeneration) return;
-      console.warn('ffb-pitch: block die faces failed to load, keeping the previous faces', error);
+    const work = this.loadBlockFaceTexturesWork(generation, app, loadGeneration);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<'deadline'>((resolve) => { timer = setTimeout(() => resolve('deadline'), PitchRenderer.BLOCK_FACE_INIT_DEADLINE_MS); });
+    const outcome = await Promise.race([work.then(() => 'done' as const), deadline]);
+    clearTimeout(timer);
+    if (outcome === 'deadline' && !PitchRenderer.blockFaceDeadlineLogged) {
+      PitchRenderer.blockFaceDeadlineLogged = true;
+      console.warn(`ffb-pitch: block die faces not ready after ${PitchRenderer.BLOCK_FACE_INIT_DEADLINE_MS} ms; continuing, they will apply when loaded`);
     }
+  }
+
+  /** Astra: a block-face request that never settles must not hold the others — each Assets.load rejects after this. */
+  static BLOCK_FACE_LOAD_TIMEOUT_MS = 6_000;
+  /** After a terminal face failure, ONE background retry this much later (a transient outage self-heals). */
+  static BLOCK_FACE_RETRY_MS = 30_000;
+  private blockFaceRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private blockFaceRetryUsed = false;
+
+  /** Launch flicker (Astra): hold the face textures until the active family x surface is composed (from the validated
+   *  localStorage set after the first launch). The five faces load IN PARALLEL, each with a timeout; failures are then
+   *  attributed per face and each face's fallback runs in order (Astra P2):
+   *  - a PACK face that fails falls back to the built-in (composed / bundled) face for THAT face only, is logged, and
+   *    never evicts the composed set;
+   *  - a built-in face that fails drives the chain: evict the composed set -> compose afresh -> the family's original
+   *    art -> the previous texture of that face. A face still missing after all that keeps the previous set. */
+  /** ONE background retry after a terminal face failure (not repeated until a load succeeds again). */
+  private scheduleBlockFaceRetry(): void {
+    if (this.blockFaceRetryUsed || this.blockFaceRetryTimer || this.destroyed) return;
+    this.blockFaceRetryUsed = true;
+    this.blockFaceRetryTimer = this.scheduleTimer(() => {
+      this.blockFaceRetryTimer = null;
+      void this.loadBlockFaceTextures();
+    }, PitchRenderer.BLOCK_FACE_RETRY_MS);
+  }
+
+  private async loadBlockFaceTexturesWork(generation: number, app: Application, loadGeneration: number): Promise<void> {
+    const live = () => this.initActive(generation, app) && loadGeneration === this.blockFaceLoadGeneration;
+    const tryLoad = async (url: string): Promise<Texture | null> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          Assets.load<Texture>(url),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('block die face load timed out')), PitchRenderer.BLOCK_FACE_LOAD_TIMEOUT_MS);
+          }),
+        ]);
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    try { await PitchRenderer.prepareBlockFaces(); } catch { /* prepareBlockFaces never rejects; belt and braces */ }
+    if (!live()) return;
+    const ids = PitchRenderer.BLOCK_FACE_IDS;
+    const family = PitchRenderer.blockFaceFamily;
+    const surface = PitchRenderer.activeBlockDieSurface();
+    const builtIn = PitchRenderer.bundledBlockFaceUrls(family, surface);
+    const textures: (Texture | null)[] = await Promise.all(ids.map(async (face, index) => {
+      const pack = PitchRenderer.blockFaceSources[face];
+      if (pack) {
+        const texture = await tryLoad(pack);
+        if (texture) return texture;
+        console.warn(`ffb-pitch: pack block die face "${face}" failed to load (${pack.slice(0, 120)}); using the built-in face`);
+      }
+      return tryLoad(builtIn[index]!);
+    }));
+    if (!live()) return;
+    let usedPrevious = false;
+    if (textures.some((t) => !t)) {
+      if (composedBlockFaceUrls(family, surface)) {
+        console.warn('ffb-pitch: composed block die faces failed to load; composing them again');
+        evictComposedBlockFaces(family, surface);
+        if (await PitchRenderer.prepareBlockFaces(family, surface) && live()) {
+          const fresh = PitchRenderer.bundledBlockFaceUrls(family, surface);
+          await Promise.all(textures.map(async (t, i) => { if (!t) textures[i] = await tryLoad(fresh[i]!); }));
+        }
+      }
+      if (!live()) return;
+      const originals = PitchRenderer.originalBlockFaceUrls(family);
+      await Promise.all(textures.map(async (t, i) => { if (!t) textures[i] = await tryLoad(originals[i]!); }));
+      if (!live()) return;
+      textures.forEach((t, i) => { if (!t) { textures[i] = this.blockFaceTextures[i] ?? null; usedPrevious = true; } });
+      if (usedPrevious) this.scheduleBlockFaceRetry();
+      if (textures.some((t) => !t)) {
+        console.warn('ffb-pitch: block die faces failed to load, keeping the previous faces');
+        return;
+      }
+    }
+    if (!usedPrevious) { // a load with every face fresh re-arms the one retry and drops any retry still pending (Astra P3)
+      this.blockFaceRetryUsed = false;
+      if (this.blockFaceRetryTimer) { this.cancelTimer(this.blockFaceRetryTimer); this.blockFaceRetryTimer = null; }
+    }
+    const wasEmpty = this.blockFaceTextures.length === 0;
+    const loadedTextures = textures as Texture[];
+    this.blockFaceTextures = loadedTextures;
+    for (const sprite of this.blockDiceSprites) sprite.texture = loadedTextures[0]!;
+    for (const sprite of this.blockFaceStaticSprites) {
+      if (sprite.destroyed) this.blockFaceStaticSprites.delete(sprite);
+      else sprite.texture = loadedTextures[0]!;
+    }
+    // Astra P3: previews drawn while no faces were loaded are vector stand-ins (buildBlockDie) that hold no texture —
+    // redraw the overlays so they become the real faces now (a late apply after the init deadline included).
+    if (wasEmpty) this.queueOverlayRedraw();
   }
 
   private destroyApplication(app: Application): void {
@@ -7815,6 +7974,10 @@ export class PitchRenderer {
 
   private redrawOverlays(): void {
     this.beginMovementOverlayFrame();
+    // Astra: the kick aim markers live on the overlay layer but are rebuilt only on pointer move — keep them across a
+    // redraw (e.g. the late block-face apply) like the hover square, never destroy them here.
+    const kickMarkers = [this.kickScatterMarker, this.kickHoverMarker].filter((m): m is Container => !!m && !m.destroyed);
+    for (const marker of kickMarkers) this.overlayLayer.removeChild(marker);
     try {
     // destroy, don't detach — leaked Text/Graphics were the W-3 heap finding
     const hoverSquareMarker = this.hoverSquareMarker;
@@ -8354,6 +8517,7 @@ export class PitchRenderer {
       });
     }
     } finally {
+      for (const marker of kickMarkers) if (!marker.destroyed) this.overlayLayer.addChild(marker); // back on top
       this.finishMovementOverlayFrame();
     }
   }

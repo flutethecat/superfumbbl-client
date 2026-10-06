@@ -1,5 +1,6 @@
 import type { AppSettings } from './settings';
 import { UI_FONTS } from './uiFonts';
+import { resolveBlockDieSurface } from '@fumbbl40k/ffb-pitch/src/blockDieSurface';
 
 /**
  * First-launch setup wizard (owner 10-06): the pure step model behind components/FirstLaunchSetup.vue — steps,
@@ -20,6 +21,7 @@ export type SetupStepId =
   | 'leftClick'
   | 'blitz'
   | 'blockDice'
+  | 'blockDiceSurface'
   | 'diceColour'
   | 'skills'
   | 'stadium'
@@ -35,6 +37,7 @@ export type SetupSettings = Pick<AppSettings,
   | 'leftClickOpensContextMenu'
   | 'declareBlitzBehavior'
   | 'blockDiceFamily'
+  | 'blockDiceSurface'
   | 'd6FaceVariant'
   | 'skillDisplay'
   | 'skillBadgeFamily'
@@ -51,6 +54,9 @@ export interface SetupOption {
   images: readonly string[];
   /** A row of the six real d6 faces of this variant (drawn from @fumbbl40k/ffb-pitch's d6FaceUrl, not a screenshot). */
   d6Variant?: AppSettings['d6FaceVariant'];
+  /** A row of the five block-die faces of the CURRENTLY chosen family composed on this surface (the same composed art
+   *  the dice use — PitchRenderer.prepareBlockFaces / bundledBlockFaceUrls), not a screenshot. */
+  blockSurface?: 'black' | 'white';
   /** A sample block rendered in this CSS font stack (the Font step; the same stacks App.vue applies as --ui-font). */
   fontStack?: string;
   /** The plain setting writes this option makes when selected. */
@@ -133,6 +139,22 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     ],
     // An installed block-dice pack wins over either family, so neither card is "current" while one is assigned.
     prefill: (s) => (s.assetPackAssignments.blockDice ? null : s.blockDiceFamily === 'krisb' ? 'krisb' : 'default'),
+  },
+  {
+    // Owner 10-06: "the user should be able to select their Block die face type as well as whether it's on a white or
+    // a black surface. Add that to the wizard." Right after the family pick; the previews follow that pick.
+    id: 'blockDiceSurface',
+    kind: 'choice',
+    title: 'Block die surface',
+    lede: "Choose whether your block dice sit on black or white. Your face set's default is preselected.",
+    // Titles carry no "(Default)": setupOptionTitle appends it to the face set's own surface (the 'auto' resolution).
+    options: [
+      { id: 'black', title: 'Black', images: [], blockSurface: 'black', writes: { blockDiceSurface: 'black' } },
+      { id: 'white', title: 'White', images: [], blockSurface: 'white', writes: { blockDiceSurface: 'white' } },
+    ],
+    // Owner 10-06 follow-up: the preselected card is the RESOLVED surface for the family picked on the previous step
+    // ('auto' = per face set); leaving the step without a pick writes nothing, so 'auto' stays.
+    prefill: (s) => resolveBlockDieSurface(s.blockDiceFamily, s.blockDiceSurface),
   },
   {
     // Owner 10-06 follow-up. Labels match Settings > Dice's mapping: the legacy 'black' key is the WHITE face set.
@@ -242,6 +264,13 @@ export function setupOption(stepId: SetupStepId, optionId: string): SetupOption 
   const option = setupStep(stepId).options?.find((candidate) => candidate.id === optionId);
   if (!option) throw new Error(`Unknown option ${optionId} for setup step ${stepId}`);
   return option;
+}
+
+/** The title a card shows. Block die surface (owner 10-06): " (Default)" is appended to the card that is the chosen
+ *  face set's own surface (resolveBlockDieSurface(family, 'auto')) — Black for Super FUMBBL, White for KrisB. */
+export function setupOptionTitle(stepId: SetupStepId, option: SetupOption, s: SetupSettings): string {
+  if (stepId === 'blockDiceSurface' && option.id === resolveBlockDieSurface(s.blockDiceFamily, 'auto')) return `${option.title} (Default)`;
+  return option.title;
 }
 
 export function prefillSetupOption(stepId: SetupStepId, s: SetupSettings): string | null {

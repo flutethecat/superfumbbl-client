@@ -3,6 +3,7 @@ export { configurePixiAssetOrigin } from './assetOrigin';
 export { installArtPack, artUrl, artBlobUrl, artPackActive, artPackHas, textureParserFor, ART_PACK_PARSER, type ArtPackFileRef, type ArtPackSource } from './artPack';
 export { KICK_ARC_GATE_CAP_MS, KICK_ARC_LONGEST_LEGIT_MS, KICK_FLYIN_MS, KICKOFF_CINE_MS, PUNT_BALL_ARC_MS, TTM_THROW_MS, activePlayerAuraVisible, ballThrowArcMs, isServerKickoffScatterTransition, kickArcGateCapMs, kickArcLongestLegitMs, setFumbblPitchFallbacks, staticSelectionHaloVisible, PitchRenderer, type ActionMode, type StadiumStandStyle, type BoardPresentationFence, type ContextTarget, type MovementPresentationFence, type MovementPresentationRecovery, type HmpScatterMarksState, type MarkLabelRequest, type PassDestinationKind, type ServerKickoffScatterOccurrence } from './renderer';
 export { blockDicePreview, type BlockPreview } from './blocks';
+export { BLOCK_DIE_SURFACE_COLOURS, BLOCK_GLYPH_RECT, COMPOSED_FACE_PX, blockGlyphRectPx, blockGlyphUrls, blockPlateUrl, composeBlockFacePixels, composeBlockFaces, composedBlockFaceUrls, blockFacesReady, setBlockFaceComposerForTests, setBlockFaceDecoderForTests, evictComposedBlockFaces, resetComposedBlockFacesForTests, composedStorageKey, COMPOSED_STORAGE_PREFIX, nativeBlockDieSurface, normalizeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, blockGlyphOutline, glyphOutlinePixels, KRISB_BLACK_OUTLINE, type BlockDieGlyphFamily, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 export { BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, HALF_BEAT_MS, type StageSpec, type PipelineTier, type PipelineHooks } from './blockPipeline';
 export { bundledFumbblAsset, cachedBundledFumbblAsset, knockdownFrameInfo, loadIconsetManifest, loadShadowlessManifest, setClassicIconTextureResolver, setClassicIconUrlRewriter } from './classicIcons';
 export type { ClassicIconTextureSource } from './classicIcons';
@@ -40,6 +41,7 @@ export * from './movement';
 export * from './passing';
 export * from './playerState';
 export * from './apothecaryBox';
+export { isPreSetupWindow, preSetupPlacements } from './preSetupFormation';
 export { rushTargetForPlayer } from './rushTarget';
 export { RING_TYPE_COLORS, ringTypeForName, type RingType } from './positionTypes';
 export {

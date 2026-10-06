@@ -4,7 +4,7 @@
  *  dismiss, Esc does nothing. Every choice step is prefilled from the current settings and writes ONLY when an option
  *  is selected (immediately, so Back/Next never loses a choice). The step model lives in game/setupWizard.ts. */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { D6_FACE_VALUES, bundledSkillBadgeUrl } from '@fumbbl40k/ffb-pitch';
+import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl } from '@fumbbl40k/ffb-pitch';
 import D6Face from './D6Face.vue';
 import { settings } from '../game/settings';
 import { flushFumbblPassword } from '../game/credentials';
@@ -18,6 +18,7 @@ import {
   applySetupOption,
   prefillSetupOption,
   setupOptionAssignmentToClear,
+  setupOptionTitle,
   visibleSetupSteps,
   type SetupOption,
   type SetupStep,
@@ -42,10 +43,34 @@ const SKILL_EXAMPLES = ['Block', 'Guard', 'Dodge', 'Horns', 'Tackle', 'Frenzy', 
 function illustratedIconUrl(skill: string): string | undefined { return bundledSkillBadgeUrl(skill, 'illustrated'); }
 const TWITCH_URL = 'https://twitch.tv/flutethecat';
 
+// Owner 10-06: the Block die surface cards preview the five faces of the CURRENTLY chosen family (the Block dice step
+// just before) on each surface — the same composed art the dice draw (PitchRenderer.prepareBlockFaces, cached).
+// Astra P3: a card shows a placeholder until ITS pair is composed (never the plate-less original standing in for it),
+// and an explicit "preview unavailable" state when composition fails (no canvas). A newer family pick supersedes an
+// older compose: only the latest generation may settle the cards.
+type SurfacePreviewState = 'pending' | 'ready' | 'failed';
+const surfacePreview = ref<Record<'black' | 'white', SurfacePreviewState>>({ black: 'pending', white: 'pending' });
+let surfacePreviewGeneration = 0;
+function surfaceFaceUrls(surface: 'black' | 'white'): string[] {
+  return PitchRenderer.bundledBlockFaceUrls(settings.blockDiceFamily, surface);
+}
+
 const steps = computed<SetupStep[]>(() => visibleSetupSteps({ hasHomeLogin: !!props.homeLogin }));
 const index = ref(0);
 const step = computed(() => steps.value[index.value]!);
 const isLast = computed(() => index.value === steps.value.length - 1);
+watch(() => [step.value.id, settings.blockDiceFamily] as const, ([id, family]) => {
+  if (id !== 'blockDiceSurface') return;
+  const generation = ++surfacePreviewGeneration;
+  for (const surface of ['black', 'white'] as const) {
+    if (blockFacesReady(family, surface)) { surfacePreview.value[surface] = 'ready'; continue; }
+    surfacePreview.value[surface] = 'pending';
+    void PitchRenderer.prepareBlockFaces(family, surface).then((ok) => {
+      if (generation !== surfacePreviewGeneration) return; // a newer family pick owns the cards
+      surfacePreview.value[surface] = ok ? 'ready' : 'failed';
+    });
+  }
+}, { immediate: true });
 
 // The selected card is derived ONLY from the live settings: Back after e.g. "Use it now" on a mod pack shows the truth,
 // and when an installed pack supplies the slot no built-in card is shown as selected.
@@ -249,11 +274,11 @@ function finish(): void {
       <div ref="cardBody" class="setup-body">
         <!-- Choice steps: large selectable cards with radio semantics. -->
         <template v-if="step.kind === 'choice'">
-          <div class="setup-options" :class="{ 'setup-options--rows': step.id === 'blockDice' || step.id === 'diceColour' }" role="radiogroup"
+          <div class="setup-options" :class="{ 'setup-options--rows': step.id === 'blockDice' || step.id === 'blockDiceSurface' || step.id === 'diceColour' }" role="radiogroup"
             :aria-labelledby="'first-launch-setup-title'">
             <div v-for="(option, i) in step.options" :key="option.id"
               :ref="(el) => { if (el) optionRefs[i] = el as HTMLElement; }"
-              class="setup-option" :class="{ 'setup-option--row': step.id === 'blockDice' || step.id === 'diceColour' }"
+              class="setup-option" :class="{ 'setup-option--row': step.id === 'blockDice' || step.id === 'blockDiceSurface' || step.id === 'diceColour' }"
               role="radio" :aria-checked="selectedFor(step) === option.id" :aria-disabled="picksLocked" :tabindex="tabIndexFor(step, option, i)"
               :data-option="option.id" @click="choose(step, option)" @keydown="onOptionKeydown($event, step, i)">
               <span class="setup-radio" aria-hidden="true"></span>
@@ -274,12 +299,22 @@ function finish(): void {
                 <div v-else-if="option.d6Variant" class="setup-images setup-d6">
                   <D6Face v-for="value in D6_FACE_VALUES" :key="value" :value="value" :variant="option.d6Variant" />
                 </div>
+                <div v-else-if="option.blockSurface" class="setup-images setup-dice" :data-surface="option.blockSurface"
+                  :data-preview="surfacePreview[option.blockSurface]">
+                  <template v-if="surfacePreview[option.blockSurface] === 'ready'">
+                    <img v-for="(url, f) in surfaceFaceUrls(option.blockSurface)" :key="f" :src="url" alt="" />
+                  </template>
+                  <template v-else-if="surfacePreview[option.blockSurface] === 'pending'">
+                    <span v-for="f in 5" :key="f" class="setup-die-skeleton" :class="'setup-die-skeleton--' + option.blockSurface" aria-hidden="true"></span>
+                  </template>
+                  <span v-else class="setup-preview-failed">Preview unavailable. Your dice will use the face set's original art.</span>
+                </div>
                 <div v-else-if="option.images.length" class="setup-images" :class="{ 'setup-dice': step.id === 'blockDice' }">
                   <template v-for="key in option.images" :key="key">
                     <img v-if="imageUrl(key)" :src="imageUrl(key)" alt="" />
                   </template>
                 </div>
-                <strong class="setup-option-title">{{ option.title }}</strong>
+                <strong class="setup-option-title">{{ setupOptionTitle(step.id, option, settings) }}</strong>
                 <span v-if="option.description" class="setup-option-desc">{{ option.description }}</span>
               </div>
             </div>
@@ -442,6 +477,12 @@ function finish(): void {
 .setup-images img { display: block; max-width: 100%; max-height: min(40vh, 420px); object-fit: contain; border-radius: 4px; }
 .setup-dice { justify-content: flex-start; }
 .setup-dice img { width: 72px; height: 72px; image-rendering: auto; }
+.setup-die-skeleton { width: 60px; height: 60px; margin: 6px; border-radius: 9px; opacity: 0.55; animation: setup-die-pulse 1.1s ease-in-out infinite alternate; }
+.setup-die-skeleton--black { background: #141414; box-shadow: inset 0 0 0 2px #5a5e61; }
+.setup-die-skeleton--white { background: #f3efe6; box-shadow: inset 0 0 0 2px #26221e; }
+@keyframes setup-die-pulse { from { opacity: 0.35; } to { opacity: 0.7; } }
+@media (prefers-reduced-motion: reduce) { .setup-die-skeleton { animation: none; } }
+.setup-preview-failed { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.9rem); }
 .setup-font-sample {
   display: flex;
   flex-direction: column;
