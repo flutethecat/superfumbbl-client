@@ -3124,8 +3124,14 @@ function pristineActivationTypeTransitions(
   if (!currentAction || !changeableState) return [];
   if (currentAction === 'blitzMove'
       && teamTurnFlag(game, playerSideIsHome(game, playerId), 'blitzUsed')) return [];
+  // Owner 10-05 (P0): a player that has STOOD UP (the paid 3-MA stand, actingPlayer.standingUp with currentMove 3)
+  // has moved - it may still switch to Blitz / Pass / Foul / Hand-off (the stand folds into those), but never to a
+  // standalone Block: a Block action is "no movement", and only Jump Up (canStandUpForFree) lets a stood-up player
+  // block. declaresAllowed admits the stood-up player for the OTHER switches, so the Block rows are dropped here.
+  const stoodUp = Number((acting as { currentMove?: number } | undefined)?.currentMove ?? 0) > 0
+    && !!(acting as { standingUp?: boolean } | undefined)?.standingUp && !canStandUpForFree(game, playerId);
   return playerDeclareSet(game, playerId, p, ctx)
-    .filter((action) => action.kind === 'declare' && action.action !== currentAction);
+    .filter((action) => action.kind === 'declare' && action.action !== currentAction && !(stoodUp && action.action === 'block'));
 }
 
 /** Owner 09-28 (Sol re-review — ORDER fix): `playerDeclareSet` already puts its OWN disabled "Not Available" rows

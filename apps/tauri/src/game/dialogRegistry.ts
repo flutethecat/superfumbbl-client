@@ -102,7 +102,7 @@ export const DIALOG_REGISTRY = {
   opponentBlockSelectionProperties: d('unhandled', 'DialogOpponentBlockSelectionPropertiesHandler'),
   pickUpChoice: d('unhandled', 'DialogPickUpChoiceHandler'),
   selectKeyword: d('existing-dialog', 'DialogSelectKeywordHandler'),
-  selectPosition: d('unhandled', 'DialogSelectPositionHandler'),
+  selectPosition: d('existing-dialog', 'DialogSelectPositionHandler'), // owner 10-05 (g1950414): Raise the Dead position pick -> clientPositionSelection (store.ts)
   reRollRegenerationMultiple: d('existing-dialog', 'DialogReRollRegenerationMultipleHandler'),
   puntToCrowd: d('existing-dialog', 'DialogPuntToCrowdHandler'),
 } satisfies Record<DialogId, DialogDescriptor>;

@@ -93,7 +93,7 @@ import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
 import { setupProblems } from '../game/setupProblems';
 import { endActivationConfirmEnabled } from '../game/confirmationSettings';
 import { starBadgeFor } from '../game/starBadge';
-import { opponentChoosingSideStepSquare } from '../game/opponentSideStepPick';
+import { opponentChoosingPushSquare } from '../game/opponentSideStepPick';
 import starBadgeUrl from '../assets/star-badge/star-badge.png';
 import starBadgeUsedUrl from '../assets/star-badge/star-badge-used-x.png';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
@@ -2676,13 +2676,14 @@ watch(
   { immediate: true },
 );
 // Owner 10-04: while the OPPONENT picks their Side Step square, the blocking coach sees the same candidate arrows
-// (display only - no crosshairs, nothing clickable).
-const opponentSideStepPick = computed(() => opponentChoosingSideStepSquare(gameStore.game.value, {
+// (display only - no crosshairs, nothing clickable). Owner 10-05: a NORMAL push of theirs too (the pushed coach
+// watches the directions; occupied squares stay, a chain push goes through them).
+const opponentPushWatch = computed(() => opponentChoosingPushSquare(gameStore.game.value, {
   playing: gameStore.isPlaying.value,
   iControl: (playerId) => gameStore.iControl(playerId),
   localPushChoiceArmed: !!gameStore.state.pushChoice,
 }));
-watch(opponentSideStepPick, (watching) => renderer?.setPushOptionsWatching(watching), { immediate: true });
+watch(opponentPushWatch, (watching) => renderer?.setPushOptionsWatching(watching !== null, watching === 'sideStep'), { immediate: true });
 
 // While a mate is held, render it at the thrower and retain its pre-pickup square for the pickup tween.
 watch(
@@ -3806,6 +3807,11 @@ watch(() => gameStore.state.apothecaryChoice?.seq, () => { reactivePromptDragPos
 watch(() => gameStore.state.apothecaryD16?.seq, () => { reactivePromptDragPos.apothecaryD16 = null; });
 watch(() => gameStore.state.apothecaryAutoReturn?.seq, () => { reactivePromptDragPos.apothecaryAutoReturn = null; });
 watch(() => gameStore.state.selectSkill?.seq, () => { reactivePromptDragPos.selectSkill = null; });
+// Owner 10-05: the Raise the Dead position pick - upstream PositionChoiceMode.RAISE_DEAD header "Select position for raised player"
+const selectPositionTitle = computed(() => {
+  const mode = String(gameStore.state.selectPosition?.mode ?? '').toUpperCase();
+  return mode === 'RAISE_DEAD' ? 'Raise the Dead - choose the position of the raised player' : 'Choose a position';
+});
 watch(() => gameStore.state.keywordChoice?.seq, () => { reactivePromptDragPos.keywordChoice = null; });
 watch(() => gameStore.state.cardChoice?.seq, () => { reactivePromptDragPos.cardChoice = null; });
 watch(() => gameStore.state.cardBuy?.seq, () => { reactivePromptDragPos.cardBuy = null; });
@@ -4648,8 +4654,9 @@ function trackTentaclesPill() {
     const sq = playerSquareById(id);
     const c = sq ? renderer.squareToCanvas(sq) : null;
     if (c && reactivePromptHeld.value !== 'tentacles') tentaclesPos.value = {
-      x: Math.min(Math.max(c.x + 44, 8), Math.max(host.clientWidth - 176, 8)),
-      y: Math.min(Math.max(c.y - 112, 8), host.clientHeight - 72 - 84),
+      // owner 10-05: the modern panel (compact, ~360 px) sits to the tentacler's right, clamped inside the pitch host
+      x: Math.min(Math.max(c.x + 44, 8), Math.max(host.clientWidth - 376, 8)),
+      y: Math.min(Math.max(c.y - 112, 8), host.clientHeight - 72 - 96),
     };
     tentaclesRaf = requestAnimationFrame(step);
   };
@@ -4659,6 +4666,13 @@ watch(() => tentaclesPick.value?.seq, () => { reactivePromptDragPos.tentacles = 
 onBeforeUnmount(() => cancelAnimationFrame(tentaclesRaf));
 /** Answer TENTACLES on the same playerPick wire: Use = pick the auto-selected tentacler + commit; Decline = skip
  *  (only when the server allows it — W9 lesson: a mandatory choice offers no bare decline). */
+// Owner 10-05: the panel names the auto-selected tentacler
+const tentaclerName = computed(() => {
+  const id = tentaclerId.value; const g = gameStore.game.value;
+  if (!id || !g) return 'Your player';
+  const pl = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((x) => x.playerId === id);
+  return pl?.playerName || 'Your player';
+});
 function answerTentacles(use: boolean) {
   const p = gameStore.state.playerPick;
   if (!p) return;
@@ -6157,7 +6171,7 @@ watch(targetDeclarePrompt, (prompt) => {
 });
 // Owner o66aa: the 2-click target CUE for pass / hand-off / foul — 🏈 over a pass/hand-off target, the armour-
 // break roll over a foul victim. RAF-follows the camera; shown while a pending target awaits its confirm click.
-const o66TargetCue = ref<{ x: number; y: number; label: string; throwRoll?: number } | null>(null);
+const o66TargetCue = ref<{ x: number; y: number; label: string; throwRoll?: number; catchRoll?: number } | null>(null);
 let targetCueRaf = 0;
 const o66ConfirmedPassDestination = computed(() => {
   const g = gameStore.game.value;
@@ -6255,7 +6269,9 @@ watch([
     : null;
   // The destination control below owns the throw requirement so it cannot be occluded by a separate ball marker.
   renderer.setThrowRoll(null, 0);
-  renderer.setCatchRoll(preview?.catchRoll != null ? preview.targetSquare : null, preview?.catchRoll ?? 0);
+  // Owner 10-05: "The catch modal needs to be moved to the new design language" - the catch requirement is drawn
+  // by the DOM target cue (o66TargetCue.catchRoll) in the same dark pill as the Pass roll; no renderer chip.
+  renderer.setCatchRoll(null, 0);
   renderer.setPassRevealDP(!!preview);
 });
 /** o66PathSquares[0] is always the route origin; renderer chips and numbering depend on it. */
@@ -6339,6 +6355,8 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
       y: throwDestination ? p.y : o66AggroStage.value ? Math.max(diceTop != null ? Math.min(diceTop - 6, p.y - 88) : p.y - 88, 8) : p.y - 40,
       label,
       throwRoll: preview?.throwRoll,
+      // owner 10-05: the catch requirement rides this same cue (the renderer's green "Catch" chip is retired)
+      catchRoll: preview?.catchRoll ?? undefined,
     };
     targetCueRaf = requestAnimationFrame(step);
   };
@@ -13070,6 +13088,21 @@ function sendChat() {
           </div>
         </div>
 
+        <!-- Owner 10-05 (g1950414): Raise the Dead - the raising coach picks the new player's roster position. Every
+             button is an exact position id offered by DialogSelectPosition; Cancel only when the server allows none. -->
+        <div v-if="gameStore.state.selectPosition" class="yesno-card select-skill-card" data-testid="select-position-card">
+          <div class="yesno-text">{{ selectPositionTitle }}</div>
+          <div class="skill-select-list">
+            <button v-for="option in gameStore.state.selectPosition.options" :key="option.positionId"
+              class="skill-select-opt" @click="gameStore.resolveSelectPosition(option.positionId)">
+              <span>{{ option.label }}</span>
+            </button>
+          </div>
+          <div v-if="gameStore.state.selectPosition.minSelects === 0" class="yesno-actions">
+            <button class="rr-decline" @click="gameStore.resolveSelectPosition(null)">Cancel</button>
+          </div>
+        </div>
+
         <!-- Upstream DialogUseInducement: every server-offered inducement/card plus decline. -->
         <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
@@ -13394,16 +13427,19 @@ function sendChat() {
         </div>
 
         <!-- TENTACLES (owner 08-12): picker retired → token-anchored reactive card over the auto-selected tentacler
-             (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects). -->
-        <div v-if="tentaclesPick && tentaclesPos" class="followup-chip"
-          :style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y })"
-          title="Drag to move" @pointerdown="startReactivePromptDrag('tentacles', $event)">
-          <div class="fu-title">Use Tentacles?</div>
-          <div class="fu-actions">
-            <button class="fu-btn follow" @click="answerTentacles(true)">Use</button>
-            <button v-if="tentaclesPick.declinable" class="fu-btn stay" @click="answerTentacles(false)">Decline</button>
-          </div>
-        </div>
+             (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects).
+             Owner 10-05: the card is the modern confirmation panel (the pick-me-up / End Turn? language), still
+             anchored beside the tentacler and draggable. -->
+        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" title="Use Tentacles?" label="Tentacles decision"
+          compact draggable test-id="tentacles-panel"
+          :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
+          @drag-start="startReactivePromptDrag('tentacles', $event)">
+          <span>{{ tentaclerName }} can try to hold the runner</span>
+          <template #actions>
+            <button class="rr-use" @click="answerTentacles(true)">Use</button>
+            <button v-if="tentaclesPick.declinable" class="rr-decline" @click="answerTentacles(false)">Decline</button>
+          </template>
+        </PitchConfirmationPanel>
 
         <!-- Triage #10 (owner 08-11): "Your opponent is deciding…" just below the block dice while it's THEIR pick
              (state.opponentReviewingDice — never on your own picks; clears when the pick resolves). -->
@@ -13438,6 +13474,11 @@ function sendChat() {
         <!-- S99 (owner 10-02): Pick-Me-Up - the coach with prone players is choosing who stands; every other seat waits on them. -->
         <OnTheBallWaitingModal v-if="gameStore.state.pickMeUpWaiting" title="Pick-Me-Up" notice-id="pick-me-up-waiting"
           :message="gameStore.state.pickMeUpWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Owner 10-05: "Waiting for <Coach> to choose a push direction" - every seat but the choosing coach. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting" title="Push" notice-id="push-waiting"
+          :message="gameStore.state.pushWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S57 (owner 09-30): Touchback — the receiving coach nominates the ball carrier; every other seat waits on them. -->
@@ -13710,6 +13751,10 @@ function sendChat() {
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
+          </span>
+          <!-- owner 10-05: the catch requirement in the same pill (accent tint, like the hover tip's catch line) -->
+          <span v-if="o66TargetCue.throwRoll != null && o66TargetCue.catchRoll != null" class="o66-target-pass-roll o66-target-catch-roll" data-testid="target-cue-catch">Catch
+            <D6Face class="o66-target-d6" :value="o66TargetCue.catchRoll" :label="`Catch needs ${o66TargetCue.catchRoll}`" />+
           </span>
         </div>
 
@@ -16787,6 +16832,7 @@ function sendChat() {
 }
 .o66-target-pass-roll { display: inline-flex; align-items: center; gap: 2px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); }
 .o66-target-d6 { width: 22px; height: 22px; }
+.o66-target-catch-roll { color: var(--ui-accent); } /* owner 10-05: the catch line in the accent tint */
 /* Owner ⑩ (08-12): pass/bomb targeting tooltip — the throw/catch roll at the hovered square. Mirrors the
    target-cue look (over-head, pointer-transparent); catch line reads in the accent tint. */
 .pass-hover-tip {

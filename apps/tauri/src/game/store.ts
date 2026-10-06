@@ -17,7 +17,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, pushWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { inducementChoiceLabel } from './inducementChoiceLabel';
@@ -842,6 +842,13 @@ const legacyState = reactive({
    *  shared `dialogInstanceKey` (dialogId+playerId; skillArray/mode are mutable content, excluded by design) so a
    *  stale card can't be answered after an incidental outer-command resync replaces or clears the dialog. */
   selectSkill: null as { playerId: string; playerName: string; skills: string[]; mode: string; seq: number; instanceKey: string } | null,
+  /** Owner 10-05 (g1950414, unknown dialog): BB2025 `selectPosition` - Raise the Dead / infected-player raise: the
+   *  raising coach picks the roster position of the new player (upstream DialogSelectPositionHandler ->
+   *  clientPositionSelection{positionIds, teamId}). Labels are the roster position names; ids are echoed verbatim. */
+  selectPosition: null as {
+    teamId: string; mode: string; minSelects: number; maxSelects: number;
+    options: { positionId: string; label: string }[]; seq: number; instanceKey: string;
+  } | null,
   /** Weather Mage `selectWeather` prompt; labels are display-only, while name/modifier are echoed verbatim in clientSelectWeather. */
   selectWeather: null as {
     options: { name: string; label: string; modifier: number; modifierLabel: string }[];
@@ -1171,6 +1178,8 @@ const legacyState = reactive({
   solidDefenceWaiting: null as { message: string } | null,
   /** Owner 10-02 (S99): "<who> is selecting players for Pick-Me-Up" for every seat but the choosing coach. */
   pickMeUpWaiting: null as { message: string } | null,
+  /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach. */
+  pushWaiting: null as { message: string } | null,
   /** Owner 07-03: TURNOVER splash (failed action only — not TD/voluntary/drive change), raised after a real non-TD turnEnd and other anims settle. */
   turnover: null as { side: 'home' | 'away'; coach: string; teamName: string; logo: string | null; seq: number } | null,
   /** Owner 07-05: turn-START splash ("«Coach»'s turn") — voluntary ends only (turnover keeps its own; a TD transitions to kickoff). */
@@ -1257,6 +1266,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     kickoffWaiting: passive.kickoffWaiting,
     solidDefenceWaiting: passive.solidDefenceWaiting,
     pickMeUpWaiting: passive.pickMeUpWaiting,
+    pushWaiting: passive.pushWaiting,
     followupChoice: null,
     skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
     reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
@@ -1308,7 +1318,7 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -8846,6 +8856,7 @@ function resetPlayback() {
   visibleSkillDecisionProjection = createSkillDecisionProjection();
   visibleSkillDialog = null;
   selectWeatherHandledInstanceKey = null; // fresh game — identical Weather Mage payloads are new dialog instances
+  selectPositionHandledInstanceKey = null; state.selectPosition = null; // fresh game - no stale Raise the Dead card
   selectSkillHandledInstanceKey = null; state.selectSkill = null; // fresh game — no stale Intensive Training latch/card
   weatherMageRoll = null;
   pregameHandled.clear(); // g330: fresh game (incl. a REMATCH on the same connection) — else stale pchoice keys (pickMeUp) auto-decline all game
@@ -8933,7 +8944,7 @@ function clearCinematics(hardGameBoundary = false) {
     pendingPregameWait = null;
     if (pendingPregameWaitWatchdog) { cancelGameTimeout(pendingPregameWaitWatchdog); pendingPregameWaitWatchdog = null; }
   }
-  state.pregameWait = null; state.selectSkill = null; state.selectWeather = null; state.inducementUse = null;
+  state.pregameWait = null; state.selectSkill = null; state.selectWeather = null; state.selectPosition = null; state.inducementUse = null;
   liveUseInducementOffer = null;
   liveWizardSpellOffer = null; liveWizardSpell = null; liveWizardSpellAwaitingServer = false;
   state.wizardTargetPreview = null;
@@ -8986,7 +8997,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
   for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
@@ -9122,7 +9133,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -11126,6 +11137,9 @@ export function installSelectSkillTestHarness(
   applyDialog(dialog: Record<string, unknown> | null, commandNr: number): void;
   prompt(): typeof state.selectSkill;
   resolve(skill: string): void;
+  /** Owner 10-05: the Raise the Dead `selectPosition` card and its answer (same driver, same harness). */
+  positionPrompt(): typeof state.selectPosition;
+  resolvePosition(positionId: string | null): void;
   setPlayActive(on: boolean): void;
   setCoach(coach: string): void;
   setInteractive(on: boolean): void;
@@ -11139,9 +11153,13 @@ export function installSelectSkillTestHarness(
   const priorChoice = state.selectSkill;
   const priorHandledKey = selectSkillHandledInstanceKey;
   const priorInteractive = interactiveReRolls;
+  const priorPosition = state.selectPosition;
+  const priorPositionKey = selectPositionHandledInstanceKey;
 
   selectSkillHandledInstanceKey = null;
   state.selectSkill = null;
+  selectPositionHandledInstanceKey = null;
+  state.selectPosition = null;
   game.value = fixture;
   game.value.turnMode = 'regular';
   play.active = true;
@@ -11170,6 +11188,8 @@ export function installSelectSkillTestHarness(
     },
     prompt: () => state.selectSkill,
     resolve(skill) { gameStore.resolveSelectSkill(skill); },
+    positionPrompt: () => state.selectPosition,
+    resolvePosition(positionId) { gameStore.resolveSelectPosition(positionId); },
     setPlayActive(on) { play.active = on; },
     setCoach(coach) { play.coach = coach; },
     setInteractive(on) { gameStore.setInteractiveReRolls(on); },
@@ -11182,6 +11202,8 @@ export function installSelectSkillTestHarness(
       play.autoPregame = priorPlay.autoPregame;
       state.selectSkill = priorChoice;
       selectSkillHandledInstanceKey = priorHandledKey;
+      state.selectPosition = priorPosition;
+      selectPositionHandledInstanceKey = priorPositionKey;
       interactiveReRolls = priorInteractive;
     },
   };
@@ -14937,6 +14959,8 @@ let liveReRollOfferEpoch = 0;
 let interceptionSkillElection: { key: string; skill: string | null } | null = null;
 /** Weather Mage answer latch for the current server dialog instance; cleared as soon as selectWeather leaves. */
 let selectWeatherHandledInstanceKey: string | null = null;
+/** selectPosition (Raise the Dead) answer latch for the current server dialog instance; cleared when it leaves. */
+let selectPositionHandledInstanceKey: string | null = null;
 /** Intensive Training `selectSkill` answer latch (08-17 P1) for the current live dialog occurrence — set on
  *  interactive commit and on headless one-shot send so a repeat/duplicate frame can't re-answer or re-send. */
 let selectSkillHandledInstanceKey: string | null = null;
@@ -16356,6 +16380,10 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     state.selectWeather = null;
     selectWeatherHandledInstanceKey = null;
   }
+  if (initialDialogId !== 'selectPosition') {
+    state.selectPosition = null;
+    selectPositionHandledInstanceKey = null;
+  }
   if (initialDialogId !== 'useInducement') {
     if (state.inducementUse?.key.startsWith('useInducement:')) state.inducementUse = null;
     liveUseInducementOffer = null;
@@ -16661,6 +16689,39 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           selectWeatherHandledInstanceKey = instanceKey;
           sendCommand({ netCommandId: NetCommandId.CLIENT_SELECT_WEATHER, modifier: rolled.modifier, name: rolled.name });
         }
+      }
+      return;
+    }
+  }
+  // Owner 10-05 (g1950414): `selectPosition` - the RAISING team's coach picks the position of the raised player
+  // (StepApothecary:416 / StepApothecaryMultiple:554 show it with PositionChoiceMode.RAISE_DEAD, min 1 / max 1, to
+  // the team that raises - which can be the non-acting side). Team-addressed, so gated on MY team, not the turn.
+  {
+    const pdp = g.dialogParameter as Record<string, unknown> | undefined;
+    if (pdp?.dialogId === 'selectPosition') {
+      const teamId = String(pdp.teamId ?? '');
+      const myTeam = myPlayTeam(g) as { teamId?: string; roster?: { positionArray?: { positionId?: string; positionName?: string }[] } } | undefined;
+      const mine = !!teamId && String(myTeam?.teamId ?? '') === teamId;
+      const positions = myTeam?.roster?.positionArray ?? [];
+      const options = (Array.isArray(pdp.positionIds) ? pdp.positionIds : [])
+        .map((id) => String(id))
+        .filter(Boolean)
+        .map((positionId) => ({ positionId, label: positions.find((p) => String(p.positionId ?? '') === positionId)?.positionName ?? `Position ${positionId}` }));
+      const instanceKey = dialogInstanceKey(g);
+      if (!mine || options.length === 0) {
+        state.selectPosition = null;
+        return;
+      }
+      const minSelects = Math.max(0, Number(pdp.minSelects ?? 1) || 0);
+      const maxSelects = Math.max(1, Number(pdp.maxSelects ?? 1) || 1);
+      if (interactiveReRolls) {
+        if (instanceKey && selectPositionHandledInstanceKey !== instanceKey && state.selectPosition?.instanceKey !== instanceKey) {
+          state.selectPosition = { teamId, mode: String(pdp.positionChoiceMode ?? ''), minSelects, maxSelects, options, seq: (state.selectPosition?.seq ?? 0) + 1, instanceKey };
+        }
+      } else if (instanceKey && selectPositionHandledInstanceKey !== instanceKey) {
+        // headless: the first offered position, once per dialog instance (same one-shot latch as the interactive commit)
+        selectPositionHandledInstanceKey = instanceKey;
+        sendCommand({ netCommandId: NetCommandId.CLIENT_POSITION_SELECTION, positionIds: [options[0]!.positionId], teamId });
       }
       return;
     }
@@ -17442,6 +17503,16 @@ function forceAdvanceCurrentState(
       }
       break;
     }
+    // selectPosition (owner 10-05, g1950414): Raise the Dead's position pick - /stuck takes the first offered id.
+    case 'selectPosition': {
+      const ids = (dp as { positionIds?: unknown } | undefined)?.positionIds;
+      const first = Array.isArray(ids) && ids.length ? String(ids[0]) : undefined;
+      if (first !== undefined) {
+        attempt({ netCommandId: NetCommandId.CLIENT_POSITION_SELECTION, positionIds: [first], teamId: String((dp as { teamId?: unknown } | undefined)?.teamId ?? '') });
+        return finish(`picked the first offered position (${first})`);
+      }
+      break;
+    }
     // pileDriver (owner live wedge 08-05): the dialog is not yet wired (full surface = the nomanor-piledriver
     // build); until it lands, /stuck declines it — upstream DialogPileDriverHandler:60 sendPileDriver(playerId),
     // ClientCommandPileDriver{playerId}; null = decline. Our vocab already has CLIENT_PILE_DRIVER.
@@ -17990,6 +18061,7 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.kickoffWaiting = playback.catchingUp ? null : kickoffWaitingFromGame(g, myTeamId);
   state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
+  state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
   state.onTheBallWaiting = playback.catchingUp ? null : projectOnTheBallWaiting({
     audience: frame.audience,
     turnMode: frame.turnMode,
@@ -18030,7 +18102,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -18354,7 +18426,7 @@ function setPregameWait(text: string): void {
 }
 function drivePregameStep() {
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -19442,7 +19514,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -20767,6 +20839,21 @@ export const gameStore = {
     state.selectWeather = null;
   },
 
+  /** Owner 10-05: answer the Raise the Dead `selectPosition` dialog with ONE offered position id (echoed verbatim),
+   *  or null = upstream's Cancel ("Do not select any position": an empty selection). */
+  resolveSelectPosition(positionId: string | null) {
+    const s = state.selectPosition;
+    if (!s) return;
+    if (!dialogInstanceLive(s.instanceKey)) { state.selectPosition = null; return; }
+    const option = positionId === null ? null : s.options.find((candidate) => candidate.positionId === positionId);
+    if (positionId !== null && !option) return;
+    if (positionId === null && s.minSelects > 0) return; // the server wants at least one: Cancel is not offered
+    selectPositionHandledInstanceKey = s.instanceKey;
+    sendCommand({ netCommandId: NetCommandId.CLIENT_POSITION_SELECTION, positionIds: option ? [option.positionId] : [], teamId: s.teamId });
+    log('system', option ? `play: raised player position - ${option.label}` : 'play: declined to pick a position');
+    state.selectPosition = null;
+  },
+
   /** Answer only an exact choice retained from the current server useInducement offer. */
   resolveUseInducement(kind: 'inducement' | 'card' | 'spell' | 'regeneration' | 'decline', value?: string) {
     if (!state.inducementUse) return;
@@ -21175,7 +21262,7 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
@@ -21509,7 +21596,7 @@ export const gameStore = {
       if (thisSession !== session) return;
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null;
       clearSendOffWaiting();
       if (officialStatusTerminal) {
         expectingGame = false;
@@ -23894,7 +23981,7 @@ export const gameStore = {
     clearSetupLoop();
     play.active = false;
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null;
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

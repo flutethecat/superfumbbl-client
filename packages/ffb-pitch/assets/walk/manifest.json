@@ -1320,7 +1320,7 @@
    "role": "darkelflineman",
    "side": "home",
    "file": "darkelf/darkelflineman-home.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1332,14 +1332,15 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "darkelf",
    "role": "darkelflineman",
    "side": "away",
    "file": "darkelf/darkelflineman-away.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1351,14 +1352,15 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "darkelf",
    "role": "darkelfrunner",
    "side": "home",
    "file": "darkelf/darkelfrunner-home.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1370,14 +1372,15 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "darkelf",
    "role": "darkelfrunner",
    "side": "away",
    "file": "darkelf/darkelfrunner-away.png",
-   "footY": 60,
+   "footY": 68,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1389,7 +1392,8 @@
     "NW",
     "W",
     "SW"
-   ]
+   ],
+   "frame": 72
   },
   {
    "race": "darkelf",

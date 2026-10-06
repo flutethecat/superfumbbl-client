@@ -3575,9 +3575,13 @@ export class PitchRenderer {
   /** Owner 10-04: the OTHER coach is choosing among the server's open pushback squares (their Side Step). The
    *  candidate arrows are drawn for the watching coach too - display only: no crosshairs, no click targets. */
   private pushOptionsWatching = false;
-  setPushOptionsWatching(on: boolean): void {
-    if (this.pushOptionsWatching === on) return;
+  /** Owner 10-05: a watched NORMAL push keeps its occupied candidates (a chain push goes through them); only a
+   *  watched Side Step drops them (an occupied square is not a Side Step destination). */
+  private pushOptionsWatchSkipOccupied = true;
+  setPushOptionsWatching(on: boolean, skipOccupied = true): void {
+    if (this.pushOptionsWatching === on && this.pushOptionsWatchSkipOccupied === skipOccupied) return;
     this.pushOptionsWatching = on;
+    this.pushOptionsWatchSkipOccupied = skipOccupied;
     this.refresh();
   }
   onTilePick: ((coord: [number, number]) => void) | null = null;
@@ -10742,7 +10746,7 @@ export class PitchRenderer {
     // this is purely the visual/click surface.) Off-flag: identical `!plannerEnabled`.
     const spectator = (!this.plannerEnabled && !this.order66) || (this.order66 && !this.pushOptionsArmed); // owner 09-06: unarmed o66 = chosen square only
     const watchOccupied = new Set<string>();
-    if (spectator && this.pushOptionsWatching) {
+    if (spectator && this.pushOptionsWatching && this.pushOptionsWatchSkipOccupied) {
       for (const d of this.game.fieldModel.playerDataArray) if (isOnPitch(d.playerCoordinate)) watchOccupied.add(`${d.playerCoordinate![0]},${d.playerCoordinate![1]}`);
     }
     for (const sq of squares) {

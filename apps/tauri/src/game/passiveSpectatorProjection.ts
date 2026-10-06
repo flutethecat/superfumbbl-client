@@ -1,5 +1,5 @@
 import { blastinChoosingText } from './blastinSecondBeat';
-import type { GameJson } from '@fumbbl40k/ffb-protocol';
+import { playerHasSkill, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { interceptors } from '@fumbbl40k/ffb-pitch';
 import { actionRollFor, type ActionRollProjection } from './actionRollProjection';
 import { PRAYER_TABLE, type PrayerCatalogEntry } from './prayerCatalog';
@@ -199,6 +199,29 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   return { message: `${subject} is selecting players for Pick-Me-Up` };
 }
 
+/** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach - while the
+ *  server has more than one open pushback square out. The chooser is the Side Step defender's coach on the first
+ *  link when the pushed player carries Side Step, else the attacking coach (a chain push stays theirs). On a coach's
+ *  seat an open square with homeChoice=true means the pick is MINE (no notice). */
+export function pushWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const squares = (g.fieldModel?.pushbackSquareArray ?? []) as { coordinate?: [number, number] | null; locked?: boolean; selected?: boolean; homeChoice?: boolean }[];
+  const open = squares.filter((sq) => !sq.locked && !sq.selected && Array.isArray(sq.coordinate)
+    && sq.coordinate[0] >= 0 && sq.coordinate[0] < 26 && sq.coordinate[1] >= 0 && sq.coordinate[1] < 15);
+  if (open.length < 2) return null;
+  if (myTeamId !== null && open.some((sq) => sq.homeChoice === true)) return null;
+  const teams = [g.teamHome, g.teamAway] as ({ teamId?: string; coach?: string; teamName?: string; playerArray?: { playerId: string }[] } | undefined)[];
+  const teamOf = (playerId: string) => (playerId ? teams.find((t) => t?.playerArray?.some((p) => p.playerId === playerId)) : undefined);
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const defenderId = String((g as { defenderId?: string | null }).defenderId ?? '');
+  const defender = defenderId ? teams.map((t) => t?.playerArray?.find((p) => p.playerId === defenderId)).find(Boolean) : undefined;
+  const firstLink = !squares.some((sq) => sq.locked);
+  const chooser = firstLink && defender && playerHasSkill(defender as never, 'Side Step') ? teamOf(defenderId) : teamOf(actingId);
+  if (!chooser) return null;
+  if (myTeamId !== null && String(chooser.teamId ?? '') === myTeamId) return null;
+  const name = String(chooser.coach ?? '').trim() || String(chooser.teamName ?? '').trim() || 'the other coach';
+  return { message: `Waiting for ${name} to choose a push direction` };
+}
+
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
  *  fallback the live applier uses (store: dp.playerId ?? dp.playerIds[0]). */
 function shadowingPlayerId(dialog: Record<string, unknown> | null): string | null {
@@ -249,6 +272,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     kickoffWaiting: kickoffWaitingFromGame(g, null),
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
     pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
+    pushWaiting: pushWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),
