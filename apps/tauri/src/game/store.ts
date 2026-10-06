@@ -10476,7 +10476,9 @@ function plannerAdvance() {
   if (currentTurnKey(g) !== p.turnKey) { plannerFlush('the turn changed'); return; }
   const base = plannerBase(p.playerId);
   // knocked down / stunned / removed at any point = turnover-ish; never continue a plan past it
-  if (base != null && base !== 0x01 && base !== 0x02) { plannerFlush(`${playerName(g, p.playerId)} is no longer standing`); return; }
+  // Owner 10-06: a knocked-down mover is a server-resolved outcome (failed dodge / rush / foul...) — the roll's own
+  // presentation and the turnover splash already say it; no ⚠ "Plan cancelled" notice for an expected failure.
+  if (base != null && base !== 0x01 && base !== 0x02) { plannerRetireQuietly(`${playerName(g, p.playerId)} is no longer standing`); return; }
   // ---- PAUSE (a decision surface is up) ----
   if (plannerPromptPending()) return;
   const actingId = plannerActingId();
