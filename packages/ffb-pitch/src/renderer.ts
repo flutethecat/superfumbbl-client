@@ -9603,7 +9603,11 @@ export class PitchRenderer {
           : unsortedMembers;
         if (this.dugoutCountsOn) {
           // Owner 10-06: leading player count; shrink (never abbreviate) if the longer text would overflow the 3-column band.
-          label.text = dugoutLabel(section.label, members.length, true);
+          // Owner 10-06 (final ruling): sent-off players count in INJURED like the Java client's "Out" (they still
+          // stand on the corner apron, never inside the box).
+          const banned = section.label === 'INJURED'
+            ? offPitch.filter((d) => baseState(d.playerState) === PlayerStateBase.BANNED).length : 0;
+          label.text = dugoutLabel(section.label, members.length + banned, true);
           // Cap against the PROJECTED band's long axis (in E-W the text runs along the band's depth, not TILE_W).
           const bandLen = Math.hypot(
             (bandQuad[2]! + bandQuad[4]!) / 2 - (bandQuad[0]! + bandQuad[6]!) / 2,
