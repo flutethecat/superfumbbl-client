@@ -408,20 +408,29 @@ export function reRollPromptScreenPosition(
   viewport: { width: number; height: number },
   opts?: { avoid?: PromptRect | null; card?: PromptCardBox | null },
 ): { x: number; y: number } {
-  const base = anchor ?? { x: viewport.width / 2, y: viewport.height / 2 };
   const avoid = opts?.avoid;
-  const card = opts?.card;
-  if (!avoid || !card || card.width <= 0 || card.height <= 0) return base;
+  const card = opts?.card && opts.card.width > 0 && opts.card.height > 0 ? opts.card : null;
+  // Owner 10-06 (g1950446, Getting Even for a player just sent to the box): the anchor followed the DUGOUT token,
+  // which sits below the visible pitch host (y 1152 in a 900 px window) - the card rendered entirely off-screen and
+  // the coach saw a client that "would not resume the walk". The anchor (or the card box once measured) is always
+  // kept inside the viewport; an unknown anchor still centres.
+  const PROMPT_EDGE_MARGIN_PX = 16;
+  const clampAnchor = (p: { x: number; y: number }): { x: number; y: number } => ({
+    x: Math.min(Math.max(p.x, PROMPT_EDGE_MARGIN_PX), Math.max(PROMPT_EDGE_MARGIN_PX, viewport.width - PROMPT_EDGE_MARGIN_PX)),
+    y: Math.min(Math.max(p.y, PROMPT_EDGE_MARGIN_PX), Math.max(PROMPT_EDGE_MARGIN_PX, viewport.height - PROMPT_EDGE_MARGIN_PX)),
+  });
+  // Anchor→top-left deltas, so a desired BOX edge converts back to the anchor coordinate.
+  const clampToViewport = (p: { x: number; y: number }): { x: number; y: number } => card ? ({
+    x: Math.min(Math.max(p.x, -card.dx), viewport.width - card.width - card.dx),
+    y: Math.min(Math.max(p.y, -card.dy), viewport.height - card.height - card.dy),
+  }) : clampAnchor(p);
+  const base = clampToViewport(anchor ?? { x: viewport.width / 2, y: viewport.height / 2 });
+  if (!avoid || !card) return base;
   const boxAt = (p: { x: number; y: number }): PromptRect => ({
     left: p.x + card.dx, top: p.y + card.dy,
     right: p.x + card.dx + card.width, bottom: p.y + card.dy + card.height,
   });
   if (!rectsOverlap(boxAt(base), avoid)) return base;
-  // Anchor→top-left deltas, so a desired BOX edge converts back to the anchor coordinate.
-  const clampToViewport = (p: { x: number; y: number }): { x: number; y: number } => ({
-    x: Math.min(Math.max(p.x, -card.dx), viewport.width - card.width - card.dx),
-    y: Math.min(Math.max(p.y, -card.dy), viewport.height - card.height - card.dy),
-  });
   // Order = the tie-break order: below, above, right, left.
   const candidates: { x: number; y: number }[] = [
     { x: base.x, y: avoid.bottom + PROMPT_DODGE_GAP_PX - card.dy },
