@@ -42,6 +42,7 @@ import {
   type OfficialJoinTarget,
 } from './officialRejoinTarget';
 import { isNotYourTeamStatus, rejoinFlow, trackOfficialJoin, type RejoinLaunch } from './rejoinFlow';
+import { pickTeam, type TeamChoiceEntry } from './teamChoice';
 
 export interface BrowserTeam {
   side: string;
@@ -111,6 +112,7 @@ let preparedFumbblServer: { url: string; compression: boolean } | null = null;
 /** the tracked attempt (rejoinFlow window) the lobby handlers report into; valid only while it is still the live window */
 let activeOfficialLaunch: RejoinLaunch | null = null;
 let officialStatusOff: (() => void) | null = null;
+let officialTeamListOff: (() => void) | null = null;
 /** test seam: the public coach lookup used as the second source of the exact spelling */
 let coachLookupOverride: CoachLookup | undefined;
 export function setOfficialCoachLookup(lookup: CoachLookup | undefined): void { coachLookupOverride = lookup; }
@@ -399,6 +401,62 @@ function watchOfficialRefusal(
   officialStatusOff = () => { offGame(); offStatus(); offState(); };
 }
 
+/**
+ * P1 10-06: upstream answers a PLAYER join without a teamId into an unscheduled, unstarted game with `serverTeamList`
+ * and waits for the same join again WITH a teamId (ServerCommandHandlerJoinApproved.sendTeamList; the official client
+ * asks in DialogTeamChoice). Pick only when it is unambiguous (the lobby's teamId, else its team name, else the only
+ * team); otherwise the join window shows the list and the coach chooses. Never a guess.
+ */
+function watchOfficialTeamList(prepared: GameSession, launch: RejoinLaunch, lobby: FumbblLobby, retryTarget: OfficialJoinTarget): void {
+  officialTeamListOff?.();
+  const joinWith = (entry: TeamChoiceEntry): void => {
+    // only the server's own name goes anywhere a name is compared or sent; the "Team <id>" label is display-only
+    const teamName = entry.teamName.trim() ? entry.teamName : undefined;
+    lobby.teamId = entry.teamId;
+    lobby.teamName = teamName ?? '';
+    if (preparedFumbblActiveParams) {
+      preparedFumbblActiveParams.teamId = entry.teamId;
+      preparedFumbblActiveParams.teamName = teamName;
+    }
+    // a later corrected-name "Try again" of this attempt keeps the chosen team
+    retryTarget.teamId = entry.teamId;
+    retryTarget.teamName = teamName;
+    if (gameStore.state.waitingForMatch) gameStore.state.waitingForMatch.teamName = teamName;
+    try {
+      prepared.joinPreparedFumbblGameWithTeam({ teamId: entry.teamId, teamName });
+    } catch (error) {
+      fumbblLobbyError.value = error instanceof Error ? error.message : String(error);
+      surfaceOfficialFailure(fumbblLobbyError.value);
+    }
+  };
+  officialTeamListOff = prepared.on('teamList', (command) => {
+    if (currentOfficialLaunch() !== launch || !prepared.awaitingTeamChoice) return;
+    const pick = pickTeam(command.teamList?.teamListEntries, { teamId: lobby.teamId, teamName: lobby.teamName });
+    if (pick.kind === 'empty') {
+      logJnlp('FUMBBL asked for a team, but lists none for this coach.');
+      launch.refusal = { status: 'teamList', message: 'FUMBBL asked which team to play with, but lists no team for this coach.' };
+      prepared.close();
+      return;
+    }
+    if (pick.kind === 'auto') {
+      logJnlp(`FUMBBL asked for a team: joining with ${pick.entry.label} (${pick.reason === 'single' ? 'your only team' : `matched by ${pick.reason === 'teamId' ? 'team id' : 'team name'}`}).`);
+      joinWith(pick.entry);
+      return;
+    }
+    logJnlp(`FUMBBL asked for a team: ${pick.entries.length} teams listed, waiting for your choice.`);
+    const entries = pick.entries;
+    launch.teamChoice = {
+      entries,
+      choose: (teamId: string) => {
+        const entry = entries.find((row) => row.teamId === teamId);
+        if (!entry || currentOfficialLaunch() !== launch || !launch.teamChoice) return;
+        launch.teamChoice = null;
+        joinWith(entry);
+      },
+    };
+  });
+}
+
 function connectFumbblPlayer(
   lobby: FumbblLobby,
   target: FumbblJoinTarget,
@@ -471,13 +529,15 @@ function proceedFumbblPlayer(
     ...(target.opponentTeamId ? { opponentTeamId: target.opponentTeamId } : {}),
     official: true,
   };
-  watchOfficialRefusal(prepared, launch, {
+  const retryTarget: OfficialJoinTarget = {
     url: activeParams.url, compression: activeParams.compression, coach: lobby.coach,
     gameId: target.gameId, gameName: target.gameName,
     teamId: lobby.teamId || undefined, teamName: lobby.teamName || undefined,
     opponentTeamId: target.opponentTeamId, opponentCoach: target.opponentCoach,
     viaJnlp: !lobby.password,
-  }, entryNames);
+  };
+  watchOfficialRefusal(prepared, launch, retryTarget, entryNames);
+  watchOfficialTeamList(prepared, launch, lobby, retryTarget);
 
   const joinNow = () => prepared.joinPreparedFumbblGame({
     gameId: target.gameId,
@@ -510,6 +570,8 @@ function proceedFumbblPlayer(
       releaseAcceptedFumbblLobby(prepared, generation);
       officialStatusOff?.();
       officialStatusOff = null;
+      officialTeamListOff?.();
+      officialTeamListOff = null;
       if (params) recordOfficialJoin(params, !lobby.password, servedGameId);
       // the correction is told once, in the join window; nothing about it goes to the game log
     },
@@ -753,6 +815,8 @@ export function routeJnlpRequest(
       logJnlp(jnlpEntryError.value);
       return 'invalid';
     }
+    // P1 10-06: say which join fields the file carried (values only for the non-secret ids; never the token)
+    logJnlp(`jnlp: FUMBBL player request: gameId ${request.gameId ?? 'none'}, teamId ${request.teamId || 'none'}, teamName ${request.teamName ? 'present' : 'none'}, coach ${request.coach ? 'present' : 'none'}, auth token present`);
     // owner ruling 2026-08-17: official fumbbl.com replay+live permitted.
     applyServerTarget('fumbbl');
     const lobby: FumbblLobby = {

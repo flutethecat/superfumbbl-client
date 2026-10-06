@@ -11,6 +11,7 @@ import type {
   ServerCommandModelSync,
   ServerCommandPasswordChallenge,
   ServerCommandTalk,
+  ServerCommandTeamList,
   ServerCommandStatus,
   ServerCommandVersion,
 } from '../commands/types';
@@ -64,6 +65,7 @@ export interface GameSessionEvents {
   join: (command: ServerCommandJoin) => void;
   gameState: (command: ServerCommandGameState) => void;
   gameList: (command: ServerCommandGameList) => void;
+  teamList: (command: ServerCommandTeamList) => void;
   status: (command: ServerCommandStatus) => void;
   modelSync: (command: ServerCommandModelSync) => void;
   talk: (command: ServerCommandTalk) => void;
@@ -97,6 +99,11 @@ export class GameSession {
    *  auth when no gameId/gameName is given); the eventual JOIN runs the normal HMAC password challenge. */
   private passwordLobby = false;
   private pendingPasswordJoin: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null } | null = null;
+  /** The target of the last prepared-lobby join (no credential), kept so a SERVER_TEAM_LIST answer can be joined again
+   *  WITH the chosen team — upstream DialogTeamChoice → LoginLogicModule.sendChallenge(TeamListEntry). */
+  private lastPreparedJoin: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null } | null = null;
+  /** true between a SERVER_TEAM_LIST answering that join and the re-join with a team */
+  private teamChoicePending = false;
   private versionReady = false;
   private autoJoinAfterVersion = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
@@ -106,6 +113,7 @@ export class GameSession {
     join: new Set(),
     gameState: new Set(),
     gameList: new Set(),
+    teamList: new Set(),
     status: new Set(),
     modelSync: new Set(),
     talk: new Set(),
@@ -205,10 +213,39 @@ export class GameSession {
       throw new Error('A positive gameId or non-empty gameName is required');
     }
     const joinTarget = { gameId: gameId > 0 ? gameId : 0, gameName, teamId: target.teamId ?? null, teamName: target.teamName ?? null };
+    this.lastPreparedJoin = joinTarget;
+    this.teamChoicePending = false;
+    this.sendPreparedJoin(target.coach, joinTarget);
+  }
+
+  /** True while the server's team list for the last prepared join waits for a team (see joinPreparedFumbblGameWithTeam). */
+  get awaitingTeamChoice(): boolean {
+    return this.teamChoicePending;
+  }
+
+  /**
+   * Answer a SERVER_TEAM_LIST: the same join again (same game target, same coach and credential path) WITH the team.
+   * Upstream parity: DialogTeamChoice → LoginLogicModule.sendChallenge(TeamListEntry) sets teamHomeId/teamHomeName and
+   * runs sendChallenge() again — the `-auth` token is re-sent as the join password, else a fresh password challenge.
+   */
+  joinPreparedFumbblGameWithTeam(team: { teamId: string; teamName?: string }): void {
+    const target = this.lastPreparedJoin;
+    if (!this.teamChoicePending || !target || !this.params || !(this.oneTimeFumbblToken || this.passwordLobby) || !this.connection.isOpen) {
+      throw new Error('No team choice is pending on this FUMBBL join');
+    }
+    const teamId = String(team.teamId ?? '').trim();
+    if (!teamId) throw new Error('A teamId is required');
+    this.teamChoicePending = false;
+    const joinTarget = { ...target, teamId, teamName: team.teamName ?? null };
+    this.lastPreparedJoin = joinTarget;
+    this.sendPreparedJoin(undefined, joinTarget);
+  }
+
+  private sendPreparedJoin(coach: string | undefined, joinTarget: { gameId: number; gameName: string | null; teamId: string | null; teamName: string | null }): void {
     if (this.passwordLobby) {
       // S44: the server checks team ownership letter for letter, so a password join may carry the account's exact
       // spelling (both the challenge and the join use params.coach). The list request above already went out as typed.
-      if (target.coach && target.coach.trim()) this.params = { ...this.params!, coach: target.coach };
+      if (coach && coach.trim()) this.params = { ...this.params!, coach };
       // the real join authenticates like any password join: challenge → HMAC response → CLIENT_JOIN
       this.pendingPasswordJoin = joinTarget;
       this.setState('authenticating');
@@ -329,6 +366,7 @@ export class GameSession {
         // Acceptance consumes the JNLP token. A named-game collision arrives as
         // SERVER_STATUS before this point and therefore retains it for correction.
         this.oneTimeFumbblToken = null;
+        this.teamChoicePending = false;
         // S44 round 2: nothing after acceptance re-authenticates on this socket (a fork reconnect opens a NEW session from
         // the store's own params), so the clear-text password / md5 leave the session object the moment we are in.
         this.scrubPasswordSecrets();
@@ -340,6 +378,13 @@ export class GameSession {
         break;
       case NetCommandId.SERVER_GAME_LIST:
         this.emit('gameList', command as ServerCommandGameList);
+        break;
+      case NetCommandId.SERVER_TEAM_LIST:
+        // Only an outstanding prepared-lobby join can be answered with a team; anything else is just reported.
+        if (this.lastPreparedJoin && (this.currentState === 'joining' || this.currentState === 'authenticating')) {
+          this.teamChoicePending = true;
+        }
+        this.emit('teamList', command as ServerCommandTeamList);
         break;
       case NetCommandId.SERVER_STATUS:
         {
@@ -391,6 +436,8 @@ export class GameSession {
     this.oneTimeFumbblToken = null;
     this.passwordLobby = false;
     this.pendingPasswordJoin = null;
+    this.lastPreparedJoin = null;
+    this.teamChoicePending = false;
     this.params = null;
     this.autoJoinAfterVersion = false;
     this.versionReady = false;

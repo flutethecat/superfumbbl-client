@@ -19,6 +19,7 @@
 import { reactive, watch } from 'vue';
 import type { SessionState } from '@fumbbl40k/ffb-protocol';
 import { gameStore } from './store';
+import type { TeamChoiceEntry } from './teamChoice';
 
 export interface RejoinLaunch {
   gameId: number;
@@ -46,6 +47,9 @@ export interface RejoinLaunch {
   tryAgain?: (() => (() => void) | null) | null;
   /** furthest step index the socket demonstrably reached (set by the official join path; a close leaves no evidence) */
   reachedStep?: number;
+  /** P1 10-06: the server answered the join with its team list and the pick is ambiguous — the coach chooses
+   *  (`choose(teamId)` re-sends the join with that team). Null/absent when no choice is pending. */
+  teamChoice?: { entries: TeamChoiceEntry[]; choose: (teamId: string) => void } | null;
 }
 
 /** The single "Try again" action of a failed window, if any: the corrected-name retry first, else the target rejoin. */
@@ -59,7 +63,7 @@ export function retryFor(launch: RejoinLaunch | null): (() => void) | null {
 
 export type RejoinStepStatus = 'pending' | 'active' | 'done' | 'failed';
 export interface RejoinStep {
-  key: 'connect' | 'join' | 'game';
+  key: 'connect' | 'join' | 'team' | 'game';
   label: string;
   status: RejoinStepStatus;
 }
@@ -68,6 +72,8 @@ export type RejoinModalState =
   | { kind: 'closed' }
   | { kind: 'progress'; title: string; steps: RejoinStep[]; notes: string[] }
   | { kind: 'waiting'; title: string; steps: RejoinStep[]; message: string; notes: string[] }
+  /** P1 10-06: the server wants a team before it lets the coach in; the client never picks when it is ambiguous */
+  | { kind: 'choose-team'; title: string; steps: RejoinStep[]; teams: TeamChoiceEntry[]; notes: string[] }
   | {
     kind: 'failed'; title: string; steps: RejoinStep[]; message: string; detail: string | null; notes: string[];
     /** true when a "Try again" button is offered (S44 point 8) */
@@ -189,6 +195,22 @@ export function deriveRejoinModal(launch: RejoinLaunch | null, snap: RejoinSnaps
       `Connection closed (code ${snap.connectionClosed.code}) before the game loaded.`,
       snap.connectionClosed.reconnecting ? 'Attempting to reconnect automatically…' : null,
     );
+  }
+  // the server answered with its team list and more than one team could be meant: the coach chooses, nothing is sent
+  if (launch.teamChoice && launch.teamChoice.entries.length > 0) {
+    const [connect, join, game] = steps as [RejoinStep, RejoinStep, RejoinStep];
+    return {
+      kind: 'choose-team',
+      title: 'Choose your team',
+      steps: [
+        { ...connect, status: 'done' },
+        { ...join, status: 'done' },
+        { key: 'team', label: 'Choose your team', status: 'active' },
+        { ...game, status: 'pending' },
+      ],
+      teams: launch.teamChoice.entries,
+      notes: notesFor(launch, false),
+    };
   }
   // an official join raises the waiting notice as soon as it starts; "joined — waiting" is only true once the server accepted us
   if (snap.waitingForMatch && snap.sessionState === 'joined') {

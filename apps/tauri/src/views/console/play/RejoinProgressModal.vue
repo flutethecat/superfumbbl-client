@@ -6,10 +6,16 @@
 // and the game view takes over. Visual idiom: the W30 save-prompt family (App.vue global styles).
 import { computed } from 'vue';
 import { deriveRejoinModal, dismissRejoin, rejoinFlow, retryOfficialJoin, storeRejoinSnapshot } from '../../../game/rejoinFlow';
+import { formatTeamValue } from '../../../game/teamChoice';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
 
 const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' } as const;
+
+/** P1 10-06: the coach's pick from the server's team list (only shown when more than one team could be meant). */
+function chooseTeam(teamId: string): void {
+  rejoinFlow.launch?.teamChoice?.choose(teamId);
+}
 </script>
 
 <template>
@@ -24,6 +30,19 @@ const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' 
         </li>
       </ul>
       <p v-if="modal.kind === 'waiting' && modal.message" class="hint">{{ modal.message }}</p>
+      <template v-else-if="modal.kind === 'choose-team'">
+        <p class="hint">FUMBBL wants to know which team you are playing this game with.</p>
+        <div class="rejoin-team-list" role="list">
+          <button v-for="team in modal.teams" :key="team.teamId" type="button" class="rejoin-team-card" role="listitem"
+            @click="chooseTeam(team.teamId)">
+            <span class="rejoin-team-name">{{ team.label }}</span>
+            <span class="rejoin-team-meta">
+              <span v-if="team.race">{{ team.race }}</span>
+              <span v-if="team.teamValue != null" class="rejoin-team-tv">TV {{ formatTeamValue(team.teamValue) }}</span>
+            </span>
+          </button>
+        </div>
+      </template>
       <template v-else-if="modal.kind === 'failed'">
         <p class="hint rejoin-fail-message">{{ modal.message }}</p>
         <p v-if="modal.detail" class="hint rejoin-fail-detail">{{ modal.detail }}</p>
@@ -50,6 +69,15 @@ const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' 
 .rejoin-steps .glyph { width: 1em; text-align: center; }
 .rejoin-steps li[data-status="active"] .glyph { animation: rejoin-pulse 1s ease-in-out infinite; }
 .rejoin-fail-message { color: #ff8d8d; }
+.rejoin-team-list { display: grid; gap: 6px; margin: 8px 0 4px; max-height: 50vh; overflow-y: auto; }
+.rejoin-team-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%;
+  padding: 8px 10px; text-align: left; cursor: pointer;
+  background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .14); border-radius: 6px; color: #ddd;
+}
+.rejoin-team-card:hover, .rejoin-team-card:focus-visible { border-color: #9bcf83; background: rgba(155, 207, 131, .08); }
+.rejoin-team-name { font-weight: 600; }
+.rejoin-team-meta { display: flex; gap: 10px; color: #aaa; font-size: max(var(--ui-min-text-size, 12px), 12px); }
 .rejoin-fail-detail { opacity: .8; }
 @keyframes rejoin-pulse { 50% { opacity: .3; } }
 </style>

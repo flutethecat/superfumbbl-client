@@ -16,7 +16,10 @@ export function railDiagnosticWireRecord(seq: number, t: number, diagnostic: Rea
  *  stalled socket): CONNECTION records ride the same per-game JSONL. Events: `state` (session state change),
  *  `close` (code + reason), `error`, `pong` (round-trip + gap since the previous pong) and `pong-overdue` (no pong
  *  for longer than expected — logging only, nothing reconnects). No payloads, no credentials. */
-export type ConnectionWireEvent = 'state' | 'close' | 'error' | 'pong' | 'pong-overdue' | 'join-start' | 'join-error';
+/** P1 10-06 (g1950446: "joined" then no game state, and the trail could not say whether the opponent was in or the join
+ *  carried a team): `join-accepted` (how many PLAYER seats the server's serverJoin lists) and `team-list` (the server
+ *  asked for a team — row count only). */
+export type ConnectionWireEvent = 'state' | 'close' | 'error' | 'pong' | 'pong-overdue' | 'join-start' | 'join-error' | 'join-accepted' | 'team-list';
 /** Owner 09-27: a join that never reaches a game has no per-game wire file — its connection records go to a dated
  *  connection log instead, so a failed rejoin leaves evidence. */
 export function connectionLogFileName(now: Date): string {

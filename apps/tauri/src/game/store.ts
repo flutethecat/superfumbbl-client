@@ -21504,7 +21504,7 @@ export const gameStore = {
     pregameHandled.clear();
     session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true });
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
-    wireConnection('join-start', { mode: 'player', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0), byName: !!params.gameName, official: officialFumbbl });
+    wireConnection('join-start', { mode: 'player', host: hostForLog(params.url), gameId: Number(params.gameId ?? 0), byName: !!params.gameName, withTeam: !!params.teamId, official: officialFumbbl });
     // A prior session closes asynchronously AFTER this connect starts; its late
     // events must not mutate the new session's state (a stale close was leaving a
     // bogus joinError banner up over a live game). Ignore events from any session
@@ -21603,7 +21603,9 @@ export const gameStore = {
       if (thisSession !== session) return;
       log('talk', `${cmd.coach ?? '?'}: ${(cmd.talks ?? []).join(' ')}`, talkSide(cmd.coach));
     });
-    session.on('join', (cmd) => { if (thisSession !== session) return; joinAckedThisConnect = true; if (officialFumbbl) prepared?.onJoinAccepted?.(); handleServerJoin(cmd as { spectators?: number }); });
+    // P1 10-06: the trail records how many player seats the accepted join lists, and a server request for a team
+    session.on('teamList', (cmd) => { if (thisSession === session) wireConnection('team-list', { teams: (cmd.teamList?.teamListEntries ?? []).length }); });
+    session.on('join', (cmd) => { if (thisSession !== session) return; wireConnection('join-accepted', { players: Array.isArray(cmd.playerNames) ? cmd.playerNames.length : null }); joinAckedThisConnect = true; if (officialFumbbl) prepared?.onJoinAccepted?.(); handleServerJoin(cmd as { spectators?: number }); });
     session.on('command', (cmd) => { if (thisSession === session) handleServerPush(cmd as Record<string, unknown>); });
     session.on('error', (error) =>
       log('system', `error: ${error instanceof Error ? error.message : (error as { type?: string })?.type ?? String(error)}`),

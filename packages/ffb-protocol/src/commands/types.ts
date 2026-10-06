@@ -82,6 +82,25 @@ export interface ServerCommandGameList extends ServerCommand {
   gameList?: { gameListEntries?: GameListEntry[] } | null;
 }
 
+/** One team of the joining coach, as upstream TeamListEntry.toJsonValue() writes it (ffb-common TeamListEntry.java). */
+export interface TeamListEntry {
+  teamId?: string | null;
+  /** upstream TeamStatus enum name (e.g. "Active"); FUMBBL fills it from its teams XML */
+  teamStatus?: string | null;
+  division?: string | null;
+  teamName?: string | null;
+  teamValue?: number | null;
+  race?: string | null;
+  treasury?: number | null;
+}
+
+/** Upstream ServerCommandTeamList: the server's answer to a PLAYER join without a teamId into an unscheduled,
+ *  unstarted game (ServerCommandHandlerJoinApproved.sendTeamList). The client joins again WITH a teamId. */
+export interface ServerCommandTeamList extends ServerCommand {
+  netCommandId: typeof NetCommandId.SERVER_TEAM_LIST;
+  teamList?: { coach?: string | null; teamListEntries?: TeamListEntry[] | null } | null;
+}
+
 /** Login/lobby failure surface. `serverStatus` is an upstream enum name. */
 export interface ServerCommandStatus extends ServerCommand {
   netCommandId: typeof NetCommandId.SERVER_STATUS;
