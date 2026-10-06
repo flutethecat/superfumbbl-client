@@ -14,6 +14,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import PostGameRoster from './PostGameRoster.vue';
 import { clampPanelPosition } from '../game/edgePanelLayout';
+import { defaultRosterPosition } from '../game/rosterPopoutLayout';
 import { ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, rosterPopoutScale } from '../game/rosterPopoutScale';
 import type { PostGameSide, Side } from '../game/postGameProjection';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
@@ -42,12 +43,28 @@ const defaultWidth = () => (props.skillMode === 'icons' ? ICONS_W : DEFAULT_W);
 const panelEl = ref<HTMLElement | null>(null);
 const headEl = ref<HTMLElement | null>(null);
 const bodyEl = ref<HTMLElement | null>(null);
-// Session-only position (null = the default spot, upper right); the window is a glance surface, not a layout panel.
+// Session-only position (null = the default spot, lower left of the pitch area); the window is a glance surface, not a layout panel.
 const pos = ref<{ x: number; y: number } | null>(null);
+// Owner 10-06: the default spot (viewport px), recomputed on resize / re-measure while `pos` is null.
+const defaultPos = ref<{ x: number; y: number }>({ x: 88, y: 80 });
+function updateDefaultPos() {
+  if (pos.value || typeof window === 'undefined') return;
+  const host = document.querySelector<HTMLElement>('.pitch-host');
+  const r = host?.getBoundingClientRect();
+  const left = r?.left ?? 0, top = r?.top ?? 0;
+  const hostWidth = r && r.width > 0 ? r.width : window.innerWidth;
+  const hostHeight = r && r.height > 0 ? r.height : window.innerHeight;
+  const panel = panelEl.value;
+  const panelWidth = panel && panel.offsetWidth > 0 ? panel.offsetWidth : defaultWidth();
+  const panelHeight = panel && panel.offsetHeight > 0 ? panel.offsetHeight : 400;
+  const d = defaultRosterPosition({ hostWidth, hostHeight, panelWidth, panelHeight });
+  const next = clampPanelPosition({ x: left + d.x, y: top + d.y }, { width: panelWidth, height: panelHeight }, { width: window.innerWidth, height: window.innerHeight });
+  if (Math.abs(next.x - defaultPos.value.x) < 0.5 && Math.abs(next.y - defaultPos.value.y) < 0.5) return;
+  defaultPos.value = next;
+}
 
 const frameStyle = computed(() => {
-  const vw = typeof window === 'undefined' ? 1280 : window.innerWidth;
-  const p = pos.value ?? { x: Math.max(0, vw - defaultWidth() - 24), y: 80 };
+  const p = pos.value ?? defaultPos.value;
   return {
     left: `${p.x}px`,
     top: `${p.y}px`,
@@ -58,6 +75,20 @@ const frameStyle = computed(() => {
 // ---- Owner 10-02: grow-with-the-window scaling ----
 let scale = 1;
 let sized = false; // the frame has its explicit starting height (until then it is content-sized and never scales)
+// Astra (roster default spot): the sizes THIS component set; any other observed size is the user dragging the resize grip.
+let selfSize: { w: number; h: number } | null = null;
+function rememberSelfSize() {
+  const panel = panelEl.value;
+  if (panel && panel.offsetHeight > 0) selfSize = { w: panel.offsetWidth, h: panel.offsetHeight };
+}
+/** A user resize from the default spot pins the panel where it is, so the grip follows the cursor instead of the top sliding. */
+function pinIfUserResized() {
+  const panel = panelEl.value;
+  if (pos.value || !sized || !selfSize || !panel || panel.offsetHeight === 0) return;
+  if (Math.abs(panel.offsetWidth - selfSize.w) <= 1 && Math.abs(panel.offsetHeight - selfSize.h) <= 1) return;
+  const rect = panel.getBoundingClientRect();
+  pos.value = { x: rect.left, y: rect.top };
+}
 let observer: ResizeObserver | null = null;
 function parts() {
   const panel = panelEl.value, head = headEl.value, body = bodyEl.value;
@@ -97,7 +128,9 @@ function sizeFrame() {
   const want = rosterPopoutHeightFor(metricsAt(el, 1), rows) + borders;
   el.panel.style.height = `${Math.ceil(Math.min(want, window.innerHeight * 0.9))}px`;
   sized = true;
+  rememberSelfSize();
   applyScale();
+  updateDefaultPos();
 }
 watch(() => props.teams, () => { void nextTick(() => { sizeFrame(); applyScale(); }); });
 watch(side, () => { void nextTick(applyScale); });
@@ -132,13 +165,12 @@ function endDrag(event?: PointerEvent) {
   drag = null;
 }
 function clampToViewport() {
+  if (!pos.value) { updateDefaultPos(); return; } // default spot: track the window, never pin it
   const rect = panelEl.value?.getBoundingClientRect();
   if (!rect) return;
-  // From the default spot too (pos null = upper right): growing the window from its corner must not push it off-screen.
-  const p = pos.value ?? { x: rect.left, y: rect.top };
+  const p = pos.value;
   const next = clampPanelPosition(p, { width: rect.width, height: rect.height }, { width: window.innerWidth, height: window.innerHeight });
-  if (pos.value && next.x === pos.value.x && next.y === pos.value.y) return;
-  if (!pos.value && Math.abs(next.x - p.x) < 0.5 && Math.abs(next.y - p.y) < 0.5) return;
+  if (next.x === p.x && next.y === p.y) return;
   pos.value = next;
 }
 onMounted(() => {
@@ -147,10 +179,12 @@ onMounted(() => {
   if (panel) {
     panel.style.width = `${defaultWidth()}px`;
     panel.style.setProperty('--roster-scale', '1');
+    rememberSelfSize();
   }
+  updateDefaultPos();
   void nextTick(sizeFrame);
   if (panel && typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver(() => { applyScale(); clampToViewport(); });
+    observer = new ResizeObserver(() => { applyScale(); pinIfUserResized(); clampToViewport(); });
     observer.observe(panel);
   }
 });

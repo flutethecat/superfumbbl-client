@@ -301,7 +301,7 @@ function startGroupsFetch(fetcher: FetchLike): Promise<FumbblGroup[]> {
   }
   return groupsCache;
 }
-export function resetReplaySearchCache(): void { groupsCache = null; groupsCacheFetcher = null; logoNames.clear(); }
+export function resetReplaySearchCache(): void { groupsCache = null; groupsCacheFetcher = null; logoNames.clear(); enrichedMatches.clear(); }
 
 /** The most logo-only leagues whose names one search fetches (the 10-06 page lists 50) - a few at a time. */
 export const LOGO_NAME_CAP = 60;
@@ -574,4 +574,57 @@ export function withSearchTimeout<T>(
     timer = setTimeout(() => { controller.abort(); reject(new ReplaySearchTimeout()); }, ms);
   });
   return Promise.race([run(fetcher), timeout]).finally(() => clearTimeout(timer));
+}
+
+// ---- league rows: progressive enrichment from /api/match/get (owner 10-06) ----
+// Tournament schedules carry team names only. Each played league row is filled in from its match record (coach,
+// race / roster, TV - and the replay id when the schedule lacked it), a few requests at a time, cached per session.
+
+export const ENRICH_CONCURRENCY = 4;
+const enrichedMatches = new Map<number, ReplayRow>();
+export function resetLeagueEnrichmentCache(): void { enrichedMatches.clear(); }
+
+/** Merge a parsed match record into a league row (sides matched by team id; the row's own names win). */
+export function enrichRowFromMatch(row: ReplayRow, match: ReplayRow | null): ReplayRow {
+  if (!match || !match.right || !row.right) return row;
+  const fill = (side: ReplayRowTeam): ReplayRowTeam => {
+    const src = side.teamId && match.right!.teamId === side.teamId ? match.right! : side.teamId && match.left.teamId === side.teamId ? match.left : null;
+    if (!src) return side;
+    return { ...side, name: side.name || src.name, coach: side.coach || src.coach, race: side.race ?? src.race, tv: side.tv ?? src.tv };
+  };
+  const out: ReplayRow = { ...row, left: fill(row.left), right: fill(row.right) };
+  if (!out.replayId && match.replayId) { out.replayId = match.replayId; delete out.replayLookup; }
+  return out;
+}
+
+/**
+ * Fill league rows in place via `onRow(index, row)` as each match record lands. Rows already complete or cached are
+ * filled without a request; a failed request leaves its row untouched (and is not cached, so a later search retries).
+ * Stops issuing requests once `isCancelled()` turns true (a newer search / leaving the pane).
+ */
+export async function enrichLeagueRows(
+  rows: readonly ReplayRow[],
+  fetcher: FetchLike,
+  onRow: (index: number, row: ReplayRow) => void,
+  isCancelled: () => boolean = () => false,
+): Promise<void> {
+  const todo: number[] = [];
+  rows.forEach((row, i) => {
+    if (!row.matchId || (row.left.coach && row.right?.coach)) return;
+    const cached = enrichedMatches.get(row.matchId);
+    if (cached) onRow(i, enrichRowFromMatch(row, cached));
+    else todo.push(i);
+  });
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < todo.length && !isCancelled()) {
+      const i = todo[next++]!;
+      const row = rows[i]!;
+      const match = await fetchMatchRow(row.matchId!, fetcher);
+      if (!match || isCancelled()) continue;
+      enrichedMatches.set(row.matchId!, match);
+      onRow(i, enrichRowFromMatch(row, match));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(ENRICH_CONCURRENCY, todo.length) }, worker));
 }

@@ -11,7 +11,7 @@ import { jnlpEntryError, readJnlpFile, routeJnlpRequest } from '../game/jnlpRout
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { recentTeamCapNote } from '../game/fumbblRecentMatches';
 import {
-  ReplaySearchTimeout, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
+  REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
   type AbortableFetch, type FumbblGroup, type ReplayRow, type ReplaySearchResult,
 } from '../game/replaySearch';
 import { relativeTime } from '../game/fumbblPlayBlade';
@@ -67,15 +67,18 @@ async function pickGroup(group: FumbblGroup): Promise<void> {
 /** Owner 10-06: one search at a time - a newer search aborts the older one's requests, and every search settles
  *  within REPLAY_SEARCH_TIMEOUT_MS ("Search timed out") so the button always comes back. */
 async function showSearch(run: (f: (input: string) => Promise<Response>) => Promise<ReplaySearchResult>): Promise<void> {
+  cancelEnrichment();
   searchAbort?.abort();
   const controller = new AbortController();
   searchAbort = controller;
   const seq = ++searchSeq;
   search.loading = true; search.error = '';
   try {
+    const deadline = Date.now() + REPLAY_SEARCH_TIMEOUT_MS;
     const result = await withSearchTimeout(run, baseFetch, undefined, controller);
     if (seq !== searchSeq) return;
     search.result = result;
+    if (result.kind === 'league') startEnrichment(seq, deadline);
   } catch (error) {
     if (seq !== searchSeq) return;
     search.result = null;
@@ -83,6 +86,25 @@ async function showSearch(run: (f: (input: string) => Promise<Response>) => Prom
   } finally {
     if (seq === searchSeq) { search.loading = false; searchAbort = null; }
   }
+}
+
+// Owner 10-06: league (tournament-schedule) rows carry team names only - each is filled in from /api/match/get
+// (coach, race + crest, TV) as it lands, 4 at a time, cached per session, under the search's 15 s abort. A newer
+// search or leaving the pane stops it; a failed lookup leaves its row as it is (no error shown).
+let enrichAbort: AbortController | null = null;
+function cancelEnrichment(): void { enrichAbort?.abort(); enrichAbort = null; }
+/** Astra 10-06: enrichment shares the search's 15 s window - it gets only what is left of the search's deadline. */
+function startEnrichment(seq: number, deadline: number): void {
+  const result = search.result;
+  const remaining = deadline - Date.now();
+  if (!result || remaining <= 0) return;
+  const controller = new AbortController();
+  enrichAbort = controller;
+  const current = (): boolean => seq === searchSeq && search.result === result && !controller.signal.aborted && !unmounted;
+  void withSearchTimeout(
+    (f) => enrichLeagueRows(result.rows.slice(), f, (index, row) => { if (current()) result.rows[index] = row; }, () => !current()),
+    baseFetch, remaining, controller,
+  ).catch(() => { /* timed out / aborted: rows keep what they have */ }).finally(() => { if (enrichAbort === controller) enrichAbort = null; });
 }
 const rows = computed<ReplayRow[]>(() => search.result?.rows ?? []);
 const hideScores = computed(() => settings.replaySearchHideScores);
@@ -235,6 +257,7 @@ function sessionIsCurrent(snapshot: LauncherSessionSnapshot): boolean {
 onBeforeUnmount(() => {
   unmounted = true;
   cancelReplayLookup();
+  cancelEnrichment();
   searchSeq += 1;
   searchAbort?.abort();
   stopFileBusy();
