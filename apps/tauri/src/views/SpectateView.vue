@@ -48,6 +48,7 @@ import BlockChooserCopy from '../components/BlockChooserCopy.vue';
 import EligibleRosterPicker from '../components/EligibleRosterPicker.vue';
 import ChatDock from '../components/ChatDock.vue';
 import ChatToast from '../components/ChatToast.vue';
+import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/ballOutView';
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
 import { teamBoxCounts } from '../game/dugoutCounts';
 import QuickBarButton from '../components/QuickBarButton.vue';
@@ -2583,13 +2584,17 @@ watch(
 watch(
   () => gameStore.state.scatterAnim?.seq,
   () => {
-    const s = gameStore.state.scatterAnim;
+    const s = modernScatterCue(gameStore.state.scatterAnim);
     if (s && renderer) {
       renderer.markScatter(s.playerId, s.path);
       if (s.refreshAfterArm) renderer.refresh();
     }
   },
 );
+
+// Owner 10-07: the ball leaves the pitch (TOUCHBACK / OUT OF BOUNDS) — the renderer hops a stand-in ball over the
+// edge into the stands and stamps the plate. Default ('pre') flush, like the scatter cue it may follow.
+bindBallOutCue(() => gameStore.state.ballOut, () => renderer);
 
 // Owner 2026-07-14: UNIFIED projectile throw — the store surfaces one `throwAnim` cue (pass = ball,
 // throwTeamMate = thrown player, throwBomb/rock/keg = a created sprite) from the wire animation; the
@@ -2603,7 +2608,7 @@ watch(
   () => gameStore.state.throwAnim?.seq,
   () => {
     const t = gameStore.state.throwAnim;
-    if (t && renderer) renderer.playThrow(t.kind, t.from, t.to, t.thrownId, t.sound); // #92 Inc-2: arc sound at the throw release beat
+    if (t && renderer) renderer.playThrow(t.kind, modernThrowOrigin(t), t.to, t.thrownId, t.sound); // #92 Inc-2: arc sound at the throw release beat
   },
 );
 

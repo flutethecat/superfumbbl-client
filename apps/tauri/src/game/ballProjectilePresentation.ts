@@ -1,6 +1,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { projectAuthoritativeKick, projectKickScatterPreview, type AuthoritativeKickBeat, type KickPlaybackContext, type KickScatterPreview } from './kickElection';
 import { movesRandomly } from './logic/availableActions';
+import { anchorBallOutAt, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 
 export type ThrowPresentationKind = 'pass' | 'punt' | 'throwTeamMate' | 'throwBomb' | 'throwARock' | 'throwKeg';
 
@@ -77,10 +78,14 @@ export interface BallProjectilePresentation {
   catchPlayerId: string | null;
   direction: { playerId: string; direction: string } | null;
   ballScatter: { path: [number, number][]; sound?: 'bounce' } | null;
+  /** Owner 10-07: the ball leaves the pitch. `before` = ahead of this command's throw (a throw-in whose leaving hop
+   *  was not shown), `with` = with this command's scatter, `after` = once this command's flight (KICK / pass) lands. */
+  ballOut: { cue: BallOutCue; phase: 'before' | 'with' | 'after' } | null;
+  ballOutContext: BallOutContext;
   playerScatter: { playerId: string; path: [number, number][] } | null;
   bomb: { square: [number, number]; sound: 'explode' } | null;
   fireball: { square: [number, number]; sound: 'fireball' } | null;
-  throw: { kind: ThrowPresentationKind; from: [number, number]; to: [number, number]; thrownId?: string; sound: 'throw' | 'woooaaah' } | null;
+  throw: { kind: ThrowPresentationKind; from: [number, number]; to: [number, number]; fromPoint?: [number, number]; thrownId?: string; sound: 'throw' | 'woooaaah' } | null;
   trickster: { playerId: string; from: [number, number]; to: [number, number] } | null;
   leap: { playerId: string; kind: 'crossing' | 'inPlace'; sound: 'boing' } | null;
   ballAndChainScatter: { playerId: string; roll: number; from: [number, number]; dest: [number, number] } | null;
@@ -95,6 +100,20 @@ export interface BallProjectileContext {
   kickAwaitingAuthoritativeThrow: boolean;
   kickPreview: KickScatterPreview | null;
 }
+
+/** Owner 10-07: cross-command ball-out state for the review presenter. Deliberately NOT part of the checkpoint's
+ *  BallProjectileContext (a strict, versioned schema): after a seek it starts empty, which only drops a hop. */
+export interface BallOutContext {
+  /** A ball-out decided before its flight (kick-off touchback, inaccurate pass off the pitch). */
+  pendingBallOut: BallOutCue | null;
+  /** Where the last shown ball-out came to rest, for the throw-in that follows it. */
+  ballOutExit: { from: [number, number]; exit: [number, number] } | null;
+  /** The provisional kickoffScatter report (the line; the touchback is decided by the outOfBounds frame). */
+  kickScatterReport?: Record<string, unknown> | null;
+  /** The last scatterBall direction and the square it reached (a throw-in whose leaving hop was not shown). */
+  lastScatter?: { square: [number, number]; dir: [number, number] } | null;
+}
+export const createBallOutContext = (): BallOutContext => ({ pendingBallOut: null, ballOutExit: null, kickScatterReport: null, lastScatter: null });
 
 export const createBallProjectileContext = (): BallProjectileContext => ({
   passAwaitingAuthoritativeThrow: false, passOrigin: null,
@@ -114,6 +133,10 @@ export function ballProjectilePresentation(
     previous?: Readonly<BallProjectileContext>;
     fallbackThrownPlayerId?: string | null;
     priorCoordinates?: ReadonlyMap<string, readonly number[] | null>;
+    /** Owner 10-07: the model ball before this command (a bounce out of bounds walks from it). */
+    priorBall?: readonly number[] | null;
+    /** Owner 10-07: the review presenter's ball-out state (omitted = no ball-out tracking across commands). */
+    ballOut?: Readonly<BallOutContext>;
   },
 ): BallProjectilePresentation {
   const nextContext: BallProjectileContext = {
@@ -121,6 +144,8 @@ export function ballProjectilePresentation(
     passOrigin: context.previous?.passOrigin ? [...context.previous.passOrigin] : null,
     kickPreview: context.previous?.kickPreview ? structuredClone(context.previous.kickPreview) : null,
   };
+  const outContext: BallOutContext = context.ballOut ? structuredClone(context.ballOut) as BallOutContext : createBallOutContext();
+  let ballOut: BallProjectilePresentation['ballOut'] = null;
   let passBallHold: BallProjectilePresentation['passBallHold'];
   let kickScatterPreview: BallProjectilePresentation['kickScatterPreview'];
   const animation = command.animation as {
@@ -141,6 +166,20 @@ export function ballProjectilePresentation(
       nextContext.kickPreview = preview;
       kickScatterPreview = preview;
     } catch { /* kickoffWeatherPresentation owns the diagnostic */ }
+    outContext.kickScatterReport = structuredClone(kickoffScatter);
+    outContext.pendingBallOut = null;
+  }
+  // Owner 10-07 (Astra): the touchback is decided on the frame that sets outOfBounds before the KICK (with Kick that
+  // is the dialog-answer frame after the provisional full-distance report).
+  if (nextContext.kickAwaitingAuthoritativeThrow && outContext.kickScatterReport && frameSetsOutOfBounds(command.modelChangeList)) {
+    outContext.pendingBallOut = kickoffTouchbackBallOut({
+      scatterReport: outContext.kickScatterReport, reportInThisFrame: !!kickoffScatter, reports,
+      ballAfter: game.fieldModel.ballCoordinate, modelChanges: command.modelChangeList,
+    });
+  }
+  {
+    const trace = scatterBall?.bomb === true ? null : lastScatterDirection(reports, game.fieldModel.ballCoordinate);
+    if (trace) outContext.lastScatter = trace;
   }
   const passRoll = reports.find((report) => String(report.reportId) === 'passRoll');
   const passResult = String(passRoll?.passResult ?? '').toUpperCase();
@@ -164,7 +203,22 @@ export function ballProjectilePresentation(
     if (nextContext.passOrigin) passBallHold = [...nextContext.passOrigin];
     if (nextContext.kickPreview) kickScatterPreview = structuredClone(nextContext.kickPreview);
   }
-  const ballPath = preflightBallScatter ? null : scatterPathFromEnd(game.fieldModel.ballCoordinate, ballDirections);
+  const scatterOut = scatterBall && scatterBall.bomb !== true ? scatterBallOut({
+    directions: ballDirections,
+    prevBall: context.priorBall ?? null,
+    ballAfter: game.fieldModel.ballCoordinate,
+    modelChanges: command.modelChangeList,
+    kickoff: String(game.turnMode ?? '') === 'kickoff',
+  }) : null;
+  if (scatterOut && preflightBallScatter) {
+    // The flight lands on the last in-bounds square first; the leaving hop follows it.
+    outContext.pendingBallOut = { ...scatterOut, path: [scatterOut.path.at(-1)!] };
+  } else if (scatterOut) {
+    ballOut = { cue: scatterOut, phase: 'with' };
+  }
+  const ballPath = preflightBallScatter ? null
+    : scatterOut ? (!scatterOut.exit && scatterOut.path.length > 1 ? scatterOut.path : null)
+      : scatterPathFromEnd(game.fieldModel.ballCoordinate, ballDirections);
   const scatterPlayer = reports.find((report) => String(report.reportId) === 'scatterPlayer');
   const playerPath = scatterPathFromStart(scatterPlayer?.startCoordinate,
     scatterPlayer?.directionArray ?? scatterPlayer?.directions);
@@ -184,22 +238,52 @@ export function ballProjectilePresentation(
     ? animation!.interceptorCoordinate : animation?.endCoordinate;
   const to = pitchCoordinate(ordinaryEnd);
   const kind = throwPresentationKind(animationType, reports, game.actingPlayer?.playerAction);
+  // Owner 10-07: a throw-in flies from where the ball was shown coming to rest in the stands (`fromPoint`, Modern);
+  // `from` stays the server's in-bounds square.
+  let fromPoint: [number, number] | null = null;
+  if (kind === 'pass' && from && to && hasThrowInReport(reports)) {
+    const shown = outContext.ballOutExit;
+    if (shown && shown.from[0] === from[0] && shown.from[1] === from[1]) fromPoint = [shown.exit[0], shown.exit[1]];
+    else {
+      const last = outContext.lastScatter;
+      const trace = last && last.square[0] === from[0] && last.square[1] === from[1] ? last.dir : null;
+      const inferred = throwInBallOut(from, trace);
+      if (inferred?.exit) { ballOut = { cue: inferred, phase: 'before' }; fromPoint = [inferred.exit[0], inferred.exit[1]]; }
+    }
+    outContext.ballOutExit = null;
+    outContext.lastScatter = null;
+  }
   const throwCue = kind && from && to ? {
     kind, from: [from[0], from[1]] as [number, number], to: [to[0], to[1]] as [number, number],
+    ...(fromPoint ? { fromPoint } : {}),
     ...(thrownPlayerId ? { thrownId: thrownPlayerId } : {}),
     sound: (kind === 'throwTeamMate' ? 'woooaaah' : 'throw') as 'throw' | 'woooaaah',
   } : null;
+  if (kind === 'pass' && throwCue && outContext.pendingBallOut && !hasThrowInReport(reports)) {
+    const landing = to ? [to[0], to[1]] as [number, number] : outContext.pendingBallOut.path.at(-1)!;
+    ballOut = { cue: anchorBallOutAt(outContext.pendingBallOut, landing), phase: 'after' };
+    outContext.pendingBallOut = null;
+  }
   if (kind === 'pass' && throwCue) {
     nextContext.passAwaitingAuthoritativeThrow = false;
     nextContext.passOrigin = null;
     passBallHold = null;
   }
   if (animationType === 'kick') {
+    const landing = pitchCoordinate(animation?.endCoordinate);
+    if (outContext.pendingBallOut && landing) ballOut = { cue: anchorBallOutAt(outContext.pendingBallOut, landing), phase: 'after' };
+    outContext.pendingBallOut = null;
     nextContext.kickAwaitingAuthoritativeThrow = false;
     nextContext.kickPreview = null;
     kickScatterPreview = null;
   }
+  // Every shown exit (with this scatter or after this flight) hands its resting point to the throw-in that follows.
+  if (ballOut && ballOut.phase !== 'before' && ballOut.cue.exit && ballOut.cue.label === 'OUT OF BOUNDS') {
+    const last = ballOut.cue.path.at(-1)!;
+    outContext.ballOutExit = { from: [last[0], last[1]], exit: [ballOut.cue.exit[0], ballOut.cue.exit[1]] };
+  }
   if (reports.some((report) => String(report.reportId) === 'turnEnd')) {
+    outContext.ballOutExit = null;
     nextContext.passAwaitingAuthoritativeThrow = false;
     nextContext.passOrigin = null;
     passBallHold = null;
@@ -238,6 +322,8 @@ export function ballProjectilePresentation(
     direction: typeof directionReport?.playerId === 'string' && typeof directionReport.direction === 'string'
       ? { playerId: directionReport.playerId, direction: directionReport.direction } : null,
     ballScatter: ballPath ? { path: ballPath, ...(command.sound === 'bounce' ? { sound: 'bounce' as const } : {}) } : null,
+    ballOut,
+    ballOutContext: outContext,
     playerScatter: playerPath && thrownPlayerId && !playerScatterCoveredByThrow && !ballAndChainScatter
       ? { playerId: thrownPlayerId, path: playerPath } : null,
     bomb: animationType === 'bombExplosion' && square ? { square, sound: 'explode' } : null,

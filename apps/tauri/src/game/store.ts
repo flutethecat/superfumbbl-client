@@ -1,6 +1,6 @@
 import { observedFailedMovementDestination, reduceObservedMovementOccurrence, type ObservedMovementOccurrence } from './movementOccurrenceProjection';
 import { blockOutcomePresentation } from './blockOutcomePresentation';
-import { ballProjectilePresentation, createBallProjectileContext, KNOWN_PROJECTILE_ANIMATION_TYPES, throwPresentationKind, type BallProjectileContext, type ThrowPresentationKind } from './ballProjectilePresentation';
+import { ballProjectilePresentation, createBallOutContext, createBallProjectileContext, type BallOutContext, KNOWN_PROJECTILE_ANIMATION_TYPES, throwPresentationKind, type BallProjectileContext, type ThrowPresentationKind } from './ballProjectilePresentation';
 export { throwPresentationKind } from './ballProjectilePresentation';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
@@ -22,6 +22,7 @@ export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { diceStats, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { inducementChoiceLabel } from './inducementChoiceLabel';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
+import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
 import { buildBlockDecision, createBlockContext, reduceBlockContext } from './blockDecisionProjection';
@@ -520,7 +521,11 @@ const legacyState = reactive({
   /** One-shot (owner 2026-07-07, TTM): a thrown/kicked player SCATTERS — the renderer hops
    *  the sprite along this explicit path (start … end via the server's scatter directions)
    *  instead of gliding straight. `playerId` = the scattered (thrown) player. */
-  scatterAnim: null as { playerId: string; path: [number, number][]; seq: number; refreshAfterArm?: boolean } | null,
+  scatterAnim: null as { playerId: string; path: [number, number][]; seq: number; refreshAfterArm?: boolean; ballOutOwned?: boolean } | null,
+  /** Owner 10-07: the ball leaves the pitch (server outOfBounds / kick-off touchback) — the renderer hops a stand-in
+   *  ball over the edge into the stands and stamps TOUCHBACK / OUT OF BOUNDS (playBallOut). `delayMs` lets a
+   *  stamp-only cue wait for the ordinary scatter hops it follows. */
+  ballOut: null as (BallOutCue & { delayMs: number; seq: number }) | null,
   /** TTM inc-1 (owner 07-07): the held mate RIDES the thrower's square until the throw (mirrors FFB `updateThrownPlayer`); null = not holding. */
   ttmHeld: null as { thrownId: string; throwerId: string; fromSquare: [number, number]; seq: number } | null,
   /** Direct projection of the server's passCoordinate. Modern and Classic render it as a read-only destination. */
@@ -596,6 +601,8 @@ const legacyState = reactive({
   throwAnim: null as {
     kind: ThrowPresentationKind;
     from: [number, number]; to: [number, number]; thrownId?: string; seq: number;
+    /** Owner 10-07: a throw-in after a ball-out flies from here in the stands (Modern); `from` stays the server square (Classic). */
+    fromPoint?: [number, number];
     sound?: string; // #92 Inc-2: the arc sound the view relays to renderer.playThrow → onCue at RELEASE (⚖ ffb-pitch sound-agnostic)
   } | null,
   /** Owner 07-08 (case 419): TRICKSTER relocate (wire `animation{trickster,...}`) — renderer SLIDES the token from→to, no arc. */
@@ -1314,7 +1321,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'setupPlacementPulse', 'stallerDetected', 'sppToasts', 'defenderNotice', 'infoNotice',
   'watchOutToast', 'presentationStep', 'movementPresentationFence', 'movementPresentationRecovery',
   'boardPresentationFence', 'confirmedMovementDrainActive', 'moveTrailClearSeq', 'kickAim',
-  'kickDescend', 'kickClearSeq', 'throwAnim', 'scatterAnim', 'ballCatch', 'ballDirection',
+  'kickDescend', 'kickClearSeq', 'throwAnim', 'scatterAnim', 'ballOut', 'ballCatch', 'ballDirection',
   'bombBlast', 'fireballAnim', 'zapAnim', 'leap', 'leapFail', 'trickster', 'crowdSurf',
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
@@ -3734,6 +3741,8 @@ async function pauseSpectatorView(): Promise<void> {
   let transitionKickoffWeather: KickoffWeatherContext = createKickoffWeatherContext(checkpoint.model);
   let transitionTurnPresentation: TurnPresentationContext = createTurnPresentationContext();
   let transitionBallProjectile: BallProjectileContext = createBallProjectileContext();
+  let transitionBallBefore: [number, number] | null = null; // owner 10-07: the ball before the reviewed command
+  let reviewBallOutContext: BallOutContext = createBallOutContext(); // owner 10-07: emptied by every snap (seek)
   let transitionTurnBefore: TurnPresentationBefore = captureTurnPresentationBefore(checkpoint.model);
   let transitionMasterChef: { team: string; stolen: number; rolls: number[] } | null = null; // S45: a steal held from its own frame until the landing is revealed
   let transitionKickoffBefore: Pick<GameJson, 'turnMode' | 'homePlaying'> = {
@@ -3762,6 +3771,11 @@ async function pauseSpectatorView(): Promise<void> {
         ?? createKickoffWeatherContext(position.model));
       transitionTurnPresentation = { ...(previous?.durableProjection.turnPresentation ?? createTurnPresentationContext()) };
       transitionBallProjectile = structuredClone(previous?.durableProjection.ballProjectile ?? createBallProjectileContext());
+      {
+        const before = (previous?.model as { fieldModel?: { ballCoordinate?: unknown } } | undefined)?.fieldModel?.ballCoordinate;
+        transitionBallBefore = Array.isArray(before) ? [Number(before[0]), Number(before[1])] : null;
+        if (snap || !previous) reviewBallOutContext = createBallOutContext();
+      }
       transitionTurnBefore = captureTurnPresentationBefore(previous?.model ?? position.model);
       if (snap) transitionMasterChef = null; // a seek / snapshot jump never carries a held steal into a later kick-off
       transitionKickoffBefore = {
@@ -3842,7 +3856,7 @@ async function pauseSpectatorView(): Promise<void> {
       let projectile: ReturnType<typeof ballProjectilePresentation> | null = null;
       try {
         projectile = ballProjectilePresentation(event.command as Record<string, unknown>, reports, position.model, {
-          playback: 'pacedReplay', previous: transitionBallProjectile, priorCoordinates,
+          playback: 'pacedReplay', previous: transitionBallProjectile, priorCoordinates, priorBall: transitionBallBefore, ballOut: reviewBallOutContext,
           fallbackThrownPlayerId: (position.model as { defenderId?: string }).defenderId,
         });
       } catch (error) {
@@ -4073,6 +4087,31 @@ async function pauseSpectatorView(): Promise<void> {
           console.warn(`ffb: unrecognised wire animationType "${projectile.unknownAnimationType}"`);
         }
         for (const sound of projectile.sounds.filter((cue) => cue.when === 'immediate')) playSound(sound.id);
+        // Owner 10-07: a throw-in whose leaving hop was not shown yet plays the ball-out first, then the flight.
+        const reviewBallOut = projectile.ballOut;
+        reviewBallOutContext = projectile.ballOutContext;
+        const armReviewBallOut = (delayMs: number) => {
+          if (!reviewBallOut) return;
+          armReviewBallOutCue(reviewBallOut.cue, delayMs);
+        };
+        const waitReviewIdle = async () => {
+          await nextTick();
+          await waitUntilReplayPresentationIdle({
+            flushView: async () => { await nextTick(); }, isCurrent: () => !signal.aborted,
+            isIdle: () => replayPresentationIdleProbe?.() ?? true,
+            now: () => Date.now(), waitFrame: () => new Promise<void>((resolve) => setTimeout(resolve, 16)),
+            timeoutMs: 30000, onTimeout: () => {},
+          });
+        };
+        if (reviewBallOut?.phase === 'before') {
+          armReviewBallOut(0);
+          await waitReviewIdle();
+          if (signal.aborted) return;
+        }
+        if (reviewBallOut?.phase === 'with') {
+          const hops = projectile.ballScatter ? Math.max(0, projectile.ballScatter.path.length - 1) : 0;
+          armReviewBallOut(reviewBallOut.cue.exit ? 0 : presentationMs(200) * hops);
+        }
         if (projectile.catchPlayerId) state.ballCatch = {
           playerId: projectile.catchPlayerId, seq: (state.ballCatch?.seq ?? 0) + 1,
         };
@@ -4126,7 +4165,8 @@ async function pauseSpectatorView(): Promise<void> {
           if (!await presentStages([{ delayBefore: presentationMs(600), present: () => { playSound('blunder'); } }], signal)) return;
         }
         const hasAnimatedProjectile = !!(projectile.authoritativeKick || projectile.bomb || projectile.fireball
-          || projectile.throw || projectile.trickster || projectile.leap || projectile.playerScatter || projectile.ballScatter);
+          || projectile.throw || projectile.trickster || projectile.leap || projectile.playerScatter || projectile.ballScatter
+          || reviewBallOut?.phase === 'with');
         if (hasAnimatedProjectile) {
           await nextTick();
           await waitUntilReplayPresentationIdle({
@@ -4147,6 +4187,11 @@ async function pauseSpectatorView(): Promise<void> {
           if (projectile.authoritativeKick) {
             state.kickAim = null; state.kickDescend = null; state.kickClearSeq++;
           }
+        }
+        if (reviewBallOut?.phase === 'after') {
+          armReviewBallOut(0);
+          await waitReviewIdle();
+          if (signal.aborted) return;
         }
       }
       if (kickoffWeather.victims && !await holdSurface(RIOTOUS_CINE_MS,
@@ -4648,6 +4693,8 @@ type PresentationEvent =
   | AuthoritativeKickBeat
   // A distinct scatterBall after this kickoff's authoritative KICK. It waits behind the kickArc barrier.
   | { kind: 'kickoffBounce'; path: [number, number][]; sound?: string }
+  // Owner 10-07: the kick-off ball leaves the pitch (touchback) after the KICK lands / after its bounce.
+  | { kind: 'ballOut'; cue: BallOutCue; sound?: string }
   // #174 KICKOFF-ARC BARRIER: gate-BEARING (unlike prompt) — registers on `presenting`, released by onAnimDone('kickDescend'); the kickoff splashes ride behind it as prompts (now genuinely context-gated). `seq` pins THIS arc so a re-kick can't release a superseded barrier.
   | { kind: 'kickArc'; seq: number }
   // Slice 2 (kick program): a kickoff-transaction CINE that owns its dwell on the #67 FIFO instead of pregameCineQueue
@@ -4663,6 +4710,7 @@ const FLUSH_DISPOSITION: Record<PresentationEvent['kind'], 'discard' | 'preserve
   beat: 'discard',      // a store-paced hold; nothing to resume after a flush (pre-existing behaviour, now stated)
   authoritativeKick: 'preserve', // final server flight authority is a load-bearing kickoff beat
   kickoffBounce: 'preserve', // the server's post-KICK bounce is a distinct ordered beat
+  ballOut: 'preserve', // owner 10-07: the touchback's hop + stamp is the kick-off's last ordered beat
   kickArc: 'preserve',  // #174 OQ, Meero-RULED KEEP-GROUP on the owner's "queued, not dropped"
   cine: 'preserve',     // Slice 2: a kickoff-transaction card is a load-bearing reveal — never dropped by an activation flush
 };
@@ -4723,13 +4771,15 @@ const CATCH_BEAT_MS = 300;
 const BOUNCE_HOP_BEAT_MS = 300;
 
 type PassPacingEvent =
-  | { kind: 'throw'; from: [number, number]; to: [number, number]; sound?: string }
-  | { kind: 'scatter'; path: [number, number][]; sound?: string };
+  | { kind: 'throw'; from: [number, number]; to: [number, number]; sound?: string; fromPoint?: [number, number] }
+  | { kind: 'scatter'; path: [number, number][]; sound?: string }
+  // Owner 10-07: the ball leaves the pitch inside the pass transaction (after its flight / bounce).
+  | { kind: 'ballOut'; cue: BallOutCue; sound?: string };
 type PassPacingTransaction = {
   throwerId: string;
   origin: [number, number];
   awaitingAuthoritativeThrow: boolean;
-  active: { kind: 'throw' | 'scatter'; id: number } | null;
+  active: { kind: 'throw' | 'scatter' | 'ballOut'; id: number } | null;
   queue: PassPacingEvent[];
   nextId: number;
 };
@@ -4751,7 +4801,7 @@ function startPassPacingThrow(event: Extract<PassPacingEvent, { kind: 'throw' }>
   tx.awaitingAuthoritativeThrow = false;
   state.passBallHold = null;
   const seq = (state.throwAnim?.seq ?? 0) + 1;
-  state.throwAnim = { kind: 'pass', from: event.from, to: event.to, seq, sound: event.sound ?? 'throw' };
+  state.throwAnim = { kind: 'pass', from: event.from, ...(event.fromPoint ? { fromPoint: event.fromPoint } : {}), to: event.to, seq, sound: event.sound ?? 'throw' };
   if (!soundCueActive) playSound('throw');
   // Renderer completion is primary. This cap is fail-open for a missing/unmounted renderer or lost callback.
   if (passPacingTimer) cancelGameTimeout(passPacingTimer);
@@ -4767,6 +4817,18 @@ function drainPassPacing(): void {
   const next = tx.queue.shift();
   if (!next) return;
   if (next.kind === 'throw') { startPassPacingThrow(next); return; }
+  if (next.kind === 'ballOut') {
+    const outId = ++tx.nextId;
+    tx.active = { kind: 'ballOut', id: outId };
+    armBallOut(next.cue);
+    if (next.sound) playSound(next.sound);
+    if (passPacingTimer) cancelGameTimeout(passPacingTimer);
+    passPacingTimer = scheduleGameTimeout(() => {
+      passPacingTimer = null;
+      completePassPacingVisual('ballOut', outId);
+    }, ballOutHoldWallMs(next.cue));
+    return;
+  }
   const id = ++tx.nextId;
   tx.active = { kind: 'scatter', id };
   state.scatterAnim = { playerId: '__ball__', path: next.path, seq: (state.scatterAnim?.seq ?? 0) + 1, refreshAfterArm: true };
@@ -4779,7 +4841,7 @@ function drainPassPacing(): void {
   }, duration + presentationMs(100));
 }
 
-function completePassPacingVisual(kind: 'throw' | 'scatter', id: number, throwSeq?: number): void {
+function completePassPacingVisual(kind: 'throw' | 'scatter' | 'ballOut', id: number, throwSeq?: number): void {
   const tx = passPacing;
   if (!tx || tx.active?.kind !== kind || tx.active.id !== id) return;
   if (passPacingTimer) { cancelGameTimeout(passPacingTimer); passPacingTimer = null; }
@@ -4890,6 +4952,21 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       };
       presentation.presenting = { kind: 'beat', id: 'kickoffBounce', release };
       timer = scheduleGameTimeout(release, Math.max(0, (ev.path.length - 1) * presentationMs(200)));
+    });
+  }
+  if (ev.kind === 'ballOut') {
+    // Owner 10-07: TOUCHBACK - the hop into the stands (or the stamp alone) holds the FIFO for its read.
+    armBallOut(ev.cue);
+    if (ev.sound) playSound(ev.sound);
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const release = () => {
+        cancelGameTimeout(timer);
+        presentation.presenting = null;
+        resolve();
+      };
+      presentation.presenting = { kind: 'beat', id: 'ballOut', release };
+      timer = scheduleGameTimeout(release, ballOutHoldWallMs(ev.cue));
     });
   }
   if (ev.kind === 'kickArc') {
@@ -5304,6 +5381,10 @@ type KickoffPresentationOccurrence = {
   phase: 'revealed' | 'eventResolved' | 'kickQueued';
   kickCommandNr: number | null;
   seenScatterCommands: Set<number>;
+  /** Owner 10-07: the provisional kickoffScatter report (the line; never the touchback verdict on its own). */
+  scatterReport?: Record<string, unknown> | null;
+  /** Owner 10-07: the touchback the server decided (the frame that set fieldModelOutOfBounds). */
+  ballOut?: BallOutCue | null;
 };
 let kickoffPresentationOccurrence: KickoffPresentationOccurrence | null = null;
 let kickScatterPreviewSeq = 0;
@@ -5329,6 +5410,12 @@ function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
   // StepKickoffScatterRollAskAfter.java:178 publishes KICKING_PLAYER_COORDINATE, but
   // StepKickoffAnimation.java:63-90 reads KICKED_PLAYER_COORDINATE and may emit the exact 27,8 fallback.
   presentation.queue.push(event);
+  // Owner 10-07: a kick that scattered out of the pitch (or outside the receiving half) is a TOUCHBACK — after the
+  // flight lands (the kickArc barrier the KICK arms sits in front of this), the ball hops off / the stamp shows.
+  if (occurrence?.ballOut && occurrence.kickCommandNr === event.commandNr) {
+    presentation.queue.push({ kind: 'ballOut', cue: anchorBallOutAt(occurrence.ballOut, event.animation.endCoordinate) });
+    occurrence.ballOut = null;
+  }
   void pumpPresentation();
 }
 
@@ -5360,7 +5447,7 @@ function clearAuthoritativeKickPresentation(dropQueued: boolean): void {
   state.kickAim = null;
   state.kickDescend = null;
   state.kickClearSeq++;
-  if (dropQueued) presentation.queue = presentation.queue.filter((event) => event.kind !== 'authoritativeKick' && event.kind !== 'kickArc' && event.kind !== 'kickoffBounce');
+  if (dropQueued) presentation.queue = presentation.queue.filter((event) => event.kind !== 'authoritativeKick' && event.kind !== 'kickArc' && event.kind !== 'kickoffBounce' && event.kind !== 'ballOut');
   const presenting = presentation.presenting;
   if (presenting?.kind === 'kickDescend') presenting.release();
 }
@@ -5372,7 +5459,7 @@ function kickoffTransactionActive(): boolean {
   const p = presentation.presenting;
   return (p?.kind === 'cine' && p.id === 'kickoff')
     || p?.kind === 'kickDescend'
-    || presentation.queue.some((e) => (e.kind === 'cine' && e.label === 'kickoff') || e.kind === 'authoritativeKick' || e.kind === 'kickArc' || e.kind === 'kickoffBounce');
+    || presentation.queue.some((e) => (e.kind === 'cine' && e.label === 'kickoff') || e.kind === 'authoritativeKick' || e.kind === 'kickArc' || e.kind === 'kickoffBounce' || e.kind === 'ballOut');
 }
 
 /** Slice 2: enqueue a kickoff-transaction CINE (event card / Weather-Change child) onto the #67 FIFO. `show`/`clear`
@@ -5402,7 +5489,7 @@ function deferTurnStartBehindKickArc(side: 'home' | 'away'): boolean {
   // (a) FIFO-borne surfaces: defer via enqueuePromptBehind, whose FIFO order re-arms the splash only once they
   // drain (the cine's release nulls state.kickoffCine before advancing). The recursion walks arc→card→clear.
   const kickArcHeld = presentation.presenting?.kind === 'kickDescend'
-    || presentation.queue.some((e) => e.kind === 'kickArc' || e.kind === 'authoritativeKick' || e.kind === 'kickoffBounce');
+    || presentation.queue.some((e) => e.kind === 'kickArc' || e.kind === 'authoritativeKick' || e.kind === 'kickoffBounce' || e.kind === 'ballOut');
   const cineHeld = presentation.presenting?.kind === 'cine'
     || presentation.queue.some((e) => e.kind === 'cine');
   if (kickArcHeld || cineHeld) {
@@ -6527,6 +6614,10 @@ function applyFrameContents(frame: QueuedFrame) {
   }
   // #10 pt-2: who was STUNNED BEFORE this apply — the STUNNED→PRONE transition identifies recovery (a snapshot can't: a wrestled player is also PRONE+!active, but never from STUNNED).
   const preStunned = stunnedPlayerIds(game.value);
+  // Owner 10-07: the ball's square before this frame — a bounce that leaves the pitch walks the server's directions
+  // from here (bounceBall moves the model ball onto the off-pitch square, which is never drawn).
+  const preBallRaw = game.value.fieldModel.ballCoordinate as [number, number] | null | undefined;
+  const preBall: [number, number] | null = Array.isArray(preBallRaw) ? [preBallRaw[0], preBallRaw[1]] : null;
   if (cmd.modelChangeList) {
     const result = applyModelChangeList(game.value, cmd.modelChangeList as unknown as ModelChangeListJson);
     if (setupPlaceThisFrame) playSound('setupPlace');
@@ -6854,6 +6945,17 @@ function applyFrameContents(frame: QueuedFrame) {
       // Preserve #78's sound-only fallback when a future/legacy bounce omits scatter directions.
       enqueueBeat(presentationMs(BOUNCE_HOP_BEAT_MS), 'bounce');
       relocatedBeatSounds.add('bounce');
+    }
+    // Owner 10-07: a bounce that leaves the pitch holds what follows (the throw-in, the touchback chooser's frame) for
+    // the extra hop into the stands and the stamp's read.
+    const outCue = !kickoffOwnedScatter && !passPacingOwnedScatter && !bombFrame ? frameScatterBallOut(cmd, reports, preBall) : null;
+    if (outCue) {
+      const extra = ballOutHoldWallMs(outCue) - presentationMs(BOUNCE_HOP_BEAT_MS) * hopCount;
+      if (extra > 0) {
+        enqueueBeat(extra);
+        ballChainBeatMs += extra;
+        ballChainFrame = true;
+      }
     }
     if (ballChainBeatMs > 0) armBallChainBeat(ballChainBeatMs);
     // The chain ends at its catch, when the ball settles, or at the first frame that is neither a hop nor a catch.
@@ -7437,7 +7539,49 @@ function applyFrameContents(frame: QueuedFrame) {
     const sb = reports.find((r) => String(r.reportId) === 'scatterBall');
     const dirs = (sb?.directionArray ?? sb?.directions) as string[] | undefined;
     const ball = game.value.fieldModel.ballCoordinate as [number, number] | undefined;
-    if (Array.isArray(dirs) && dirs.length && Array.isArray(ball) && ball[0] >= 0) {
+    // Owner 10-07: the server put the ball out of bounds with this scatter (bounceBall / StepMissedPass / a kick-off
+    // bounce out of the receiving half). The cue carries the in-bounds hops itself, so the generic backward path
+    // (which would start from the off-pitch model square) is not armed when the ball leaves the pitch.
+    const scatterOut = Array.isArray(dirs) && dirs.length ? frameScatterBallOut(cmd, reports, preBall) : null;
+    const scatterTrace = lastScatterDirection(reports, game.value.fieldModel.ballCoordinate);
+    if (scatterTrace) lastBallScatter = scatterTrace;
+    if (scatterOut) {
+      const commandNr = Number((cmd as { commandNr?: unknown }).commandNr);
+      const occurrence = kickoffPresentationOccurrence;
+      const duplicateOccurrenceScatter = !!occurrence && occurrence.seenScatterCommands.has(commandNr);
+      const bounceSound = String((cmd as { sound?: unknown }).sound ?? '') === 'bounce' ? 'bounce' : undefined;
+      if (occurrence && bounceSound) relocatedBeatSounds.add(bounceSound);
+      const orderedKickoffBounce = occurrence?.kickCommandNr != null
+        && Number.isInteger(commandNr) && commandNr > occurrence.kickCommandNr;
+      if (orderedKickoffBounce && !duplicateOccurrenceScatter) {
+        occurrence.seenScatterCommands.add(commandNr);
+        if (!scatterOut.exit && scatterOut.path.length > 1) presentation.queue.push({ kind: 'kickoffBounce', path: scatterOut.path, sound: bounceSound });
+        presentation.queue.push({ kind: 'ballOut', cue: scatterOut, sound: scatterOut.exit ? bounceSound : undefined });
+        void pumpPresentation();
+      } else if (occurrence && occurrence.kickCommandNr == null) {
+        // Pre-KICK (a weather gust): event resolution, not ball travel — the kick-off owns the reveal.
+        if (Number.isInteger(commandNr)) occurrence.seenScatterCommands.add(commandNr);
+      } else if (!duplicateOccurrenceScatter && passPacing) {
+        // The pass transaction owns the ball until its flight lands: a pre-flight (inaccurate landing) scatter never
+        // renders, so only the leaving hop from the landing square is shown, after the throw.
+        const cue: BallOutCue = passPacing.awaitingAuthoritativeThrow
+          ? { ...scatterOut, path: [scatterOut.path.at(-1)!] } : scatterOut;
+        if (!cue.exit && cue.path.length > 1) queueOrStartPassPacingEvent({ kind: 'scatter', path: cue.path, sound: bounceSound });
+        else if (bounceSound) relocatedBeatSounds.add(bounceSound);
+        rememberBallOutExit(cue); // the throw-in frame can apply before this queued cue arms
+        passPacing.queue.push({ kind: 'ballOut', cue, sound: cue.exit ? bounceSound : undefined });
+        drainPassPacing();
+      } else if (!duplicateOccurrenceScatter) {
+        if (!scatterOut.exit && scatterOut.path.length > 1) {
+          state.scatterAnim = { playerId: '__ball__', path: scatterOut.path, seq: (state.scatterAnim?.seq ?? 0) + 1 };
+          const delay = presentationMs(200) * (scatterOut.path.length - 1);
+          enqueueBallOutStep(delay + ballOutHoldWallMs(scatterOut), () => armBallOut(scatterOut, delay));
+        } else {
+          rememberBallOutExit(scatterOut); // a throw-in frame can apply before this queued cue arms
+          enqueueBallOutStep(ballOutHoldWallMs(scatterOut), () => armBallOut(scatterOut));
+        }
+      }
+    } else if (Array.isArray(dirs) && dirs.length && Array.isArray(ball) && ball[0] >= 0) {
       let bx = ball[0], by = ball[1];
       const rev: [number, number][] = [[bx, by]];
       for (let i = dirs.length - 1; i >= 0; i--) {
@@ -7539,12 +7683,47 @@ function applyFrameContents(frame: QueuedFrame) {
           if (kind === 'throwTeamMate' && thrownId) (game.value as { defenderId?: string }).defenderId = thrownId;
           // Upstream AnimationSequenceThrowing: THROW_TEAM_MATE rides SoundId.WOOOAAAH, every other throw SoundId.THROW.
           const throwSound = kind === 'throwTeamMate' ? 'woooaaah' : 'throw';
+          // Owner 10-07: a THROW-IN (ReportThrowIn + the server's PASS animation from the throw-in square) flies from
+          // where this client showed the ball come to rest in the stands. A throw-in with no exit shown yet (the
+          // 3-square scatter stops on the edge square; a throw-in that went out again) shows the leaving hop first,
+          // on the side the server derives from that square, then the flight.
+          // `from` stays the server's in-bounds square (Classic draws it); Modern flies from `fromPoint` in the stands.
+          let fromPoint: [number, number] | undefined;
+          let throwIn = false;
+          if (kind === 'pass' && hasThrowInReport(reports) && !playback.catchingUp) {
+            throwIn = true;
+            const shown = throwInOrigin([from[0], from[1]]);
+            if (shown[0] !== from[0] || shown[1] !== from[1]) fromPoint = shown;
+            else {
+              const trace = lastBallScatter && lastBallScatter.square[0] === from[0] && lastBallScatter.square[1] === from[1]
+                ? lastBallScatter.dir : null;
+              const inferred = throwInBallOut(from, trace);
+              if (inferred?.exit) {
+                if (passPacing) passPacing.queue.push({ kind: 'ballOut', cue: inferred });
+                else enqueueBallOutStep(ballOutHoldWallMs(inferred), () => armBallOut(inferred));
+                lastBallOutExit = null;
+                fromPoint = [inferred.exit[0], inferred.exit[1]];
+              }
+            }
+            lastBallScatter = null;
+          }
           const pacedPass = kind === 'pass' && queueOrStartPassPacingEvent({
-            kind: 'throw', from: [from[0], from[1]], to: [end[0], end[1]], sound: 'throw',
+            kind: 'throw', from: [from[0], from[1]], to: [end[0], end[1]], sound: 'throw', ...(fromPoint ? { fromPoint } : {}),
           });
-          if (!pacedPass) {
+          if (!pacedPass && throwIn) {
+            // Owner 10-07 (Astra): an unpaced throw-in waits for the ball-out in front of it (and a later throw-in for
+            // this one) on the same FIFO, and the frames behind it are held for the whole sequence.
+            const throwFrom: [number, number] = [from[0], from[1]];
+            const point = fromPoint;
+            enqueueBallOutStep(ballThrowArcMs('pass'), () => {
+              const seq = (state.throwAnim?.seq ?? 0) + 1;
+              state.throwAnim = { kind, from: throwFrom, ...(point ? { fromPoint: point } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound };
+              if (!soundCueActive) playSound(throwSound);
+              scheduleGameTimeout(() => { if (state.throwAnim?.seq === seq) state.throwAnim = null; }, ballThrowArcMs('pass'));
+            });
+          } else if (!pacedPass) {
             const seq = (state.throwAnim?.seq ?? 0) + 1;
-            state.throwAnim = { kind, from: [from[0], from[1]], to: [end[0], end[1]], thrownId, seq, sound: throwSound };
+            state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound };
             // Owner 10-03: nothing behind a bomb throw (its explosion, the knockdowns, the server's destination clear)
             // applies until the bomb has landed - see bombFlightWaitMs.
             if (kind === 'throwBomb' && play.active) bombFlightHoldUntil = Date.now() + presentationMs(BOMB_FLIGHT_MS);
@@ -7813,6 +7992,8 @@ function applyFrameContents(frame: QueuedFrame) {
             phase: 'revealed',
             kickCommandNr: null,
             seenScatterCommands: new Set([commandNr]),
+            scatterReport: structuredClone(scatterReport),
+            ballOut: null,
           } : null;
       }
     } catch (error) {
@@ -7825,6 +8006,17 @@ function applyFrameContents(frame: QueuedFrame) {
   }
   // S47: the landing marker follows the model ball until the KICK frame is received (Kick skill accept, pre-flight gust); nothing after the KICK may move it.
   if (kickoffPresentationOccurrence && kickoffPresentationOccurrence.kickCommandNr == null) followKickMarkerToModelBall((cmd.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray);
+  // Owner 10-07 (Astra): the touchback is the server's verdict on the frame that SETS outOfBounds and the final ball
+  // square (with Kick that is the dialog-answer frame, after the provisional full-distance kickoffScatter report).
+  if (kickoffPresentationOccurrence && kickoffPresentationOccurrence.kickCommandNr == null && frameSetsOutOfBounds(cmd.modelChangeList)) {
+    kickoffPresentationOccurrence.ballOut = kickoffTouchbackBallOut({
+      scatterReport: kickoffPresentationOccurrence.scatterReport,
+      reportInThisFrame: !!scatterReport,
+      reports,
+      ballAfter: game.value.fieldModel.ballCoordinate,
+      modelChanges: cmd.modelChangeList,
+    });
+  }
   // S45: the Master Chef splash follows the reveal (and precedes this kick-off's event cine, which arrives in a later frame).
   if (scatterReport) flushPendingMasterChef();
   // Preliminary scatter never arms a gate; result cues keep their received position ahead of final KICK.
@@ -8495,7 +8687,9 @@ function pumpPlayback() {
   // Owner 10-02 (g1949371): a loose-ball bounce chain presents one hop / one catch roll at a time (play + spectate).
   const ballChainWait = ballChainWaitMs(playback.queue[0]);
   if (ballChainWait > 0) {
-    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, ballChainWait);
+    const timer = scheduleGameTimeout(() => { if (playback.timer === timer) playback.timer = null; ballChainTimer = null; pumpPlayback(); }, ballChainWait);
+    playback.timer = timer;
+    ballChainTimer = timer;
     return;
   }
   // Live is authoritative for TIMING VALUES and a live seat self-paces: it keeps the immediate drain. A spectator
@@ -8593,9 +8787,101 @@ function touchdownResolutionMustWait(frame: QueuedFrame | undefined): boolean {
  *  cap, so a lost animation ack can delay the chain but never wedge it. Kickoff-owned and pass-paced scatters keep
  *  their own presentation; replay (ReplayAutoPlayer paces per command) and snap-only catch-up are excluded. */
 const BALL_CHAIN_CATCH_READ_MS = 450;
+/** Owner 10-07 (ball out of bounds): the stand-in hop + stamp cue, its throw-in hand-off and its wall-clock hold. */
+let ballOutSeq = 0;
+let lastBallOutExit: { from: [number, number]; exit: [number, number] } | null = null;
+function ballOutHoldWallMs(cue: BallOutCue): number {
+  return presentationMs(ballOutTravelMs(cue)) + Math.max(450, presentationMs(ballOutHoldMs(cue) - ballOutTravelMs(cue)));
+}
+function armBallOut(cue: BallOutCue, delayMs = 0): void {
+  if (playback.catchingUp) return; // snap-only catch-up shows the result, never the travel
+  state.ballOut = {
+    path: cue.path.map(([x, y]) => [x, y] as [number, number]),
+    exit: cue.exit ? [cue.exit[0], cue.exit[1]] : null,
+    label: cue.label,
+    delayMs,
+    seq: ++ballOutSeq,
+  };
+  rememberBallOutExit(cue);
+  publishLegacyBallOutScatter(cue);
+}
+/** Owner 10-07: the replay / review presenter's ball-out arm - Modern's cue plus Classic's legacy scatter cue. */
+function armReviewBallOutCue(cue: BallOutCue, delayMs: number): void {
+  state.ballOut = { ...structuredClone(cue), delayMs, seq: (state.ballOut?.seq ?? 0) + 1 };
+  publishLegacyBallOutScatter(cue); // Classic's exit in replays / review too (Astra P2-c)
+}
+/** @internal test seam: the replay / review ball-out arm. */
+export function installReviewBallOutTestHarness(): { arm(cue: BallOutCue, delayMs?: number): void; ballOut(): typeof state.ballOut; scatter(): typeof state.scatterAnim } {
+  return { arm: (cue, delayMs = 0) => armReviewBallOutCue(cue, delayMs), ballOut: () => state.ballOut, scatter: () => state.scatterAnim };
+}
+/** Classic never consumes `ballOut`: it keeps the legacy loose-ball scatter cue (the in-bounds squares plus the first
+ *  off-pitch square, as before). Modern skips a cue marked ballOutOwned (playBallOut draws that hop). Live and replay. */
+function publishLegacyBallOutScatter(cue: BallOutCue): void {
+  if (!cue.exit) return;
+  const last = cue.path.at(-1)!;
+  const off: [number, number] = [last[0] + Math.sign(cue.exit[0] - last[0]), last[1] + Math.sign(cue.exit[1] - last[1])];
+  state.scatterAnim = {
+    playerId: '__ball__', path: [...cue.path.map(([x, y]) => [x, y] as [number, number]), off],
+    seq: (state.scatterAnim?.seq ?? 0) + 1, ballOutOwned: true,
+  };
+}
+/** Owner 10-07 (Astra): unpaced ball-out cues and the throw-ins behind them run one at a time on this FIFO; every
+ *  enqueue also holds the frames behind it (the loose-ball chain beat) until the whole sequence has shown. */
+const ballOutFifo: { ms: number; run: () => void }[] = [];
+let ballOutFifoTimer: ReturnType<typeof setTimeout> | null = null;
+let ballOutFifoEndsAt = 0;
+function enqueueBallOutStep(ms: number, run: () => void): void {
+  if (playback.catchingUp) { run(); return; }
+  const now = Date.now();
+  ballOutFifoEndsAt = Math.max(now, ballOutFifoEndsAt) + ms;
+  armBallChainBeat(ballOutFifoEndsAt - now);
+  ballOutFifo.push({ ms, run });
+  drainBallOutFifo();
+}
+function drainBallOutFifo(): void {
+  if (ballOutFifoTimer) return;
+  const next = ballOutFifo.shift();
+  if (!next) return;
+  next.run();
+  ballOutFifoTimer = scheduleGameTimeout(() => { ballOutFifoTimer = null; drainBallOutFifo(); }, next.ms);
+}
+function resetBallOutFifo(): void {
+  if (ballOutFifoTimer) cancelGameTimeout(ballOutFifoTimer);
+  ballOutFifoTimer = null;
+  ballOutFifo.length = 0;
+  ballOutFifoEndsAt = 0;
+  lastBallScatter = null;
+}
+let lastBallScatter: { square: [number, number]; dir: [number, number] } | null = null;
+function rememberBallOutExit(cue: BallOutCue): void {
+  const last = cue.path.at(-1)!;
+  // Only a play bounce is followed by a throw-in; a kick-off touchback goes to the receiving coach's chooser.
+  lastBallOutExit = cue.exit && cue.label === 'OUT OF BOUNDS' ? { from: [last[0], last[1]], exit: [cue.exit[0], cue.exit[1]] } : null;
+}
+/** The throw-in flight starts where the ball came to rest in the stands when this client showed it leaving there. */
+function throwInOrigin(from: [number, number]): [number, number] {
+  const shown = lastBallOutExit;
+  if (!shown || shown.from[0] !== from[0] || shown.from[1] !== from[1]) return from;
+  lastBallOutExit = null;
+  return [shown.exit[0], shown.exit[1]];
+}
+/** This frame's out-of-bounds scatter as the server reported it (null = the ball stayed in play). */
+function frameScatterBallOut(cmd: Record<string, unknown>, reports: Record<string, unknown>[], preBall: [number, number] | null): BallOutCue | null {
+  const sb = reports.find((r) => String(r.reportId) === 'scatterBall');
+  if (!sb || sb.bomb === true || !game.value) return null;
+  return scatterBallOut({
+    directions: sb.directionArray ?? sb.directions,
+    prevBall: preBall,
+    ballAfter: game.value.fieldModel.ballCoordinate,
+    modelChanges: cmd.modelChangeList,
+    kickoff: String(game.value.turnMode ?? '') === 'kickoff',
+  });
+}
 const BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS = 2000;
 const BALL_CHAIN_POLL_MS = 50;
 let ballChainOpen = false;
+/** Owner 10-07 (Astra): the pending playback timer when it is the ball-chain wait (a dialog cancels it). */
+let ballChainTimer: ReturnType<typeof setTimeout> | null = null;
 let ballChainNextApplyAt = 0;
 /** Owner 10-03 ("bomb marker should stay up ... until the explosion animation plays"): an uncontested bomb's frames
  *  (throw animation, explosion, knockdowns, passCoordinate clear) arrive in one burst, so live play fired the explosion
@@ -8884,6 +9170,14 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
     return;
   }
   playback.queue.push(frame);
+  // Owner 10-07 (Astra): the loose-ball / ball-out hold is presentation only and never a gate on a server prompt. A
+  // dialog (catch / reroll / touchback chooser, ...) that arrives while the chain's wait timer is pending cancels it,
+  // so the drain re-evaluates now (ballChainWaitMs ends the pacing for a queued dialog).
+  if (ballChainTimer && playback.timer === ballChainTimer && frameSetsDialog(frame)) {
+    cancelGameTimeout(ballChainTimer);
+    playback.timer = null;
+    ballChainTimer = null;
+  }
   pumpPlayback();
 }
 
@@ -8919,6 +9213,8 @@ function resetPlayback() {
   ballChainOpen = false;
   ballChainNextApplyAt = 0;
   ballBounceMovementWaitSince = 0;
+  ballChainTimer = null;
+  resetBallOutFifo();
   onTheBallConnectionEpoch += 1;
   onTheBallReceiveTurnMode = '';
   onTheBallFallbackReceiveSequence = 0;
@@ -9038,6 +9334,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.keywordChoice = null;
   state.zapAnim = null; state.addPlayerPuff = null; state.cardChoice = null; state.bombBlast = null; state.fireballAnim = null;
   state.leap = null; state.leapFail = null; leapMovesAwaitingReport.clear(); state.scatterAnim = null; state.ballCatch = null; state.deferMove = null;
+  state.ballOut = null; lastBallOutExit = null; resetBallOutFifo(); // owner 10-07
   clearPassPacing(true);
   state.ttmHeld = null; state.throwAnim = null; state.trickster = null; state.passDestination = null; cancelBombDestinationHold();
   state.vampireBite = null; clearFallOver(); state.negatraitCue = null; // #132: flush the negatrait cue on a game change
@@ -13763,9 +14060,11 @@ export function installPassPacingTestHarness(fixture: GameJson): {
   hold(): typeof state.passBallHold;
   throwCue(): typeof state.throwAnim;
   scatterCue(): typeof state.scatterAnim;
+  ballOutCue(): typeof state.ballOut;
   transaction(): { awaitingThrow: boolean; active: string | null; queued: string[] } | null;
   finishThrow(): void;
   finishScatter(): void;
+  finishBallOut(): void;
   setCatchingUp(value: boolean): void;
   setActingPlayer(playerId: string | null): void;
   hardBoundary(): void;
@@ -13833,6 +14132,7 @@ export function installPassPacingTestHarness(fixture: GameJson): {
     hold: () => state.passBallHold,
     throwCue: () => state.throwAnim,
     scatterCue: () => state.scatterAnim,
+    ballOutCue: () => state.ballOut,
     transaction: () => passPacing ? {
       awaitingThrow: passPacing.awaitingAuthoritativeThrow,
       active: passPacing.active?.kind ?? null,
@@ -13841,6 +14141,9 @@ export function installPassPacingTestHarness(fixture: GameJson): {
     finishThrow() { gameStore.onAnimDone('throw', '__ball__'); },
     finishScatter() {
       if (passPacing?.active?.kind === 'scatter') completePassPacingVisual('scatter', passPacing.active.id);
+    },
+    finishBallOut() {
+      if (passPacing?.active?.kind === 'ballOut') completePassPacingVisual('ballOut', passPacing.active.id);
     },
     setCatchingUp(value) { playback.catchingUp = value; },
     setActingPlayer(playerId) {

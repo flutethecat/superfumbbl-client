@@ -127,6 +127,31 @@ export type MarkLabelRequest =
   | { kind: 'player'; playerId: string; screenX: number; screenY: number };
 export type ActionMode = 'auto' | 'move' | 'blitz' | 'foul' | 'pass' | 'handoff' | 'bomb';
 
+/** Owner 10-07 (ball out of bounds): a fractional square's ground anchor, interpolated between whole squares so an
+ *  off-pitch point in the stands projects exactly like the squares around it in every orientation. */
+export function fractionalSquareAnchor(x: number, y: number): { x: number; y: number } {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  const a = squareAnchor(x0, y0), b = squareAnchor(x0 + 1, y0);
+  const c = squareAnchor(x0, y0 + 1), d = squareAnchor(x0 + 1, y0 + 1);
+  const top = { x: a.x + (b.x - a.x) * fx, y: a.y + (b.y - a.y) * fx };
+  const bottom = { x: c.x + (d.x - c.x) * fx, y: c.y + (d.y - c.y) * fx };
+  return { x: top.x + (bottom.x - top.x) * fy, y: top.y + (bottom.y - top.y) * fy };
+}
+
+/** Owner 10-07: where the ball-out stamp sits - on the crossed square's edge (the pitch edge the hop from `last` to
+ *  `exit` crosses). */
+export function stampAnchorSquare(last: readonly [number, number], exit: readonly [number, number]): [number, number] {
+  const dx = exit[0] - last[0], dy = exit[1] - last[1];
+  const limits: number[] = [];
+  if (dx < 0) limits.push((last[0] + 0.5) / -dx);
+  if (dx > 0) limits.push((PITCH_COLS - 0.5 - last[0]) / dx);
+  if (dy < 0) limits.push((last[1] + 0.5) / -dy);
+  if (dy > 0) limits.push((PITCH_ROWS - 0.5 - last[1]) / dy);
+  const t = limits.length ? Math.min(1, ...limits) : 1;
+  return [last[0] + dx * t, last[1] + dy * t];
+}
+
 function isMovingPlayerAction(action: string | null | undefined): boolean {
   return action === 'move' || action === 'blitzMove' || action === 'handOverMove'
     || action === 'passMove' || action === 'foulMove' || action === 'throwTeamMateMove'
@@ -1169,6 +1194,26 @@ const RAIL_AWAY_STYLE = new TextStyle({
   fontFamily: 'Nuffle, sans-serif', fontSize: 18, fontWeight: 'bold',
   fill: 0x5a8fe0, stroke: { color: 0x04101c, width: 2 },
 });
+/** Owner 10-07: TOUCHBACK / OUT OF BOUNDS stamp lettering - pitch-glyph scale (owner: "not much larger than a pitch
+ *  square"), two short centred lines, Nuffle white on the band; rastered at 4x with mipmaps like the other glyphs. */
+export const BALL_OUT_STAMP_FONT_PX = 9;
+const BALL_OUT_STAMP_STYLE = new TextStyle({
+  fontFamily: 'Nuffle, sans-serif', fontSize: BALL_OUT_STAMP_FONT_PX, fontWeight: 'bold', fill: 0xffffff,
+  stroke: { color: 0x000000, width: 2 }, align: 'center', lineHeight: BALL_OUT_STAMP_FONT_PX + 1,
+});
+/** Owner 10-07: the stamp's two lines. */
+export function ballOutStampLines(label: string): string[] {
+  return label === 'TOUCHBACK' ? ['TOUCH', 'BACK'] : label === 'OUT OF BOUNDS' ? ['OUT OF', 'BOUNDS'] : [label];
+}
+/** Owner 10-07: the plate's size in pitch pixels at depth scale 1 (~1.3 squares wide at most). */
+export function ballOutStampSize(label: string): { w: number; h: number } {
+  const lines = ballOutStampLines(label);
+  const longest = Math.max(...lines.map((line) => line.length));
+  return {
+    w: Math.min(TILE_W * 1.3, longest * BALL_OUT_STAMP_FONT_PX * 0.72 + 8),
+    h: lines.length * (BALL_OUT_STAMP_FONT_PX + 1) + 6,
+  };
+}
 const DODGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: 0x1a1a1a });
 /** CROWD QUIP / SIGN font. Owner 2026-09-02: system monospace (MXSQUAD retired — its
  *  desktop license does not cover redistributing the .otf in a public source tree). */
@@ -2688,6 +2733,10 @@ export class PitchRenderer {
    *  one frame makes exact two-/three-square boundaries observable. */
   private adCompletedMotionTargets = new Map<string, { x: number; y: number }>();
   private activeVisualEffects = 0;
+  /** Owner 10-07: the running ball-out stand-in (playBallOut); null when idle. */
+  private ballOutFlight: { hidesModel: boolean; cleanup: () => void; travelUntil: number } | null = null;
+  /** Owner 10-07: keep the model ball hidden after a ball-out until the server clears outOfBounds. */
+  private ballOutHideWhileOut = false;
 
   /** Replay completion probe; presentation-only and never influences the model. */
   isReplayPresentationIdle(): boolean {
@@ -2700,7 +2749,8 @@ export class PitchRenderer {
    *  and never touches the model. Deliberately the TWEEN only — NOT the model's `ballAtRest`, which is false
    *  for an off-pitch ball (throw-in pending) and would make every such turnover wait out the settle cap. */
   ballAnimating(): boolean {
-    return this.moveTweens.has('__ball__');
+    return this.moveTweens.has('__ball__')
+      || (!!this.ballOutFlight && performance.now() < this.ballOutFlight.travelUntil);
   }
 
   /** Owner 09-14: is any PLAYER token still visibly moving? Live tweens (walk/slide/hop, intent, step) plus an
@@ -5436,6 +5486,7 @@ export class PitchRenderer {
     this.clearUnactivatedCues(); // owner 09-08: End-Turn idle-player cues never survive a game change
     this.deferredMoves.clear(); // queue #1: a stale follow/stay defer must not leak games
     this.pendingScatter.clear(); // TTM: a stale scatter cue must not leak games
+    this.retireBallOut(); this.ballOutHideWhileOut = false; // owner 10-07: a ball-out stand-in never leaks games
     this.pendingServerKickoffScatter = null;
     this.serverKickoffScatterReveal = null;
     this.suppressGenericBallInThisRefresh = false;
@@ -5507,6 +5558,7 @@ export class PitchRenderer {
     this.kickoffScatterSeqSeen = -1;
     this.pendingTtmThrow.clear();
     this.pendingTrickster.clear();
+    this.retireBallOut(); this.ballOutHideWhileOut = false; // owner 10-07: a snap never strands a mid-hop ball-out
     this.retirePassBallFlight(undefined, false);
     this.pendingBallThrow = null;
     this.passBallHold = null;
@@ -6154,7 +6206,7 @@ export class PitchRenderer {
     const modelBall = this.game.fieldModel.ballCoordinate as [number, number] | null | undefined;
     // During final KICK presentation draw one dedicated flight ball at the authoritative landing identity;
     // the already-applied model ball (caught, touchback, loose, or off pitch) stays hidden until reconcile.
-    const ball = this.passBallHold ?? (this.serverKickoffScatterReveal
+    const ball = this.passBallHold ?? (this.serverKickoffScatterReveal || this.ballHiddenByBallOut()
       ? null
       : presentedBallCoordinate(modelBall, this.kickDescendSnapshot, arcActive));
     this.ballMarker = null;
@@ -17061,7 +17113,8 @@ export class PitchRenderer {
     let tick: (() => void) | null = null;
 
     if (app) {
-      const p0 = squareAnchor(throwState.from[0], throwState.from[1]);
+      // Owner 10-07: a throw-in after a ball-out starts in the stands (a fractional square), so interpolate.
+      const p0 = fractionalSquareAnchor(throwState.from[0], throwState.from[1]);
       const p1 = squareAnchor(throwState.to[0], throwState.to[1]);
       const ball = new Container();
       const br = BALL_SPRITE_SIZE * 0.5;
@@ -17108,6 +17161,132 @@ export class PitchRenderer {
     if (this.pendingBallThrow === flight.throwState) this.pendingBallThrow = null;
     if (this.renderedBall && !this.renderedBall.destroyed) this.renderedBall.visible = true;
     if (notifyComplete) this.onAnimDone?.('throw', '__ball__');
+  }
+
+  /** Owner 10-07: the ball leaving the pitch — a self-contained effects-layer ball hops along the server's in-bounds
+   *  squares, takes one more hop over the sideline / end zone into the stands (`exit`, fractional squares) and fades;
+   *  a TOUCHBACK / OUT OF BOUNDS plate stamps at the edge it crossed (>= 450 ms, viewer-visible rule). With no
+   *  `exit` the ball stayed on the pitch (a kick-off touchback in the kicking half): stamp only, after the hops the
+   *  ordinary scatter already plays. Presentation-only: the model is never read for squares or changed; the model
+   *  ball is hidden while the stand-in ball flies and then for as long as the server keeps it out of bounds. Pause /
+   *  seek / GO TO LIVE retire it through clearEffects (cancelEffectTickers), so nothing strands mid-hop. */
+  playBallOut(cue: { path: [number, number][]; exit: [number, number] | null; label: string; delayMs?: number }): void {
+    if (this.destroyed || !this.app || cue.path.length === 0) return;
+    this.retireBallOut();
+    const app = this.app;
+    const hopMs = presentationMs(200);
+    const startAt = performance.now() + Math.max(0, cue.delayMs ?? 0);
+    const exit = cue.exit;
+    const stops: [number, number][] = exit ? [...cue.path, exit] : [...cue.path];
+    const points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
+    const travelMs = exit ? (stops.length - 1) * hopMs : 0;
+    const fadeMs = presentationMs(250);
+    const stampMs = Math.max(450, presentationMs(1200));
+    const last = cue.path.at(-1)!;
+    const stampSquare = exit ? stampAnchorSquare(last, exit) : last;
+    const nodes: Container[] = [];
+
+    let ball: Container | null = null;
+    if (exit) {
+      ball = new Container();
+      const br = BALL_SPRITE_SIZE * 0.5;
+      const ballDot = this.ballTexture
+        ? this.sizedBallSprite(BALL_SPRITE_SIZE)
+        : new Graphics().ellipse(0, 0, br, br * 0.78).fill(COLORS.ball).stroke({ color: 0x5a3a1a, width: 1 });
+      ball.addChild(this.buildBallGlow(), ballDot);
+      ball.position.set(points[0]!.x, points[0]!.y - 3);
+      ball.scale.set(depthScale(Math.max(0, Math.min(PITCH_COLS - 1, last[0])), Math.max(0, Math.min(PITCH_ROWS - 1, last[1]))));
+      ball.zIndex = 99000;
+      ball.visible = startAt <= performance.now();
+      this.effectsLayer.addChild(ball);
+      nodes.push(ball);
+    }
+
+    const plate = this.buildBallOutStamp(cue.label);
+    const sp = fractionalSquareAnchor(stampSquare[0], stampSquare[1]);
+    const stampScale = depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(stampSquare[0]))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(stampSquare[1]))));
+    plate.position.set(sp.x, sp.y);
+    plate.scale.set(stampScale);
+    plate.zIndex = 99500;
+    plate.visible = false;
+    this.effectsLayer.addChild(plate);
+    nodes.push(plate);
+
+    const finishEffect = this.beginVisualEffect();
+    const hopRise = TILE_H * 0.45;
+    let settledNaturally = false;
+    let cleanup: () => void = () => {};
+    const tick = () => {
+      if (this.app !== app) { cleanup(); return; }
+      const elapsed = performance.now() - startAt;
+      if (elapsed < 0) return;
+      if (ball && !ball.destroyed) {
+        ball.visible = true;
+        if (elapsed < travelMs) {
+          const seg = Math.min(points.length - 2, Math.floor(elapsed / hopMs));
+          const t = (elapsed - seg * hopMs) / hopMs;
+          const a = points[seg]!, b = points[seg + 1]!;
+          ball.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t - 3 - Math.sin(Math.PI * t) * hopRise);
+          ball.alpha = 1;
+        } else {
+          const end = points.at(-1)!;
+          ball.position.set(end.x, end.y - 3);
+          ball.alpha = Math.max(0, 1 - (elapsed - travelMs) / fadeMs);
+        }
+      }
+      const stampElapsed = elapsed - travelMs;
+      if (stampElapsed >= 0 && !plate.destroyed) {
+        plate.visible = true;
+        const pop = Math.min(1, stampElapsed / presentationMs(140));
+        plate.scale.set(stampScale * (1.3 - 0.3 * pop)); // pop over the depth scale, settling at ~1 square
+        const fadeStart = stampMs - presentationMs(200);
+        plate.alpha = stampElapsed <= fadeStart ? 1 : Math.max(0, 1 - (stampElapsed - fadeStart) / Math.max(1, stampMs - fadeStart));
+      }
+      if (elapsed >= travelMs + Math.max(stampMs, exit ? fadeMs : 0)) { settledNaturally = true; cleanup(); }
+    };
+    this.ballOutHideWhileOut = !!exit;
+    const flight = { hidesModel: !!exit, cleanup: () => cleanup(), travelUntil: startAt + travelMs };
+    this.ballOutFlight = flight;
+    cleanup = this.registerEffectTicker(app, tick, nodes, () => {
+      finishEffect();
+      if (this.ballOutFlight === flight) this.ballOutFlight = null;
+      if (settledNaturally && !this.destroyed) this.refresh();
+    });
+    tick();
+    if (exit) this.refresh(); // hide the model ball (it may sit on the last in-bounds square) for the stand-in's flight
+  }
+
+  /** Retire a running ball-out cue (a newer cue, a seek, a game change). */
+  private retireBallOut(): void {
+    this.ballOutFlight?.cleanup();
+    this.ballOutFlight = null;
+  }
+
+  /** The model ball is not drawn while the ball-out stand-in flies, nor while the server keeps the ball out of
+   *  bounds after it (it is in the stands); the flag clears with the server's own outOfBounds=false. */
+  private ballHiddenByBallOut(): boolean {
+    if (this.ballOutFlight?.hidesModel) return true;
+    if (!this.ballOutHideWhileOut) return false;
+    if (this.game?.fieldModel.outOfBounds) return true;
+    this.ballOutHideWhileOut = false;
+    return false;
+  }
+
+  /** TOUCHBACK / OUT OF BOUNDS plate: the turnover splash family's dark red band, Nuffle lettering. */
+  private buildBallOutStamp(label: string): Container {
+    const plate = new Container();
+    const touchback = label === 'TOUCHBACK';
+    const text = new Text({ text: ballOutStampLines(label).join('\n'), style: BALL_OUT_STAMP_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    text.anchor.set(0.5, 0.5);
+    // Sized from the label rather than measured, so the plate is built without a canvas (and stays ~1 square).
+    const { w, h } = ballOutStampSize(label);
+    const band = new Graphics()
+      .roundRect(-w / 2, -h / 2, w, h, 3)
+      .fill({ color: touchback ? 0x0c1e7a : 0x7a0c0c, alpha: 0.94 })
+      .stroke({ color: touchback ? 0x3a5be0 : 0xe03030, width: 1.5, alpha: 0.9 });
+    plate.addChild(band, text);
+    plate.label = 'ballOutStamp';
+    return plate;
   }
 
   /** Arc a CREATED projectile sprite from→to on its own clock (bomb/rock/keg — no field token to move).
