@@ -56,6 +56,9 @@ pub struct WindowState {
     pub frame_height: f64,
     #[serde(default)]
     pub maximized: bool,
+    /// Owner 10-07: the client was in (native) fullscreen when it closed - the next launch goes straight back to it.
+    #[serde(default)]
+    pub fullscreen: bool,
 }
 
 /// A monitor: its work area in physical pixels and its scale factor.
@@ -82,6 +85,7 @@ pub struct Restore {
     pub width: f64,
     pub height: f64,
     pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 /// The pane zoom as the page stores it (0.75-2, 5 % steps); anything else is 100 %.
@@ -132,7 +136,7 @@ pub fn restore_geometry(saved: WindowState, monitors: &[Monitor], primary: Optio
     let (ow, oh) = (width + saved.frame_width, height + saved.frame_height);
     let x = saved.x.clamp(m.x, (m.x + m.width - ow).max(m.x)).round();
     let y = saved.y.clamp(m.y, (m.y + m.height - oh).max(m.y)).round();
-    Some(Restore { x, y, width, height, maximized: saved.maximized })
+    Some(Restore { x, y, width, height, maximized: saved.maximized, fullscreen: saved.fullscreen })
 }
 
 /// A remembered geometry, or None when absent / not ours / nonsense.
@@ -153,15 +157,22 @@ pub fn home_zoom_from_settings(text: &str) -> f64 {
     sanitize_zoom(value.get("homePaneZoom").and_then(|v| v.as_f64()))
 }
 
-/// What a resize / move event means for the remembered state: a minimized window is never recorded; a maximized one
-/// keeps the last normal geometry and only sets the flag.
+/// What a resize / move event means for the remembered state: a minimized window is never recorded; a maximized or
+/// FULLSCREEN one keeps the last normal geometry and only sets its flag (owner 10-07: fullscreen is remembered too,
+/// so a client closed in fullscreen reopens in fullscreen; leaving it records the normal geometry again).
 pub fn record(previous: Option<WindowState>, current: WindowState, minimized: bool) -> Option<WindowState> {
     if minimized {
         return previous;
     }
+    if current.fullscreen {
+        return Some(match previous {
+            Some(p) => WindowState { fullscreen: true, ..p },
+            None => current,
+        });
+    }
     if current.maximized {
         return Some(match previous {
-            Some(p) => WindowState { maximized: true, ..p },
+            Some(p) => WindowState { maximized: true, fullscreen: false, ..p },
             None => current,
         });
     }
@@ -229,6 +240,9 @@ pub fn finish(window: &tauri::WebviewWindow, plan: Plan) {
         if r.maximized {
             let _ = window.maximize();
         }
+        if r.fullscreen {
+            let _ = window.set_fullscreen(true); // owner 10-07: closed in fullscreen -> reopen in fullscreen
+        }
         let _ = window.show();
     }
     track(window);
@@ -250,6 +264,7 @@ fn track(window: &tauri::WebviewWindow) {
                 frame_width: outer.width.saturating_sub(inner.width) as f64,
                 frame_height: outer.height.saturating_sub(inner.height) as f64,
                 maximized: handle.is_maximized().unwrap_or(false),
+                fullscreen: handle.is_fullscreen().unwrap_or(false),
             };
             let minimized = handle.is_minimized().unwrap_or(false);
             if let Ok(mut state) = CURRENT.lock() {
@@ -279,7 +294,31 @@ mod tests {
     const SMALL: Monitor = Monitor { x: 0.0, y: 0.0, width: 1366.0, height: 728.0, scale: 1.0 };
 
     fn win(x: f64, y: f64, w: f64, h: f64) -> WindowState {
-        WindowState { version: STATE_VERSION, x, y, width: w, height: h, frame_width: 16.0, frame_height: 39.0, maximized: false }
+        WindowState { version: STATE_VERSION, x, y, width: w, height: h, frame_width: 16.0, frame_height: 39.0, maximized: false, fullscreen: false }
+    }
+
+    #[test]
+    fn fullscreen_is_remembered_over_the_last_normal_geometry_and_restored_as_a_flag() {
+        let normal = win(100.0, 80.0, 1600.0, 900.0);
+        let fs = WindowState { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0, frame_width: 0.0, frame_height: 0.0, fullscreen: true, ..normal };
+        // entering fullscreen keeps the normal geometry, sets the flag
+        let r = record(Some(normal), fs, false).unwrap();
+        assert_eq!((r.x, r.y, r.width, r.height, r.fullscreen, r.maximized), (100.0, 80.0, 1600.0, 900.0, true, false));
+        // leaving fullscreen records the normal geometry again, flag off
+        let back = record(Some(r), normal, false).unwrap();
+        assert!(!back.fullscreen);
+        // a maximized event after fullscreen clears the fullscreen flag
+        let max = WindowState { maximized: true, ..normal };
+        assert_eq!(record(Some(r), max, false).map(|s| (s.maximized, s.fullscreen)), Some((true, false)));
+        // first event ever while fullscreen: nothing better to keep, record it as-is
+        assert!(record(None, fs, false).unwrap().fullscreen);
+        // restore carries the flag; a file without the key reads as not fullscreen
+        let restored = restore_geometry(r, &[FHD], Some(FHD)).unwrap();
+        assert!(restored.fullscreen);
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(parse_state(&json).unwrap().fullscreen);
+        let legacy = json.replace(",\"fullscreen\":true", "");
+        assert!(!parse_state(&legacy).unwrap().fullscreen);
     }
 
     #[test]
@@ -320,7 +359,7 @@ mod tests {
         let saved = win(2100.0, 100.0, 1500.0, 1000.0);
         assert_eq!(
             restore_geometry(saved, &[FHD, QHD150], Some(FHD)),
-            Some(Restore { x: 2100.0, y: 100.0, width: 1500.0, height: 1000.0, maximized: false })
+            Some(Restore { x: 2100.0, y: 100.0, width: 1500.0, height: 1000.0, maximized: false, fullscreen: false })
         );
         // The minimum is applied at THAT monitor's scale: 800x600 logical = 1200x900 physical there.
         let small_on_hidpi = win(2000.0, 50.0, 900.0, 700.0);
@@ -334,7 +373,7 @@ mod tests {
     fn the_outer_frame_stays_inside_the_work_area() {
         // Inner 1910x1030 + a 16x39 frame would overhang the 1920x1040 work area: the inner size gives way.
         let big = win(0.0, 0.0, 1910.0, 1030.0);
-        assert_eq!(restore_geometry(big, &[FHD], Some(FHD)), Some(Restore { x: 0.0, y: 0.0, width: 1904.0, height: 1001.0, maximized: false }));
+        assert_eq!(restore_geometry(big, &[FHD], Some(FHD)), Some(Restore { x: 0.0, y: 0.0, width: 1904.0, height: 1001.0, maximized: false, fullscreen: false }));
         // Hanging off the bottom-right edge: pulled back so the OUTER rectangle fits.
         let off = win(1500.0, 700.0, 1000.0, 700.0);
         assert_eq!(restore_geometry(off, &[FHD], Some(FHD)).map(|r| (r.x, r.y)), Some((904.0, 301.0)));
@@ -347,7 +386,7 @@ mod tests {
         assert_eq!((r.width, r.height), (1500.0, 900.0));
         assert_eq!((r.x, r.y), (404.0, 100.0));
         let max = WindowState { maximized: true, ..win(10.0, 10.0, 300.0, 200.0) };
-        assert_eq!(restore_geometry(max, &[FHD], Some(FHD)), Some(Restore { x: 10.0, y: 10.0, width: 800.0, height: 600.0, maximized: true }));
+        assert_eq!(restore_geometry(max, &[FHD], Some(FHD)), Some(Restore { x: 10.0, y: 10.0, width: 800.0, height: 600.0, maximized: true, fullscreen: false }));
         assert_eq!(restore_geometry(saved, &[], None), None);
     }
 
@@ -368,7 +407,7 @@ mod tests {
     fn parses_only_sane_remembered_state() {
         assert_eq!(
             parse_state(r#"{"version":1,"x":1,"y":2,"width":1300,"height":900,"frame_width":16,"frame_height":39,"maximized":true}"#),
-            Some(WindowState { version: 1, x: 1.0, y: 2.0, width: 1300.0, height: 900.0, frame_width: 16.0, frame_height: 39.0, maximized: true })
+            Some(WindowState { version: 1, x: 1.0, y: 2.0, width: 1300.0, height: 900.0, frame_width: 16.0, frame_height: 39.0, maximized: true, fullscreen: false })
         );
         assert_eq!(parse_state(r#"{"version":1,"x":1,"y":2,"width":1300,"height":900}"#).map(|s| (s.maximized, s.frame_width)), Some((false, 0.0)));
         // Astra N4: the first build's file (logical values, no version) and any other version are discarded.

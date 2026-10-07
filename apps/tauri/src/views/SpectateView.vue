@@ -12197,7 +12197,7 @@ function sendChat() {
           <div class="active-indicator" role="status" :data-active="homePanel.playing"
             :aria-hidden="!homePanel.playing"
             :title="homePanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label">Current Player</span>
+            <span class="active-label"><span>Current</span><span>Player</span></span>
           </div>
           <div v-if="homePrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in homePrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
@@ -12232,7 +12232,7 @@ function sendChat() {
           <div class="active-indicator" role="status" :data-active="awayPanel.playing"
             :aria-hidden="!awayPanel.playing"
             :title="awayPanel.playing ? 'This coach is activating a player' : 'This coach is waiting'">
-            <span class="active-label">Current Player</span>
+            <span class="active-label"><span>Current</span><span>Player</span></span>
           </div>
           <div v-if="awayPrayers.length" class="prayer-tag" role="list" aria-label="Prayers to Nuffle in effect">
             <div v-for="pr in awayPrayers" :key="pr.name" class="prayer-tag-row" role="listitem" :title="pr.effect">
@@ -14574,36 +14574,48 @@ function sendChat() {
    mirrored coach's drawer down from the panel edge. */
 .active-indicator {
   position: absolute;
-  bottom: 0;
-  z-index: 1; /* owner 09-14: one level above the Prayers to Nuffle tag (both drawers hang off the coach panel) */
+  top: 6px;
+  z-index: 1; /* owner 09-14: one level above the Prayers to Nuffle tag */
   display: flex;
-  justify-content: center;
   align-items: center;
-  /* Default geometry is exactly 25% below the previous drawer. The accessibility
-     slider may grow it beyond that footprint so enlarged text remains whole. */
-  inline-size: max(clamp(90px, 39%, 111px), calc(var(--ui-min-text-size, 12px) * 8 + 12px));
-  block-size: max(20.25px, calc(var(--ui-min-text-size, 12px) + 5.25px));
+  /* Owner 10-07: the tag hangs OFF THE OUTER SIDE of the coach panel near its top (home: right of the panel,
+     away: left of it) as two stacked words, text justified against the panel edge - it used to be a drawer under
+     the panel where it collided with the Prayers to Nuffle tag. */
+  inline-size: auto;
+  block-size: auto;
   overflow: clip;
   background: color-mix(in srgb, var(--active-badge-color, var(--ui-accent)) 78%, #101319);
   border: 0;
-  border-radius: 0 0 3.75px 3.75px;
   box-sizing: border-box;
-  padding: 3px 6px 2.25px;
+  padding: 3px 6px 2.5px;
   box-shadow: 0 5px 9px #0009;
-  transform: translateY(12%) scaleY(0.16);
-  transform-origin: top center;
   opacity: 0;
   pointer-events: none;
   transition:
     transform var(--p-360) cubic-bezier(0.2, 0.9, 0.25, 1.18),
     opacity var(--p-180) ease;
 }
+.coach-panel.home .active-indicator {
+  left: 100%;
+  margin-left: 2px;
+  border-radius: 0 3.75px 3.75px 0;
+  transform: translateX(-40%) scaleX(0.16);
+  transform-origin: left center;
+}
+.coach-panel.away .active-indicator {
+  right: 100%;
+  margin-right: 2px;
+  border-radius: 3.75px 0 0 3.75px;
+  transform: translateX(40%) scaleX(0.16);
+  transform-origin: right center;
+}
+/* side-specific so it outranks the per-side resting transform above (same specificity would never slide in) */
+.coach-panel.home .active-indicator[data-active='true'],
+.coach-panel.away .active-indicator[data-active='true'],
 .active-indicator[data-active='true'] {
-  transform: translateY(calc(100% - 2px)) scaleY(1);
+  transform: translateX(0) scaleX(1);
   opacity: 1;
 }
-.coach-panel.home .active-indicator { right: 12px; }
-.coach-panel.away .active-indicator { left: 12px; }
 /* Owner 09-06: PRAYERS TO NUFFLE tag — the orange prayer-banner language as a drawer under the panel's OTHER
    bottom corner (home left / away right), one row per prayer, stacking DOWNWARD. Sits behind the panel body (z 0)
    like the Current Player drawer. */
@@ -14674,14 +14686,17 @@ function sendChat() {
   font-size: max(var(--ui-min-text-size, 12px), clamp(0.42rem, 0.75vw, 0.51rem));
   font-weight: 900;
   letter-spacing: 0.01875em;
-  line-height: 1;
-  text-align: center;
+  line-height: 1.05;
   text-transform: uppercase;
   text-shadow: 0 1px 1px #000;
   white-space: nowrap;
   color: #fff;
+  display: flex;
+  flex-direction: column; /* owner 10-07: CURRENT over PLAYER */
   transform: scaleX(0.8);
-  transform-origin: center;
+}
+.coach-panel.home .active-label { text-align: left; align-items: flex-start; transform-origin: left center; }
+.coach-panel.away .active-label { text-align: right; align-items: flex-end; transform-origin: right center;
 }
 .coach-panel.home { --active-badge-color: var(--seat-home-bright); --active-badge-text: #eef5ff; }
 .coach-panel.away { --active-badge-color: var(--seat-away-bright); --active-badge-text: #fff2f3; }
