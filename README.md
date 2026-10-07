@@ -34,6 +34,50 @@ We recommend the bundled release below for most users. It contains all assets an
 Bundled release:
 https://github.com/flutethecat/superfumbbl-client/releases/latest
 
+Windows: run the `_Windows_x64-setup.exe`. macOS: open the `.dmg` for your chip (`aarch64` = Apple Silicon, `x64` = Intel).
+
+## Linux and Steam Deck (SteamOS)
+
+Every release carries two Linux downloads for each of amd64 and arm64:
+
+- `SuperFUMBBL_<version>_Linux_<arch>.AppImage` — runs on any distribution with no install, and is the one to use on a Steam Deck. It bundles its own WebKit and GTK, so it does not depend on your system packages.
+- `SuperFUMBBL_<version>_Linux_<arch>.deb` — for Debian 12+ and Ubuntu 22.04+ (and derivatives). It needs `libwebkit2gtk-4.1-0` and `libgtk-3-0`, which apt pulls in.
+
+A Steam Deck is amd64. Raspberry Pi 4/5 and other ARM boards are arm64.
+
+### Steam Deck / SteamOS
+
+SteamOS is Arch-based with a read-only system partition, so the `.deb` does not apply. Use the AppImage:
+
+1. Switch to Desktop Mode (Steam button > Power > Switch to Desktop).
+2. In the browser, open https://github.com/flutethecat/superfumbbl-client/releases/latest and download `SuperFUMBBL_<version>_Linux_amd64.AppImage`. Keep it in your home folder, e.g. `~/Applications`.
+3. Make it executable: in Dolphin, right-click the file > Properties > Permissions > tick "Is executable". Or in Konsole:
+   ```bash
+   chmod +x ~/Applications/SuperFUMBBL_*_Linux_amd64.AppImage
+   ```
+4. Double-click it to run. The first launch downloads the art pack (about 180 MB) and runs the setup wizard.
+5. Optional, to launch from Gaming Mode: in Steam, Games > Add a Non-Steam Game to My Library > Browse, pick the AppImage, then set its controller layout to a mouse template (the client is mouse-driven; the right trackpad works well as the pointer).
+6. Updates: the client checks on launch and hourly. In-app patches install on their own; when a new shell is released the client offers it and replaces the AppImage in place, so leave the file where it is.
+
+If the AppImage does not start, run it from Konsole with the extract flag (needed on systems without FUSE):
+
+```bash
+~/Applications/SuperFUMBBL_*_Linux_amd64.AppImage --appimage-extract-and-run
+```
+
+### Debian / Ubuntu
+
+```bash
+sudo apt install ./SuperFUMBBL_<version>_Linux_amd64.deb
+```
+
+Launch "Super FUMBBL" from the application menu. In-app patches install on their own; for a new shell release, download the newer `.deb` and install it the same way.
+
+### Other distributions (Arch, Fedora, openSUSE, …)
+
+Use the AppImage with the Steam Deck steps above from step 2.
+
+
 ```bash
 pnpm install
 pnpm --filter @fumbbl40k/app build
