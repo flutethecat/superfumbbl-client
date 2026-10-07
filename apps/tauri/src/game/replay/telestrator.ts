@@ -27,6 +27,19 @@ export function gridSteps(from: readonly [number, number], to: readonly [number,
   return out;
 }
 
+/** Owner 10-07 ("allow diagonal movement for the pathing telestrator"): a diagonal drag always clips the corner of an
+ *  orthogonal neighbour before reaching the diagonal square, so registering every square the cursor touches turns a
+ *  diagonal into a staircase. The Path tool therefore only steps to a square once the pointer is inside its CORE
+ *  (the inner box `2 * PATH_SQUARE_CORE` of the square's size, centred); the edge band is a dead zone. A drag along
+ *  the diagonal then enters the diagonal square's core without ever entering a side square's, and gridSteps
+ *  makes it one diagonal step. Orthogonal drags along the row still pass through every core. */
+export const PATH_SQUARE_CORE = 0.3;
+export function inSquareCore(pointer: SketchPoint, center: SketchPoint, squareSize: number, core = PATH_SQUARE_CORE): boolean {
+  if (!(squareSize > 0)) return true; // unknown geometry: behave as before (every square counts)
+  const limit = squareSize * core;
+  return Math.abs(pointer.x - center.x) <= limit && Math.abs(pointer.y - center.y) <= limit;
+}
+
 export interface TelestratorState {
   expanded: boolean;
   tool: SketchTool;

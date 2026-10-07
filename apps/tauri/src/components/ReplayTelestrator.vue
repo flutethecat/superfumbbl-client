@@ -5,6 +5,7 @@ import {
   TELESTRATOR_COLOR_PRESETS,
   TELESTRATOR_THICKNESS_PRESETS,
   gridSteps,
+  inSquareCore,
   type SketchElement,
   type SketchPoint,
   type SketchTool,
@@ -55,6 +56,10 @@ const drawing = ref(false);
 const moving = ref<{ point: SketchPoint } | null>(null);
 /** Owner 09-22: the last square the Path tool walked to (the drag steps square by square from here). */
 let pathSquare: [number, number] | null = null;
+/** Owner 10-07 (diagonals): an orthogonally adjacent square the cursor has entered but not yet CONFIRMED - it is
+ *  appended once the pointer reaches its core, or skipped when the drag turns out to be heading for the diagonal
+ *  square beyond it (the staircase corner). Diagonal / farther entries append at once; release commits it. */
+let pendingSquare: [number, number] | null = null;
 const openPopover = ref<'shapes' | 'weight' | 'color' | null>(null);
 const root = ref<SVGSVGElement | null>(null);
 const shell = ref<HTMLDivElement | null>(null);
@@ -360,6 +365,7 @@ function pointerDown(event: PointerEvent): void {
     const square = props.toSquare?.(at.x, at.y) ?? null;
     if (!square) { event.preventDefault(); return; }
     pathSquare = square;
+    pendingSquare = null; // Astra: a lost capture can leave the previous drag's pending square behind
     drawing.value = model.begin(props.squareCenter?.(square) ?? at);
   } else if (state.value.tool !== 'none' && state.value.tool !== 'select') drawing.value = model.begin(at);
   else if (state.value.tool === 'select') model.select(null);
@@ -379,11 +385,9 @@ function pointerMove(event: PointerEvent): void {
   if (drawing.value && state.value.tool === 'path' && pathSquare) {
     // Walk the grid from the last square to the one under the cursor, one square per step, so the line passes
     // through the centre of every square in between even when the drag jumps several at once.
-    const square = props.toSquare?.(point(event).x, point(event).y) ?? null;
-    if (!square || (square[0] === pathSquare[0] && square[1] === pathSquare[1])) return;
-    const steps = gridSteps(pathSquare, square);
-    model.appendPathPoints(steps.map((sq) => props.squareCenter?.(sq) ?? point(event)));
-    pathSquare = square;
+    const at = point(event);
+    const square = props.toSquare?.(at.x, at.y) ?? null;
+    if (square) trackPathPointer(square, at);
   } else if (drawing.value) model.update(point(event));
   else if (moving.value) {
     const next = point(event);
@@ -392,7 +396,60 @@ function pointerMove(event: PointerEvent): void {
   } else return;
   refresh();
 }
+/** World-space size of a square: the distance between the centres of two neighbours (orientation-agnostic). */
+function squareSizeAt(square: [number, number]): number {
+  const c = props.squareCenter;
+  if (!c) return 0;
+  const a = c(square), b = c([square[0] + 1, square[1]]);
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+function stepPathTo(square: [number, number], fallback: SketchPoint): void {
+  if (!pathSquare) return;
+  const steps = gridSteps(pathSquare, square);
+  model.appendPathPoints(steps.map((sq) => props.squareCenter?.(sq) ?? fallback));
+  pathSquare = square;
+  pendingSquare = null;
+}
+const sameSquare = (a: readonly [number, number], b: readonly [number, number]) => a[0] === b[0] && a[1] === b[1];
+const orthogonalNeighbour = (a: readonly [number, number], b: readonly [number, number]) =>
+  Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) === 1;
+const chebyshevNeighbour = (a: readonly [number, number], b: readonly [number, number]) =>
+  Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) === 1;
+/** Owner 10-07 ("allow diagonal movement"): a diagonal drag always clips an orthogonal neighbour before the diagonal
+ *  square, which used to turn every diagonal into a staircase. An orthogonally adjacent square is now only PENDING
+ *  until the pointer reaches its core (inSquareCore) or moves on to a square that is not the diagonal beyond it;
+ *  reaching that diagonal square (the staircase corner) skips the pending square and steps diagonally. Anything
+ *  diagonal or farther away appends at once (gridSteps walks the squares between), so no crossed square is lost. */
+function trackPathPointer(square: [number, number], at: SketchPoint): void {
+  if (!pathSquare) return;
+  if (sameSquare(square, pathSquare)) { pendingSquare = null; return; }
+  if (pendingSquare && sameSquare(square, pendingSquare)) {
+    if (inSquareCore(at, props.squareCenter?.(square) ?? at, squareSizeAt(square))) stepPathTo(square, at);
+    return;
+  }
+  // Leaving a pending square: the staircase corner (diagonal to pathSquare, beside the pending square) falls through
+  // to a single diagonal step via gridSteps - the clipped side square is skipped. A square that is beside the pending
+  // one but NOT beside pathSquare means the drag crossed the whole pending square (e.g. riding a row edge and dipping
+  // into the next row two columns on): commit it first. Anything else only clipped the pending square: drop it.
+  if (pendingSquare && chebyshevNeighbour(square, pendingSquare) && !chebyshevNeighbour(square, pathSquare)) stepPathTo(pendingSquare, at);
+  pendingSquare = null;
+  if (orthogonalNeighbour(square, pathSquare)) {
+    if (inSquareCore(at, props.squareCenter?.(square) ?? at, squareSizeAt(square))) stepPathTo(square, at);
+    else pendingSquare = square;
+    return;
+  }
+  stepPathTo(square, at);
+}
 function pointerUp(event: PointerEvent): void {
+  if (drawing.value && state.value.tool === 'path' && pathSquare) {
+    // Release: the square under the cursor ends the path, core or not; off the pitch, the pending square does.
+    const at = point(event);
+    const square = props.toSquare?.(at.x, at.y) ?? null;
+    if (square) {
+      trackPathPointer(square, at); // resolves a pending square / the staircase corner exactly as a move would
+      if (!sameSquare(square, pathSquare)) stepPathTo(square, at);
+    } else if (pendingSquare) stepPathTo(pendingSquare, at);
+  }
   if (drawing.value) {
     // Owner 08-17 ("on every click"): a committed arrow/circle used to fall back to `finishInteraction`
     // (tool → 'none'), forcing a re-arm through the Shapes flyout before the next shape. The
@@ -403,6 +460,7 @@ function pointerUp(event: PointerEvent): void {
   drawing.value = false;
   moving.value = null;
   pathSquare = null;
+  pendingSquare = null;
   try { root.value?.releasePointerCapture(event.pointerId); } catch { /* pointer already released */ }
   refresh();
 }
