@@ -998,7 +998,7 @@ const configBarStyle = computed(() => {
 });
 
 // Owner 10-06: the push-direction waiting notice holds 1.5 s before it shows (a quick choice never flashes it).
-const PUSH_WAITING_HOLD_MS = 1500;
+const PUSH_WAITING_HOLD_MS = 2500; // owner 10-07: 1500 -> 2500
 const { shown: pushWaitingShown } = useDelayedPresence(() => gameStore.state.pushWaiting?.message ?? null, PUSH_WAITING_HOLD_MS);
 
 // --- Owner 2026-07-04e: UI-customize mode (grip/resizer on the corner panels) ---
@@ -13559,6 +13559,11 @@ function sendChat() {
         <!-- Owner 10-05: "Waiting for <Coach> to choose a push direction" - every seat but the choosing coach. -->
         <OnTheBallWaitingModal v-if="gameStore.state.pushWaiting && pushWaitingShown" title="Push" notice-id="push-waiting"
           :message="gameStore.state.pushWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Owner 10-07: the other coach's reroll decision on a failed pass / catch (incl. a scattered ball's catch). -->
+        <OnTheBallWaitingModal v-if="gameStore.state.reRollWaiting" title="Reroll" notice-id="reroll-waiting"
+          :message="gameStore.state.reRollWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S57 (owner 09-30): Touchback — the receiving coach nominates the ball carrier; every other seat waits on them. -->

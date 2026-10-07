@@ -20,7 +20,7 @@ const BACKUP_KEY = 'fumbbl40k.settings.bak';
 /** An unparseable primary is parked here (not destroyed) before defaults may overwrite it. */
 const CORRUPT_KEY = 'fumbbl40k.settings.corrupt';
 /** Bump when a default change must be FORCED onto existing installs (see load()). */
-const SETTINGS_VERSION = 34; // v34: movement animation default 200ms
+const SETTINGS_VERSION = 35; // v35: camera pan speed default 16 px (owner 10-07)
 
 /** Load-path health (P1 08-18: blank credentials). notices non-empty = a degraded settings read
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
@@ -505,7 +505,7 @@ const DEFAULTS: AppSettings = {
   confirmKey: 'Space', // owner 2026-07-02: Space confirms queued moves
   rosterKey: 'KeyH', // owner 10-02: H opens the roster pop-out
   logExpandKey: 'KeyL', // owner 10-02: L doubles the Log window, L again restores it
-  cameraPanSpeed: 9,
+  cameraPanSpeed: 16, // owner 10-07: 9 -> 16 px per frame
   tackleZoneMode: 'opposition',
   showDefaultSkills: false,
   showPositionRings: true,
@@ -959,6 +959,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
     merged.replaySearchHideScores = raw.replaySearchHideScores !== false; // owner 10-06: ON by default; only an explicit false turns it off
+    // owner 10-07: camera pan speed default 9 -> 16; a blob still on the old default (or without the key) takes the new one
+    if ((raw.settingsVersion ?? 0) < 35 && (raw.cameraPanSpeed == null || raw.cameraPanSpeed === 9)) merged.cameraPanSpeed = 16;
     merged.discordPresence = typeof raw.discordPresence === 'boolean' ? raw.discordPresence : DEFAULTS.discordPresence;
     merged.discordSpectateInvites = raw.discordSpectateInvites !== false;
     merged.logNeededAsNumbers = raw.logNeededAsNumbers === true;

@@ -135,7 +135,7 @@ export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: `${subject} is selecting players for the Charge!` };
+  return { message: `Waiting for ${subject}` }; // owner 10-07: the red title names the action; the line just names the coach
 }
 
 /** Owner 10-01 (S62): Solid Defence - the kicking coach first PICKS up to D3+3 players (`playerChoice` mode `solidDefence`,
@@ -152,7 +152,7 @@ export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: repositioning ? `${subject} is repositioning players for the Solid Defence!` : `${subject} is selecting players for the Solid Defence!` };
+  return { message: repositioning ? `Waiting for ${subject} (repositioning)` : `Waiting for ${subject}` }; // owner 10-07 copy
 }
 
 /** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
@@ -165,7 +165,7 @@ export function touchbackWaitingFromGame(g: GameJson, myTeamId: string | null): 
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'Your opponent';
-  return { message: `${subject} is choosing who takes the touchback` };
+  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
 }
 
 /** Owner 10-01 (S91): "Your opponent is choosing the kick-off destination". Turn mode `kickoff` opens the kick: the
@@ -184,7 +184,7 @@ export function kickoffWaitingFromGame(g: GameJson, myTeamId: string | null): { 
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The kicking coach');
-  return { message: `${subject} is choosing the kick-off destination` };
+  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
 }
 
 /** Owner 10-02 (S99): Pick-Me-Up - the standing `playerChoice` dialog with mode `pickMeUp` (wire g1919953 cmd 1278:
@@ -196,7 +196,7 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = myTeamId !== null ? 'Your opponent' : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The other coach');
-  return { message: `${subject} is selecting players for Pick-Me-Up` };
+  return { message: `Waiting for ${subject}` }; // owner 10-07 copy
 }
 
 /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach - while the
@@ -219,7 +219,30 @@ export function pushWaitingFromGame(g: GameJson, myTeamId: string | null): { mes
   if (!chooser) return null;
   if (myTeamId !== null && String(chooser.teamId ?? '') === myTeamId) return null;
   const name = String(chooser.coach ?? '').trim() || String(chooser.teamName ?? '').trim() || 'the other coach';
-  return { message: `Waiting for ${name} to choose a push direction` };
+  return { message: `Waiting for ${name}` }; // owner 10-07: "Push / Waiting for Elyod is sufficient"
+}
+
+/** Owner 10-07: "<Coach> is deciding whether to reroll" for a failed PASS or CATCH (a scattered / bouncing ball's
+ *  catch included). Dodge / rush / pickup dice are held on the pitch with their marker while the reroll offer is
+ *  open, but pass and catch rolls show through the pass/catch pill, which gives the watching seat nothing - so the
+ *  other coach's open reroll dialog for one of those surfaces as a waiting notice. `myTeamId` = the local coach's
+ *  team (null = spectator); the deciding coach's own seat never shows it (their prompt is up instead). */
+export function reRollWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+  const dp = g.dialogParameter as { dialogId?: unknown; playerId?: unknown; reRolledAction?: unknown } | null | undefined;
+  const dialogId = String(dp?.dialogId ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  if (dialogId !== 'reroll' && dialogId !== 'rerollproperties') return null;
+  // The wire carries "Catch" for every catch (scatter / bounce included) but the PASS action as the FQ skill class
+  // `com.fumbbl.ffb.skill.common.Pass` (Astra 10-07) - match the last dotted segment.
+  const action = String(dp?.reRolledAction ?? '').toLowerCase().split('.').pop() ?? '';
+  if (!/^(pass|catch)$/.test(action)) return null;
+  const playerId = String(dp?.playerId ?? '');
+  if (!playerId) return null;
+  const teams = [g.teamHome, g.teamAway] as ({ teamId?: string; coach?: string; teamName?: string; playerArray?: { playerId: string }[] } | undefined)[];
+  const team = teams.find((t) => t?.playerArray?.some((pl) => pl.playerId === playerId));
+  if (!team) return null;
+  if (myTeamId !== null && String(team.teamId ?? '') === myTeamId) return null;
+  const name = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || 'The other coach';
+  return { message: `Waiting for ${name}` }; // owner 10-07 copy (the title reads Reroll)
 }
 
 /** A playerChoice dialog serialises PLAYER_IDS (no singular playerId): the shadower is the first entry — the same
@@ -273,6 +296,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
     pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
     pushWaiting: pushWaitingFromGame(g, null),
+    reRollWaiting: reRollWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),
