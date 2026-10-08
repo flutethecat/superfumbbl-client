@@ -8777,7 +8777,9 @@ function applyFrameContents(frame: QueuedFrame) {
     multiBlockOnModelApplied(); // #58 (ML-7): clear the multi-block selection once the server's state-change lands
     maybeAutoEndOnTimeout(); // #14b (TB-1…TB-4): client-side timeout auto-end, re-evaluated per model-apply (never a timer)
     freeSelectPassOnModelApplied(); // spec-252 R-1: drop the free-select-pass arm once the activation leaves PASS
+    gazeSentOnModelApplied(cmd); // owner 10-08: a CLIENT_GAZE spent by a final failed Bloodlust roll gives the gaze back
     gazeIntentOnModelApplied(); // W40: ack the menu declare; clear only after its live gaze activation leaves
+    gazeToMoveOnModelApplied(); // owner 10-08: a confirmed gaze→move change walks on its echo
     if (game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock') {
       armOnTheBall(game.value, game.value.turnMode);
     }
@@ -8823,6 +8825,76 @@ function freeSelectPassOnModelApplied() {
   }
 }
 
+/**
+ * Owner 10-08 ("Behavior for a failed bloodlust with a declared hypnotic gaze action?"). The one CLIENT_GAZE this
+ * client sent for the live activation, remembered from the send (confirmGazeTarget drops the gaze intent there) until
+ * the server shows what became of it.
+ *
+ * BB2025 rolls Bloodlust on the activation's FIRST command, before it is carried out (ActivationSequenceBuilder:96,
+ * BloodLustBehaviour:81/95). For a gaze there is no change-action dialog (:113-130): a FINAL failure sets
+ * sufferingBloodLust (:78/:102), drops the move stack and jumps to END_MOVING, so the HYPNOTIC_GAZE step never runs.
+ * The command is spent; StepEndMoving:250-255/342-345 pushes a fresh Move sequence that waits for a new command with
+ * the action still GAZE, and a second CLIENT_GAZE is accepted (StepInitMoving:238-244, no second Bloodlust roll).
+ * Upstream's client is model-driven there (GazeLogicModule.playerInteraction): the coach simply clicks a victim again.
+ * This client had dropped its intent at the send, so the declared gaze was lost: the click was an ordinary click.
+ *
+ * The restore is local state only. NOTHING is sent: the server asks nothing here and the coach, now suffering
+ * Bloodlust, may prefer to walk or end; the next click on the victim is the ordinary confirm (one CLIENT_GAZE).
+ */
+let gazeSent: { actingPlayerId: string; victimId: string; seq: number; bloodlustFailed: boolean } | null = null;
+const isGazeAction = (action: string) => action === 'gazeMove' || action === 'gazeSelect' || action === 'gaze';
+
+/** Follow the sent gaze through the applied frames: a resolved gaze, a passed Bloodlust roll (first roll or reroll),
+ *  a different acting player/action or a re-made intent all forget it; only a failed `bloodLustRoll` for the gazer,
+ *  reported AFTER the send, makes it restorable. */
+function gazeSentOnModelApplied(cmd?: Record<string, unknown>) {
+  const sentGaze = gazeSent;
+  if (!sentGaze) return;
+  const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  if (state.gazeIntent || String(acting?.playerId ?? '') !== sentGaze.actingPlayerId
+      || !isGazeAction(String(acting?.playerAction ?? ''))) { gazeSent = null; return; }
+  const reports = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown }[] } | undefined)?.reports ?? [];
+  for (const report of reports) {
+    if (String(report.playerId ?? '') !== sentGaze.actingPlayerId) continue;
+    const reportId = String(report.reportId ?? '');
+    if (reportId === 'hypnoticGazeRoll') { gazeSent = null; return; } // the gaze was rolled: not spent
+    if (reportId === 'bloodLustRoll') {
+      if (report.successful === false) sentGaze.bloodlustFailed = true;
+      else { gazeSent = null; return; } // passed (first roll or reroll): the server carries the gaze out itself
+    }
+  }
+  gazeSentRestore();
+}
+
+/** Give the gaze back once the failure is FINAL in the model (sufferingBloodlust) and nothing is still being shown or
+ *  asked: the reroll offer has left the model and an accepted reroll's staged result has landed (roll-beat hold;
+ *  releaseRerollResultPin is the wake when no further frame arrives). */
+function gazeSentRestore() {
+  const sentGaze = gazeSent;
+  const g = game.value;
+  if (!sentGaze?.bloodlustFailed || !g) return;
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null; sufferingBloodlust?: unknown } | undefined;
+  if (String(acting?.playerId ?? '') !== sentGaze.actingPlayerId || !isGazeAction(String(acting?.playerAction ?? ''))) {
+    gazeSent = null;
+    return;
+  }
+  if (acting?.sufferingBloodlust !== true || g.dialogParameter || state.rerollResultPending) return;
+  gazeSent = null;
+  if (state.gazeIntent || !iControlPlayer(sentGaze.actingPlayerId)) return;
+  const base = { actingPlayerId: sentGaze.actingPlayerId, seq: sentGaze.seq + 1 };
+  // The same victim is armed again only while it is still a legal send from the gazer's square.
+  const victimLegal = canConfirmGazeAtCurrentPosition(g, { ...base, victimId: sentGaze.victimId, pendingVictimId: null, phase: 'active' });
+  if (settings.uiMode === 'classic') {
+    // Classic: its locked declaration as it stood before the send; without a legal victim it declares again.
+    state.gazeIntent = victimLegal
+      ? { ...base, victimId: sentGaze.victimId, pendingVictimId: null, phase: 'active' }
+      : { ...base, victimId: null, pendingVictimId: null, phase: 'targeting' };
+  } else {
+    state.gazeIntent = { ...base, victimId: null, pendingVictimId: victimLegal ? sentGaze.victimId : null, phase: 'active' };
+  }
+  log('system', `play: HYPNOTIC GAZE not rolled — ${playerName(g, sentGaze.actingPlayerId)} failed Bloodlust; the gaze is available again${victimLegal ? ` (${playerName(g, sentGaze.victimId)} armed)` : ''}`);
+}
+
 /** W40 gaze intent lifecycle follows the server-echoed acting player; a pre-ack switch may pass through actor-null. */
 function gazeIntentOnModelApplied() {
   const intent = state.gazeIntent;
@@ -8845,6 +8917,112 @@ function gazeIntentOnModelApplied() {
     return;
   }
   if (intent.phase !== 'declaring') state.gazeIntent = null;
+}
+
+/**
+ * Owner 10-08 (Astra P2): walking instead of gazing after a consumed gaze.
+ *
+ * A CLIENT_GAZE spent by a final failed Bloodlust roll leaves the server's action at the NON-moving `gaze`
+ * (bb2025 StepInitMoving:334-337; PlayerAction.isMoving:68-71). StepEndMoving:250-255 + 342-345 pushes a fresh Move
+ * sequence without refreshing the move squares (:278 is the moving branch only), and a raw CLIENT_MOVE there keeps
+ * GAZE and the old defender, so StepHypnoticGaze:106 would roll the OLD gaze before any step (generator Move:30-37).
+ * Upstream's client walks through an explicit action change instead: LogicModule.isMoveAvailable:625-627 offers Move
+ * while the action is GAZE and MoveLogicModule.performAvailableAction:106-109 sends
+ * sendActingPlayer(player, MOVE, jumping). StepInitMoving:239-246 answers with UtilServerSteps.changePlayerAction:76-83:
+ * same player, so only the action changes (sufferingBloodLust and the used skills stay, UtilActingPlayer:75-87), and
+ * updateMoveSquares re-publishes the squares under `move`. StepHypnoticGaze:106-111 then skips and clears the
+ * defender. With the action `move` neither client offers the gaze again this activation (bb2025
+ * declareGazeActionAtStart; here declaresAllowed needs an empty usedSkills list), so the coach confirms first.
+ *
+ * The confirmation is client-owned (the server asks nothing). Yes sends that one CLIENT_ACTING_PLAYER; the walk goes
+ * out through the ordinary o66Move guard once the model shows `move` with its fresh offers. The applied frame is the
+ * wake; the timeout below only gives the gaze back when the server never answers.
+ */
+let gazeToMoveOffer: { playerId: string; route: [number, number][] } | null = null;
+let gazeToMovePending: { playerId: string; route: [number, number][]; seq: number; intent: GazeIntent | null } | null = null;
+let gazeToMoveSeq = 0;
+const GAZE_TO_MOVE_KEY = 'gazeToMove:';
+const GAZE_TO_MOVE_ACK_MS = 8000;
+
+/** My acting player holds a consumed gaze: the server action is `gaze`, the restored intent is live. */
+function gazeWalkNeedsConversion(playerId: string): boolean {
+  const g = game.value;
+  if (!play.active || !g || !playerId || !iControlPlayer(playerId)) return false;
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  return String(acting?.playerId ?? '') === playerId && String(acting?.playerAction ?? '') === 'gaze'
+    && gameStore.hasLiveGazeIntent();
+}
+
+function dropGazeToMoveOffer() {
+  gazeToMoveOffer = null;
+  if (state.yesNo?.key.startsWith(GAZE_TO_MOVE_KEY)) clearYesNo();
+}
+
+/** A walk was asked for under the non-moving `gaze` action: ask before giving the gaze up. Sends nothing. */
+function offerGazeToMove(playerId: string, route: [number, number][]): false {
+  if (gazeToMovePending) { log('system', 'ignored: the change to a Move is already with the server'); return false; }
+  if (state.yesNo && !state.yesNo.key.startsWith(GAZE_TO_MOVE_KEY)) return false; // another question is open: answer it first
+  gazeToMoveOffer = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]) };
+  askYesNo({
+    key: `${GAZE_TO_MOVE_KEY}${playerId}`,
+    text: 'You\'ve declared a Hypnotic Gaze. Convert to a plain Move instead? The Gaze can\'t be used again this activation.',
+    yesLabel: 'Convert to Move',
+    noLabel: 'Keep Gaze',
+    onAnswer: (yes) => {
+      const offer = gazeToMoveOffer;
+      gazeToMoveOffer = null;
+      if (yes && offer) convertGazeToMove(offer.playerId, offer.route);
+    },
+  });
+  return false;
+}
+
+/** The coach confirmed: the one action change upstream's client sends (GAZE -> MOVE), then the walk on its echo. */
+function convertGazeToMove(playerId: string, route: [number, number][]): boolean {
+  if (!game.value || route.length === 0 || gazeToMovePending || !gazeWalkNeedsConversion(playerId)) {
+    log('system', 'ignored: no consumed Hypnotic Gaze to convert to a Move');
+    return false;
+  }
+  if (!sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: 'move', leaping: isJumping() })) {
+    log('system', '⚠ Convert to Move refused — the Hypnotic Gaze stays; try again once the prompt clears.');
+    return false;
+  }
+  const seq = ++gazeToMoveSeq;
+  gazeToMovePending = { playerId, route, seq, intent: state.gazeIntent ? { ...state.gazeIntent } : null };
+  // The coach gave the gaze up: no victim click may send it while the action change is in flight.
+  plannerClearAbort();
+  plannerSet(null);
+  state.gazeIntent = null;
+  gazeSent = null;
+  log('system', `play: CONVERT gaze→move ${playerName(game.value, playerId)} (server resolves)`);
+  scheduleGameTimeout(() => {
+    const pending = gazeToMovePending;
+    if (pending?.seq !== seq) return;
+    gazeToMovePending = null;
+    const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+    // Never answered: the server still holds the gaze action, so the coach gets the gaze back as it was.
+    if (pending.intent && !state.gazeIntent && String(acting?.playerId ?? '') === playerId
+        && String(acting?.playerAction ?? '') === 'gaze' && iControlPlayer(playerId)) {
+      state.gazeIntent = { ...pending.intent, seq: pending.intent.seq + 1 };
+    }
+    const text = 'Move not started — the server did not answer the change to a Move.';
+    log('system', `⚠ ${text}`);
+    state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+  }, GAZE_TO_MOVE_ACK_MS);
+  return true;
+}
+
+/** Applied frame: retire a stale question; on the `move` echo walk the confirmed route through the normal guard. */
+function gazeToMoveOnModelApplied() {
+  if (gazeToMoveOffer && !gazeWalkNeedsConversion(gazeToMoveOffer.playerId)) dropGazeToMoveOffer();
+  const pending = gazeToMovePending;
+  if (!pending) return;
+  const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  const action = String(acting?.playerAction ?? '');
+  if (String(acting?.playerId ?? '') === pending.playerId && action === 'gaze') return; // not echoed yet
+  gazeToMovePending = null;
+  if (String(acting?.playerId ?? '') !== pending.playerId || action !== 'move') return;
+  gameStore.o66Move(pending.playerId, pending.route);
 }
 
 /**
@@ -9591,6 +9769,8 @@ function resetPlayback() {
   state.hmpScatterMarks = null;
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
+  gazeSent = null; // nor is a spent gaze given back across one
+  gazeToMovePending = null; dropGazeToMoveOffer(); // nor a gaze→move change or its question
   gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
@@ -10785,6 +10965,7 @@ function releaseRerollResultPin(seq: number): void {
   if (state.rerollResultPending?.seq !== seq) return;
   state.rerollResultPending = null;
   if (plannerPlan) plannerAdvance();
+  gazeSentRestore(); // owner 10-08: the same wake for a gaze spent by a failed Bloodlust reroll
 }
 /** Viewer-visible beat a HELD armour roll gets before the Animal Savagery resend starts the walk (owner 09-05). */
 const PLANNER_LASH_ARMOUR_BEAT_MS = 450;
@@ -23588,6 +23769,7 @@ export const gameStore = {
    *  No victim is named here (owner 10-08): the server echo makes the activation live and the victim is picked later. */
   declareGazeIntent(playerId: string) {
     if (!play.active || !game.value || !iControlPlayer(playerId)) return;
+    gazeSent = null;
     state.gazeIntent = {
       actingPlayerId: playerId,
       victimId: null,
@@ -23677,7 +23859,10 @@ export const gameStore = {
     }
     plannerClearAbort();
     plannerSet(null);
+    dropGazeToMoveOffer(); // the coach gazes after all: the walk question is moot
     state.gazeIntent = null;
+    // Owner 10-08: remembered until the server shows what became of this command (see gazeSent).
+    gazeSent = { actingPlayerId: intent!.actingPlayerId, victimId, seq: intent!.seq, bloodlustFailed: false };
     gameStore.sendGazeTarget(victimId);
     return true;
   },
@@ -23717,7 +23902,10 @@ export const gameStore = {
     }
   },
 
-  clearGazeIntent() { state.gazeIntent = null; },
+  clearGazeIntent() { state.gazeIntent = null; gazeSent = null; gazeToMovePending = null; dropGazeToMoveOffer(); },
+
+  /** Owner 10-08: a walk from here first needs the gaze→move change (a consumed gaze, server action `gaze`). */
+  gazeWalkNeedsConversion(playerId: string): boolean { return gazeWalkNeedsConversion(playerId); },
 
   /** Send a server-offered field target through the established coordinate wire. BB2025 Punt uses this after
    *  `puntMove` escalates to `punt` (`PuntLogicModule.java:56-69`; `StepInitPunt.java:92-101`). */
@@ -23803,6 +23991,8 @@ export const gameStore = {
     if (acting.playerId !== playerId) { log('system', 'ignored: server has not confirmed this player as acting'); return false; }
     const action = String(acting.playerAction ?? '');
     if ((action === 'gazeMove' || action === 'gaze') && !gameStore.hasLiveGazeIntent()) return false;
+    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs upstream's GAZE→MOVE change first.
+    if (action === 'gaze') return offerGazeToMove(playerId, [toSquare]);
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
     if (!from) return false;
     // ClientStatePassBlock.java:32 and ClientStateKickoffReturn.java:30 both use the shared move state;
@@ -23848,6 +24038,8 @@ export const gameStore = {
     if (acting.playerId !== playerId) { log('system', 'ignored: server has not confirmed this player as acting'); return false; }
     const action = String(acting.playerAction ?? '');
     if ((action === 'gazeMove' || action === 'gaze') && !gameStore.hasLiveGazeIntent()) return false;
+    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs upstream's GAZE→MOVE change first.
+    if (action === 'gaze') return offerGazeToMove(playerId, path);
     // Hit & Run sends one CLIENT_FIELD_COORDINATE per step and closes with CLIENT_END_TURN.
     if (String(game.value.turnMode ?? '') === 'hitAndRun') {
       const dest = path[path.length - 1]!;
@@ -23963,6 +24155,8 @@ export const gameStore = {
       state.multiBlockSel = null;
     }
     state.gazeIntent = null;
+    gazeSent = null; // the coach ended the activation: a spent gaze is not given back
+    gazeToMovePending = null; dropGazeToMoveOffer();
     // Spec S15B: Activate then End Activation with no step made: exactly ONE command, in place of the ordinary end.
     const activate = options.rollActivate ? liveBigGuyActivateIntent(game.value) : null;
     if (activate) {
