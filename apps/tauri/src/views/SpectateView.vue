@@ -3257,6 +3257,8 @@ watch(
       if (!gameStore.playbackCatchingUp.value) {
         const decisionDwell = gameStore.state.kickoffArcNeedsDecisionDwell ? presentationMs(KICKOFF_CINE_MS) : 0;
         renderer.holdBallKickIn(presentationMs(KICK_FLYIN_MS) + decisionDwell);
+        // Owner 10-08: an initialised, seeded renderer now holds this KICK's live aim and apex hold - it will land the flight.
+        if (rendererReady.value > 0) gameStore.acknowledgeKickFlightWiring();
       }
     }
   },

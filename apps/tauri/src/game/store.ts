@@ -4927,6 +4927,9 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
     // SR-119: aim then descend in this SAME pass; enqueue the kickArc barrier only AFTER the pair.
     const end = ev.animation.endCoordinate;
     const start = ev.animation.startCoordinate;
+    // Flight ownership (see kickFlightOwnedByRendererSeq): the view's kickAim watcher is sync-flush, so a mounted,
+    // ready Modern renderer acknowledges its live aim + apex-hold wiring INSIDE the assignment below.
+    kickAimWiringAcknowledged = false;
     state.kickAim = { square: [end[0], end[1]], seq: (state.kickAim?.seq ?? 0) + 1 };
     playSound('kick'); // upstream AnimationSequenceThrowing(KICK) plays SoundId.KICK client-side; the wire never carries it
     // Owner 09-10 (game 947 second-half kickoff, "watchdog released seq 1 after 8025ms"): the seq restarted at 1
@@ -4937,6 +4940,8 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       landing: [end[0], end[1]],
       seq: ++kickDescendSeqCounter,
     };
+    kickFlightOwnedByRendererSeq = kickAimWiringAcknowledged ? state.kickDescend.seq : null;
+    kickAimWiringAcknowledged = false;
     enqueueKickArcBarrier(state.kickDescend.seq, true);
     state.kickTargetReveal = null; // S45: the landing marker retires with the flight — the view replaces it when kickAim arms (showKickTargetPersistent), this only clears the state
     return Promise.resolve();
@@ -5316,6 +5321,17 @@ function onPresentationDrainIdle(): void {
  *  construction are untouched — this only resolves an already-complete transaction that lingered into the move. */
 function resolveKickGateBeforeFirstStep(): void {
   const p = presentation.presenting;
+  // Owner 10-08: the kick-off's closing turnEnd no longer tears down a flight that is in the air, so "kickDescend is
+  // nulled before any move" (above) has one exception: a step that arrives while that flight is still up. Its barrier
+  // is resolved here as always (the coach is never made to wait for the ball), and the flight is CANCELLED here, on
+  // purpose - the same hard clear the turnEnd did before (pair cleared together, kickClearSeq to the renderer, which
+  // snaps the ball to the server's model once). A cancelled flight can therefore be shorter than 450 ms and emits NO
+  // onAnimDone('kickDescend'): that is a cancellation, not a lost completion (the renderer's pending landing timer
+  // finds its snapshot gone and stays silent, so there is no late or duplicate signal either). What the viewer is
+  // owed is unaffected: the catch die / bounce queued behind the barrier publish now, on the settled ball, and the
+  // die still holds its own 450 ms read before the step renders.
+  const barrierResolved = (p?.kind === 'kickDescend' && p.requeue?.kind === 'kickArc')
+    || presentation.queue.some((e) => e.kind === 'kickArc');
   if (p && (p.kind === 'cine' || (p.kind === 'kickDescend' && p.requeue?.kind === 'kickArc'))) {
     p.release(); // release() nulls presentation.presenting + resolves the awaiting presentEvent promise
   }
@@ -5323,6 +5339,7 @@ function resolveKickGateBeforeFirstStep(): void {
     for (const e of presentation.queue) if (e.kind === 'cine') { try { e.clear(); } catch (err) { log('system', `U8 cine resolve: ${String(err)}`); } }
     presentation.queue = presentation.queue.filter((e) => e.kind !== 'kickArc' && e.kind !== 'cine');
   }
+  if (barrierResolved && (state.kickDescend || state.kickAim)) clearAuthoritativeKickPresentation(false);
 }
 
 /** #67: enqueue a movement-step SNAPSHOT (from/to frozen here, DD-1 — the drain never re-reads the model); stepIndex runs across a contiguous run, resets on a fresh one. */
@@ -5526,6 +5543,46 @@ function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
 /** Owner 09-10: kickDescend seqs never repeat within a session (see the authoritativeKick handler). */
 let kickDescendSeqCounter = 0;
 
+/** Owner 10-08: the kickDescend seq of a flight the kick-off's closing turnEnd left in the air (null = none). Only
+ *  the renderer that armed that flight can land it, so the store has to know when that renderer goes away - see
+ *  endRetainedKickoffFlightOnRendererChange. Seqs never repeat, so a stale value can never match a later kick. */
+let kickFlightRetainedPastClosingTurnEndSeq: number | null = null;
+
+/** Owner 10-08 (Astra confirmation review, P2): the kickDescend seq of the flight that the CURRENT, ready Modern
+ *  renderer was wired for live - it received that KICK's aim and armed its apex hold (the view says so from its
+ *  sync-flush kickAim watcher, acknowledgeKickFlightWiring), which is what makes its flight end in
+ *  onAnimDone('kickDescend'). null = nobody proved it can land the armed flight: no view mounted, Classic, a renderer
+ *  still initialising (the view registers before its async renderer init, so a consumer count proves nothing), or a
+ *  view that mounted after the KICK and was only seeded with kickDescend (it draws the ball but withholds the
+ *  completion). Recorded in the KICK pass itself, for that exact seq; dropped on every register / unregister edge of
+ *  the Modern view, on every kick teardown and at the landing. Only an owned flight may outlive its closing turnEnd -
+ *  otherwise the catch die, the bounce and the turn splash would wait on the kickArc watchdog. A label only: it
+ *  arms, cancels and re-times nothing (SR-119). */
+let kickFlightOwnedByRendererSeq: number | null = null;
+/** True only between the kickAim assignment of a KICK pass and the kickDescend assignment that follows it. */
+let kickAimWiringAcknowledged = false;
+
+/** Owner 10-08 (Astra review of the closing-turnEnd change): a flight retained past its closing turnEnd is landed by
+ *  the renderer that armed it (its timers, its onAnimDone). When the set of mounted Modern renderers changes while
+ *  that flight is still armed - the view unmounts (Modern -> Classic, UI reload, the game view re-mounting) or a new
+ *  one mounts - that renderer is gone or about to be replaced: destroy() cancels its timers and a freshly mounted
+ *  renderer is only seeded with kickDescend, which it draws but never completes. Nothing would then wake the kickArc
+ *  barrier but its watchdog (~8 s) with the catch die, the bounce and the turn splash queued behind it. So the
+ *  retained flight ends HERE, exactly the way the closing turnEnd ended it before the retention existed: the pair is
+ *  cleared together, the renderer gets its hard clear, the barrier is released. Everything behind it proceeds at
+ *  once and the next view (Classic included, which is seeded from state.kickDescend) starts on the settled ball.
+ *  Nothing is armed or re-timed (SR-119). Inert unless a retained flight is still armed. */
+function endRetainedKickoffFlightOnRendererChange(): void {
+  // Whatever the new set of renderers is, none of them has proven it can land the flight that is armed now: a flight
+  // that has not reached its closing turnEnd yet is simply no longer retained there (it keeps the old teardown).
+  kickFlightOwnedByRendererSeq = null;
+  const seq = kickFlightRetainedPastClosingTurnEndSeq;
+  if (seq === null) return;
+  kickFlightRetainedPastClosingTurnEndSeq = null;
+  if (state.kickDescend?.seq !== seq) return; // already landed, cancelled or superseded
+  clearAuthoritativeKickPresentation(false);
+}
+
 /** S47: while the landing marker is held (scatter frame -> flight arms) it FOLLOWS the server's model ball: any frame that sets an in-bounds ball coordinate moves it there
  *  (the Kick skill's halved distance arrives as a bare model change with no second scatter report; a pre-flight Changing Weather gust moves the ball the same way).
  *  The seq is bumped only when the square changes. The callers gate on "no KICK frame received yet". */
@@ -5546,6 +5603,8 @@ function retireKickoffForTerminalState(): void {
 /** Clear authoritative art/state and optionally remove queued kick beats. Model truth is already applied. */
 function clearAuthoritativeKickPresentation(dropQueued: boolean): void {
   pendingKickDescendSupersede = false;
+  kickFlightRetainedPastClosingTurnEndSeq = null;
+  kickFlightOwnedByRendererSeq = null;
   if (dropQueued) kickoffPresentationOccurrence = null;
   state.kickScatterPreview = null;
   state.kickTargetReveal = null;
@@ -6538,6 +6597,26 @@ export function ballCoordinateSupersedesKickDescend(
   return !Array.isArray(coordinateSet)
     || coordinateSet[0] !== descend.landing[0]
     || coordinateSet[1] !== descend.landing[1];
+}
+
+/** Owner 10-08: is this frame the kick-off's OWN closing turnEnd (the kick-off sequence ends, the receiving team's
+ *  turn starts), as opposed to a later turn's? The server marks it: StepEndTurn (`case KICKOFF`) is the only place a
+ *  turnEnd report is published together with the kickoff -> regular turn-mode change, and Game.setTurnMode records
+ *  the mode it left as lastTurnMode in that same frame (g1950980 cmd 1589, g1951179 cmd 2128, replay 1949553 cmd 61).
+ *  A touchback kick-off is NOT marked (StepTouchback already switched touchback -> regular one frame earlier, so its
+ *  closing turnEnd carries no turn-mode change at all) and keeps the ordinary turnEnd handling. Pure. */
+export function isKickoffClosingTurnEnd(
+  modelChangeList: ModelChangeListJson | null | undefined,
+  reports: readonly { reportId?: unknown }[],
+): boolean {
+  if (!reports.some((report) => String(report.reportId) === 'turnEnd')) return false;
+  let turnMode: unknown;
+  let lastTurnMode: unknown;
+  for (const change of modelChangeList?.modelChangeArray ?? []) {
+    if (change.modelChangeId === ModelChangeId.GAME_SET_TURN_MODE) turnMode = change.modelChangeValue;
+    else if (change.modelChangeId === ModelChangeId.GAME_SET_LAST_TURN_MODE) lastTurnMode = change.modelChangeValue;
+  }
+  return turnMode === 'regular' && lastTurnMode === 'kickoff';
 }
 
 /** #174/W5: pure view of whether a kick-arc barrier is presenting or still waiting in the FIFO. */
@@ -8560,7 +8639,25 @@ function applyFrameContents(frame: QueuedFrame) {
       // the landing clear; the carrier clear waits on a wall-clock window) — a turnEnd retires the whole kick
       // presentation whether the aim or the descend is what's still armed, and an idempotent renderer clear covers a
       // reticle the store no longer tracks. Same rule in play and spectate.
-      if (state.kickDescend || state.kickAim) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
+      // Owner 10-08: every kick-off's OWN closing turnEnd follows the KICK frame by 2-53 ms. When the kick-off event card
+      // was already gone (High Kick, Quick Snap, Solid Defence, Blitz!: the coach took longer than the card) the flight
+      // had just armed, so this clear tore it down ~4 ms later and the ball never flew. For that one frame the flight
+      // is left alone: nothing is armed, cancelled or re-timed here (SR-119) - the pair ends as it does everywhere else,
+      // together, at onAnimDone('kickDescend'). Only while the kickArc barrier still owns the flight, so the turn-start
+      // splash queues behind the landing and the barrier's watchdog stays the fail-open wake - and only when the
+      // mounted renderer has proven it will land this very flight (kickFlightOwnedByRendererSeq): a view that mounted
+      // after the KICK, or was still initialising at it, would leave the landing to the watchdog. Every other turnEnd,
+      // catch-up, and Classic (which keeps the timing it had) clear exactly as before.
+      const kickoffFlightOutlivesClosingTurnEnd = !!state.kickDescend
+        && !playback.catchingUp
+        && settings.uiMode !== 'classic'
+        && kickArcBarrierLive(presentation.presenting, presentation.queue)
+        && kickFlightOwnedByRendererSeq === state.kickDescend.seq // a ready renderer was wired live for THIS flight
+        && isKickoffClosingTurnEnd(cmd.modelChangeList as ModelChangeListJson | null | undefined, reports);
+      // The renderer that armed the flight is the only thing that can land it: remember which flight was retained so a
+      // view unmount / remount before the landing ends it at once (endRetainedKickoffFlightOnRendererChange).
+      if (kickoffFlightOutlivesClosingTurnEnd) kickFlightRetainedPastClosingTurnEndSeq = state.kickDescend!.seq;
+      else if (state.kickDescend || state.kickAim) clearAuthoritativeKickPresentation(false); // stale authoritative art never survives a turn
       else if (String(game.value.turnMode ?? '') === 'regular' && !state.kickTargetReveal) state.kickClearSeq++; // S47: the landing marker outlives a mini-turn's turn ends (only the flight retires it)
       state.kickoffVictimSplash = null; // #131 fail-safe: a stale kickoff victim-splash never survives a turn
       state.multiBlockSel = null; // #58 (ML-7 fail-safe): a stale multi-block selection never survives a turnEnd
@@ -12351,6 +12448,10 @@ export function installTouchdownPacingTestHarness(
   queuedFrames(): number;
   /** The #67 presentation FIFO is fully drained: nothing queued, nothing on screen, the pump stopped. */
   presentationIdle(): boolean;
+  /** Owner 10-08 (kick-off closing turnEnd): flag the playback catch-up fast-forward. */
+  setCatchingUp(on: boolean): void;
+  /** Owner 10-08: the fresh-game / reconnect seed exactly as a received serverGameState runs it (resetPlayback). */
+  reconnect(): void;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -12385,6 +12486,8 @@ export function installTouchdownPacingTestHarness(
     serverPush(cmd) { handleServerPush(structuredClone(cmd)); },
     queuedFrames: () => playback.queue.length,
     presentationIdle: () => presentation.queue.length === 0 && !presentation.running && !presentation.presenting,
+    setCatchingUp(on) { playback.catchingUp = on; },
+    reconnect() { resetPlayback(); },
     dispose() {
       settings.uiMode = priorUiMode;
       interactiveReRolls = priorInteractive;
@@ -20851,13 +20954,25 @@ export const gameStore = {
   },
   /** Modern's mounted renderer owns the seq-correlated confirmed-step bridge. Unregistration is idempotent and
    *  the final unregister releases any walk gate immediately, so a Modern → Classic switch cannot
-   *  inherit the 750ms fail-open delay. Replay remains exact-step-driven independently of this live surface. */
+   *  inherit the 750ms fail-open delay. Replay remains exact-step-driven independently of this live surface.
+   *  Owner 10-08: this registration is also how the store learns a Modern renderer mounted or went away (the view
+   *  registers first thing on mount and unregisters first thing on unmount, before it destroys its renderer), so
+   *  either edge ends a kick-off flight that was retained past its closing turnEnd: no other renderer can land it. */
+  /** Owner 10-08 (Astra confirmation review, P2): the Modern view calls this from its sync-flush kickAim watcher, and
+   *  only once its renderer is initialised and seeded, right where it hands that renderer the live aim and the apex
+   *  hold. It tells the store the flight being armed in this KICK pass has a renderer that will land it (see
+   *  kickFlightOwnedByRendererSeq). Outside a KICK pass, or with no Modern view registered, it means nothing. */
+  acknowledgeKickFlightWiring(): void {
+    if (confirmedMovementPresentationConsumers.size > 0) kickAimWiringAcknowledged = true;
+  },
   registerConfirmedMovementPresentationConsumer(): () => void {
     const consumer = Symbol('confirmed-movement-presentation');
+    endRetainedKickoffFlightOnRendererChange();
     confirmedMovementPresentationConsumers.add(consumer);
     syncConfirmedMovementPresentationCapability();
     return () => {
       if (!confirmedMovementPresentationConsumers.delete(consumer)) return;
+      endRetainedKickoffFlightOnRendererChange();
       syncConfirmedMovementPresentationCapability();
     };
   },
@@ -20885,6 +21000,8 @@ export const gameStore = {
     // Matching authoritative completion reconciles once; late/stale signals are inert.
     if (kind === 'kickDescend' && id === '__ball__' && state.kickDescend) {
       pendingKickDescendSupersede = false;
+      kickFlightRetainedPastClosingTurnEndSeq = null;
+      kickFlightOwnedByRendererSeq = null;
       state.kickScatterPreview = null;
       state.kickAim = null;
       state.kickDescend = null;
