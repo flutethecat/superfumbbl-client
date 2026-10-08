@@ -6108,7 +6108,12 @@ const WISDOM_PCHOICE_MODE = 'wisdomOfTheWhiteDwarf';
 // (dialog null -> new dialog in ONE frame). Keyed per turn it read as already handled, nothing surfaced, and the
 // server waited until a reconnect. Same instance keying as Wisdom; the hold/watchdog path re-enters with the same
 // dialog object, so its key is unchanged.
-const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp']);
+// Owner 10-08 (live test game 1012): the Bloodlust bite (`feed`) is asked once per VAMPIRE that failed Bloodlust, so two
+// of them in one turn means two `feed` dialogs with the same half / turn numbers. Keyed per turn, the second bite
+// menu was treated as already handled and never opened, and the server waited on the coach for an answer that had
+// no surface. Per dialog instance: each `feed` dialog the server sets opens its own bite menu, while later frames
+// over the same standing dialog still do not re-arm it.
+const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp', 'feed']);
 /** Owner 10-05 (g1950390): "We should be declining future offers from the server if the user did not select them ...
  *  Only on pick me up". The players the coach LEFT OUT of a confirmed Pick-Me-Up selection, with the turn it was
  *  confirmed in. A same-turn re-offer made up only of those players is declined for them (empty clientPlayerChoice)

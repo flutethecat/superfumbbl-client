@@ -544,6 +544,11 @@
     "size": 4768058,
     "sha256": "903936b48bdfa2ae84011a4a4057783304d327e8e9f486312f5d8d76178de8cb"
   },
+  "app@fd70e7b89e8b8bc2": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/app-fd70e7b8.zip",
+    "size": 4991463,
+    "sha256": "e4192d38b2d4f27762baf7e250fc595ed9946b8ff1315f1ec05e14c5692aa983"
+  },
   "blockdice-krisb@67beea54c4a24af4": {
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/blockdice-krisb-67beea54.zip",
     "size": 860484,

@@ -14637,7 +14637,7 @@ function sendChat() {
   background: color-mix(in srgb, var(--active-badge-color, var(--ui-accent)) 78%, #101319);
   border: 0;
   box-sizing: border-box;
-  padding: 3px 6px 2.5px;
+  padding: 3px 4px 2.5px;
   box-shadow: 0 5px 9px #0009;
   opacity: 0;
   pointer-events: none;
@@ -14733,7 +14733,9 @@ function sendChat() {
 .coach-panel.away .coach-decision-status { left: 12px; }
 .active-label {
   font-family: 'Nuffle', system-ui, sans-serif;
-  font-size: max(var(--ui-min-text-size, 12px), clamp(0.42rem, 0.75vw, 0.51rem));
+  /* Owner 10-08: larger label; the tag hugs its text (the old scaleX(0.8) squeeze left the box 25% wider than the
+     words, which read as a dead margin on the outer side). */
+  font-size: max(calc(var(--ui-min-text-size, 12px) + 2px), clamp(0.56rem, 0.95vw, 0.68rem));
   font-weight: 900;
   letter-spacing: 0.01875em;
   line-height: 1.05;
@@ -14743,11 +14745,9 @@ function sendChat() {
   color: #fff;
   display: flex;
   flex-direction: column; /* owner 10-07: CURRENT over PLAYER */
-  transform: scaleX(0.8);
 }
-.coach-panel.home .active-label { text-align: left; align-items: flex-start; transform-origin: left center; }
-.coach-panel.away .active-label { text-align: right; align-items: flex-end; transform-origin: right center;
-}
+.coach-panel.home .active-label { text-align: left; align-items: flex-start; }
+.coach-panel.away .active-label { text-align: right; align-items: flex-end; }
 .coach-panel.home { --active-badge-color: var(--seat-home-bright); --active-badge-text: #eef5ff; }
 .coach-panel.away { --active-badge-color: var(--seat-away-bright); --active-badge-text: #fff2f3; }
 .coach-lines { display: flex; flex: 1; min-width: 0; max-width: 100%; flex-direction: column; gap: 3px; }
