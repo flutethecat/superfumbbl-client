@@ -5354,6 +5354,10 @@ export class PitchRenderer {
       }
     }
     this.game = game;
+    // Owner 10-08 / Astra: note every player's distracted onset from the MODEL on each install, not only when its
+    // token is rebuilt - a mover whose token is preserved through its own walk skips the rebuild, and its onset
+    // would otherwise be recorded a turn late (grey in the wrong turn).
+    for (const data of game?.fieldModel?.playerDataArray ?? []) this.distractedShadedThisTurn(data);
     if (spectatorState) {
       this.activePlayerId = spectatorState.activePlayerId;
       setActiveWalkerPlayer(this.walkerOwnerId, spectatorState.activePlayerId);

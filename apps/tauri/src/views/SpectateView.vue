@@ -128,6 +128,23 @@ import { watchBoardPresentationReconciliation, watchMovementPresentationReconcil
 import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../game/furyOfTheBloodGod';
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
 gameStore.setInteractiveReRolls(true);
+// Owner 10-08 (cold join): a decision the store armed BEFORE this view existed - a reconnect snapshot landing on an
+// open dialog, or a frame that arrived while Pixi was still starting - is rendered from store state, but the effects
+// that place it on the pitch (follow the token, arm the push fan, zoom, the prompt die) live in watchers, and a watcher
+// only fires on a change it was there to see, with a renderer to act on. `watchDecisionSurface` is `watch` plus a
+// replay: the mount runs every registered effect once after the first model paint (`replayDecisionSurfaces`).
+const decisionSurfaceReplays: Array<() => void> = [];
+function watchDecisionSurface<T>(
+  source: () => T,
+  effect: (value: T, previous: T | undefined) => void,
+  options?: { immediate?: boolean; flush?: 'pre' | 'post' | 'sync' },
+): void {
+  watch(source, (value, previous) => effect(value as T, previous as T | undefined), options);
+  decisionSurfaceReplays.push(() => effect(source(), undefined));
+}
+function replayDecisionSurfaces(): void {
+  for (const replay of decisionSurfaceReplays) replay();
+}
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
 import { actingHasBlocked, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
@@ -2700,13 +2717,13 @@ watch(
 );
 // Owner 2026-07-08 (case 422): SIDESTEP shares the badge language — when the pushed player's push choice
 // is a Sidestep, tag its pushback crosshairs with the SideStep icon (Sidestep keeps its pushback wiring).
-watch(
+watchDecisionSurface(
   () => gameStore.state.pushChoice?.skill,
   (skill) => renderer?.setPushSkill(skill),
 );
 // Owner 09-06: the push fan surfaces only while the direction pick is THIS coach's current action (the store arms
 // pushChoice after any pending Stand Firm / Side Step reaction resolves) — never straight off the block result.
-watch(
+watchDecisionSurface(
   () => !!gameStore.state.pushChoice,
   (armed) => renderer?.setPushOptionsArmed(armed),
   { immediate: true },
@@ -3106,6 +3123,14 @@ watch(() => (gameStore.state.reRollPrompt?.mine ? gameStore.state.reRollPrompt.s
   rerollOfferFailOpenTimer = window.setTimeout(() => { rerollOfferFailOpenTimer = 0; renderer?.releaseRerollOfferHold(square); }, REROLL_OFFER_HOLD_FAILOPEN_MS);
 });
 onBeforeUnmount(() => { if (rerollOfferFailOpenTimer) clearTimeout(rerollOfferFailOpenTimer); });
+// Owner 10-08 (cold join): an offer of mine that was open before this view existed still needs its square recorded,
+// or the die held for it is never released when the offer closes.
+decisionSurfaceReplays.push(() => {
+  const prompt = gameStore.state.reRollPrompt;
+  if (!prompt?.mine) return;
+  const at = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === prompt.playerId)?.playerCoordinate;
+  myRerollOfferSquare = at && at[0] >= 0 && at[0] <= 25 && at[1] >= 0 && at[1] <= 14 ? [at[0], at[1]] : null;
+});
 const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
 /** The player the model has standing on that square (the mover a pickup roll belongs to), or null. */
 function pickupMoverAt(square: readonly [number, number]): string | null {
@@ -3254,7 +3279,7 @@ const skillSilhouette = ref<string | null>(null);
 const selectSkillPortrait = ref<string | null>(null);
 const prayerRecipientPortrait = ref<string | null>(null);
 const intensiveTrainingSelect = computed(() => String(gameStore.state.selectSkill?.mode ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === 'intensivetraining');
-watch(
+watchDecisionSurface(
   () => gameStore.state.skillChoice?.seq,
   () => {
     const choice = gameStore.state.skillChoice;
@@ -3358,7 +3383,7 @@ let skillChoiceRaf = 0;
 // stationary target, following resumes on release. The trait is structural to the whole family, so every
 // RAF-followed prompt guards on this (a dropped decision-click is always a bug, even when rare).
 const reactivePromptHeld = ref<ReactivePromptDragKey | null>(null);
-watch(
+watchDecisionSurface(
   () => gameStore.state.skillChoice?.seq,
   () => {
     cancelAnimationFrame(skillChoiceRaf);
@@ -3398,7 +3423,7 @@ watch(
 // sidestep/stand-firm skill toast — RAF-follows `playerScreenPos`, sits just above the token.
 const bloodlustPos = reactive({ x: 0, y: 0, ready: false });
 let bloodlustRaf = 0;
-watch(
+watchDecisionSurface(
   () => gameStore.state.bloodlust?.seq,
   () => {
     cancelAnimationFrame(bloodlustRaf);
@@ -3663,7 +3688,7 @@ function rerollCardBox(host: HTMLElement | null): PromptCardBox | null {
     dy: (r.top - hr.top) - rerollMenuPos.y,
   };
 }
-watch(
+watchDecisionSurface(
   () => gameStore.state.reRollPrompt?.seq,
   () => {
     cancelAnimationFrame(rerollMenuRaf);
@@ -3983,7 +4008,7 @@ function refreshApothecarySubject(): void {
   apoChoiceSide.value = entry?.side ?? injury?.side ?? null;
 }
 let apoChoiceRaf = 0;
-watch(
+watchDecisionSurface(
   () => gameStore.state.apothecaryChoice?.seq,
   () => {
     refreshApothecarySubject();
@@ -4021,7 +4046,7 @@ watch(
     follow();
   },
 );
-watch(
+watchDecisionSurface(
   () => gameStore.state.apothecaryD16?.seq,
   () => {
     const c = gameStore.state.apothecaryD16;
@@ -4415,7 +4440,7 @@ function onSetupDragEnd(e: PointerEvent) {
 // Owner 2026-07-04: REFEREE SEND-OFF cinematic. The prompt spotlights the spotted
 // player (stand-firm style); the result rolls a d6 in from the bottom, then reveals
 // a green ✓ / red ✗ with the outcome text (+ coins for a bribe).
-watch(
+watchDecisionSurface(
   () => gameStore.state.sendOff?.seq,
   () => {
     const so = gameStore.state.sendOff;
@@ -4617,7 +4642,7 @@ function trackFollowupChip() {
   };
   step();
 }
-watch(
+watchDecisionSurface(
   () => [gameStore.state.followupChoice?.seq, gameStore.state.followupIndicator?.seq],
   () => trackFollowupChip(),
 );
@@ -4777,12 +4802,12 @@ function trackBlockReroll() {
   };
   step();
 }
-watch(
+watchDecisionSurface(
   () => gameStore.state.blockPartial?.seq,
   () => trackBlockReroll(),
 );
 
-watch(
+watchDecisionSurface(
   () => gameStore.state.selectSkill?.seq,
   () => {
     const selection = gameStore.state.selectSkill;
@@ -10186,6 +10211,10 @@ onMounted(async () => {
   // The store may already hold this turn's occurrence when Modern mounts (reconnect, replay/spectate entry,
   // or Classic→Modern). The seq watcher ran before renderer creation, so seed after the initial token render.
   pushBlitzTokens();
+  // Owner 10-08 (cold join): every decision surface the store already holds - armed by the join snapshot, or by a
+  // frame that landed while this renderer was starting - gets its on-pitch effects now (card follows its token, the
+  // push fan is armed, the prompt die and camera are set). Their watchers saw no change, or had no renderer.
+  replayDecisionSurfaces();
   // Owner 09-28 (Spec S3 v2 #2): same "seed after the initial token render" reasoning as pushBlitzTokens — a
   // Classic->Modern switch (or reconnect) remounts this renderer while a Kick 'em Blitz nomination is already
   // held; the watcher (below) only fires on a CHANGE, so a value that was already true before this renderer
@@ -11840,6 +11869,9 @@ function confirmEndActivation() {
   if (endActConfirm.value && currentActingId() !== endActConfirmActingId) { endActConfirm.value = null; return; } // stale: send nothing
   const kind = endActConfirm.value?.kind;
   const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
+  // Owner 10-08: this Yes is the coach's one confirmation for the back-out. The store spends it only on the server's
+  // confirmEndAction for this same Hypnotic Gaze activation (an unused gaze), so the coach is not asked a second time.
+  if (endActConfirm.value) gameStore.noteEndActivationConfirmed();
   endActConfirm.value = null;
   clearO66Arms();
   renderer?.clearSelection();

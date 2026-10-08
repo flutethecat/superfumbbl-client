@@ -88,9 +88,10 @@ export class KickElectionController {
     return this.answer(key, choice);
   }
 
-  /** Headless/private-fork driving declines once, after the caller's deferred exact-instance check. */
-  declineHeadless(key: string): boolean {
-    if (this.hasInteractiveSurface()) return false;
+  /** Headless/private-fork driving declines once, after the caller's deferred exact-instance check.
+   *  `automatedSeat`: the seat is declared automation-driven, so a registered view surface does not own the offer. */
+  declineHeadless(key: string, automatedSeat = false): boolean {
+    if (!automatedSeat && this.hasInteractiveSurface()) return false;
     return this.answer(key, 'normal');
   }
 

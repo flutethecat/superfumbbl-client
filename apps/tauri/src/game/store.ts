@@ -2699,7 +2699,7 @@ function syncInteractivePrayerPresentation(): boolean {
   const myTeamId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? '';
   const mine = play.active && myTeamId === prayer.ownerTeamId;
   const hasInteractiveSurface = mine
-    ? interactiveReRolls
+    ? humanReRollSurface()
     : true;
   if (!hasInteractiveSurface) return false;
   if (pregameCineBusy()) {
@@ -6302,7 +6302,7 @@ function maximumCarnageOnModelApplied(): void {
   maximumCarnageConfirmedInstanceKey = '';
   state.maximumCarnageTargeting = false;
   if (state.actionNotice?.text === MAXIMUM_CARNAGE_NOTICE) state.actionNotice = null;
-  if (!interactiveReRolls) {
+  if (!humanReRollSurface()) {
     gameStore.endActivation();
     return;
   }
@@ -8284,11 +8284,11 @@ function applyFrameContents(frame: QueuedFrame) {
       // Owned interactive and read-only prayer surfaces are handled by the FIFO barrier above. Headless keeps
       // the existing first-offered auto-answer below without introducing any new send.
       const prayerUiHandled = isIntensiveTrainingMode(mode) && syncInteractivePrayerPresentation();
-      if (!prayerUiHandled && mine && interactiveReRolls) {
+      if (!prayerUiHandled && mine && humanReRollSurface()) {
         if (instanceKey && selectSkillHandledInstanceKey !== instanceKey && state.selectSkill?.instanceKey !== instanceKey) {
           state.selectSkill = { playerId: pid, playerName: playerName(game.value, pid), skills, mode, instanceKey, seq: (state.selectSkill?.seq ?? 0) + 1 };
         }
-      } else if (!prayerUiHandled && mine && !interactiveReRolls && skills.length > 0) {
+      } else if (!prayerUiHandled && mine && !humanReRollSurface() && skills.length > 0) {
         // headless auto-pick the first offered skill (once per live dialog occurrence — same one-shot latch as the interactive commit path, not a mode+pid content key)
         if (instanceKey && selectSkillHandledInstanceKey !== instanceKey) {
           selectSkillHandledInstanceKey = instanceKey;
@@ -8311,7 +8311,7 @@ function applyFrameContents(frame: QueuedFrame) {
       const pid = String(dp.playerId);
       const keywords = (dp.keywords ?? []).map((k) => (typeof k === 'string' ? k : String((k as { name?: string })?.name ?? k))).filter(Boolean);
       const mine = play.active && myPlayIds(game.value).has(pid);
-      if (mine && interactiveReRolls) {
+      if (mine && humanReRollSurface()) {
         if (state.keywordChoice?.playerId !== pid) {
           state.keywordChoice = {
             playerId: pid, playerName: playerName(game.value, pid), keywords,
@@ -8320,7 +8320,7 @@ function applyFrameContents(frame: QueuedFrame) {
             seq: (state.keywordChoice?.seq ?? 0) + 1,
           };
         }
-      } else if (play.active && !interactiveReRolls && keywords.length > 0) {
+      } else if (play.active && !humanReRollSurface() && keywords.length > 0) {
         const key = `selectKeyword:${pid}`;
         if (!followupHandled.has(key)) {
           followupHandled.add(key);
@@ -8395,7 +8395,7 @@ function applyFrameContents(frame: QueuedFrame) {
           }
         }
         if (attackerFrom && vacated) {
-          const mine = play.active && interactiveReRolls && myPlayIds(game.value).has(attackerId);
+          const mine = play.active && humanReRollSurface() && myPlayIds(game.value).has(attackerId);
           pendingFollowup = { attackerId, vacated, attackerFrom, mine, resolvingAge: 0 };
           if (mine) {
             state.followupChoice = {
@@ -8441,7 +8441,9 @@ function applyFrameContents(frame: QueuedFrame) {
   {
     const dp = game.value.dialogParameter as Record<string, unknown> | null;
     const dlg = dp?.dialogId as string | undefined;
-    const showApo = apothecaryPromptVisible(play.active, apothecaryElectionSurfaces.size > 0);
+    // Owner 10-08: a seated coach whose view has not mounted yet counts as a surface - the offer / result card state
+    // is armed now and rendered at mount (it used to be skipped here and declined by the followups).
+    const showApo = apothecaryPromptVisible(play.active, humanDecisionSurface(apothecaryElectionSurfaces.size > 0));
     const teamSide = (pid: string): 'home' | 'away' =>
       game.value!.teamHome.playerArray.some((player) => player.playerId === pid) ? 'home' : 'away';
     const squareOf = (pid: string): [number, number] | null => {
@@ -8652,18 +8654,18 @@ function applyFrameContents(frame: QueuedFrame) {
     // dialog teardown are applied; never infer completion from the local button click.
     advanceDeferredStandUpWideRail();
     // Interactive setup: rebuild the reserve/zone/validation view from the model whenever a placement echoes back (drivePregameStep only fires on turnMode/dialog transitions, not on coordinate changes). G303-B3: also covers a Solid-Defence re-setup (SETUP_TURN_MODES), same setup-shaped rebuild.
-    if (interactiveSetup && state.setupPhase) {
+    if (humanSetupSurface() && state.setupPhase) {
       try { computeSetupPhase(game.value); } catch { /* ignore */ }
     }
     // #85: refresh the Quick Snap surface coords per model-apply (the turnMode watch won't fire on a same-mode reposition echo). Self-nulls off quickSnap; startCoord stays pinned (QS-2).
-    if (interactiveSetup && (game.value?.turnMode ?? '') === 'quickSnap') {
+    if (humanSetupSurface() && (game.value?.turnMode ?? '') === 'quickSnap') {
       try { computeQuickSnapPhase(game.value); } catch { /* ignore */ }
     }
     // High Kick: the offer and the ball's landing square can both change without a turnMode transition.
-    if (interactiveSetup && ((game.value?.turnMode ?? '') === HIGH_KICK_TURN_MODE || state.highKickPhase)) {
+    if (humanSetupSurface() && ((game.value?.turnMode ?? '') === HIGH_KICK_TURN_MODE || state.highKickPhase)) {
       try { computeHighKickPhase(game.value); } catch { /* ignore */ }
     }
-    if (interactiveSetup) {
+    if (humanSetupSurface()) {
       try { computeSwarmingPhase(game.value); } catch { /* ignore */ }
     }
     // ORDER 66 (#6.4): advance/flush the planner command-queue AFTER the model + follow-ups + setup are fully applied for this command (leg-2a: evaluate terminals only after a complete apply). `cmd` carries this frame's resolution reports (leg-2a resolution-wait). No-op when no plan runs.
@@ -9487,6 +9489,7 @@ function resetPlayback() {
   state.hmpScatterMarks = null;
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
+  gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
   prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
@@ -10148,7 +10151,7 @@ function reconcileShotToNothingDeclarationEcho(): void {
       && srvActingId === pending.playerId && srvActingAction === pending.playerAction) {
     pendingShotToNothingDeclare = null;
     acknowledgedShotToNothingDeclare = pending;
-    if (interactiveReRolls && shotToNothingElectionStillLive(pending)) {
+    if (humanReRollSurface() && shotToNothingElectionStillLive(pending)) {
       state.skillChoice = {
         playerId: pending.playerId,
         skill: 'Shot to Nothing',
@@ -10292,7 +10295,7 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   completedWideRailDeclare = null;
   deferredStandUpWideRail = null;
   clearShotToNothingElection();
-  if (g && play.active && interactiveReRolls && srvActingId && srvActingAction === 'passMove'
+  if (g && play.active && humanReRollSurface() && srvActingId && srvActingAction === 'passMove'
       && !g.dialogParameter && iControlPlayer(srvActingId)
       && hasUnusedSkillNamed(g, srvActingId, 'Shot to Nothing')) {
     const correlation: ShotToNothingCorrelation = {
@@ -10358,6 +10361,7 @@ function watchActivationTook(playerId: string, label: string) {
 function whenPriorActivationEnded(attackerId: string, cb: () => void, maxWaitMs = 900) {
   // Clean state (no live activation) or re-declaring on the SAME player → nothing to end, go now.
   if (srvActingId == null || srvActingId === attackerId) { cb(); return; }
+  gazeEndRequest = null; // this acting-null is not the coach's confirmed End: a Yes given for an earlier one is never spent on it
   sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
   const start = Date.now();
   const tick = () => {
@@ -12663,10 +12667,15 @@ export function installPlayerChoiceTestHarness(
   /** Shape an acknowledged regular Move so the production move/end send path can be exercised. */
   prepareMove(playerId: string, destination?: [number, number]): void;
   move(playerId: string, destination?: [number, number]): void;
-  end(): void;
+  /** `gazeEndConfirmed`: the coach said Yes on the client's own End Activation card - driven exactly as the view
+   *  drives it (`noteEndActivationConfirmed()` then the ordinary `endActivation`). */
+  end(options?: { gazeEndConfirmed?: boolean }): void;
   answered(): boolean;
   railLogs(): string[];
   pick(): typeof state.playerPick;
+  gazeIntent(): typeof state.gazeIntent;
+  /** A later applied frame's dialog followups over the current model (production runs them on every frame). */
+  followups(): void;
   bloodlust(): typeof state.bloodlust;
   /** The server shows `confirmEndAction` for my team (a new dialog object), driven as the LIVE UI drives it
    *  (interactive rerolls on, as both views set at mount). `interactive: false` = the reconnect snapshot: the
@@ -12697,6 +12706,7 @@ export function installPlayerChoiceTestHarness(
   const priorInteractiveReRollsFlag = interactiveReRolls;
   const priorFollowupHandled = [...followupHandled]; // the headless confirmEnd latch is module state: isolate it per harness
   followupHandled.clear();
+  gazeEndRequest = null; confirmEndCardInstance = null; // likewise the confirm-end module state
   const priorHandled = [...pregameHandled];
   const priorPick = state.playerPick;
   const priorEndGame = state.endGame;
@@ -12788,7 +12798,9 @@ export function installPlayerChoiceTestHarness(
       seedMoveOfferSnapshot(playerId);
     },
     move(playerId, destination = [2, 3]) { gameStore.stepMove(playerId, destination); },
-    end() { gameStore.endActivation(); },
+    end(options) { if (options?.gazeEndConfirmed) gameStore.noteEndActivationConfirmed(); gameStore.endActivation(); },
+    gazeIntent: () => state.gazeIntent,
+    followups() { resolvePlayFollowups(); },
     answered: () => dialogAlreadyAnswered(),
     railLogs: () => state.log.slice(priorLogLength).map((entry) => entry.text)
       .filter((text) => text.includes('rail:')),
@@ -12844,6 +12856,7 @@ export function installPlayerChoiceTestHarness(
       interactiveReRolls = priorInteractiveReRollsFlag;
       followupHandled.clear();
       for (const key of priorFollowupHandled) followupHandled.add(key);
+      gazeEndRequest = null; confirmEndCardInstance = null;
       moveOfferOccurrences.clear();
       for (const [key, occurrence] of priorMoveOfferOccurrences) moveOfferOccurrences.set(key, occurrence);
       moveOfferRevision = priorMoveOfferRevision;
@@ -13896,14 +13909,14 @@ export function installSetupErrorRecoveryTestHarness(
       settings.uiMode = surface === 'classic' ? 'classic' : 'fumbbl40k';
       if (play.active) {
         drivePregameStep();
-        if (game.value && interactiveSetup) computeSwarmingPhase(game.value);
+        if (game.value && humanSetupSurface()) computeSwarmingPhase(game.value);
       }
     },
     apply(command) {
       applyFrame({ receivedAt: Date.now(), cmd: command });
       if (play.active) {
         drivePregameStep();
-        if (game.value && interactiveSetup) computeSwarmingPhase(game.value);
+        if (game.value && humanSetupSurface()) computeSwarmingPhase(game.value);
       }
     },
     applyReceived(command) {
@@ -15735,6 +15748,194 @@ const interceptWait = computed(() => {
 });
 // Owner 2026-07-03 r4: live UI turns this ON so reroll prompts on OUR player answered by coach; headless drivers/probes leave OFF (auto-decline) so M4.2 probe flow unchanged. ⚠ NEEDS A LIVE PLAY-MODE VERIFICATION PASS (demo never sends reRoll dialogs); reRollSource wire shape may need tweak against fork server.
 let interactiveReRolls = false;
+/**
+ * Owner 10-08 ("Can we have this popped for reconnecting coaches?") - the cold-join auto-answer family.
+ * `interactiveReRolls === false` means "a DECLARED headless/bot seat", never "the view has not mounted yet". It used to
+ * default to false and be raised only by a view's setup/mount, so on a cold join or reconnect - where the snapshot's
+ * forced tick and its dialog followups run BEFORE the view exists - a seated coach had open decisions answered by the
+ * headless fallback (stay, die zero, decline the reroll / skill / apothecary / argue, first push square ...).
+ *
+ * connectAsPlayer is how a coach takes a seat, so it declares the decision surface there (the same fix, at the same
+ * place, as `interactiveSetup` got on 08-18). Every dialog then arms its normal surface STATE at once and the view
+ * renders it when it mounts; nothing is sent until the coach answers.
+ *
+ * A seat driven by AUTOMATION (test drivers, the fly-brain / random coach, bot rigs) says so explicitly - see
+ * `seatAutomation` below. Store harnesses never pass through connectAsPlayer and are untouched; demo / replay /
+ * spectate never set `play.active`.
+ */
+/** This seat was taken through connectAsPlayer and that connection has not been dropped (`disconnect` clears it). */
+let connectDeclaredSeat = false;
+/** `interactiveReRolls` is on only because the STORE raised it for a seated coach (at connect, or across a view's
+ *  teardown) - no view has claimed it since. Every explicit `setInteractiveReRolls` call clears it. */
+let connectRaisedReRolls = false;
+/**
+ * Astra P2 (10-08): "this seat is driven by automation" is an EXPLICIT, STICKY declaration - never an inference from
+ * the order two flags happened to be set in (which a mounted view, a failed reconnect attempt or Classic mode broke).
+ *  - SET by a driver opting out: `setSeatAutomation(true)`, or the established recipe every driver already uses -
+ *    `setInteractiveSetup(false)` / `setInteractiveReRolls(false)` on a seat taken through connectAsPlayer.
+ *  - A VIEW's teardown is not a driver. Only ClassicView ever lowers those flags (its onBeforeUnmount), and it does so
+ *    while its 'classic' surfaces are still registered and unregisters them in the same synchronous task; a `false`
+ *    that arrives like that is held as a candidate and dropped when the surface goes (see `noteSurfaceOptOut`).
+ *    A human seat is therefore never classified as automation by a view mounting or unmounting.
+ *  - STICKY: survives every view mount / unmount (a view's `setInteractive*(true)` is not an opt back in), `disconnect`
+ *    and every reconnect attempt, in every UI mode.
+ *  - CLEARED only by `setSeatAutomation(false)` or by a fresh connectAsPlayer that is not the store's own reconnect
+ *    (a new join starts as a human seat; a driver declares after joining, as the recipe always had it).
+ * What it changes: the seated-coach protections above stand down (nothing is raised or held "for the coach" at
+ * connect, on reconnect or across a teardown), and - Astra confirm (10-08) - the declaration is AUTHORITATIVE: every
+ * seat test in this file goes through `seatIsAutomated()` (see the predicates under `seatedCoachAwaitingView`), so a
+ * declared seat takes the headless / bot branch of every decision and keeps its coach brain, whatever the two flags,
+ * the UI mode or the registered view surfaces say. The raw flags are still whatever connect / a view / the driver last
+ * set; for a declared seat nothing reads them. So connectAsPlayer's own raises (on a join or on any reconnect attempt)
+ * can never make a declared bot look human, not even for the snapshot's forced tick.
+ */
+let seatAutomation = false;
+/** `reconnect()` is calling connectAsPlayer: the automation declaration rides through (read in its synchronous head). */
+let reconnectJoinInProgress = false;
+/** A `setInteractive*(false)` that arrived with a 'classic' surface registered: ClassicView's teardown, unless the
+ *  surface is still there at the next microtask - then it was a driver on a mounted Classic app. `reRolls` = the
+ *  reroll flag was one of the flags it lowered. */
+let classicOptOutCandidate: { reRolls: boolean } | null = null;
+function declareSeatedCoachAtConnect(): void {
+  connectDeclaredSeat = true;
+  if (seatAutomation) return; // an automated seat re-joining by itself: its flags stay as the driver left them
+  if (!interactiveReRolls) { interactiveReRolls = true; connectRaisedReRolls = true; }
+}
+function withdrawConnectDeclaredSeat(): void {
+  connectDeclaredSeat = false;
+  if (connectRaisedReRolls) { connectRaisedReRolls = false; interactiveReRolls = false; }
+}
+function declareSeatAutomation(): void {
+  // Dev builds only (the Vite dev app / rigs; compiled out of every packaged build). A driver left running re-declares
+  // on its own timer, and would do so on a seat a human has since joined: say so where the driver's operator looks.
+  if (!seatAutomation && import.meta.env.DEV) {
+    console.warn('[seat] this seat is now declared AUTOMATION-driven: every decision is answered by the client / coach brain and no prompt is offered. '
+      + 'If a human is meant to play this seat, stop the driver that declared it (setInteractiveSetup(false) / setInteractiveReRolls(false) / setSeatAutomation(true)) and call setSeatAutomation(false).');
+  }
+  seatAutomation = true;
+  // the store's own raise was made for a human coach: take it back, so the driver finds the flag where it had it
+  if (connectRaisedReRolls) { connectRaisedReRolls = false; interactiveReRolls = false; }
+}
+/** A legacy opt-out call (`setInteractiveSetup(false)` / `setInteractiveReRolls(false)`): a driver's declaration, or
+ *  ClassicView's teardown. Returns 'classic-teardown' while it may still be the latter. Calls with no connected seat
+ *  (store harnesses, a view torn down after an explicit disconnect) are neither. */
+function noteSurfaceOptOut(which: 'setup' | 'rerolls'): 'none' | 'automation' | 'classic-teardown' {
+  if (!play.active || !connectDeclaredSeat) return 'none';
+  if (!apothecaryElectionSurfaces.has('classic')) { declareSeatAutomation(); return 'automation'; }
+  if (seatAutomation) return 'automation';
+  if (!classicOptOutCandidate) {
+    classicOptOutCandidate = { reRolls: false };
+    queueMicrotask(() => {
+      const candidate = classicOptOutCandidate;
+      classicOptOutCandidate = null;
+      // Still mounted a task later: not a teardown - a driver on a mounted Classic app. Apply what it asked for.
+      if (!candidate || !play.active || !connectDeclaredSeat || !apothecaryElectionSurfaces.has('classic')) return;
+      declareSeatAutomation();
+      if (candidate.reRolls) { interactiveReRolls = false; connectRaisedReRolls = false; }
+    });
+  }
+  if (which === 'rerolls') classicOptOutCandidate.reRolls = true;
+  return 'classic-teardown';
+}
+/** A seated human coach whose view has not registered its dedicated surfaces yet (Apothecary, Kick): those gates key
+ *  on a MOUNTED surface, which a cold join does not have while the snapshot is being derived. */
+function seatedCoachAwaitingView(): boolean {
+  return play.active && connectDeclaredSeat && !seatAutomation;
+}
+/**
+ * Astra confirm (10-08): THE seat test. The automation declaration is AUTHORITATIVE - a declared automated seat takes
+ * the headless / bot branch of every decision, whatever `interactiveSetup`, `interactiveReRolls`, `settings.uiMode` or
+ * the registered view surfaces (Kick, Apothecary, Classic) say. Those are all things a mounted view, connectAsPlayer or
+ * a reconnect raise for a HUMAN coach; before this they each still won over the declaration somewhere (connect raised
+ * setup again, so a Modern bot's confirmEndAction / gaze target waited and its coach brain was switched off; a mounted
+ * Kick or Apothecary surface held a bot's offer; Classic mode alone armed a bot's blitz-target pick).
+ * Every "is this a seated human who must answer" decision in this file reads one of the predicates below - never the
+ * raw flags, the surface sets or the UI mode. With no declaration each evaluates exactly as the raw operand did.
+ * `play.active`: the declaration is about a seat, and is sticky past `disconnect`; spectating / replay never read it.
+ */
+function seatIsAutomated(): boolean {
+  return seatAutomation && play.active;
+}
+/** `interactiveSetup` as a seat test: a human places / answers the setup-side decisions by hand. */
+function humanSetupSurface(): boolean {
+  return interactiveSetup && !seatIsAutomated();
+}
+/** `interactiveReRolls` as a seat test: a human answers the in-play decisions (rerolls, skills, dice, cards ...). */
+function humanReRollSurface(): boolean {
+  return interactiveReRolls && !seatIsAutomated();
+}
+/** Classic mode as a seat test (ClassicView may not have mounted yet, and never declares setup outside play). */
+function classicHumanSeat(): boolean {
+  return settings.uiMode === 'classic' && !seatIsAutomated();
+}
+/** A dedicated view surface (Kick, Apothecary) as a seat test: registered, or a seated coach's view is still to mount. */
+function humanDecisionSurface(registered: boolean): boolean {
+  return !seatIsAutomated() && (registered || seatedCoachAwaitingView());
+}
+/**
+ * Astra P1 (10-08): decisions ClassicView has NO surface for - no consumer of the state the store arms and no sender.
+ * Audited against ClassicView.vue 10-08 (every state / sender the interactive branches use; these are the only gaps):
+ *   pushback                         state.pushChoice           - Classic never binds renderer.onPushChoice / resolvePushback
+ *   selectWeather                    state.selectWeather        - no card, no resolveSelectWeather
+ *   selectPosition                   state.selectPosition       - no card, no resolveSelectPosition
+ *   reRollBlockForTargetsProperties  state.multiBlockResolution - no card, no multi-block commit
+ * For a Classic coach these keep EXACTLY what they did before the 10-08 connect-time declaration: the store's own
+ * raise of `interactiveReRolls` (cold join, reconnect, across Classic's teardown) does not count for them, so the
+ * pre-mount fallback still answers - holding them would leave the server waiting on a coach with nothing to click.
+ * Once ClassicView has claimed the flag itself (warm play) they behave as they always have; that warm gap is older
+ * than this change and is not touched here. SHRINK this list as Classic gains each surface.
+ */
+type ClassicUnsurfacedDecision = 'pushback' | 'selectWeather' | 'selectPosition' | 'reRollBlockForTargetsProperties';
+const CLASSIC_UNSURFACED_DECISIONS: ReadonlySet<ClassicUnsurfacedDecision> = new Set<ClassicUnsurfacedDecision>([
+  'pushback', 'selectWeather', 'selectPosition', 'reRollBlockForTargetsProperties',
+]);
+/** `interactiveReRolls`, for one of the decisions above: false while a Classic coach's flag is only the store's raise. */
+function decisionSurfaceDeclared(decision: ClassicUnsurfacedDecision): boolean {
+  if (!humanReRollSurface()) return false;
+  return !(connectRaisedReRolls && settings.uiMode === 'classic' && CLASSIC_UNSURFACED_DECISIONS.has(decision));
+}
+/** Owner 10-08 / Astra P2 (10-08): the ONE End request (acting-null) this seat has sent for a Hypnotic Gaze activation
+ *  and the server has not replied to yet. `confirmed` = the coach said Yes to it on the client's End Activation card;
+ *  the server's confirmEndAction for that same request then spends that Yes (one prompt per back-out).
+ *  It is pinned to the exact occurrence - game, turn, acting player, acting action - and lives until the server
+ *  ANSWERS it: the confirmEndAction (which consumes it), or real evidence the server answered another way - the
+ *  acting player cleared or changed, the action changed, the turn or game changed, a reconnect (`resetPlayback`).
+ *  Astra P2 (10-08): a frame that does not answer it is NOT a reply. The server syncs the model on its own clock
+ *  (ServerGameTimeTask's timeout-availability change gets its own command number), and such a frame landing between
+ *  the acting-null and its confirmEndAction used to drop the request and the Yes - the coach was asked twice.
+ *  So a carried Yes can never reach another player, action, activation or turn and never survives a reconnect. A
+ *  server that left the activation standing and never asked cannot have that Yes spent later either: only a
+ *  confirmEndAction spends it, the server raises one only for an acting-null, and every acting-null goes through
+ *  `endActivation`, which starts a new request (carrying the Yes only across a server that stayed wholly silent).
+ *  While the request is fresh a repeated End gesture sends nothing: the activation is already being ended, and a
+ *  second acting-null would only make the server ask a second time. */
+interface GazeEndRequest {
+  gameId: string; turnKey: string; playerId: string; playerAction: string;
+  /** `lastAppliedCommandNr` when the request left: any later value means the server has sent SOMETHING since (not
+   *  necessarily a reply - see above). Only the silent-server Yes carry in `endActivation` reads it. */
+  commandNr: number; sentAt: number; confirmed: boolean;
+}
+let gazeEndRequest: GazeEndRequest | null = null;
+/** A silent server must not leave End dead: after this long a repeated End gesture is sent again (the Yes rides along). */
+const GAZE_END_REPEAT_MS = 2000;
+/** The request, while its own activation is still the live one (same game, turn, acting player and action). */
+function gazeEndRequestLive(): GazeEndRequest | null {
+  const request = gazeEndRequest;
+  const g = game.value;
+  if (!request || !g) return null;
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | null | undefined;
+  return currentGameId() === request.gameId && currentTurnKey(g) === request.turnKey
+    && String(acting?.playerId ?? '') === request.playerId && String(acting?.playerAction ?? '') === request.playerAction
+    ? request : null;
+}
+/** Still unanswered: its activation is live and no confirmEndAction has consumed it (frames that do not answer it
+ *  leave it standing). */
+function gazeEndRequestUnanswered(): GazeEndRequest | null {
+  return gazeEndRequestLive();
+}
+let endActivationConfirmedByCoach = false;
+/** The confirmEndAction dialog object the showing `confirmEnd:` card was armed for. */
+let confirmEndCardInstance: object | null = null;
 function interactiveApothecaryPrompts(): boolean {
   return apothecaryElectionSurfaces.size > 0;
 }
@@ -15823,7 +16024,7 @@ function deferKickElectionDecline(key: string, generation: number): void {
     autoBeatTimers.delete(t); autoBeatPending.delete(key);
     const live = state.kickSkill;
     if (!live || live.generation !== generation || kickElectionController.currentKey() !== key) return;
-    if (!kickElectionController.declineHeadless(key)) return;
+    if (!kickElectionController.declineHeadless(key, seatIsAutomated())) return;
     kickSkillAnsweredKey = key;
     state.kickSkill = null;
     log('system', `play: Kick declined (${playerName(game.value, live.playerId)})`);
@@ -17124,6 +17325,14 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // S100: the Follow up / Stay fallback card dies with its followupChoice dialog - before any dialog handler can return early.
   if (state.yesNo?.key.startsWith('followupAsk:')
     && (game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId !== 'followupChoice') clearYesNo();
+  // A confirm-end card dies with its server dialog (cleared / replaced). Sends nothing.
+  if (state.yesNo?.key.startsWith('confirmEnd:')
+    && (game.value?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId !== 'confirmEndAction') clearYesNo();
+  // A pending gaze End (and any Yes it carries) is dropped the moment its occurrence is not the live one - the acting
+  // player cleared or changed, another action, turn or game: the server answered some other way and nothing is left
+  // for that Yes to answer. Astra P2 (10-08): any OTHER frame (a clock / timeout-availability model sync, chat) is not
+  // an answer and leaves it standing for the confirmEndAction that is still on its way.
+  if (gazeEndRequest && !gazeEndRequestLive()) gazeEndRequest = null;
   if (!play.active) return;
   const g = game.value;
   if (!g) return;
@@ -17152,7 +17361,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     if (cdp?.dialogId === 'concedeGame') {
       if (!isMyTurn(g)) return; // SR-242: no teamId on the wire (DialogWithoutParameter); upstream shows only to the playing coach (DialogGameConcessionHandler.showDialog:28)
       concedeRequestAt = null; // the server responded — cancel the no-response feedback
-      if (interactiveReRolls) {
+      if (humanReRollSurface()) {
         if (dialogAlreadyAnswered()) return; // S37: answered once per server dialog instance; later frames over it do not re-raise
         const concedeDialog = g.dialogParameter as object;
         const concedeInstanceKey = dialogInstanceKey(g);
@@ -17227,7 +17436,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
           armServerCoordinatePicks();
           return;
         }
-        if (interactiveReRolls) {
+        if (humanReRollSurface()) {
           const options = wizardSpellChoices(offer)
             .filter((choice): choice is { kind: 'spell'; spell: WizardSpell } => choice.kind === 'spell')
             .map((choice) => ({
@@ -17284,7 +17493,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         const key = regenerationElectionKey(offer.commandNr);
         if (followupHandled.has(key)) return;
         liveRegenerationOffer = offer;
-        if (interactiveReRolls) {
+        if (humanReRollSurface()) {
           const choices = regenerationElectionChoices(offer)
             .filter((choice): choice is Exclude<RegenerationElectionChoice, { kind: 'decline' }> => choice.kind !== 'decline');
           liveRegenerationChoices = new Map(choices.map((choice) => [regenerationChoiceValue(choice), choice]));
@@ -17337,7 +17546,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         const key = useInducementKey(offer.commandNr);
         if (followupHandled.has(key)) return;
         liveUseInducementOffer = offer;
-        if (interactiveReRolls) {
+        if (humanReRollSurface()) {
           const options = useInducementChoices(offer)
             .filter((choice): choice is Exclude<UseInducementChoice, { kind: 'decline' }> => choice.kind !== 'decline')
             .map((choice) => ({
@@ -17378,7 +17587,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         followupHandled.add(key);
         sendCommand({ netCommandId: NetCommandId.CLIENT_PILE_DRIVER, playerId });
       };
-      if (!interactiveReRolls || playerIds.length === 0) {
+      if (!humanReRollSurface() || playerIds.length === 0) {
         reply(null); // headless / driven fallback: decline so the parked server always resumes
         return;
       }
@@ -17431,7 +17640,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         state.selectWeather = null;
         return;
       }
-      if (interactiveReRolls) {
+      if (decisionSurfaceDeclared('selectWeather')) {
         if (instanceKey && selectWeatherHandledInstanceKey !== instanceKey && state.selectWeather?.instanceKey !== instanceKey) {
           state.selectWeather = { options, seq: (state.selectWeather?.seq ?? 0) + 1, instanceKey };
         }
@@ -17466,7 +17675,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       }
       const minSelects = Math.max(0, Number(pdp.minSelects ?? 1) || 0);
       const maxSelects = Math.max(1, Number(pdp.maxSelects ?? 1) || 1);
-      if (interactiveReRolls) {
+      if (decisionSurfaceDeclared('selectPosition')) {
         if (instanceKey && selectPositionHandledInstanceKey !== instanceKey && state.selectPosition?.instanceKey !== instanceKey) {
           state.selectPosition = { teamId, mode: String(pdp.positionChoiceMode ?? ''), minSelects, maxSelects, options, seq: (state.selectPosition?.seq ?? 0) + 1, instanceKey };
         }
@@ -17539,7 +17748,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
             ? { netCommandId: NetCommandId.CLIENT_INTERCEPTOR_CHOICE, interceptorId, skill }
             : { netCommandId: NetCommandId.CLIENT_INTERCEPTOR_CHOICE, interceptorId });
         };
-        if (interactiveReRolls) {
+        if (humanReRollSurface()) {
           // DialogInterceptionHandler's decline gate is unconditional of candidate count; its lone-interceptor
           // auto-pick happens only post-yes, so even one candidate must use the declinable picker.
           const armPicker = (elected: string | null) => armPlayerPick({
@@ -17600,7 +17809,10 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     if (kickSkillAnsweredKey === key) return;
     const generation = kickSkillGeneration;
     // Modern and Classic both opt into this dedicated pitch election. Only a headless client auto-declines.
-    if (kickElectionController.hasInteractiveSurface()) return;
+    // Owner 10-08: nor is it declined for a seated coach whose view has not mounted yet (a cold join into the offer):
+    // state.kickSkill stays armed and the view's surface picks it up when it registers.
+    // Astra confirm (10-08): a declared automated seat declines even with a view's Kick surface registered.
+    if (humanDecisionSurface(kickElectionController.hasInteractiveSurface())) return;
     deferKickElectionDecline(key, generation);
     return;
   }
@@ -17628,7 +17840,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   if (dlg === 'penaltyShootout') {
     const decision = deriveEndGameDecision(state.endGame, outgoingDecisionContext(g));
     if (decision?.kind !== 'penaltyShootout') return;
-    if (!interactiveReRolls && !followupHandled.has(decision.instanceKey)) {
+    if (!humanReRollSurface() && !followupHandled.has(decision.instanceKey)) {
       followupHandled.add(decision.instanceKey);
       sendCommand(answerEndGameDecision(decision));
     }
@@ -17638,7 +17850,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // to my team is surfaced INTERACTIVELY (the coach argues / bribes / passes); never
   // auto-answered (the human owns it). Bots/headless leave interactiveReRolls off →
   // fall through to the auto-decline below.
-  if ((dlg === 'bribes' || dlg === 'argueTheCall') && interactiveReRolls && (dp?.teamId ?? myTeamId) === myTeamId) {
+  if ((dlg === 'bribes' || dlg === 'argueTheCall') && humanReRollSurface() && (dp?.teamId ?? myTeamId) === myTeamId) {
     surfaceSendOff(g, dp);
     return;
   }
@@ -17653,7 +17865,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // o66: authority = deriveReaction (which checks the wire choosingTeamId against my true team, invariant 2); legacy: the same choosingTeamId match inline. The non-choosing side surfaces nothing (invariant 2a).
   const diePickForMe = o66On ? o66Reaction === 'diePick' : (isBlockDice && dp?.choosingTeamId === myTeamId); // o66-dispatch
   if (diePickForMe) {
-    if (interactiveReRolls) { surfaceBlockPartial(dp as Record<string, unknown>, { reports }); return; }
+    if (humanReRollSurface()) { surfaceBlockPartial(dp as Record<string, unknown>, { reports }); return; }
     // Headless / bot: clientBlockChoice both picks die 0 AND declines every re-roll.
     // g313 recurring-class fix: include the block-choice epoch so two blocks with IDENTICAL dice don't
     // collide on the dice-JSON key and suppress the 2nd auto-pick (same bug as surfaceBlockPartial).
@@ -17661,14 +17873,14 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   // Show non-choosers an Order-66-only inert block result; headless non-choosers do nothing.
   if (o66On && o66Reaction === 'blockView') { // o66-dispatch
-    if (interactiveReRolls) surfaceBlockPartial(dp as Record<string, unknown>, { readOnly: true, reports });
+    if (humanReRollSurface()) surfaceBlockPartial(dp as Record<string, unknown>, { readOnly: true, reports });
     return;
   }
   // Surface combined synchronous multi-block dice to the blocker; headless picks die 0 per unresolved target.
   if (dlg === 'reRollBlockForTargetsProperties') {
     const blocker = String(dp?.playerId ?? '');
     if (!blocker || !mine.has(blocker)) return; // not my dialog
-    if (interactiveReRolls) { surfaceMultiBlockResolution(dp as Record<string, unknown>); return; }
+    if (decisionSurfaceDeclared('reRollBlockForTargetsProperties')) { surfaceMultiBlockResolution(dp as Record<string, unknown>); return; }
     // headless: pick die 0 for the FIRST still-unselected target and let the server's re-send drive the next
     // (robust whether the server applies choices sequentially or in a batch — sending all at once could dedup-wedge
     // a sequential server on its re-send). dedup per target+epoch guards a transient re-send before the model updates.
@@ -17686,7 +17898,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // card's RE-ROLL beat for the vampire's coach (Team/Pro, Pro only if the player has it) — same panel as
   // the change/feed decision that follows. Interactive only; headless falls through to the auto-decline.
   if ((dlg === 'reRoll' || dlg === 'reRollProperties') && /blood ?lust/i.test(String(dp?.reRolledAction ?? '')) &&
-      interactiveReRolls && dpPlayer && mine.has(dpPlayer)) {
+      humanReRollSurface() && dpPlayer && mine.has(dpPlayer)) {
     const key = `bloodlust-rr:${dpPlayer}:${dp?.reRolledAction}`;
     if (!followupHandled.has(key)) {
       followupHandled.add(key);
@@ -17717,7 +17929,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     // interactiveReRolls (am I a live client vs a headless driver) is orthogonal and gates both.
     const ownedReroll = !!dpPlayer && mine.has(dpPlayer);
     const rerollForMe = o66On ? o66Reaction === 'reroll' : ownedReroll; // o66-dispatch
-    if (interactiveReRolls && rerollForMe) {
+    if (humanReRollSurface() && rerollForMe) {
       if (isTeamOnlyPuntReRoll(dp as Record<string, unknown>)) {
         state.reRollPrompt = null;
         return once(`puntTeamReRoll:${dp?.reRolledAction}:${dpPlayer}`, {
@@ -17760,7 +17972,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     const fireKey = `${dpPlayer}|${rawSkill}`;
     // Never fast-auto-fire behaviorless Fend/Taunt/Tackle; route them through the interactive wait.
     const behaviourless = !!autoKey && BEHAVIOURLESS_AUTO_USE_SKILLS.has(autoKey);
-    if (interactiveReRolls) {
+    if (humanReRollSurface()) {
       const liveSkillDialog = g.dialogParameter as object;
       if (autoOn && !behaviourless && autoFiredSkillDialog !== liveSkillDialog) {
         autoFiredSkillDialog = liveSkillDialog;
@@ -17803,7 +18015,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       ? !!authority.myTeamId && dp.teamId === authority.myTeamId
       : !!dpPlayer && authority.myPlayerIds.has(dpPlayer);
     if (!addressedToMe) return;
-    if (interactiveApothecaryPrompts()) {
+    // Owner 10-08: a seated coach whose view has not mounted yet is never declined for - the prompt state is armed
+    // now (registerApothecaryElectionSurface re-arms it at mount as well).
+    if (humanDecisionSurface(interactiveApothecaryPrompts())) {
       armApothecaryPrompt(g, dp);
       return;
     }
@@ -17815,7 +18029,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     return;
   }
   if (dlg === 'apothecaryChoice' && (!dpPlayer || mine.has(dpPlayer))) {
-    if (interactiveApothecaryPrompts() && dpPlayer && mine.has(dpPlayer)) return; // cinematic owns it
+    if (humanDecisionSurface(interactiveApothecaryPrompts()) && dpPlayer && mine.has(dpPlayer)) return; // cinematic owns it
     return once(`apoChoice:${dpPlayer}`, {
       netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, playerId: dpPlayer,
       playerState: dp?.playerStateNew, seriousInjury: dp?.seriousInjuryNew, playerStateOld: dp?.playerStateOld,
@@ -17836,9 +18050,15 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     // Astra P1 (10-08): the Decline confirmation is never answered for a seated coach - including before the view
     // mounts (a reconnect snapshot runs these followups first, with `interactiveReRolls` still at its default).
     // Same seat test as the selectGazeTarget rail; only a declared headless/bot seat falls to the auto-confirm.
+    // Owner 10-08: the same holds for EVERY action. A seated coach who reconnects into a standing confirmEndAction is
+    // offered its card (nothing is sent until they answer); `setInteractiveReRolls` re-offers a card lost before the mount.
     const gazeSelectCancel = String(g.turnMode ?? '') === 'selectGazeTarget';
-    if (interactiveReRolls || (gazeSelectCancel && (interactiveSetup || settings.uiMode === 'classic'))) {
+    if (humanReRollSurface() || humanSetupSurface() || classicHumanSeat()) {
       const rawAction = String(dp?.playerAction ?? '').toLowerCase();
+      // A card still up from an earlier occurrence (the server asked again; card keys are content-keyed) is replaced, so
+      // the answer always goes to the occurrence that is live.
+      if (state.yesNo?.key.startsWith('confirmEnd:') && confirmEndCardInstance !== instanceRef) clearYesNo();
+      confirmEndCardInstance = instanceRef;
       // Astra P2 (10-08): BB2020 StepSelectGazeTarget asks this when the coach Declines the target dialog after the
       // gazer has already acted. The turn mode is still `selectGazeTarget` (the step restores it only once it is done),
       // which the right-click back-out below never is. The coach pressed Decline, not "end the action": offer the
@@ -17863,9 +18083,39 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         });
         return;
       }
-      // Right-click does not end the turn during gaze, so confirming back-out is pointless friction.
+      // Owner 10-08: backing out of a Hypnotic Gaze whose gaze was NOT used (upstream StepInitSelecting asks only then:
+      // unused skill, no square moved, a committed target selection) is the coach's to confirm - it used to be answered
+      // for them (08-20). ONE prompt per back-out: when the coach has just confirmed ending this very activation on the
+      // client's own End Activation card, that Yes is the answer and no second card is raised. Every other route
+      // (the card switched off in Settings, Classic, a menu End) gets this card. No sends nothing, as upstream
+      // (DialogConfirmEndActionHandler), and the action stays live.
       if (rawAction.includes('gaze') || rawAction.includes('hypno')) {
-        sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef);
+        const gazerId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+        // This dialog IS the server's reply to the pending End, so the request is over either way; the Yes it may
+        // carry is spent here or not at all (same game, turn, gazer and action as when the coach gave it).
+        const pendingEnd = gazeEndRequestLive();
+        gazeEndRequest = null;
+        if (pendingEnd?.confirmed && pendingEnd.playerId === gazerId) {
+          sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef);
+          return;
+        }
+        askYesNo({
+          key: `confirmEnd:gaze:${instanceKey}`,
+          text: 'Cancel the Hypnotic Gaze? This ends the action.',
+          onAnswer: (yes) => {
+            if (yes) { sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef); return; }
+            if (!acknowledgeAnsweredDialogInstance(instanceKey, instanceRef)) return;
+            // The end that raised this dropped the local gaze intent; the server kept the activation, so bring it back.
+            const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+            if (!state.gazeIntent && gazerId && String(acting?.playerId ?? '') === gazerId && iControlPlayer(gazerId)
+                && ['gaze', 'gazeMove', 'gazeSelect'].includes(String(acting?.playerAction ?? ''))) {
+              state.gazeIntent = {
+                actingPlayerId: gazerId, victimId: null, pendingVictimId: null,
+                phase: settings.uiMode === 'classic' ? 'targeting' : 'active', seq: 1,
+              };
+            }
+          },
+        });
         return;
       }
       // Owner 2026-07-13 (humanizer review): playerAction is camelCase ('blitzMove') — split it BEFORE lowering, else the prompt read "End the current blitzmove?". Now → "End the current blitz move?".
@@ -17880,13 +18130,18 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       });
       return;
     }
+    // Headless/bot seat. Latched per dialog OCCURRENCE (the answered-instance latch checked above: this exact dialog
+    // object). It was once('confirmEnd'), a key only cleared on a fresh game: a bot's SECOND confirmEndAction of a
+    // game was never answered and the server waited forever. `dialogInstanceKey` is content-keyed, so it cannot tell
+    // two occurrences apart either.
+    if (instanceKey && instanceRef) { sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef); return; }
     return once('confirmEnd', { netCommandId: NetCommandId.CLIENT_CONFIRM });
   }
   // Owner 2026-07-04 (interaction catalog 65): yesOrNoQuestion — NEVER pushed by
   // the server (in FUMBBL it's a client-INTERNAL dialog id, DialogThreeWayChoice);
   // flagged for owner review. Defensive: render any accompanying text verbatim in
   // the generic yes/no card; Yes answers clientConfirm.
-  if (dlg === 'yesOrNoQuestion' && interactiveReRolls) {
+  if (dlg === 'yesOrNoQuestion' && humanReRollSurface()) {
     askYesNo({
       key: 'yesOrNoQuestion',
       text: String(dp?.text ?? dp?.message ?? dp?.question ?? 'Confirm?'),
@@ -17915,7 +18170,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       return;
     }
     const changeToMove = !!dp?.changeToMove;
-    if (interactiveReRolls) {
+    if (humanReRollSurface()) {
       // Owner 2026-07-08: the unified bloodlust card's DECISION beat (same panel as the re-roll beat).
       const key = `bloodlust-dec:${vampId}`;
       if (!followupHandled.has(key)) {
@@ -17962,7 +18217,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       return once('followup', { netCommandId: NetCommandId.CLIENT_FOLLOWUP_CHOICE, choiceFollowup: false });
     }
     const followupForMe = o66On ? o66Reaction === 'followup' : true; // o66-dispatch
-    if (interactiveReRolls && followupForMe && state.followupChoice) {
+    if (humanReRollSurface() && followupForMe && state.followupChoice) {
       // R-E1: the chip is GEOMETRY-armed (applyFrame) before the dialog may be live, so pin its instance key HERE —
       // where dlg==='followupChoice' proves the server's followup dialog is live this frame. Refreshed each live
       // frame (idempotent — same followup = same key); once the dialog clears, the key stops updating and the send
@@ -17973,7 +18228,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     // S100 (owner 10-02 + Astra review): the client never answers this for an interactive coach. When the chip could not
     // arm (no vacated square derivable - e.g. a rejoin while the dialog is open after a crowd surf), ask in the generic
     // yes/no card instead of the headless auto-decline below.
-    if (interactiveReRolls && followupForMe && actingIsMine && !followupHandled.has('followup')) {
+    if (humanReRollSurface() && followupForMe && actingIsMine && !followupHandled.has('followup')) {
       const instanceKey = dialogInstanceKey(g);
       const instanceRef = g.dialogParameter as object | null;
       askYesNo({
@@ -18006,7 +18261,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // here already means the push is the acting coach's, so pushMine defaults true. A single forced square (or a
   // headless driver) still auto-picks below either way.
   const pushMine = o66On ? o66Reaction === 'pushback' : true; // o66-dispatch
-  if (interactiveReRolls && pushMine && legal.length > 1) {
+  if (decisionSurfaceDeclared('pushback') && pushMine && legal.length > 1) {
     const key = legal.map((s) => (s.coordinate as [number, number]).join(',')).join('|');
     // Already answered this candidate set (command sent) — wait for the server to lock the square / advance the chain rather than re-arming (avoids a double-send).
     if (followupHandled.has(`push:${key}`) || key === lastSentPushKey) return; // g330 #11: don't re-offer a push we already resolved (stale array survives followupHandled.clear())
@@ -18809,7 +19064,7 @@ function onTheBallFrame(g: GameJson): OnTheBallFrame {
   const actingCoordinate = acting?.playerId
     ? (g.fieldModel.playerDataArray.find((data) => data.playerId === acting.playerId)?.playerCoordinate as [number, number] | undefined)
     : undefined;
-  const view = state.demoMode ? 'replay' : !play.active ? 'spectator' : interactiveSetup ? 'player' : 'headless';
+  const view = state.demoMode ? 'replay' : !play.active ? 'spectator' : humanSetupSurface() ? 'player' : 'headless';
   return {
     gameId: String(g.gameId),
     connectionEpoch: onTheBallConnectionEpoch,
@@ -19274,7 +19529,7 @@ function drivePregameStep() {
         // Owner 2026-07-08: UNDERDOG — the opponent is choosing inducements FIRST
         // (the dialog is addressed to THEIR team). Show a waiting screen on MY side
         // until it's my turn — but only while I still have a choice to make.
-        if (play.active && interactiveSetup && !fastPregame && dialogParam?.teamId && !state.inducementReveal?.mine && !state.inducementReveal?.mineWaiting) {
+        if (play.active && humanSetupSurface() && !fastPregame && dialogParam?.teamId && !state.inducementReveal?.mine && !state.inducementReveal?.mineWaiting) {
           const oppTeam = myTeamId === (g.teamHome as { teamId?: string }).teamId ? g.teamAway : g.teamHome;
           state.inducementReveal = {
             seq: (state.inducementReveal?.seq ?? 0) + 1,
@@ -19294,7 +19549,7 @@ function drivePregameStep() {
       // Surface every buyable inducement (cost + max from the synced game options) with
       // the money the server sent (availableGold + underdog pettyCash). Headless keeps
       // the auto-finalize (buy nothing) so driven games never hang.
-      if (interactiveSetup && !fastPregame) {
+      if (humanSetupSurface() && !fastPregame) {
         if (!state.inducementBuy) {
           const dp = dialogParam as { availableGold?: number; pettyCash?: number; treasury?: number; usesTreasury?: boolean };
           if (state.inducementReveal) state.inducementReveal.mineWaiting = false; // my turn now
@@ -19339,7 +19594,7 @@ function drivePregameStep() {
       const myCall = !!(g as { homePlaying?: boolean }).homePlaying === (coinMySide === 'home');
       if (!myCall) {
         // Owner 2026-07-09: the opponent calls — surface a WAITING modal so BOTH coaches see who's on the clock (was a silent return → the waiting coach saw nothing).
-        if (interactiveSetup && !fastPregame) {
+        if (humanSetupSurface() && !fastPregame) {
           const oppTeam = coinMySide === 'home' ? g.teamAway : g.teamHome;
           const oppCoach = (oppTeam as { coach?: string })?.coach || 'Your opponent';
           setPregameWait(`${oppCoach} is calling the coin toss`);
@@ -19347,7 +19602,7 @@ function drivePregameStep() {
         return;
       }
       state.pregameWait = null; pendingPregameWait = null; // my call — drop any stale wait (#170: the HELD one too)
-      if (interactiveSetup && !fastPregame) {
+      if (humanSetupSurface() && !fastPregame) {
         // #103 CG-1 (Meero SR-49): arm coinArmedGameId at the CALL-toss prompt too — the EARLIEST coin-window
         // entry — so midCoinWindow's coinChoicePrompt guard isn't inert (armed later at reveal/receiveChoice
         // would leave a same-game flush during the call window clobbering the heads/tails prompt = the same
@@ -19363,7 +19618,7 @@ function drivePregameStep() {
       // Owner 2026-07-04d: the toss WINNER picks kick/receive. INTERACTIVE (live UI + my team): surface the Kick/Receive card; headless auto-receives.
       const choosing = (dialogParam as { choosingTeamId?: string })?.choosingTeamId;
       // If we made the coin call, derive the immediate reveal from our call and winner; otherwise await the report.
-      if (interactiveSetup && !fastPregame && lastCoinCall !== null && !coinRevealShown) {
+      if (humanSetupSurface() && !fastPregame && lastCoinCall !== null && !coinRevealShown) {
         const iWon = !choosing || choosing === myTeamId;
         const called: 'heads' | 'tails' = lastCoinCall ? 'heads' : 'tails';
         const result: 'heads' | 'tails' = iWon ? called : (lastCoinCall ? 'tails' : 'heads');
@@ -19378,7 +19633,7 @@ function drivePregameStep() {
       }
       if (choosing && choosing !== myTeamId) {
         // Owner 2026-07-09: the opponent won the toss and is choosing — surface a WAITING modal.
-        if (interactiveSetup && !fastPregame) {
+        if (humanSetupSurface() && !fastPregame) {
           const winnerTeam = [g.teamHome, g.teamAway].find((t) => (t as { teamId?: string })?.teamId === choosing);
           const winnerCoach = (winnerTeam as { coach?: string })?.coach || 'Your opponent';
           setPregameWait(`${winnerCoach} is choosing to kick or receive`);
@@ -19386,7 +19641,7 @@ function drivePregameStep() {
         return;
       }
       state.pregameWait = null; pendingPregameWait = null; // my choice (or unaddressed) — drop any stale wait (#170: the HELD one too)
-      if (interactiveSetup && !fastPregame) {
+      if (humanSetupSurface() && !fastPregame) {
         // Owner 2026-07-10: this card is shown to the toss WINNER — name them in a splash. The winner
         // is the `choosing` team's coach (its coach won); when the dialog omits choosingTeamId it's my
         // own prompt, so fall back to my coach.
@@ -19418,7 +19673,7 @@ function drivePregameStep() {
         availableGold?: number; availableCards?: number;
         nrOfCardsPerType?: { cardType?: string; nrOfCards?: number }[];
       };
-      if (interactiveSetup && !fastPregame) {
+      if (humanSetupSurface() && !fastPregame) {
         // Surface/REFRESH the picker every sync — gold + deck counts change after each buy, and the server re-shows the dialog until the coach is done / out of budget.
         const decks = (dp.nrOfCardsPerType ?? [])
           .map((d) => ({ cardType: String(d.cardType ?? ''), nrOfCards: Number(d.nrOfCards ?? 0) }))
@@ -19445,7 +19700,7 @@ function drivePregameStep() {
       // Interactive coach WITH a real card-draw choice: surface the menu and WAIT. Return
       // unconditionally so a re-sync while the menu is up (cardChoice already set) can't fall
       // through to the auto-finalize below and cancel the pick.
-      if (interactiveSetup && !fastPregame && options.length > 0) {
+      if (humanSetupSurface() && !fastPregame && options.length > 0) {
         if (!state.cardChoice) {
           state.cardChoice = {
             availableGold: Number((dialogParam as { availableGold?: number })?.availableGold ?? 0),
@@ -19471,7 +19726,7 @@ function drivePregameStep() {
       const pcm = String(dpc?.playerChoiceMode ?? '');
       if (isPrayerPlayerChoiceMode(pcm, g) && syncInteractivePrayerPresentation()) return;
       if (!addressedToMe) return;
-      const interactivePlayerChoice = interactiveSetup || (isPrayerPlayerChoiceMode(pcm, g) && interactiveReRolls);
+      const interactivePlayerChoice = humanSetupSurface() || (isPrayerPlayerChoiceMode(pcm, g) && humanReRollSurface());
       // Capture the precise occurrence before the pick rail clears. A same-mode replacement gets a new
       // dialog object even when its stable key/payload are otherwise byte-identical.
       const answerInstanceKey = dialogInstanceKey(g);
@@ -19619,7 +19874,7 @@ function drivePregameStep() {
       // and the game waited on them forever — the owner's "hard freeze".
       const touchbackTeamId = (g.homePlaying ? g.teamAway : g.teamHome)?.teamId;
       if (!addressedToMe || !myTeamId || touchbackTeamId !== myTeamId) return;
-      const eligible = interactiveSetup
+      const eligible = humanSetupSurface()
         ? myOnFieldPlayers(g).filter((d) => d.playerCoordinate).map((d) => d.playerId)
         : [];
       if (eligible.length > 0 && !pregameHandled.has('touchback')) {
@@ -19687,7 +19942,8 @@ function drivePregameStep() {
       // Unique per blitz declaration (a player acts once per turn) so a later blitz re-arms rather than colliding with a spent `once` key.
       const turnNr = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
       const key = `blitzTarget:${ap}:${turnNr}`;
-      const interactive = interactiveSetup || settings.uiMode === 'classic';
+      // Astra confirm (10-08): Classic mode alone never arms the pick for a declared automated seat (it stalled there).
+      const interactive = humanSetupSurface() || classicHumanSeat();
       if (interactive && !pregameHandled.has(key)) {
         armPlayerPick({
           key,
@@ -19740,7 +19996,7 @@ function drivePregameStep() {
       // Classic coach until ClassicView mounts, and the snapshot drives this step first (a reconnect into a standing
       // dialog). Same seat test as selectBlitzTarget above, plus the live-UI reroll flag: any sign of a seated human
       // arms the rail (both views render state.playerPick, so a pick armed before the mount is offered once it is up).
-      if (interactiveSetup || interactiveReRolls || settings.uiMode === 'classic') {
+      if (humanSetupSurface() || humanReRollSurface() || classicHumanSeat()) {
         armGazeTargetPick(g, ap, answer);
         return;
       }
@@ -19754,7 +20010,7 @@ function drivePregameStep() {
       // CHOOSE the kick-off result (FUMBBL's DialogKickOffResult = Charge vs Solid
       // Defence). Normal kick-off events roll + auto-flow (our splash covers them).
       if (!addressedToMe) return;
-      if (interactiveSetup) {
+      if (humanSetupSurface()) {
         askYesNo({
           key: 'kickOffResult',
           text: 'Overtime — choose the kick-off result',
@@ -19794,7 +20050,7 @@ function drivePregameStep() {
           if (!sent && game.value?.dialogParameter === instanceRef) arm();
         },
       });
-      if (interactiveSetup || interactiveReRolls) arm();
+      if (humanSetupSurface() || humanReRollSurface()) arm();
       else sendAnsweredDialogCommand({
         netCommandId: NetCommandId.CLIENT_PUNT_TO_CROWD,
         puntToCrowd: false,
@@ -19836,7 +20092,7 @@ function drivePregameStep() {
     const mySideId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
     const mySide = mySideId === (g.teamHome as { teamId?: string }).teamId ? 'home' : 'away';
     const myTurn = !!g.homePlaying === (mySide === 'home');
-    if (interactiveSetup && myTurn) computeSetupPhase(g);
+    if (humanSetupSurface() && myTurn) computeSetupPhase(g);
     else state.setupPhase = null;
     return;
   }
@@ -19853,7 +20109,7 @@ function drivePregameStep() {
       const notice = invalidSolidDefenceNotice(
         dialogParam as Record<string, unknown>,
         mySideId ?? null,
-        !!play.active && interactiveSetup && myTurn,
+        !!play.active && humanSetupSurface() && myTurn,
       );
       // [[dedup-key-too-coarse]]: a SECOND rejection can carry byte-identical values, so the arm is keyed on
       // the applied frame, never on the payload.
@@ -19866,7 +20122,7 @@ function drivePregameStep() {
       state.solidDefenceError = null;
     }
     // INTERACTIVE (owner 2026-07-04): surface the hand-placement UI on my turn. (fastPregame auto-places instead — falls through to the auto-formation loop.)
-    if (interactiveSetup && !fastPregame && myTurn) {
+    if (humanSetupSurface() && !fastPregame && myTurn) {
       clearSetupLoop();
       computeSetupPhase(g);
       return;
@@ -19893,7 +20149,7 @@ function drivePregameStep() {
     const mySideId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
     const iAmHome = mySideId === (g.teamHome as { teamId?: string }).teamId;
     const myKick = !!g.homePlaying === iAmHome; // the playing side kicks off
-    if (interactiveSetup && myKick) {
+    if (humanSetupSurface() && myKick) {
       if (!state.kickPlacement && once('kickoff-pick')) {
         // SEND-FRAME receiving half is ALWAYS x 13..25 (verified against upstream StepKickoff + FieldCoordinate.
         // transform(): the server uses the coord as-is when HOME kicks and mirrors x→25−x when AWAY kicks, so the
@@ -19910,7 +20166,7 @@ function drivePregameStep() {
   }
   // Interactive coaches play kickoff mini-turns; headless closes them with CLIENT_END_TURN.
   if ((g.turnMode === 'highKick' || g.turnMode === 'quickSnap' || g.turnMode === 'blitz')) {
-    if (interactiveSetup) return;
+    if (humanSetupSurface()) return;
     // Check the lock before latching a headless mini-turn skip.
     if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
     if (once(`skip:${g.turnMode}`))
@@ -19949,9 +20205,9 @@ watch(
     try {
       drivePregameStep();
       if (game.value) {
-        if (interactiveSetup) computeQuickSnapPhase(game.value); // #85: build/refresh the Quick Snap surface (self-nulls off quickSnap)
-        if (interactiveSetup) computeHighKickPhase(game.value); // shared High Kick projection (self-nulls off highKick)
-        if (interactiveSetup) computeSwarmingPhase(game.value);
+        if (humanSetupSurface()) computeQuickSnapPhase(game.value); // #85: build/refresh the Quick Snap surface (self-nulls off quickSnap)
+        if (humanSetupSurface()) computeHighKickPhase(game.value); // shared High Kick projection (self-nulls off highKick)
+        if (humanSetupSurface()) computeSwarmingPhase(game.value);
         maybeSurfaceUnknownCall(game.value); // owner 2026-07-04e
         maybeSurfaceDefenderAction(game.value); // owner 2026-07-07
       }
@@ -19987,7 +20243,7 @@ if (FORK_EDITION) {
         return {
           game: g, sessionKey: session, revision: lastAppliedCommandNr,
           context: { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome },
-          enabled: settings.coachBrain !== 'none' && play.active && !interactiveSetup
+          enabled: settings.coachBrain !== 'none' && play.active && !humanSetupSurface()
             && !replay.active && playPermitted() && session.connection.isOpen
             && coachHostAllowed(url, FORK_SERVER_HOST, settings.forkHost)
             && !playback.catchingUp && playback.queue.length === 0
@@ -20871,7 +21127,7 @@ export const gameStore = {
     apothecaryElectionSurfaces.add(surface);
     const g = game.value;
     const dialog = g?.dialogParameter as Record<string, unknown> | null | undefined;
-    if (play.active && g && dialog && dialogRuntimeHandler(String(dialog.dialogId ?? '')) === 'apothecary-election') {
+    if (play.active && !seatIsAutomated() && g && dialog && dialogRuntimeHandler(String(dialog.dialogId ?? '')) === 'apothecary-election') {
       armApothecaryPrompt(g, dialog);
     }
     let registered = true;
@@ -20879,6 +21135,8 @@ export const gameStore = {
       if (!registered) return;
       registered = false;
       apothecaryElectionSurfaces.delete(surface);
+      // the 'classic' surface going in the same task as a `setInteractive*(false)`: that was ClassicView's teardown
+      if (surface === 'classic') classicOptOutCandidate = null;
       if (apothecaryElectionSurfaces.size === 0) state.apothecaryChoice = null;
     };
   },
@@ -20991,23 +21249,51 @@ export const gameStore = {
    *  this on; headless drivers leave it off so the roll auto-declines). */
   setInteractiveReRolls(on: boolean) {
     interactiveReRolls = on;
+    connectRaisedReRolls = false; // an explicit owner (a view, or a driver) has spoken: connect's own raise is no longer the reason
+    // Owner 10-08: a VIEW going away does not make a seated coach headless. A reconnect drops the game, so the view
+    // unmounts while connectAsPlayer has already seated the coach again - and Classic's teardown lowers this flag. The
+    // snapshot that follows must still find the decision surface declared; the next mount claims it as usual.
+    // Astra P2 (10-08): any other `false` on a connected seat is a driver declaring automation, and stands.
+    if (!on && noteSurfaceOptOut('rerolls') === 'classic-teardown' && seatedCoachAwaitingView()) {
+      interactiveReRolls = true;
+      connectRaisedReRolls = true;
+    }
     const g = game.value;
     const dialog = g?.dialogParameter as Record<string, unknown> | null | undefined;
-    if (on && play.active && g && dialog && dialogRuntimeHandler(String(dialog.dialogId ?? '')) === 'apothecary-election') {
+    if (on && play.active && !seatIsAutomated() && g && dialog && dialogRuntimeHandler(String(dialog.dialogId ?? '')) === 'apothecary-election') {
       armApothecaryPrompt(g, dialog);
     }
-    // Astra P1 (10-08): the view is up - if the server is still waiting on the gaze Decline confirmation and its card
-    // is not showing (armed before the mount and since replaced, or never armed), offer it now. Sends nothing.
+    // Astra P1 (10-08), owner 10-08 (every action): the view is up - if the server is still waiting on a
+    // confirmEndAction and its card is not showing (armed before the mount and since replaced, or never armed), offer
+    // it now. Sends nothing for a seated coach; an occurrence the coach already answered is not asked again.
     if (on && play.active && g && dialog && String(dialog.dialogId ?? '') === 'confirmEndAction'
-        && String(g.turnMode ?? '') === 'selectGazeTarget' && !state.yesNo?.key.startsWith('confirmEnd:gazeSelect:')) {
-      try { resolvePlayFollowups(); } catch (e) { console.error('[play] gaze confirmation re-drive error:', e); }
+        && !state.yesNo?.key.startsWith('confirmEnd:')) {
+      try { resolvePlayFollowups(); } catch (e) { console.error('[play] confirm-end re-drive error:', e); }
     }
   },
 
   /** Owner 2026-07-04: turn hand-placement setup on/off (off = auto-formation). */
   setInteractiveSetup(on: boolean) {
     interactiveSetup = on;
+    // Owner 10-08 / Astra P2: `false` on a connected seat is how a driver declares the seat automated (see
+    // `seatAutomation`) - sticky, and the store's own raise of the reroll flag is taken back so that seat keeps
+    // answering by itself. Classic's teardown says `false` too, with its surfaces still registered: not a declaration.
+    if (!on) noteSurfaceOptOut('setup');
   },
+
+  /** Astra P2 (10-08): the explicit form of the declaration (see `seatAutomation`). `true` = this seat is driven by
+   *  automation: every decision takes its headless / bot branch and the coach brain stays enabled, whatever the two
+   *  flags, the UI mode or the mounted view surfaces say; nothing is held "for the coach" at connect, on reconnect or
+   *  across a view teardown; it survives view mounts and every reconnect attempt. `false` opts the seat back in as a
+   *  human coach's. The two flags are not touched beyond undoing / restoring the store's own connect-time raise. */
+  setSeatAutomation(on: boolean) {
+    if (on) { declareSeatAutomation(); return; }
+    seatAutomation = false;
+    classicOptOutCandidate = null;
+    if (play.active && connectDeclaredSeat && !interactiveReRolls) { interactiveReRolls = true; connectRaisedReRolls = true; }
+  },
+  /** Whether this seat is declared automation-driven (dev / test read-back). */
+  seatAutomationDeclared(): boolean { return seatAutomation; },
 
   setCoachBrain(id: 'none' | 'random' | 'fly-chaos') {
     settings.coachBrain = FORK_EDITION && (id === 'random' || id === 'fly-chaos') ? id : 'none';
@@ -22224,6 +22510,10 @@ export const gameStore = {
    * commands. Mirrors connect()'s session handlers.
    */
   async connectAsPlayer(params: PlayerParams, prepared?: PreparedPlayerConnection) {
+    // Astra P2 (10-08): a fresh join starts as a HUMAN seat (a driver declares after joining); only the store's own
+    // reconnect carries an automation declaration through.
+    const viaReconnect = reconnectJoinInProgress;
+    reconnectJoinInProgress = false;
     const officialFumbbl = params.officialFumbbl === true;
     const joinLabel = params.gameName
       ? `"${params.gameName}"`
@@ -22274,6 +22564,12 @@ export const gameStore = {
     // headless", never "not declared yet" — so declare here, at the earliest point that knows.
     // Classic never declared interactive and keeps its existing auto-formation path unchanged.
     interactiveSetup = settings.uiMode !== 'classic';
+    // Owner 10-08: the same race, for every IN-PLAY decision. The snapshot's forced tick and dialog followups run
+    // before either view exists (a cold join / reconnect into an open dialog), so declare the decision surface here
+    // too - Modern and Classic alike. An automated seat says so after this call (setInteractiveSetup(false) /
+    // setSeatAutomation(true)); that declaration is sticky and rides through the store's own reconnects.
+    if (!viaReconnect) { seatAutomation = false; classicOptOutCandidate = null; }
+    declareSeatedCoachAtConnect();
     pregameHandled.clear();
     session = prepared?.session ?? new GameSession({ url: params.url, compression: params.compression ?? true });
     attachConnectionWireLog(session); // owner 09-27: connection records in the wire log
@@ -23338,8 +23634,28 @@ export const gameStore = {
   /** `rollActivate`: set only by the explicit End Activation gestures (menu row, click on self, and a confirm that one of
    *  those opened); a held Big Guy Activate intent then sends removeConfusion instead of the no-roll cancel. Every other
    *  caller (Esc and the confirm it opens, deselect, player switch, cancel) drops the intent and ends as before. */
-  endActivation(options: { blitzConfirmed?: boolean; rollActivate?: boolean } = {}) {
-    if (!play.active || !game.value) return;
+  /** Owner 10-08: the coach has just said Yes on the client's End Activation card; the `endActivation` that follows
+   *  in the same gesture carries that confirmation (see `gazeEndRequest`). Spent by that one call, whatever it sends. */
+  noteEndActivationConfirmed() { endActivationConfirmedByCoach = true; },
+
+  endActivation(options: { blitzConfirmed?: boolean; rollActivate?: boolean; gazeEndConfirmed?: boolean } = {}) {
+    const coachConfirmedEnd = options.gazeEndConfirmed === true || endActivationConfirmedByCoach;
+    endActivationConfirmedByCoach = false;
+    if (!play.active || !game.value) { gazeEndRequest = null; return; }
+    // Astra P2 (10-08): an End for this very gaze activation is already with the server and unanswered. A repeated
+    // End gesture (a second right-click before the reply) sends nothing and leaves the coach's Yes where it is - it
+    // used to wipe that Yes and send a second acting-null, so the server asked and the coach was prompted twice.
+    const pendingEnd = gazeEndRequestUnanswered();
+    if (pendingEnd && Date.now() - pendingEnd.sentAt < GAZE_END_REPEAT_MS) {
+      if (coachConfirmedEnd) pendingEnd.confirmed = true;
+      log('system', 'play: END MOVE already sent - waiting for the server');
+      return;
+    }
+    // Any other End is a new request. A Yes is carried forward only for the SAME still-unanswered occurrence with the
+    // server wholly silent past the repeat window (not one frame since); otherwise a confirmation covers exactly the
+    // end it was given for.
+    const carriedYes = pendingEnd?.confirmed === true && lastAppliedCommandNr === pendingEnd.commandNr;
+    gazeEndRequest = null;
     // Spec S15B: an accepted roll-and-end is awaiting the server's echo; a second End sends nothing.
     if (bigGuyRollEndLatched(game.value, String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''))) return;
     // Fail closed at the wire boundary: every UI gesture must surface the Blitz confirmation first. This backstop
@@ -23411,7 +23727,16 @@ export const gameStore = {
       return;
     }
     bigGuyActivateIntent = null; // every other end drops the intent (cancel / Esc / switch / deselect)
-    sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
+    const endSent = sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: isJumping() });
+    // Owner 10-08: the coach confirmed ending this gaze activation on the client's card. If the server now asks its
+    // own confirmEndAction for it (unused gaze), that Yes answers it - the coach is not asked twice.
+    const endedId = String(g.actingPlayer?.playerId ?? '');
+    if (endSent && endedId && /gaze|hypno/i.test(endingAction)) {
+      gazeEndRequest = {
+        gameId: currentGameId(), turnKey: currentTurnKey(game.value), playerId: endedId, playerAction: endingAction,
+        commandNr: lastAppliedCommandNr, sentAt: Date.now(), confirmed: coachConfirmedEnd || carriedYes,
+      };
+    }
     log('system', 'play: END MOVE (server resolves)');
   },
 
@@ -24728,7 +25053,13 @@ export const gameStore = {
     // join clears them (gameState); a failed one keeps retrying/prompting via the close
     // handler (which treats `reconnecting` as a drop even though game.value is null).
     if (lc.mode === 'spectator') void this.connect(lc.params, true);
-    else void this.connectAsPlayer(lc.params);
+    else {
+      // An automated seat (`seatAutomation`) that re-joins by itself keeps what it had before 10-08, on every attempt
+      // and in every UI mode: connectAsPlayer re-declares `interactiveSetup` (as it always did), and nothing is raised
+      // for a coach. The flag is consumed in connectAsPlayer's synchronous head.
+      reconnectJoinInProgress = true;
+      try { void this.connectAsPlayer(lc.params); } finally { reconnectJoinInProgress = false; }
+    }
     reconnecting = true;
     state.connectionClosed = { mode: lc.mode, label, code: 0, reconnecting: true };
   },
@@ -24811,6 +25142,7 @@ export const gameStore = {
     resetSpectatorWatch(); // fresh connection re-baselines the spectator count
     clearSetupLoop();
     play.active = false;
+    withdrawConnectDeclaredSeat(); // owner 10-08: the seat declaration belongs to one connection
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
     state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null;
     clearSendOffWaiting();
