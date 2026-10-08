@@ -114,7 +114,7 @@ import {
 } from './d6';
 import { ACTION_DIE_TUMBLE_MS, nextTumbleFace, type ActionDiceLayer, type ActionDieFaceSource, type ActionDieSlot } from './actionDice3d';
 import { presentationMs, setPresentationMode as configurePresentationMode, type PresentationMode } from './presentationTiming';
-import { SQUARE_MARK_LABEL_MAX_CHARS, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
+import { SQUARE_MARK_LABEL_MAX_CHARS, playerMarkLabelScale, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { rushTargetForPlayer } from './rushTarget';
@@ -3905,6 +3905,9 @@ export class PitchRenderer {
   /** Owner 2026-07-04: interactive team-setup hook. While setup is active, a tap
    *  reports the square + any player on it so the host can place/remove/select. */
   onSetupClick: ((coord: [number, number], playerId: string | null) => void) | null = null;
+  /** Owner 10-08: a tap on a token that takes no action in the current phase (a presentation-only pre-setup
+   *  formation token) - the host may still surface that player's card. Never selects, never sends. */
+  onInspectPlayer: ((playerId: string) => void) | null = null;
   /** Owner 2026-07-14 (setup overhaul cond-b): fired on a pointerdown over a DUGOUT reserve token during setup
    *  (screen/client coords). The host begins the drag-to-pitch ghost and enforces reserve-only (KO/CAS inert). */
   onDugoutSetupDragStart: ((playerId: string, clientX: number, clientY: number) => void) | null = null;
@@ -5227,6 +5230,7 @@ export class PitchRenderer {
     this.onPlayerDoubleClick = null;
     this.onTilePick = null;
     this.onSetupClick = null;
+    this.onInspectPlayer = null;
     this.onDugoutSetupDragStart = null;
     this.onSelectionChange = null;
     this.onPathChange = null;
@@ -11393,14 +11397,16 @@ export class PitchRenderer {
     if (!coordinate || !isOnPitch(coordinate)) return;
     const group = new Container();
     group.label = 'playerMarkLabel';
+    // Owner 10-08: a line of 4-6 characters shrinks the text (width-preserving, 3 / n) instead of breaking early.
+    const labelScale = playerMarkLabelScale(label.split('\n'));
     const text = new Text({
       text: label,
       style: new TextStyle({
         fontFamily: this.skillMarkingFontFamily,
-        fontSize: this.skillMarkingFontSize,
+        fontSize: this.skillMarkingFontSize * labelScale,
         fontWeight: 'bold',
         fill: this.skillMarkingColor,
-        stroke: { color: 0x14161a, width: 2 },
+        stroke: { color: 0x14161a, width: Math.max(1, 2 * labelScale) },
         align: 'center',
         wordWrap: false,
         breakWords: false,
@@ -19279,7 +19285,7 @@ export class PitchRenderer {
         const worldY = (event.offsetY - this.world.position.y) / this.world.scale.y;
         const [sx, sy] = worldToSquare(worldX, worldY);
         const pid = this.playersBySquare.get(`${sx},${sy}`);
-        if (pid && this.preSetupCoords.has(pid)) return;
+        if (pid && this.preSetupCoords.has(pid)) { this.onInspectPlayer?.(pid); return; } // inert for play; the card may show
       }
       // Owner 2026-07-04: interactive team setup owns taps while active — report
       // the tapped square + any player on it (place / move / remove / select).

@@ -2866,6 +2866,11 @@ function captureKey(event: KeyboardEvent) {
               <input v-model.number="settings.hudToastOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
               <span>{{ Math.round(settings.hudToastOpacity * 100) }}%</span>
             </label>
+            <label class="row">
+              <span>Roster window</span>
+              <input v-model.number="settings.rosterOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" data-testid="roster-opacity" />
+              <span>{{ Math.round(settings.rosterOpacity * 100) }}%</span>
+            </label>
           </fieldset>
 
           <fieldset class="settings-group">

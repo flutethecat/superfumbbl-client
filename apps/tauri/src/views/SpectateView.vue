@@ -4352,6 +4352,10 @@ function startPlayerDrag(mode: DragMode, playerId: string, clientX: number, clie
   window.addEventListener('pointerup', onSetupDragEnd);
 }
 function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number) {
+  // Owner 10-08: "surface portrait view for opposing players during the setup phase". A press on a token I cannot
+  // place (an opposing player, or one of mine that is out) used to be dropped here with no feedback: the renderer
+  // hands every setup press to this drag start, and an ineligible player never reached the tap that shows the card.
+  if (!setupDragMode.eligible(playerId)) { showPopup(playerId); return; }
   startPlayerDrag(setupDragMode, playerId, clientX, clientY);
 }
 // Owner 2026-07-14 (setup overhaul #5/#3): a TAP on a PLACED player selects it; a 2nd tap on another placed
@@ -9738,6 +9742,9 @@ onMounted(async () => {
   // declares Move (incl. stand-up-into-move for a prone player), so the first click of any double-click has
   // already declared Move. o66 double-clicks are a no-op here; legacy (non-o66) hosts keep their double-click
   // behaviour (empty-square reset camera) handled by the renderer when this hook takes no action.
+  // Owner 10-08: a presentation-only pre-setup formation token (the other team while a coach sets up) is inert for
+  // play but still shows its card.
+  renderer.onInspectPlayer = (playerId) => { showPopup(playerId); };
   renderer.onPlayerDoubleClick = () => {
     /* o66: intentionally inert — single-click declares Move (#5). */
   };
@@ -12690,7 +12697,7 @@ function sendChat() {
         <!-- Owner 10-02: the Helmet quick-bar pop-out — the end-game roster (shared PostGameRoster) on the live model.
              Teleports to body; closed = not mounted, so nothing sits over the pitch. -->
         <RosterPopout v-if="rosterPopoutOpen" v-model:side="rosterPopoutSide" :teams="rosterPopoutTeams"
-          :portrait="pgRosterPortrait" :helmet-icon="helmetIconUrl" :opacity="settings.logOpacity" :local-side="gameStore.blockPresentationSeat.value"
+          :portrait="pgRosterPortrait" :helmet-icon="helmetIconUrl" :opacity="settings.rosterOpacity" :local-side="gameStore.blockPresentationSeat.value"
           :skill-mode="skillMode" :icon-style="effectiveIconStyle" :suppressed="ui.settingsOpen"
           @close="rosterPopoutOpen = false" />
 

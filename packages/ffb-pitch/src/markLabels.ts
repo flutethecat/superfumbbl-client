@@ -3,10 +3,25 @@
 
 /** Square label input cap (the field's maxlength). */
 export const SQUARE_MARK_LABEL_MAX_CHARS = 24;
-/** Player label input cap: 2 lines x 3 characters. */
-export const PLAYER_MARK_LABEL_MAX_CHARS = 6;
-export const PLAYER_MARK_LABEL_LINE_CHARS = 3;
+/** Player label input cap: 2 lines x 6 characters (owner 10-08, bug report JLeav: "only 3 characters before it breaks
+ *  into a new line"). A line of 1-3 characters draws at the full markings size; 4-6 characters SHRINK the text so the
+ *  line still fits the figure (see playerMarkLabelScale) before any line break happens. */
+export const PLAYER_MARK_LABEL_MAX_CHARS = 12;
+export const PLAYER_MARK_LABEL_LINE_CHARS = 6;
 export const PLAYER_MARK_LABEL_MAX_LINES = 2;
+/** Characters that fit a line at full size; longer lines scale down. */
+export const PLAYER_MARK_LABEL_FULL_SIZE_CHARS = 3;
+/** The smallest scale: a 6-character line at 3 / 6 is exactly as wide as a 3-character line at full size, so the
+ *  label never grows past the footprint it always had (Astra 10-08: a 0.55 floor overhung a checkers disc). */
+export const PLAYER_MARK_LABEL_MIN_SCALE = 0.5;
+
+/** Font scale for a shaped player label: 1 up to 3 characters on the longest line, then width-preserving (3 / n)
+ *  down to PLAYER_MARK_LABEL_MIN_SCALE at 6 characters. */
+export function playerMarkLabelScale(lines: readonly string[]): number {
+  const longest = lines.reduce((max, line) => Math.max(max, markLabelCharacters(line).length), 0);
+  if (longest <= PLAYER_MARK_LABEL_FULL_SIZE_CHARS) return 1;
+  return Math.max(PLAYER_MARK_LABEL_MIN_SCALE, PLAYER_MARK_LABEL_FULL_SIZE_CHARS / longest);
+}
 
 /** The user-perceived characters of a string (review r1): an accent stays with its letter and an emoji is one
  *  character. Falls back to code points where Intl.Segmenter is unavailable. */
@@ -66,8 +81,8 @@ export function shapeSquareMarkLabel(
   return lines;
 }
 
-/** At most 2 lines of at most 3 characters. A space or line break typed by the user splits the lines; otherwise
- *  characters 1-3 are line one and 4-6 line two. Overflow is dropped. */
+/** At most 2 lines of at most 6 characters. A space or line break typed by the user splits the lines; otherwise
+ *  characters 1-6 are line one and 7-12 line two. Overflow is dropped. */
 export function shapePlayerMarkLabel(text: string): string[] {
   const chunks = text.split(/\s+/).filter((chunk) => chunk.length > 0);
   const lines: string[] = [];

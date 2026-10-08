@@ -304,6 +304,8 @@ export interface AppSettings extends ConfirmationSettings {
   hudQuickBarOpacity: number;
   /** Opacity of incoming chat-toast surfaces. */
   hudToastOpacity: number;
+  /** Owner 10-08: opacity of the Roster pop-out window (it used to follow the Log window's opacity). */
+  rosterOpacity: number;
   /** Show the pitch grid/yard lines (off = clean field for legibility). */
   gridLines: boolean;
   /** Grid line width multiplier (0.5–3, 1 = default). */
@@ -619,6 +621,7 @@ const DEFAULTS: AppSettings = {
   hudScoreboardOpacity: 0.9,
   hudQuickBarOpacity: 0.9,
   hudToastOpacity: 0.92,
+  rosterOpacity: 0.79, // the Log window's default, which the roster followed before it had its own setting
   gridLines: true,
   gridLineWidth: 0.5, // owner 09-05: default 1 -> 0.5
   gridLineColor: '#e8e4d8',
@@ -855,6 +858,11 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.hudScoreboardOpacity = opacity(merged.hudScoreboardOpacity, DEFAULTS.hudScoreboardOpacity);
     merged.hudQuickBarOpacity = opacity(merged.hudQuickBarOpacity, DEFAULTS.hudQuickBarOpacity);
     merged.hudToastOpacity = opacity(merged.hudToastOpacity, DEFAULTS.hudToastOpacity);
+    // Owner 10-08: a blob from before the setting existed keeps the look it had - the roster followed logOpacity.
+    merged.rosterOpacity = opacity(
+      raw.rosterOpacity === undefined ? raw.logOpacity : merged.rosterOpacity,
+      DEFAULTS.rosterOpacity,
+    );
     merged.modernHudStyle = raw.modernHudStyle === 'chrome' ? 'chrome' : 'minimalist'; // owner 10-05: a stored chrome pick is kept; everything else is minimalist
     // Current-version blobs bypass migrations, so malformed video values must be
     // normalized independently. Only choices exposed by Settings are accepted;
