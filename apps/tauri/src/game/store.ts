@@ -3152,6 +3152,10 @@ function resetCasualtySppPacing(): void {
 // Owner 09-06: the injury gate waits for the armour presentation's full TEAR-DOWN (dice + stencil gone), not the read beat.
 const armourReadMs = () => PIPELINE_TIMINGS.armour.tearDownMs;
 let armourGateUntil = 0;
+/** When the last armour roll was put on screen (0 = none this game). The planner's Animal Savagery resend gives a
+ *  HELD armour roll its own viewer-visible beat before the walk (plannerLashHoldMs); a broken one is already
+ *  covered by armourGateUntil + the injury slot. */
+let armourShownAt = 0;
 // Phase 3b — INJURY result lifetime BY SEVERITY (event-priority D6, §3): a stun reads
 // for a shorter, lighter beat; a KO holds mid; a casualty (Badly Hurt+) holds full.
 // Drives both the pump's tracking stage and the splash-clear timer.
@@ -3265,6 +3269,7 @@ function pumpInjuries() {
         flushCasualtySpp();
       }
       pumpInjuries();
+      plannerOnInjuryBeatReleased(); // the injury slot holds the planner's Animal Savagery resend: every hold needs a wake
     }, stepMs);
   };
   // Owner 2026-07-03: a crowd push plays its fans-rush cinematic FIRST — the crowd bounces on the out-of-bounds player, then runs back — and only then does the injury animation (casualty/KO) play at the same square.
@@ -7360,7 +7365,7 @@ function applyFrameContents(frame: QueuedFrame) {
     // Astra 09-14: a DELAYED reveal (stab / foul beat) must not publish against a REPLACED model — a reconnect snapshot
     // inside the beat swaps game.value; the old roll/square then belongs to nothing on screen.
     const modelAtSchedule = game.value;
-    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; };
+    const showArmour = () => { if (game.value !== modelAtSchedule) return; state.armorDice = { rolls: armorRolls, seq: (state.armorDice?.seq ?? 0) + 1 }; armourShownAt = Date.now(); };
     const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
       && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
     if (fireballInjury && pendingFireballBeats > 0) {
@@ -9678,7 +9683,7 @@ function clearCinematics(hardGameBoundary = false) {
   for (const t of demoCineTimers) cancelGameTimeout(t);
   demoCineTimers = [];
   clearAutoBeats(); // #166: drop any pending opt-in auto-answer beats on a game change
-  turnoverArmed = false; turnoverArmedAfterInjury = false; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; // Phase 3a: drop stale turnover/block/armour gates
+  turnoverArmed = false; turnoverArmedAfterInjury = false; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; armourShownAt = 0; // Phase 3a: drop stale turnover/block/armour gates
   visibleBlockContext.defenderSquare = null; lastBlitzDeclKey = ''; // #1/#5 + blitz-decl
   injuryQueue.length = 0;
   injuryPlaying = false;
@@ -10543,9 +10548,22 @@ interface PlannerPlan {
    *    which republishes the squares and pushes a Move sequence with no stack, so StepInitMoving:161-175 waits for a
    *    NEW clientMove. A successful (re)roll clears the mark: the server then performs the original move itself.
    *  The player has not moved; the same still-offered square must be sent once more, exactly as upstream's coach
-   *  clicks it again. An Animal Savagery lash-out against an opponent spends the move the same way but is NOT
-   *  marked (owner/Astra 10-08, see plannerOnModelApplied). */
-  spentMove: { idx: number; cause: 'bloodlust'; offerFloor: number } | null;
+   *  clicks it again.
+   *  - `animalSavagery` (owner commission 10-08): a lash-out against an OPPONENT that does not end the activation
+   *    (bb2025 AnimalSavageryBehaviour:280-284, bb2020 :227-230) publishes MOVE_STACK = null and USE_ALTERNATE_LABEL,
+   *    so the Move sequence jumps to END_MOVING once the victim is fully resolved. The squares are re-offered several
+   *    times on the way (the lash step itself :281, UtilServerInjury.dropPlayer:392 / StepHandleDropPlayerContext:167)
+   *    while the server may still stop at a dialog that accepts no movement (Steady Footing, the victim's
+   *    apothecary, a regeneration or catch reroll...). Only StepEndMoving's own republish (bb2025 :278-284, bb2020
+   *    :212-218) proves StepInitMoving is waiting for a new clientMove. That step emits one frame carrying NOTHING
+   *    but the move-square refresh (plus its hideDialog), as captured for Bloodlust in g1012 command 49;
+   *    `readyRevision` is the offer revision of the sent square from such a frame (plannerMoveSelectionReoffer), and
+   *    the resend goes out only while that exact offer is still the live one. `currentMove` is the acting player's
+   *    move count at the mark (the server must not have moved it), `readyAt` starts the presentation-hold cap. */
+  spentMove:
+    | { idx: number; cause: 'bloodlust'; offerFloor: number }
+    | { idx: number; cause: 'animalSavagery'; offerFloor: number; currentMove: number; readyRevision: number | null; readyAt: number }
+    | null;
   /** Owner 09-15 (g1942731 cmd 770): the last FAILED flagged roll for the current square, pending a re-roll or the
    *  fall/turnover. When the server then drops the activation, the plan ended on that roll — an expected outcome,
    *  not a cancelled plan — so it retires quietly instead of the "lost the activation" warning. A later successful
@@ -10768,6 +10786,66 @@ function releaseRerollResultPin(seq: number): void {
   state.rerollResultPending = null;
   if (plannerPlan) plannerAdvance();
 }
+/** Viewer-visible beat a HELD armour roll gets before the Animal Savagery resend starts the walk (owner 09-05). */
+const PLANNER_LASH_ARMOUR_BEAT_MS = 450;
+/** Fail-open cap on the presentation hold below, measured from the frame that proved the server move-ready. It is
+ *  shorter than PLANNER_ABORT_MS, so a wedged presentation can only delay the resend, never hand it to the watchdog. */
+const PLANNER_LASH_HOLD_CAP_MS = 6000;
+let plannerLashWakeTimer: ReturnType<typeof setTimeout> | null = null;
+function plannerClearLashWake(): void {
+  if (plannerLashWakeTimer) { cancelGameTimeout(plannerLashWakeTimer); plannerLashWakeTimer = null; }
+}
+/** How long the Animal Savagery resend must still wait for the lash-out's armour / injury presentation (0 = go).
+ *  Injury before walk: a broken armour roll gates the injury (armourGateUntil), the injury slot then plays for its
+ *  severity; neither holds live play on its own (holdPlayback is a spectator drain hold). */
+function plannerLashHoldMs(readyAt: number): number {
+  const now = Date.now();
+  const capLeft = readyAt + PLANNER_LASH_HOLD_CAP_MS - now;
+  if (capLeft <= 0) return 0;
+  if (injuryQueue.length > 0 || injuryPlaying || state.injurySplash) return capLeft; // released by plannerOnInjuryBeatReleased
+  const timed = Math.max(armourGateUntil, armourShownAt ? armourShownAt + PLANNER_LASH_ARMOUR_BEAT_MS : 0) - now;
+  return Math.min(capLeft, Math.max(0, timed));
+}
+/** The wake of plannerLashHoldMs' injury leg: the injury slot emptied. A no-op unless a lash resend is waiting. */
+function plannerOnInjuryBeatReleased(): void {
+  if (plannerPlan?.spentMove?.cause !== 'animalSavagery' || injuryPlaying || injuryQueue.length > 0) return;
+  plannerAdvance();
+}
+/** True when `cmd` is the frame bb2025 StepEndMoving:278-284 (bb2020 :212-218) emits on its "next move possible"
+ *  branch: no report, and no model change other than the move-square refresh that re-offers `target` (and the
+ *  step's hideDialog, which also clears waitingForOpponent). Captured shape: g1012 command 49. Every earlier frame of
+ *  an Animal Savagery lash-out carries more: the lash step its report, the drop-player frame the victim's new
+ *  player state, the apothecary / catch frames their reports and dialogs. The one exception, a Ball & Chain victim
+ *  (its drop-player frame is a bare square refresh too), is excluded where the mark is set. */
+function plannerMoveSelectionReoffer(cmd: Record<string, unknown> | undefined, target: [number, number]): boolean {
+  const changes = (cmd?.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray;
+  const reports = (cmd?.reportList as { reports?: unknown[] } | undefined)?.reports ?? [];
+  if (!Array.isArray(changes) || reports.length > 0) return false;
+  let offered = false;
+  for (const change of changes) {
+    const id = String(change.modelChangeId ?? '');
+    if (id === 'fieldModelRemoveMoveSquare') continue;
+    if (id === 'fieldModelAddMoveSquare') {
+      const raw = (change.modelChangeValue as { coordinate?: unknown } | null | undefined)?.coordinate;
+      if (Array.isArray(raw) && Number(raw[0]) === target[0] && Number(raw[1]) === target[1]) offered = true;
+      continue;
+    }
+    if (id === 'gameSetDialogParameter' && change.modelChangeValue == null) continue;
+    if (id === 'gameSetWaitingForOpponent' && change.modelChangeValue === false) continue;
+    // Astra 10-08: UtilServerTimer.syncTime:36-39 adds this to whichever frame is synced as the turn-time limit is
+    // crossed; it says nothing about the step that ran. Without it that END_MOVING frame was rejected (8 s watchdog).
+    if (id === 'gameSetTimeoutPossible' && change.modelChangeValue === true) continue;
+    return false;
+  }
+  return offered;
+}
+/** Server-sent team membership only: true when both ids are rostered and on different teams. */
+function plannerOpposingPlayers(g: GameJson, a: string, b: string): boolean {
+  const side = (id: string) => g.teamHome.playerArray.some((pl) => pl.playerId === id) ? 'home'
+    : g.teamAway.playerArray.some((pl) => pl.playerId === id) ? 'away' : null;
+  const sa = side(a), sb = side(b);
+  return !!sa && !!sb && sa !== sb;
+}
 let plannerSeq = 0;
 let answeredDialogInstanceKey: string | null = null;
 // The shared key separates dialog kinds/modes; object identity separates a byte-identical replacement
@@ -10780,6 +10858,7 @@ let plannerAbortSince = 0;
 function plannerActive(): boolean { return plannerPlan != null; }
 function plannerSet(next: PlannerPlan | null): void {
   if (plannerPlan === next) return;
+  plannerClearLashWake(); // a lash-resend wake belongs to the plan that armed it
   plannerPlan = next;
   state.plannerRevision += 1;
 }
@@ -11157,15 +11236,37 @@ function plannerAdvance() {
         // the player's current square, in a frame after the mark (and after the spent send). Without it the plan sat
         // here for PLANNER_ABORT_MS.
         const spent = p.spentMove?.idx === p.sentIdx ? p.spentMove : null;
-        const spentFinal = !!spent && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true;
-        if (rescuedByReRoll || spentFinal) {
+        const spentFinal = !!spent && spent.cause === 'bloodlust' && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true;
+        // Owner commission 10-08: an Animal Savagery lash-out against an opponent spends the move the same way
+        // (PlannerPlan.spentMove). Its resend waits for the frame that proves the server is back in move selection
+        // (readyRevision, set in plannerOnModelApplied): squares re-offered earlier, while the victim is still being
+        // resolved, never release it.
+        const lash = !rescuedByReRoll && spent?.cause === 'animalSavagery' ? spent : null;
+        const lashReady = !!lash && lash.readyRevision != null;
+        if (rescuedByReRoll || spentFinal || lashReady) {
           // Astra 10-08: an ACCEPTED reroll that fails again is staged (splash, then the rerolled die). The roll
           // beat stays: nothing is re-sent until that result has been shown. releaseRerollResultPin wakes the plan.
           if (!rescuedByReRoll && state.rerollResultPending) return;
+          if (lash) {
+            // No dialog for EITHER coach (the victim's apothecary is the opponent's), and the server has not moved
+            // the player. plannerPromptPending above already paused on a live dialog; this is the raw model.
+            if (g.dialogParameter != null) return;
+            if (Number((g.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove ?? 0) !== lash.currentMove) return;
+            // Injury before walk: wait out the lash-out's armour / injury presentation. The hold has its own wakes
+            // (this timer for the timed legs and the fail-open cap, plannerOnInjuryBeatReleased for the injury slot).
+            const holdMs = plannerLashHoldMs(lash.readyAt);
+            if (holdMs > 0) {
+              plannerClearLashWake();
+              plannerLashWakeTimer = scheduleGameTimeout(() => { plannerLashWakeTimer = null; if (plannerPlan) plannerAdvance(); }, holdMs);
+              return;
+            }
+          }
           const retry = p.route[p.sentIdx];
           const priorRevision = Math.max(p.sentOfferRevisions[p.sentIdx] ?? -1, !rescuedByReRoll && spent ? spent.offerFloor : -1);
           const retryOffer = retry ? currentMoveOffer(p.playerId, retry, priorRevision) : null;
           if (!retryOffer) return;
+          // The live offer must be the very one StepEndMoving published: a newer generation needs its own proof.
+          if (lash && retryOffer.revision !== lash.readyRevision) return;
           if (!retry || !moveSquareInfo(g).has(`${retry[0]},${retry[1]}`)) return;
           const wasRescued = p.retryResolvedIdx === p.sentIdx;
           p.retryResolvedIdx = null;
@@ -11177,7 +11278,7 @@ function plannerAdvance() {
             : gameStore.o66Move(p.playerId, [retry], priorRevision);
           if (!accepted) {
             if (wasRescued) p.retryResolvedIdx = p.sentIdx;
-            if (spentFinal) p.spentMove = spent;
+            if (spentFinal || lash) p.spentMove = spent;
             plannerClearAbort();
             return;
           }
@@ -11323,6 +11424,8 @@ export function installMovePlannerTestHarness(
   /** Test seam: stamp the receive-time acting mirror the way enqueueSync does, WITHOUT applying it to the model
    *  (simulates a declare echo still queued behind a presentation drain). */
   mirrorActing(playerId: string | null, playerAction: string | null): void;
+  /** A reconnect: the SERVER_GAME_STATE handler's reset (resetPlayback), which drops the plan and its markers. */
+  reconnect(): void;
   active(): boolean;
   intent(): typeof state.movementIntent;
   dispose(): void;
@@ -11458,6 +11561,7 @@ export function installMovePlannerTestHarness(
       syncConfirmedMovementPresentationCapability();
     },
     mirrorActing(playerId, playerAction) { srvActingId = playerId; srvActingAction = playerAction; },
+    reconnect() { resetPlayback(); },
     active: plannerActive,
     intent: () => state.movementIntent,
     dispose() {
@@ -15073,21 +15177,50 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
   if (p.phase === 'moving' && p.sentIdx >= 0) {
     const cur = p.squareResolutions[p.sentIdx];
     const target = p.route[p.sentIdx];
-    const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown }[] } | undefined)?.reports ?? [];
+    const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown; attackerId?: unknown; defenderId?: unknown }[] } | undefined)?.reports ?? [];
     // Owner 10-08: Bloodlust is rolled on the activation's first command, BEFORE the move. A failure marks the sent
     // square as possibly spent (plannerAdvance resends only once the model says the failure is final); a success,
     // first roll or reroll, means the server carries the original move out itself.
-    // Owner/Astra 10-08: an Animal Savagery lash-out against an OPPONENT (bb2025 AnimalSavageryBehaviour:280-284)
-    // drops the move stack too, but its `animalSavagery` report deliberately arms NOTHING here: that plan still
-    // waits out the planner watchdog (PLANNER_ABORT_MS). The resend was withheld because (1) the drop-player frame
-    // re-offers the square BEFORE a possible apothecary dialog, so the single resend would be spent on a server
-    // that is not yet selecting a move, and (2) the armour/injury presentation gate does not hold the planner and
-    // has no wake of its own, so the walk could overtake the injury beat. Needs its own build.
+    // Owner commission 10-08: an Animal Savagery lash-out against an OPPONENT (bb2025 AnimalSavageryBehaviour:
+    // 280-284, bb2020 :227-230) drops the move stack too. The `animalSavagery` report names the victim; only a
+    // rostered player of the OTHER team marks the move as spent. A team-mate lash keeps the stack (the server moves
+    // the player itself) and a report without a victim ends the activation: neither is marked. Blitz walks are
+    // excluded on evidence: BlitzMove carries no activation steps (the roll belongs to SelectBlitzTarget), so a
+    // clientBlitzMove is never spent this way. The mark alone releases nothing, see readyRevision below.
+    const g = game.value;
+    const sentCoord = plannerCoord(p.playerId);
+    const atSent = !!sentCoord && !!target && sentCoord[0] === target[0] && sentCoord[1] === target[1];
     for (const r of reps) {
       if (String(r.reportId ?? '') === 'bloodLustRoll' && String(r.playerId ?? '') === p.playerId) {
         if (r.successful === false) p.spentMove = { idx: p.sentIdx, cause: 'bloodlust', offerFloor: moveOfferRevision };
         else if (p.spentMove?.cause === 'bloodlust') p.spentMove = null;
       }
+      if (String(r.reportId ?? '') === 'animalSavagery' && String(r.attackerId ?? '') === p.playerId) {
+        const victim = String(r.defenderId ?? '');
+        const walkSpent = !!g && !!victim && !atSent && p.actKind !== 'blitz' && p.actKind !== 'blitzWalk'
+          && plannerOpposingPlayers(g, p.playerId, victim)
+          // Astra 10-08: a Ball & Chain victim (the only grantor of placedProneCausesInjuryRoll) is never marked.
+          // UtilServerInjury.dropPlayer:339-342 skips its player-state change and InjuryTypeBallAndChain reports
+          // nothing, so its drop-player frame is a bare square refresh, indistinguishable from END_MOVING's, while
+          // the server may still be at the victim's apothecary / KO report. That case keeps the watchdog behaviour.
+          && !movesRandomly(g, victim);
+        if (walkSpent) {
+          p.spentMove = {
+            idx: p.sentIdx, cause: 'animalSavagery', offerFloor: moveOfferRevision,
+            currentMove: Number((g!.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove ?? 0),
+            readyRevision: null, readyAt: 0,
+          };
+        } else if (p.spentMove?.cause === 'animalSavagery') p.spentMove = null;
+      }
+    }
+    // The lash-out is fully resolved and the server is selecting a move again only once StepEndMoving republishes
+    // the squares in a frame of its own (plannerMoveSelectionReoffer). The marking frame carries the report, so it
+    // can never qualify; a later non-qualifying republish replaces the offer and thereby withdraws the proof.
+    const lash = p.spentMove?.cause === 'animalSavagery' && p.spentMove.idx === p.sentIdx ? p.spentMove : null;
+    if (lash && target && plannerMoveSelectionReoffer(cmd, target)) {
+      const offer = currentMoveOffer(p.playerId, target, lash.offerFloor);
+      lash.readyRevision = offer ? offer.revision : null;
+      lash.readyAt = Date.now();
     }
     if (cur && cur.size > 0 && target) {
       const coord = plannerCoord(p.playerId);
