@@ -4251,7 +4251,6 @@ const selectedSetupPlayer = computed(() =>
     ? (setupPhase.value?.players.find((p) => p.playerId === selectedSetupPlayerId.value) ?? null)
     : null,
 );
-const selectedSetupPlaced = computed(() => !!selectedSetupPlayer.value?.coord);
 watch(
   () => setupPhase.value?.seq,
   () => {
@@ -13090,10 +13089,8 @@ function sendChat() {
               Placed {{ setupPhase.validation.placed }}/{{ setupPhase.validation.required }}
             </li>
           </ul>
-          <div v-if="selectedSetupPlayer" class="setup-selected">
-            Selected: <b>{{ selectedSetupPlayer.posName || selectedSetupPlayer.name }}</b> —
-            {{ selectedSetupPlaced ? 'click a square to move, or click the dugout to return to reserves' : 'click a square on your half to place' }}
-          </div>
+          <!-- Owner 10-08: the "Selected: <player> — click a square ..." line is gone; it kept resizing the panel on
+               every selection and the placement gestures no longer need explaining here. -->
           <!-- Owner 10-03: the pane carries no confirm (the scoreboard's Confirm Setup opens the setup confirmation) nor
                Concede (a prompt asks when conceding is legal); owner 10-05: nor a Reserve button - a placed player goes
                back by clicking it then the dugout, or by dragging it off the pitch. -->

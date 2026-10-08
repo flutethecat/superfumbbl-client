@@ -4690,6 +4690,10 @@ type PresentationEvent =
   | { kind: 'prompt'; label: string; arm: () => void }
   // #78: store-paced HOLD (~300ms family) for a pickup / catch / bounce hop (no renderer anim to gate on). ⚠ NOT-a-step spares it from COLLAPSE only, never a flush (SR-115: trigger ≠ disposition — a flush that runs has always discarded beats; FLUSH_DISPOSITION records it).
   | { kind: 'beat'; ms: number; sound?: string }
+  // Owner 10-08: a kick-off catchRoll's die, catcher ring, sound and (when the server asks) its reroll card, held behind
+  // the kick-off ball chain; presenting it publishes them and then holds the read beat. ONE event, so no flush can part
+  // the die from its beat. `arms` are filled by the frame that staged it; `published` flips when it reaches the head.
+  | { kind: 'kickoffCatch'; playerId: string; kick: number | null; ms: number; sound?: string; arms: (() => void)[]; published: boolean }
   // Final StepKickoffAnimation authority. Immutable at receive time; arms the renderer only at the FIFO head.
   | AuthoritativeKickBeat
   // A distinct scatterBall after this kickoff's authoritative KICK. It waits behind the kickArc barrier.
@@ -4709,6 +4713,7 @@ const FLUSH_DISPOSITION: Record<PresentationEvent['kind'], 'discard' | 'preserve
   step: 'discard',      // stale on a new activation — the model already holds that player at its final square
   prompt: 'preserve',   // a RESULT held behind its context: a decision must never be lost
   beat: 'discard',      // a store-paced hold; nothing to resume after a flush (pre-existing behaviour, now stated)
+  kickoffCatch: 'preserve', // owner 10-08: the server's kick-off catch roll (and a reroll card riding it) is never dropped
   authoritativeKick: 'preserve', // final server flight authority is a load-bearing kickoff beat
   kickoffBounce: 'preserve', // the server's post-KICK bounce is a distinct ordered beat
   ballOut: 'preserve', // owner 10-07: the touchback's hop + stamp is the kick-off's last ordered beat
@@ -5047,6 +5052,26 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       presentation.presenting = { kind: 'beat', id: '__beat__', release };
     });
   }
+  if (ev.kind === 'kickoffCatch') {
+    // Owner 10-08: the ball is down - publish the server's catch roll (die, ring, sound, then a reroll card that was
+    // waiting on it) and hold its read beat. Self-timed like a beat: the timer is the FIFO's wake, no gate, no cap.
+    ev.published = true;
+    for (const arm of ev.arms.splice(0)) { try { arm(); } catch (e) { log('system', `#67 kick-off catch arm failed: ${String(e)}`); } }
+    if (ev.sound) playSound(ev.sound);
+    return new Promise<void>((resolve) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const release = () => {
+        if (done) return;
+        done = true;
+        cancelGameTimeout(timer);
+        presentation.presenting = null;
+        resolve();
+      };
+      timer = scheduleGameTimeout(release, Math.max(0, ev.ms));
+      presentation.presenting = { kind: 'beat', id: KICKOFF_CATCH_ID, release };
+    });
+  }
   // kind === 'step'
   const stepGameId = currentGameId();
   const openWalkGate = (presentedStep: NonNullable<typeof state.presentationStep>): Promise<void> => new Promise<void>((resolve) => {
@@ -5140,7 +5165,10 @@ function flushStalePresentation(): void {
   presentation.queue.length = 0;
   presentation.queue.push(...kept);
   // #174 KA-2: the force-release must NOT open a barrier gated on an EXTERNAL still-running animation (that drains the splashes mid-arc) — a gate carrying `requeue` is released but its event goes BACK to the queue front. resetPresentation keeps the unscoped release deliberately (teardown releases everything).
-  if (presentation.presenting) {
+  // Owner 10-08 (Astra P2): a kick-off catch die that is on screen keeps the rest of its read beat - force-releasing it
+  // here cut the die (and let the preserved bounce follow at once) whenever a new activation's first step arrived
+  // inside the beat. It is self-timed, so the new step waits at most what is left of those 450 ms.
+  if (presentation.presenting && !kickoffCatchReadBeatPresenting()) {
     const back = presentation.presenting.requeue;
     presentation.presenting.release(presentation.presenting.kind === 'rollBeat');
     presentation.presenting = null;
@@ -5362,6 +5390,80 @@ function enqueueBehindFireball(label: string, arm: () => void): boolean {
   return true;
 }
 
+/** Owner 10-08 ("Catch die toast doesn't play for a player that moved under the ball after kickoff"): a kick-off
+ *  catchRoll frame arrives in the same burst as the KICK frame (g1950980 cmd 1587 -> 1588, 2 ms apart), so its die
+ *  and catcher ring were published at apply time: under the kick-off event card and gone before the ball flew, or
+ *  (High Kick, whose card finished long before) the instant the flight armed with the turn-start splash 400 ms behind
+ *  it. The scatter after a kick-off already waits behind the flight on this FIFO (kickoffBounce); the catch roll now
+ *  does too: its presentation is one `kickoffCatch` event behind the kickArc barrier, which publishes the die, the ring
+ *  and the frame's catch sound and then holds the read beat. Model truth, dialog delivery and sends are untouched;
+ *  nothing here creates, cancels or re-times kickAim / kickDescend (SR-119) - the event only rides behind the pair's
+ *  barrier. Every staged catch is the server's own catchRoll report, shown once. A flush keeps the event and lets a die
+ *  that is already up finish its beat (FLUSH_DISPOSITION, flushStalePresentation); a reset drops it with the queue.
+ *  A reroll offer / reroll use for a catch that is still queued rides the same event (surfaceReRollPrompt). */
+const KICKOFF_CATCH_READ_MS = 450; // viewer-visible rule: the roll reads this long before the bounce / turn splash
+const KICKOFF_CATCH_ID = 'kickoffCatch';
+type StagedKickoffCatch = Extract<PresentationEvent, { kind: 'kickoffCatch' }>;
+/** A kick-off catch die is on screen, inside its read beat. */
+function kickoffCatchReadBeatPresenting(): boolean {
+  return presentation.presenting?.kind === 'beat' && presentation.presenting.id === KICKOFF_CATCH_ID;
+}
+/** A staged kick-off catch roll is still queued, or its read beat is on screen. */
+function kickoffCatchPresentationPending(): boolean {
+  return kickoffCatchReadBeatPresenting() || presentation.queue.some((e) => e.kind === 'kickoffCatch');
+}
+/** Is this frame's catchRoll a kick-off catch whose die belongs on the FIFO? Only while the KICK of the live kick-off
+ *  occurrence has been received and nothing has ended that kick-off yet (the catch frame is checked before its own
+ *  ballMoving=false retires the occurrence). That covers the burst (flight still queued) and a catch that arrives
+ *  after the flight drained (replay serialises every command behind the drain; a slow link does the same live).
+ *  Astra confirmation P2: kick-off visuals that are merely still DRAINING do not own a catch - once the occurrence
+ *  has ended (caught / out / turnEnd / turn-mode change) an ordinary catch, e.g. a first-turn hand-off, publishes at
+ *  apply time with the generic catch beat exactly as before this change. Classic is excluded: it has no rollModal /
+ *  ballCatch reader, so it keeps the generic catch beat too. */
+function kickoffCatchOwnsFrame(): boolean {
+  if (settings.uiMode === 'classic') return false;
+  return liveKickoffKickCommandNr() != null;
+}
+/** Astra confirmation 2, P2-a: a KICK frame this client accepted (its flight is queued) with no scatter-time
+ *  occurrence to bind to - a reconnect during Kick-Off Return / High Kick drops the occurrence, the KICK still comes.
+ *  The KICK frame is the server's own, so it owns the catch that follows exactly as a bound occurrence does, and it is
+ *  retired by the same events (ball settled / out, turn-mode change, touchback / throwIn / turnEnd, a new kick-off
+ *  scatter, a playback reset). Null whenever the occurrence itself carries the KICK. */
+let unboundKickCommandNr: number | null = null;
+/** The KICK command of the kick-off that is live right now (received, not yet ended), else null. */
+function liveKickoffKickCommandNr(): number | null {
+  return kickoffPresentationOccurrence?.kickCommandNr ?? unboundKickCommandNr;
+}
+/** Queue ONE server catchRoll's presentation behind whatever the FIFO holds; each staged roll holds its own read beat,
+ *  so two rolls in one frame (the automatic Catch-skill reroll) read one after the other. With nothing ahead it
+ *  publishes in this call, so the caller adds its publishers through addKickoffCatchArm (which then runs them at
+ *  once, in frame order). */
+function stageKickoffCatch(playerId: string, sound?: string): StagedKickoffCatch {
+  const staged: StagedKickoffCatch = {
+    kind: 'kickoffCatch', playerId, kick: liveKickoffKickCommandNr(), sound, arms: [], published: false,
+    ms: Math.max(KICKOFF_CATCH_READ_MS, presentationMs(CATCH_BEAT_MS)),
+  };
+  presentation.queue.push(staged);
+  void pumpPresentation();
+  return staged;
+}
+function addKickoffCatchArm(staged: StagedKickoffCatch, arm: () => void): void {
+  if (staged.published) arm(); else staged.arms.push(arm);
+}
+/** The newest catch roll of `playerId` IN THE LIVE KICK-OFF that is still waiting behind the ball chain (not yet
+ *  shown). Astra confirmation 2, P2-b: the roll occurrence is the kick-off it belongs to, not the player alone - once
+ *  that kick-off has ended, its catch events that are still queued are history, and a reroll offer / use for the same
+ *  player's later ordinary catch (a first-turn hand-off back to the kick-off catcher) surfaces as it always did. */
+function queuedKickoffCatchFor(playerId: string): StagedKickoffCatch | null {
+  const kick = liveKickoffKickCommandNr();
+  if (kick == null) return null;
+  for (let i = presentation.queue.length - 1; i >= 0; i--) {
+    const event = presentation.queue[i]!;
+    if (event.kind === 'kickoffCatch' && !event.published && event.playerId === playerId && event.kick === kick) return event;
+  }
+  return null;
+}
+
 /** #174: enqueue the kickoff-arc BARRIER (seq-deduped). ⚠ Callers MUST enqueue it BEFORE its dependent prompts, and only once kickDescend is armed for this frame. */
 function enqueueKickArcBarrier(seq: number, next = false): void {
   const already = presentation.queue.some((e) => e.kind === 'kickArc' && e.seq === seq)
@@ -5407,7 +5509,8 @@ function enqueueAuthoritativeKick(cmd: Record<string, unknown>): void {
     occurrence.kickCommandNr = event.commandNr;
     occurrence.endpoint = [event.animation.endCoordinate[0], event.animation.endCoordinate[1]];
     occurrence.phase = 'kickQueued';
-  }
+    unboundKickCommandNr = null;
+  } else unboundKickCommandNr = event.commandNr; // the flight is queued below either way: its catch waits behind it
   // StepKickoffScatterRollAskAfter.java:178 publishes KICKING_PLAYER_COORDINATE, but
   // StepKickoffAnimation.java:63-90 reads KICKED_PLAYER_COORDINATE and may emit the exact 27,8 fallback.
   presentation.queue.push(event);
@@ -5437,6 +5540,7 @@ function followKickMarkerToModelBall(modelChanges: unknown): void {
  *  ball and the preview exactly as the flight teardown would (kickClearSeq reaches the renderer). Ordinary turn ends inside the window are NOT terminal and keep it. */
 function retireKickoffForTerminalState(): void {
   if (state.kickTargetReveal || state.kickScatterPreview) clearAuthoritativeKickPresentation(true);
+  unboundKickCommandNr = null;
 }
 
 /** Clear authoritative art/state and optionally remove queued kick beats. Model truth is already applied. */
@@ -5489,8 +5593,10 @@ function deferTurnStartBehindKickArc(side: 'home' | 'away'): boolean {
   // kickoff-event surface family (card AND splash forms), same dismiss-then-splash ordering.
   // (a) FIFO-borne surfaces: defer via enqueuePromptBehind, whose FIFO order re-arms the splash only once they
   // drain (the cine's release nulls state.kickoffCine before advancing). The recursion walks arc→card→clear.
+  // Owner 10-08: a kick-off catch roll staged behind the flight is part of that chain (its die reads before the splash).
   const kickArcHeld = presentation.presenting?.kind === 'kickDescend'
-    || presentation.queue.some((e) => e.kind === 'kickArc' || e.kind === 'authoritativeKick' || e.kind === 'kickoffBounce' || e.kind === 'ballOut');
+    || presentation.queue.some((e) => e.kind === 'kickArc' || e.kind === 'authoritativeKick' || e.kind === 'kickoffBounce' || e.kind === 'ballOut')
+    || kickoffCatchPresentationPending();
   const cineHeld = presentation.presenting?.kind === 'cine'
     || presentation.queue.some((e) => e.kind === 'cine');
   if (kickArcHeld || cineHeld) {
@@ -6913,6 +7019,9 @@ function applyFrameContents(frame: QueuedFrame) {
     const marker = reduceFumblerooskie(state.fumblerooskie, reports, game.value);
     if (marker !== state.fumblerooskie) state.fumblerooskie = marker ? { ...marker, seq: (state.fumblerooskie?.seq ?? 0) + 1 } : null;
   }
+  // Owner 10-08: this frame's catch rolls that wait behind the kick-off flight (see stageKickoffCatch) - one staged
+  // event per server catchRoll report, in report order (Astra confirmation P2: a same-frame Catch-skill reroll).
+  const stagedKickoffCatches = new Map<object, StagedKickoffCatch>();
   // #78 (owner 08-05): pace pickup, catch resolution, and EVERY ball-scatter hop in o66 play; spectate keeps holdPlayback. The frame's sound rides its beat (#92 Group-A cue); beats ride the #67 FIFO so they land AFTER move steps and degrade to instant on flush/catch-up.
   if (settings.order66 && !playback.catchingUp) {
     const snd = String((cmd as { sound?: unknown }).sound ?? '');
@@ -6931,7 +7040,12 @@ function applyFrameContents(frame: QueuedFrame) {
     if (catchRoll?.successful === false || catchRoll?.successful === true) {
       // A fail beat reads before the next bounce frame; a success beat is the chain's terminal resolution.
       const s = snd === 'catch' && !relocatedBeatSounds.has('catch') ? 'catch' : undefined;
-      enqueueBeat(presentationMs(CATCH_BEAT_MS), s);
+      // Owner 10-08: a kick-off catch reads when the ball has landed - its die, ring and sound ride behind the flight.
+      // The frame's catch sound belongs to its last roll (the one that settled the ball).
+      if (!bombFrame && kickoffCatchOwnsFrame()) {
+        const rolls = reports.filter((r) => String(r.reportId) === 'catchRoll');
+        rolls.forEach((r, i) => stagedKickoffCatches.set(r, stageKickoffCatch(String(r.playerId ?? ''), i === rolls.length - 1 ? s : undefined)));
+      } else enqueueBeat(presentationMs(CATCH_BEAT_MS), s);
       if (s) relocatedBeatSounds.add(s);
       // A catch attempt inside a bounce chain shows its die at the catcher before the next hop / the chain's end.
       if (ballChainOpen && !bombFrame) { ballChainBeatMs += presentationMs(BALL_CHAIN_CATCH_READ_MS); ballChainFrame = true; }
@@ -7416,9 +7530,10 @@ function applyFrameContents(frame: QueuedFrame) {
   detectPregameCinematics(reports, game.value, cmd);
   // Ball catch attempt (catchRoll) → pulse a ring at the catcher (the renderer animates the kick flight itself off the off→on-pitch transition).
   const catchReport = reports.find((r) => String(r.reportId) === 'catchRoll');
-  if (catchReport?.playerId) {
-    state.ballCatch = { playerId: String(catchReport.playerId), seq: (state.ballCatch?.seq ?? 0) + 1 };
-  }
+  const publishCatchRing = (catcherId: string) => () => { state.ballCatch = { playerId: catcherId, seq: (state.ballCatch?.seq ?? 0) + 1 }; };
+  if (stagedKickoffCatches.size > 0) {
+    for (const staged of stagedKickoffCatches.values()) if (staged.playerId) addKickoffCatchArm(staged, publishCatchRing(staged.playerId));
+  } else if (catchReport?.playerId) publishCatchRing(String(catchReport.playerId))();
   // Owner 09-09: TENTACLES hold — ReportTentaclesShadowingRoll{skill:'Tentacles', defenderId = the tentacled player,
   // successful = the MOVER escaped} (upstream TentaclesBehaviour). A failed escape raises the skill pill on the
   // tentacled player ("used Tentacles", icon fade) AND a second pill on the held mover (actingPlayer), like Horns
@@ -7561,11 +7676,14 @@ function applyFrameContents(frame: QueuedFrame) {
       const occurrence = kickoffPresentationOccurrence;
       const duplicateOccurrenceScatter = !!occurrence && occurrence.seenScatterCommands.has(commandNr);
       const bounceSound = String((cmd as { sound?: unknown }).sound ?? '') === 'bounce' ? 'bounce' : undefined;
-      if (occurrence && bounceSound) relocatedBeatSounds.add(bounceSound);
-      const orderedKickoffBounce = occurrence?.kickCommandNr != null
-        && Number.isInteger(commandNr) && commandNr > occurrence.kickCommandNr;
+      // Astra 10-08: after a reconnect before the KICK no occurrence object survives, but the KICK still owns this
+      // bounce (liveKickoffKickCommandNr falls back to the unbound marker) - else it played ahead of the staged die.
+      const liveKick = liveKickoffKickCommandNr();
+      if ((occurrence || liveKick != null) && bounceSound) relocatedBeatSounds.add(bounceSound);
+      const orderedKickoffBounce = liveKick != null
+        && Number.isInteger(commandNr) && commandNr > liveKick;
       if (orderedKickoffBounce && !duplicateOccurrenceScatter) {
-        occurrence.seenScatterCommands.add(commandNr);
+        occurrence?.seenScatterCommands.add(commandNr);
         if (!scatterOut.exit && scatterOut.path.length > 1) presentation.queue.push({ kind: 'kickoffBounce', path: scatterOut.path, sound: bounceSound });
         presentation.queue.push({ kind: 'ballOut', cue: scatterOut, sound: scatterOut.exit ? bounceSound : undefined });
         void pumpPresentation();
@@ -7607,14 +7725,15 @@ function applyFrameContents(frame: QueuedFrame) {
       const bounceSound = String((cmd as { sound?: unknown }).sound ?? '') === 'bounce' ? 'bounce' : undefined;
       // Every occurrence-owned scatter suppresses receive-time bounce audio. A real post-KICK bounce carries
       // it to its queued presentation arm; pre-KICK weather gusts and duplicate commands stay silent.
-      if (occurrence && bounceSound) relocatedBeatSounds.add(bounceSound);
+      const liveKick = liveKickoffKickCommandNr(); // Astra 10-08: the unbound (post-reconnect) KICK owns its bounce too
+      if ((occurrence || liveKick != null) && bounceSound) relocatedBeatSounds.add(bounceSound);
       // Before KICK this is event resolution (not ball travel): keep the ground ball masked and move only the
       // public destination marker. After KICK the same report owns the distinct bounce behind the arc barrier.
-      const orderedKickoffBounce = occurrence?.kickCommandNr != null
+      const orderedKickoffBounce = liveKick != null
         && Number.isInteger(commandNr)
-        && commandNr > occurrence.kickCommandNr;
+        && commandNr > liveKick;
       if (orderedKickoffBounce && !duplicateOccurrenceScatter) {
-        occurrence.seenScatterCommands.add(commandNr);
+        occurrence?.seenScatterCommands.add(commandNr);
         presentation.queue.push({ kind: 'kickoffBounce', path, sound: bounceSound });
         void pumpPresentation();
       } else if (occurrence && occurrence.kickCommandNr == null && Number.isInteger(commandNr) && !duplicateOccurrenceScatter) {
@@ -7644,14 +7763,17 @@ function applyFrameContents(frame: QueuedFrame) {
     // Evaluate terminal truth only AFTER this command's KICK has had a chance to bind. The kickoff-scatter
     // command can already set outOfBounds/touchback before KICK; that pre-flight truth must not retire the mask.
     // Intermediate catch/reroll frames remain non-terminal so their later bounce(s) stay in this transaction.
-    if (kickoffPresentationOccurrence?.kickCommandNr != null) {
+    if (liveKickoffKickCommandNr() != null) {
       const changes = (cmd.modelChangeList as ModelChangeListJson | null | undefined)?.modelChangeArray ?? [];
       const settled = changes.some((change) =>
         (change.modelChangeId === ModelChangeId.FIELD_MODEL_SET_BALL_MOVING && change.modelChangeValue === false)
         || (change.modelChangeId === ModelChangeId.FIELD_MODEL_SET_OUT_OF_BOUNDS && change.modelChangeValue === true)
         || change.modelChangeId === ModelChangeId.GAME_SET_TURN_MODE);
       const terminalReport = reports.some((report) => ['touchback', 'throwIn', 'turnEnd'].includes(String(report.reportId)));
-      if (settled || terminalReport) kickoffPresentationOccurrence = null;
+      if (settled || terminalReport) {
+        if (kickoffPresentationOccurrence?.kickCommandNr != null) kickoffPresentationOccurrence = null;
+        unboundKickCommandNr = null;
+      }
     }
     if (anim && String(anim.animationType) === 'bombExplosion' && Array.isArray(anim.startCoordinate)) {
       const sq = anim.startCoordinate as [number, number];
@@ -7869,7 +7991,13 @@ function applyFrameContents(frame: QueuedFrame) {
       if (isActionRoll) {
         const cue = actionRollPresentation(report, reports, game.value, raw, !play.active || !myPlayIds(game.value).has(String(pid)), pendingActionReroll);
         if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
-        if (cue?.modal) state.rollModal = { ...cue.modal, seq: (state.rollModal?.seq ?? 0) + 1 };
+        if (cue?.modal) {
+          const modal = cue.modal;
+          const publishModal = () => { state.rollModal = { ...modal, seq: (state.rollModal?.seq ?? 0) + 1 }; };
+          // Owner 10-08: the kick-off catch die shows when the ball lands (behind the flight), not at apply time.
+          const stagedCatch = reportId === 'catchRoll' ? stagedKickoffCatches.get(report) : undefined;
+          if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal); else publishModal();
+        }
         if (cue?.die) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
         // Owner 09-14: Break Tackle gets the same skill-use toast as every other skill (icon pop + "<name> uses
         // Break Tackle!") — keyed off the successful dodge's modifier, since upstream sends no skillUse report for it.
@@ -7938,16 +8066,30 @@ function applyFrameContents(frame: QueuedFrame) {
         holdPlayback(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS));
       }
     } else {
-      if (pendingActionReroll && rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw)) showRerollSplash(pendingActionReroll.pid, pendingActionReroll.source, pendingActionReroll.isTeam, pendingActionReroll.raw);
-      // Owner 08-19: FAILED LONER with no same-frame dice (the fail landed in an earlier frame):
-      // splash shown → pill after the splash clears; no splash → pill immediately.
-      if (pendingActionReroll?.lonerFailed) {
-        const lonerPid = pendingActionReroll.pid;
-        const splashed = rerollSplashWanted(pendingActionReroll.isTeam, pendingActionReroll.raw);
-        if (splashed) rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid), presentationMs(REROLL_SPLASH_HOLD_MS)));
-        else showLonerFailedSplash(lonerPid);
-        holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS) * (splashed ? 2 : 1));
-      }
+      const rerollUse = pendingActionReroll;
+      const presentRerollUse = () => {
+        if (!rerollUse) return;
+        if (rerollSplashWanted(rerollUse.isTeam, rerollUse.raw)) showRerollSplash(rerollUse.pid, rerollUse.source, rerollUse.isTeam, rerollUse.raw);
+        // Owner 08-19: FAILED LONER with no same-frame dice (the fail landed in an earlier frame):
+        // splash shown → pill after the splash clears; no splash → pill immediately.
+        if (rerollUse.lonerFailed) {
+          const lonerPid = rerollUse.pid;
+          const splashed = rerollSplashWanted(rerollUse.isTeam, rerollUse.raw);
+          if (splashed) rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(lonerPid), presentationMs(REROLL_SPLASH_HOLD_MS)));
+          else showLonerFailedSplash(lonerPid);
+          holdPlayback(presentationMs(REROLL_SPLASH_HOLD_MS) * (splashed ? 2 : 1));
+        }
+      };
+      // Owner 10-08 (Astra P2): a reroll spent on a kick-off catch whose dice still wait behind the flight is announced
+      // with them, in server order (failed die, then the use + the rerolled die), never ahead of the failed die. The
+      // rerolled catchRoll of this frame carries it (also when the failed roll is in this same frame: its die reads its
+      // own beat first); with none in the frame (a failed Loner) it follows the queued die.
+      const queuedCatch = rerollUse ? queuedKickoffCatchFor(rerollUse.pid) : null;
+      const frameCatches = rerollUse ? [...stagedKickoffCatches].filter(([, staged]) => staged.playerId === rerollUse.pid) : [];
+      const rerolledCatch = (frameCatches.find(([roll]) => (roll as { reRolled?: unknown }).reRolled === true) ?? frameCatches.at(-1))?.[1];
+      if (rerolledCatch) addKickoffCatchArm(rerolledCatch, presentRerollUse);
+      else if (queuedCatch) enqueuePromptBehind(`kickoffCatchRerollUse:${String((cmd as { commandNr?: unknown }).commandNr)}`, presentRerollUse);
+      else presentRerollUse();
       pushDice([...firstRolls, ...reRolledRolls]);
       // Hold downstream presentation for action-roll readability; force the beat in play mode.
       // U8 (owner: NO drain before movement step 1 — drains at step 2+): a SUCCESS action-roll (the classic
@@ -7971,6 +8113,7 @@ function applyFrameContents(frame: QueuedFrame) {
   const scatterReport = reports.find((r) => String(r.reportId) === 'kickoffScatter');
   if (Array.isArray(scatterReport?.ballCoordinateEnd)) {
     const endpoint = scatterReport.ballCoordinateEnd as [number, number];
+    unboundKickCommandNr = null; // a new kick-off: an unbound KICK of the previous one owns nothing any more
     try {
       const preview = projectKickScatterPreview(scatterReport);
       const commandNr = Number((cmd as { commandNr?: unknown }).commandNr);
@@ -9303,6 +9446,7 @@ function resetPlayback() {
   state.kickPlacement = null; // owner o66aj: fresh game — drop any armed kick-placement pick
   clearKickSkillDialog(); // upstream kickSkill choice/landing candidates never cross a game or reconnect boundary
   clearAuthoritativeKickPresentation(true);
+  unboundKickCommandNr = null;
   acceptedAuthoritativeKicks.clear();
   acceptedKickoffScatterReveals.clear();
   kickElectionController.clearGame((game.value as { gameId?: string | number } | null)?.gameId ?? null);
@@ -12191,12 +12335,18 @@ export function installConfirmedMovementDrainTestHarness(
 export function installTouchdownPacingTestHarness(
   fixture: GameJson,
   mode: 'play' | 'spectator',
-  /** Astra review: seat the local coach on the AWAY (scoring) team and capture outgoing commands. */
-  options: { seat?: 'home' | 'away'; send?: (command: Record<string, unknown>) => void } = {},
+  /** Astra review: seat the local coach on the AWAY (scoring) team and capture outgoing commands.
+   *  Owner 10-08 (kick-off catch): `uiMode` mounts the Classic store path, `replay` flags a file replay, and
+   *  `interactive` makes the seat a live coach (reroll offers surface as a card instead of the headless decline). */
+  options: { seat?: 'home' | 'away'; send?: (command: Record<string, unknown>) => void; uiMode?: 'fumbbl40k' | 'classic'; replay?: boolean; interactive?: boolean } = {},
 ): {
   receive(cmd: Record<string, unknown>): void;
+  /** A reconnect: the SERVER_GAME_STATE handler's reset + snapshot seed (resetPlayback, then the snapshot model). */
+  snapshot(game: GameJson): void;
   serverPush(cmd: Record<string, unknown>): void;
   queuedFrames(): number;
+  /** The #67 presentation FIFO is fully drained: nothing queued, nothing on screen, the pump stopped. */
+  presentationIdle(): boolean;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -12207,15 +12357,19 @@ export function installTouchdownPacingTestHarness(
   const priorWireLog = settings.wireLog;
   const priorCommandNr = lastAppliedCommandNr;
   const priorSession = session;
+  const priorUiMode = settings.uiMode;
+  const priorInteractive = interactiveReRolls;
   resetPresentation();
   resetPlayback();
   game.value = structuredClone(fixture);
+  if (options.uiMode) settings.uiMode = options.uiMode;
+  if (options.interactive !== undefined) interactiveReRolls = options.interactive;
   play.active = mode === 'play';
   const seatTeam = options.seat === 'away' ? game.value.teamAway : game.value.teamHome;
   play.coach = mode === 'play' ? String((seatTeam as { coach?: string }).coach ?? '') : 'td-pacing-spectator';
   if (options.send) { const send = options.send; session = { send(command: Record<string, unknown>) { send(command); } } as unknown as GameSession; }
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
-  replay.active = false;
+  replay.active = options.replay === true;
   playback.catchingUp = false;
   playback.lastReceivedAt = 0;
   settings.order66 = true;
@@ -12223,9 +12377,13 @@ export function installTouchdownPacingTestHarness(
   const unregister = gameStore.registerConfirmedMovementPresentationConsumer();
   return {
     receive(cmd) { enqueueSync(structuredClone(cmd)); },
+    snapshot(snapshotGame) { resetPlayback(); game.value = structuredClone(snapshotGame); seedActingPlayer(game.value); },
     serverPush(cmd) { handleServerPush(structuredClone(cmd)); },
     queuedFrames: () => playback.queue.length,
+    presentationIdle: () => presentation.queue.length === 0 && !presentation.running && !presentation.presenting,
     dispose() {
+      settings.uiMode = priorUiMode;
+      interactiveReRolls = priorInteractive;
       clearCinematics(true);
       resetPlayback();
       unregister();
@@ -14474,7 +14632,7 @@ export function installKickoffPresentationTestHarness(
   const priorLastReportCommandNr = lastReportCommandNr;
 
   resetPresentation();
-  kickoffPresentationOccurrence = null;
+  kickoffPresentationOccurrence = null; unboundKickCommandNr = null;
   acceptedAuthoritativeKicks.clear();
   acceptedKickoffScatterReveals.clear();
   lastReportSig = null;
@@ -14541,7 +14699,7 @@ export function installKickoffPresentationTestHarness(
       resetPresentation();
       clearAllGameTimeouts();
       pendingMasterChef = null; blockingSplashCine.value = null;
-      kickoffPresentationOccurrence = null;
+      kickoffPresentationOccurrence = null; unboundKickCommandNr = null;
       acceptedAuthoritativeKicks.clear();
       acceptedKickoffScatterReveals.clear();
       lastReportSig = priorLastReportSig;
@@ -16172,7 +16330,13 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
       instanceKey: reRollArmedKey,
     };
   };
-  if (settings.order66 && play.active && movementDraining(playerId)) enqueuePromptBehind('reRoll', armReRollPrompt);
+  // Owner 10-08 (Astra P2): the offer for a kick-off catch whose die still waits behind the flight surfaces WITH that
+  // die (die first, then the card, in the same publish) - never ahead of it, where the coach would answer a roll they
+  // have not been shown. The staged catch's own publish is the wake (no watchdog); it is preserved by every flush and
+  // dropped only by a full reset, after which the live dialog re-surfaces. Nothing is answered here.
+  const stagedCatch = /catch/i.test(String(dp.reRolledAction ?? '')) ? queuedKickoffCatchFor(playerId) : null;
+  if (stagedCatch) stagedCatch.arms.push(armReRollPrompt);
+  else if (settings.order66 && play.active && movementDraining(playerId)) enqueuePromptBehind('reRoll', armReRollPrompt);
   else armReRollPrompt();
 }
 /** Surface every block-roll variant to the chooser; derive sources from reRollProperties/action map and keep unverified skill commands disabled. */

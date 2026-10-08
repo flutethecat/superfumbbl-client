@@ -5302,6 +5302,7 @@ export class PitchRenderer {
     const gid = (game as { gameId?: string | number } | null)?.gameId != null ? String((game as { gameId?: string | number }).gameId) : null;
     let priorClassicLeaseToRelease: ClassicIconLease | null = null;
     if (gid !== this.lastGameId) {
+      this.distractedOnsetTurn.clear(); // owner 10-08: a new game starts with no distracted-onset memory
       priorClassicLeaseToRelease = this.classicIconLease;
       this.classicIconLease = null;
       const leaseGeneration = ++this.classicIconLeaseGeneration;
@@ -19034,6 +19035,34 @@ export class PitchRenderer {
    * once they activate they lose the ring/glow (see the token build) and get this
    * deeper shading. Consistent with the ring removal.
    */
+  /** Owner 10-08: the turn in which each player was first seen without tackle zones (CONFUSED / HYPNOTIZED), as an
+   *  ordinal (half, then the two turn counters), plus the last turn it was painted in. The distracted grey is painted
+   *  only while the onset turn is still the current one. Presentation memory only - the flag itself is the server's;
+   *  a player first seen distracted on a join counts from the turn it is seen in.
+   *  Astra 10-08: the side playing is NOT part of the turn (it flips and flips back inside one activation, e.g. the
+   *  opposing coach's second-target pick for Blastin' Solves Everything, and between turns). The memory is cleared on
+   *  a GAME change only - never per replay frame or per review step (snapReplayFrame / cancelSpectatorPresentation run
+   *  on every fast-playback frame, which would re-seed the onset forever). A view that is not continuous with the
+   *  last paint - it went BACK in time, or it skipped turns without painting them (a replay or review seek, where
+   *  the player may have recovered and been distracted again unseen) - re-seeds from the turn shown. */
+  private distractedOnsetTurn = new Map<string, { onset: number; seen: number }>();
+  private distractedTurnOrdinal(): number {
+    const g = this.game as { half?: number; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } } | null;
+    return (g?.half ?? 0) * 1000 + (g?.turnDataHome?.turnNr ?? 0) + (g?.turnDataAway?.turnNr ?? 0);
+  }
+  private distractedShadedThisTurn(data: PlayerDataJson): boolean {
+    const distracted = hasFlag(data.playerState, PlayerStateFlag.CONFUSED) || hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED);
+    if (!distracted) { this.distractedOnsetTurn.delete(data.playerId); return false; }
+    const now = this.distractedTurnOrdinal();
+    const memory = this.distractedOnsetTurn.get(data.playerId);
+    if (!memory || memory.onset > now || now < memory.seen || now - memory.seen > 1) {
+      this.distractedOnsetTurn.set(data.playerId, { onset: now, seen: now });
+      return true;
+    }
+    memory.seen = now;
+    return memory.onset === now;
+  }
+
   private applyActivationShading(token: Container, data: PlayerDataJson, _isHome: boolean, strength?: number, walkerFigure?: { chestRatio?: number }): void {
     const acted = this.actedPlayers.has(data.playerId);
     // Owner ruling (Charge/High Kick shading unification, live): a player excluded from a shaded pick's
@@ -19043,13 +19072,17 @@ export class PitchRenderer {
     // A successful Hypnotic Gaze is report-authoritative in gazeVictims and remains
     // gated by the server's live CONFUSED flag. Reuse the inactive/acted paint path
     // exactly, but do not add an activation checkmark merely for being gazed.
-    const gazeInactive = !acted && !pickIneligible
+    // Owner 10-08: "On a new turn, the shading from a distracted player should be removed but the distracted token
+    // should remain" - the grey only lasts for the turn the player lost its tackle zones in; from the next turn on
+    // it stands full-colour (it may be able to act again) and keeps its DISTRACTED banner while the flag stands.
+    const distractedThisTurn = this.distractedShadedThisTurn(data);
+    const gazeInactive = !acted && !pickIneligible && distractedThisTurn
       && this.gazeVictims.has(data.playerId)
       && hasFlag(data.playerState, PlayerStateFlag.CONFUSED);
     // Owner 10-02: "They also lost tackle zones so should be shaded grey" - every standing player WITHOUT tackle zones
     // (CONFUSED: Bone-head / Really Stupid / Animal Savagery / failed Bloodlust; HYPNOTIZED) - the DISTRACTED banner's
     // players - gets the same grey as an inactive one (no checkmark: not an activation). The banner stays lit.
-    const distractedInactive = !acted && !pickIneligible && !gazeInactive && !isDown(data.playerState)
+    const distractedInactive = !acted && !pickIneligible && !gazeInactive && distractedThisTurn && !isDown(data.playerState)
       && (hasFlag(data.playerState, PlayerStateFlag.CONFUSED) || hasFlag(data.playerState, PlayerStateFlag.HYPNOTIZED));
     // item3: `k` is the dim LEVEL, not a boolean — mid-turnover it is the eased in-flight value, so a
     // player fading OUT (acted → not, the turnover case) still paints here even though acted is false.
