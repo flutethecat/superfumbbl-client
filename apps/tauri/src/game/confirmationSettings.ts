@@ -13,6 +13,8 @@ export interface ConfirmationSettings {
   confirmEndPunt: boolean;
   confirmEndHandOff: boolean;
   confirmEndPass: boolean;
+  /** Owner 10-07: a declared Foul asks before it is cancelled or ended, like Blitz / Hand-off / Pass. */
+  confirmFoul: boolean;
   confirmEndActivation: boolean;
   confirmSetup: boolean;
   confirmConcedeOffer: boolean;
@@ -26,6 +28,7 @@ export const CONFIRMATION_DEFAULTS: ConfirmationSettings = {
   confirmEndPunt: true,
   confirmEndHandOff: true,
   confirmEndPass: true,
+  confirmFoul: true,
   confirmEndActivation: true,
   confirmSetup: true,
   confirmConcedeOffer: true,
@@ -38,6 +41,7 @@ export const CONFIRMATION_SETTING_ROWS: readonly { key: ConfirmationSettingKey; 
   { key: 'confirmBlitzToMove', label: 'Keep Blitz? (convert a Blitz to a Move)', hint: 'Asks when you click an open square instead of a Blitz target. Off: that click converts the Blitz to a Move at once.' },
   { key: 'confirmEndHandOff', label: 'End or cancel a Hand-off', hint: 'Asks before a right-click, Escape or End gesture ends your Hand-off.' },
   { key: 'confirmEndPass', label: 'End or cancel a Pass', hint: 'Asks before a right-click, Escape or End gesture ends your Pass action.' },
+  { key: 'confirmFoul', label: 'Cancel Foul', hint: 'Asks before a right-click, Escape, End or End Turn gesture cancels or ends your Foul.' },
   { key: 'confirmEndPunt', label: 'End or cancel a Punt', hint: 'Asks before your Punt is ended.' },
   { key: 'confirmEndActivation', label: 'End activation with Escape', hint: 'Asks before Escape ends any other activation, and before an End that would roll for the player.' },
   { key: 'confirmSetup', label: 'Confirm Setup', hint: 'Asks before a legal setup is locked in. A setup that is not legal always shows what is wrong.' },
@@ -49,6 +53,7 @@ const END_ACTIVATION_KEY: Record<EndActivationConfirmKind, ConfirmationSettingKe
   punt: 'confirmEndPunt',
   handOver: 'confirmEndHandOff',
   pass: 'confirmEndPass',
+  foul: 'confirmFoul',
   generic: 'confirmEndActivation',
 };
 

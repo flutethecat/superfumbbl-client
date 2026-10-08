@@ -14,7 +14,7 @@ import { deriveClientState, isActiveActivation, type ClientStateContext, type Cl
 import { availableActions, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 
-export type EndActivationConfirmKind = 'blitz' | 'punt' | 'handOver' | 'pass' | 'generic';
+export type EndActivationConfirmKind = 'blitz' | 'punt' | 'handOver' | 'pass' | 'foul' | 'generic';
 
 /** Owner 10-04 (FUMBBL g1949714, KrisB): a declared Hand-off / Pass is a once-per-turn action, so ending it asks
  *  first - a stray right-click on the grass silently sent the end and the turn's hand-off was spent with the
@@ -22,10 +22,27 @@ export type EndActivationConfirmKind = 'blitz' | 'punt' | 'handOver' | 'pass' | 
 export function ballActionEndConfirmKind(state: ClientStateId | '' | null | undefined): 'handOver' | 'pass' | null {
   return state === 'HAND_OVER' ? 'handOver' : state === 'PASS' ? 'pass' : null;
 }
+/** Owner 10-07: "We should extend the confirm modal for cancelling an action to Foul actions." A declared Foul (FOUL,
+ *  target nominated or not) is once per turn too, so its cancel / end asks under its own line. Every gesture that asks
+ *  for a Hand-off / Pass (right-click on grass, Escape, End, End Turn) reads this one classifier. */
+export function declaredActionEndConfirmKind(state: ClientStateId | '' | null | undefined): 'handOver' | 'pass' | 'foul' | null {
+  return ballActionEndConfirmKind(state) ?? (state === 'FOUL' ? 'foul' : null);
+}
 
 /** Spec S15B: how an end-activation confirm was opened. An explicit End gesture (End row, click on self) may roll a held
  *  Big Guy Activate intent; Esc and every other cancel gesture never does. */
 export type EndActivationOrigin = 'explicit' | 'cancel';
+/** Astra 10-04 / 10-07 (P3): a client confirmation (End Activation prompt, End Turn warning) belongs to the activation
+ *  it opened in. It is retired, sending nothing, once the turn is no longer mine or the acting player changed. */
+export function confirmationOutlivedActivation(mine: boolean, actingId: string, openedForActingId: string): boolean {
+  return !mine || actingId !== openedForActingId;
+}
+/** Astra 10-07 (P2): the right-click route-cancel paths (the plotted-route backstop and the renderer's waypoint
+ *  cancel) ask exactly where the Escape cascade asks with a route plotted: a declared FOUL with a nominated target.
+ *  Null = the route clear stays a local abort (as Escape's abort-preview). escCascadeDecision reads this too. */
+export function plottedRouteCancelConfirmKind(input: { pendingFoul: boolean; clientState: ClientStateId | '' | null | undefined }): EndActivationConfirmKind | null {
+  return input.pendingFoul && input.clientState === 'FOUL' ? 'foul' : null;
+}
 /** `label` is bigGuyRollEndLabel (Spec S23), so the card names the same negatrait as the menu row. */
 export function rollEndConfirmCopy(label: string) {
   return { title: label, text: 'Roll the negatrait and end this activation? The player has not moved yet.', confirmLabel: label };
@@ -318,7 +335,7 @@ export type EscCascadeDecision =
   | { level: 1; kind: 'abort-preview'; wire: 'none' }
   | { level: 1; kind: 'undeclare'; wire: 'end-activation' }
   | { level: 2; kind: 'close-menu'; target: 'context' | 'game-settings' | 'popup'; wire: 'none' }
-  | { level: 3; kind: 'ask-end-activation'; confirmKind: EndActivationConfirmKind; wire: 'none' }
+  | { level: 1 | 3; kind: 'ask-end-activation'; confirmKind: EndActivationConfirmKind; wire: 'none' }
   | { level: 3; kind: 'clear-selection'; wire: 'none' }
   | { level: 4; kind: 'game-menu'; wire: 'none' };
 
@@ -357,12 +374,12 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
   }
 
   if (input.aggroStage === 2) return { level: 1, kind: 'undeclare', wire: 'end-activation' };
-  // A nominated foul target belongs to an already server-declared FOUL activation. Backing out must send the
-  // same acting-player-null cancellation as Blitz so the authoritative, still-unspent Foul budget is restored.
+  // A nominated foul target belongs to an already server-declared FOUL activation. Backing out sends the same
+  // acting-player-null cancellation as Blitz so the authoritative, still-unspent Foul budget is restored - but
+  // (owner 10-07) only through the "Cancel Foul" confirmation, which sends that same wire when confirmed.
   // Pre-declaration previews in other states remain local-only aborts.
-  if (input.pendingFoul && input.clientState === 'FOUL') {
-    return { level: 1, kind: 'undeclare', wire: 'end-activation' };
-  }
+  const routeCancelAsk = plottedRouteCancelConfirmKind(input);
+  if (routeCancelAsk) return { level: 1, kind: 'ask-end-activation', confirmKind: routeCancelAsk, wire: 'none' };
   if (input.pendingMove || input.pendingPass || input.pendingPunt || input.pendingHandOff
     || input.pendingFoul || input.thrownMatePending || input.pendingBlock
     || input.aggroStage === 1) {
@@ -385,7 +402,7 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
     // requiresBlitzEndConfirmation covers must classify 'blitz' here, matching the right-click path
     // (SpectateView.vue's requestEndActivation) exactly.
     const confirmKind: EndActivationConfirmKind = requiresBlitzEndConfirmation(input.clientState) ? 'blitz'
-      : input.clientState === 'PUNT' ? 'punt' : ballActionEndConfirmKind(input.clientState) ?? 'generic';
+      : input.clientState === 'PUNT' ? 'punt' : declaredActionEndConfirmKind(input.clientState) ?? 'generic';
     return { level: 3, kind: 'ask-end-activation', confirmKind, wire: 'none' };
   }
   if (input.hasSelection) return { level: 3, kind: 'clear-selection', wire: 'none' };

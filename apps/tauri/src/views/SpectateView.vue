@@ -128,7 +128,7 @@ import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
 gameStore.setInteractiveReRolls(true);
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, ballActionEndConfirmKind, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
 import { actingHasBlocked, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
@@ -8027,6 +8027,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // R4.2: menu-bound acting-player clicks retain the pre-09-01 plotted-route cancellation.
   if ((o66PendingMove.value?.route.length ?? 0) > 0
       && (controlledActingTarget ? disposition === 'menu' : !selectedToken)) {
+    if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
     return;
@@ -8194,8 +8195,10 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         const cancelDeclaredFoul = !!o66PendingFoul.value
           && !!gRc
           && deriveClientState(gRc, o66Ctx()) === 'FOUL';
+        // Owner 10-07: cancelling a declared Foul asks first ("Cancel Foul"). The arms stay while the prompt is open, so
+        // Go back leaves the nomination exactly as it was; confirming clears them and sends the same endActivation.
+        if (cancelDeclaredFoul) { requestEndActivation(); return; }
         clearO66Arms();
-        if (cancelDeclaredFoul) gameStore.endActivation();
       } else {
         // #231 (owner-fg 07-29): a right-click DURING A BLITZ activation must CONFIRM before ending — a stray
         //   right-click on empty was silently firing endActivation and burning the once-per-turn blitz. Gate ONLY
@@ -8204,7 +8207,8 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
         const rcState = gRc ? deriveClientState(gRc, o66Ctx()) : '';
         // Owner 10-04 (g1949714): Hand-off and Pass join them - a right-click that missed the receiver's token
         // ended the hand-off with the ball in hand.
-        if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || ballActionEndConfirmKind(rcState) || gameStore.state.gazeIntent) {
+        // Owner 10-07: a declared Foul joins them.
+        if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || declaredActionEndConfirmKind(rcState) || gameStore.state.gazeIntent) {
           requestEndActivation();
           return;
         }
@@ -9327,6 +9331,9 @@ onMounted(async () => {
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
         if (ix.kind === 'switchFriendlyActivation') {
           if (requiresBlitzEndConfirmation(clickState)) { requestEndActivation(); return; }
+          // Owner 10-07: a declared Foul asks exactly like the Blitz above (before the deferred-switch gate, whatever that
+          // setting says). Switched off, the click keeps its old immediate switch below.
+          if (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings)) { requestEndActivation(); return; }
           // Owner 10-05 (setting, default off): an activation that has already been used is NOT ended by this click.
           // The click arms the switch; the end goes out when the new player is activated. An untouched declaration
           // (refund) keeps the direct switch below - nothing is lost there.
@@ -10049,9 +10056,10 @@ onMounted(async () => {
   };
   renderer.onRightClickReset = () => { deferredFriendlySwitch.value = null; }; // Astra pass 4: renderer-consumed double right-click
   renderer.onWaypointPlanCancel = () => {
+    deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
+    if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
-    deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
   };
   renderer.onContextMenu = openContextMenu;
   renderer.onActionRejected = showToast;
@@ -11604,9 +11612,10 @@ function endTurn() {
   const idle = unactivatedOwnIds();
   // Astra review 10-04: End Turn also ends a Hand-off / Pass that is still in progress (the active player is never
   // "idle", so with everyone else done the turn ended silently, ball in hand). It asks under that action's own line.
+  // Owner 10-07: a Foul still in progress asks the same way (its own "Cancel Foul" line).
   const g = gameStore.game.value;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  const ballAction = g && actingId && gameStore.iControl(actingId) ? ballActionEndConfirmKind(deriveClientState(g, o66Ctx())) : null;
+  const ballAction = g && actingId && gameStore.iControl(actingId) ? declaredActionEndConfirmKind(deriveClientState(g, o66Ctx())) : null;
   const askBallAction = !!ballAction && endActivationConfirmEnabled(ballAction, settings);
   const askIdle = idle.length > 0 && settings.confirmEndTurn; // owner 10-04: the End Turn warning has its own Settings line
   if (askIdle || askBallAction) {
@@ -11619,8 +11628,9 @@ function endTurn() {
   }
   gameStore.playerEndTurn();
 }
-/** Astra review 10-04: the Hand-off / Pass still in progress when End Turn was pressed (null = none). */
-const endTurnWarnBallAction = ref<'handOver' | 'pass' | null>(null);
+/** Astra review 10-04: the Hand-off / Pass (owner 10-07: or Foul) still in progress when End Turn was pressed (null = none). */
+const endTurnWarnBallAction = ref<'handOver' | 'pass' | 'foul' | null>(null);
+const END_TURN_ACTION_NOUN: Record<'handOver' | 'pass' | 'foul', string> = { handOver: 'hand-off', pass: 'pass', foul: 'foul' };
 function confirmEndTurnAnyway() {
   endTurnWarnCount.value = null;
   renderer?.clearUnactivatedCues(); // owner 09-08: End turn → tear the arrows down at once
@@ -11641,6 +11651,8 @@ const END_ACTIVATION_CONFIRM_COPY: Record<EndActivationConfirmKind, Omit<EndActi
   // Owner 10-04: Hand-off and Pass get the blitz idiom - they are once per turn.
   handOver: { text: 'Are you sure you want to end your hand-off?', confirmLabel: 'End hand-off' },
   pass: { text: 'Are you sure you want to end your pass action?', confirmLabel: 'End pass' },
+  // Owner 10-07: a Foul gets the same idiom.
+  foul: { text: 'Are you sure you want to end your foul?', confirmLabel: 'End foul' },
   generic: { text: 'End activation?', confirmLabel: 'End activation' },
 };
 const endActConfirm = ref<EndActivationConfirm | null>(null);
@@ -11662,9 +11674,15 @@ watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
 const currentActingId = (): string => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
 let endActConfirmActingId = '';
 watch(endActConfirm, (now, before) => { if (now && !before) endActConfirmActingId = currentActingId(); }, { flush: 'sync' });
+// Astra 10-07 (P3): the End Turn warning belongs to the moment it opened too. If the acting player changes under it (a
+// Foul / Hand-off / Pass resolved, the activation ended) it retires, sending nothing, so it cannot hold the pitch.
+let endTurnWarnActingId = '';
+watch(endTurnWarnCount, (now, before) => { if (now !== null && before === null) endTurnWarnActingId = currentActingId(); }, { flush: 'sync' });
 watch(() => [currentActingId(), gameStore.myTurn.value] as const, ([actingId, mine]) => {
   if (endActConfirm.value && (!mine || actingId !== endActConfirmActingId)) endActConfirm.value = null;
-  if (endTurnWarnCount.value !== null && !mine) { endTurnWarnCount.value = null; renderer?.clearUnactivatedCues(); }
+  if (endTurnWarnCount.value !== null && confirmationOutlivedActivation(mine, actingId, endTurnWarnActingId)) {
+    endTurnWarnCount.value = null; endTurnWarnBallAction.value = null; renderer?.clearUnactivatedCues();
+  }
 });
 function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
   // Owner 10-04: each confirmation has its own Settings line. Switched off, the gesture does exactly what the
@@ -11699,6 +11717,12 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
     };
     return;
   }
+  // Owner 10-07: the same for a declared Foul that has not started (no squares moved). Copy only; the wire is the
+  // same endActivation the right-click / Escape cancel always sent.
+  if (kind === 'foul' && blitzUntouched(gameStore.game.value)) {
+    endActConfirm.value = { kind, text: 'Cancel your foul? This player has not moved yet.', confirmLabel: 'Cancel Foul', title: 'Cancel Foul' };
+    return;
+  }
   // Owner 09-20: the same idiom for a PUNT that has not started (declared, no squares moved, nothing kicked).
   if (kind === 'punt' && blitzUntouched(gameStore.game.value)) {
     endActConfirm.value = {
@@ -11714,6 +11738,20 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
   endActConfirm.value = { kind, ...END_ACTIVATION_CONFIRM_COPY[kind], ...(decision.copy ?? {}), roll: decision.roll };
 }
 /** The declared blitzer (or punter) has done nothing yet: no squares moved, no block thrown. */
+/** Astra 10-07 (P2): a right-click that would clear a plotted route asks instead where Escape asks (a declared Foul with
+ *  a nominated target). Go back keeps route + nomination: the renderer may already have wiped its drawn route
+ *  (dismissWaypointPlanForContextMenu), so it is redrawn from the kept plan. Setting off: the old local clear. */
+function askInsteadOfRouteCancel(): boolean {
+  const g = gameStore.game.value;
+  if (!g || endActConfirm.value) return false;
+  const kind = plottedRouteCancelConfirmKind({ pendingFoul: !!o66PendingFoul.value, clientState: deriveClientState(g, o66Ctx()) });
+  if (!kind || !endActivationConfirmEnabled(kind, settings)) return false;
+  const actingId = currentActingId();
+  if (o66PendingMove.value) setO66PathFromOrigin(playerSquareById(actingId), o66PendingMove.value.route, actingId);
+  ctxMenu.visible = false;
+  askEndActivation(kind);
+  return true;
+}
 function blitzUntouched(g: GameJson | null | undefined): boolean {
   const ap = g?.actingPlayer as { currentMove?: number; hasMoved?: boolean; hasBlocked?: boolean } | null | undefined;
   return !!ap && !(ap.hasMoved ?? false) && !(ap.hasBlocked ?? false) && Number(ap.currentMove ?? 0) === 0;
@@ -11721,7 +11759,7 @@ function blitzUntouched(g: GameJson | null | undefined): boolean {
 function requestEndActivation() {
   const g = gameStore.game.value;
   const st = g ? deriveClientState(g, o66Ctx()) : '';
-  const ballAction = ballActionEndConfirmKind(st);
+  const ballAction = declaredActionEndConfirmKind(st);
   if (requiresBlitzEndConfirmation(st)) askEndActivation('blitz');
   else if (st === 'PUNT') askEndActivation('punt');
   else if (ballAction) askEndActivation(ballAction);
@@ -13204,7 +13242,7 @@ function sendChat() {
         <PitchConfirmationPanel v-if="endTurnWarnCount !== null" title="End Turn?" label="End turn confirmation"
           :position-style="reactivePromptStyle('endTurnWarn')" draggable
           @drag-start="startReactivePromptDrag('endTurnWarn', $event)">
-          <template v-if="endTurnWarnBallAction">Your {{ endTurnWarnBallAction === 'handOver' ? 'hand-off' : 'pass' }} has not been completed. </template>
+          <template v-if="endTurnWarnBallAction">Your {{ END_TURN_ACTION_NOUN[endTurnWarnBallAction] }} has not been completed. </template>
           <template v-if="endTurnWarnCount > 0">{{ endTurnWarnCount }} of your players {{ endTurnWarnCount === 1 ? 'has' : 'have' }} not activated yet.</template>
           <template #actions>
             <button class="rr-use" @click="confirmEndTurnAnyway()">End turn</button>
