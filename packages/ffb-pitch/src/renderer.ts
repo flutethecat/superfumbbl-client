@@ -48,6 +48,10 @@ import {
   worldWidth,
 } from './geometry';
 import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
+import { markerAnchorFor, type MarkerSpriteSet } from './markerAnchor';
+
+/** Owner 10-07: a token tagged with its marker sprite set (markerAnchor.ts). */
+type MarkerTaggedToken = Container & { markerSpriteSet?: MarkerSpriteSet };
 import { APOTHECARY_STATION_LAYOUT, apoBoxState, apothecaryTokenScale, projectedApothecaryLabelPlacement } from './apothecaryBox';
 import { budgetAfterPlannedSteps, pathRollCost, planPath, reachableSquares, routePreference, squareKey, type Square } from './movement';
 
@@ -16160,7 +16164,12 @@ export class PitchRenderer {
         sprite.position.set(0, -3 + TOKEN_BASE_SHIFT_PX);
         if (down) sprite.rotation = Math.PI / 2;
         token.addChild(sprite);
-        if (down && this.showStunMark(data)) this.addDownDecoration(token, true, stunCaption, undefined, downMark);
+        // Owner 10-07: a FUMBBL-style icon's figure fills its frame - its chest-anchored markers drop to the chest
+        // (markerAnchorFor); the STUNNED banner on the lying icon follows, capped at the icon's centre.
+        (token as MarkerTaggedToken).markerSpriteSet = 'fumbblIcon';
+        if (down && this.showStunMark(data)) {
+          this.addDownDecoration(token, true, stunCaption, Math.min(-10 + this.markerDropFor(token), sprite.position.y), downMark);
+        }
         // number on the right foot, home team only (owner 2026-07-02) — off by default (owner 2026-07-04)
         if (isHome && this.showPlayerNumbers) {
           const nr = new Text({ text: String(player.playerNr), style: NAME_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
@@ -16481,7 +16490,7 @@ export class PitchRenderer {
       // torso centre (feet at y=0, head ~ -30); owner 09-06: walkers place it in decor-1 units (was ballooning zoomed).
       // Owner 09-07: a PRONE figure lies centred on its square — the row sits on the token origin (its chest), not
       // the standing torso offset (the blitz ring floated above a lying player).
-      placeWalkerDecor(token, node, x0 + i * spacing, isDown(playerState) ? 0 : -16, art?.scale ?? m.scale ?? 1);
+      placeWalkerDecor(token, node, x0 + i * spacing, isDown(playerState) ? 0 : -16 + this.markerDropFor(token), art?.scale ?? m.scale ?? 1);
       node.zIndex = 50;
       token.addChild(node);
     });
@@ -16722,6 +16731,38 @@ export class PitchRenderer {
     token.addChild(node);
   }
 
+  /** Owner 10-07: the token's marker sprite set (markerAnchor.ts) - FUMBBL-style icons are tagged by the icon branch. */
+  private markerSpriteSetOf(token: Container): MarkerSpriteSet {
+    return (token as MarkerTaggedToken).markerSpriteSet ?? 'other';
+  }
+
+  /** The tallest live body sprite (not the cast shadow) - the figure's envelope. */
+  private markerBodyOf(token: Container): Sprite | undefined {
+    return token.children
+      .filter((child): child is Sprite => child instanceof Sprite && child.label !== 'castShadow')
+      .sort((a, b) => b.height - a.height)[0];
+  }
+
+  /** Owner 10-07: token-local y of the chest line on a non-walker token (markerAnchorFor; with no body sprite the
+   *  vector fallback keeps its fixed head envelope). */
+  private figureChestY(token: Container, body = this.markerBodyOf(token)): number {
+    if (!body) return -44.5 + 6.5;
+    const metrics = { bodyTop: body.position.y - body.height * body.anchor.y, bodyHeight: body.height };
+    return markerAnchorFor(this.markerSpriteSetOf(token), metrics).chestY;
+  }
+
+  /** Owner 10-07: the uniform drop (token-local units) every figure-relative marker on this token takes - non-zero only
+   *  for FUMBBL-style icons; walkers and Checkers / Chess pieces keep their placement. */
+  private markerDropFor(token: Container): number {
+    const set = this.markerSpriteSetOf(token);
+    if (set !== 'fumbblIcon') return 0;
+    const body = this.markerBodyOf(token);
+    if (!body) return 0;
+    // the frame's own size (a lying icon is rotated, so read the larger side)
+    const size = Math.max(Math.abs(body.width), Math.abs(body.height));
+    return markerAnchorFor(set, { bodyTop: 0, bodyHeight: size }).dy;
+  }
+
   /** Owner 09-07: shared chest mount for the gaze eye / eye gouge — walkers at 55% up the measured figure, classic
    *  icons just under the head envelope. */
   private placeChestMarker(token: Container, node: Container, zIndex: number, scale = 1): void {
@@ -16733,9 +16774,7 @@ export class PitchRenderer {
     if (walkerRatio) {
       placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55, scale);
     } else {
-      const bodyTop = body ? body.position.y - body.height * body.anchor.y : -44.5;
-      const foreheadInset = body ? Math.min(9, body.height * 0.18) : 6.5;
-      node.position.set(0, bodyTop + foreheadInset);
+      node.position.set(0, this.figureChestY(token, body));
       node.scale.set(scale);
     }
     node.zIndex = zIndex;
@@ -16746,7 +16785,7 @@ export class PitchRenderer {
   /** Owner 09-15: the DECLARED Hypnotic Gaze target — the crosshair ring (the blitz-target art) with the hypno eye
    *  token centred in it, on the chest like the blitz ring; the emoji appearance style keeps the eye alone. */
   private addGazeTargetMarker(token: Container, down: boolean): void {
-    const y = down ? 0 : -16;
+    const y = down ? 0 : -16 + this.markerDropFor(token);
     const art = this.hypnogazeTargetDecoTexture;
     if (art && this.actionDecorationStyle === 'art') {
       // Owner 09-15 (art handoff): the violet/gold eye inside the thick red reticle — the block target's canvas
@@ -16794,9 +16833,7 @@ export class PitchRenderer {
     if (walkerRatio) {
       placeWalkerDecor(token, node, 0, WALKER_FEET_Y_PX - walkerRatio * WALKER_REFERENCE_FIGURE_PX * 0.55);
     } else {
-      const bodyTop = body ? body.position.y - body.height * body.anchor.y : -44.5;
-      const foreheadInset = body ? Math.min(9, body.height * 0.18) : 6.5;
-      node.position.set(0, bodyTop + foreheadInset);
+      node.position.set(0, this.figureChestY(token, body));
     }
     node.zIndex = 60;
     token.sortableChildren = true;
@@ -18810,7 +18847,7 @@ export class PitchRenderer {
     const check = new Container();
     check.label = 'activatedCheck';
     // top-right shoulder of the token; token origin ≈ feet/square anchor.
-    check.position.set(TILE_W * 0.30, -TILE_H * 0.62);
+    check.position.set(TILE_W * 0.30, -TILE_H * 0.62 + this.markerDropFor(token)); // owner 10-07: FUMBBL icons drop with the chest markers
     // Owner 10-03: on a BIG GUY that fixed offset is chest height - right under the DISTRACTED banner. Big guys wear
     // the badge beside the head instead (right shoulder line, ~80% up the centre-line height; walkerChestRatio so a
     // raised fist / horns don't lift it), laid out in decor-1 units like the chest markers.
