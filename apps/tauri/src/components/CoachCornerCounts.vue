@@ -39,11 +39,15 @@ function hide(): void {
   position: absolute;
   bottom: 8px;
   z-index: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  /* Owner 10-08: one shared grid, so the two counts sit in ONE right-aligned column and the two labels in another
+     (each row used to be its own flex line, and "RES" / "OUT" differ in width, so the numbers did not line up). */
+  display: grid;
+  grid-template-columns: auto auto;
+  column-gap: 3px;
+  row-gap: 1px;
+  align-items: baseline;
   box-sizing: border-box;
-  padding: 3px 7px 3px 6px;
+  padding: 3px 5px 3px 4px;
   background: linear-gradient(180deg,
     rgb(41 45 51 / var(--hud-coach-opacity, 0.9)),
     rgb(17 19 23 / var(--hud-coach-opacity, 0.9)));
@@ -60,10 +64,10 @@ function hide(): void {
 /* Hangs off the panel's outer side, overlapping the panel border by 2 px (home: right, away: mirrored left). */
 .coach-corner-counts[data-side='home'] { left: calc(100% - 2px); border-left-width: 1px; border-radius: 0 4px 4px 0; }
 .coach-corner-counts[data-side='away'] { right: calc(100% - 2px); border-right-width: 1px; border-radius: 4px 0 0 4px; }
-.ccc-row { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; }
+.ccc-row { display: contents; }
 .ccc-n {
-  min-width: 1.1em;
   text-align: right;
+  font-variant-numeric: tabular-nums;
   font-size: max(calc(var(--ui-min-text-size, 12px) + 1px), 13px);
   font-weight: 900;
   color: #fff;
@@ -72,7 +76,8 @@ function hide(): void {
 .ccc-label {
   font-size: max(calc(var(--ui-min-text-size, 12px) - 1px), 11px);
   font-weight: 800;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
+  text-align: left;
   color: #d8d4c8;
   text-shadow: 0 1px 1px #000;
 }
@@ -90,5 +95,5 @@ function hide(): void {
 :global(.pitch-host.hud-chrome .coach-corner-counts[data-side='home']) { left: calc(100% - 1px); border-left-width: 1px; border-radius: 0 5px 2px 0; }
 :global(.pitch-host.hud-chrome .coach-corner-counts[data-side='away']) { right: calc(100% - 1px); border-right-width: 1px; border-radius: 5px 0 0 2px; }
 /* Minimalist: the flatter, tighter HUD. */
-:global(.pitch-host.hud-minimalist .coach-corner-counts) { padding: 2px 6px 2px 5px; box-shadow: inset 0 1px 0 #626a75, 0 2px 4px #0009; }
+:global(.pitch-host.hud-minimalist .coach-corner-counts) { padding: 2px 4px 2px 3px; box-shadow: inset 0 1px 0 #626a75, 0 2px 4px #0009; }
 </style>

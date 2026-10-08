@@ -4,7 +4,8 @@
  * Data sources, in order of arrival (none of them blocks the waiting card):
  *  1. `gameStore.state.waitingForMatch` — coach names + my team name at once; my team id, the opponent's team id
  *     and the game id when the join knew them (a listed/scheduled game, a rejoin).
- *  2. The FFB lobby's own game list (`fumbblLobbyGames`, refreshed by the existing Play-blade/lobby flow) — the one
+ *  2. The FFB lobby's own game list (`fumbblLobbyGames`, refreshed by the existing Play-blade/lobby flow, and asked
+ *     for once by a JNLP join by game id, which carries no team - owner 10-08) — the one
  *     source that describes a game still WAITING for its opponent: both team ids, names and coaches. FUMBBL's public
  *     API has no endpoint for a not-yet-started game by id (`/api/match/current` lists running games only;
  *     `/api/match/get/{id}` takes a completed match id).
@@ -44,6 +45,8 @@ export interface BannerSide {
   race?: string;
   tv?: number;
   teamId?: string;
+  /** nothing names this side yet (no team, no coach): the label is a waiting notice, not a team name */
+  unknown?: boolean;
 }
 
 export interface WaitingBannerModel {
@@ -123,6 +126,14 @@ function listedOpponent(wait: WaitingForMatch, entry: GameListEntry | undefined)
   return seat;
 }
 
+/** My own seat as the lobby list describes it: the team name of a join that carried no team (a JNLP by game id). */
+function listedMine(wait: WaitingForMatch, entry: GameListEntry | undefined): { teamName?: string } {
+  if (!entry) return {};
+  const side = mySide(wait, entry);
+  if (!side) return {};
+  return { teamName: text(side === 'home' ? entry.teamHomeName : entry.teamAwayName) };
+}
+
 /**
  * The opponent's team id: what the join named, else the lobby list's other seat, else my scheduled tournament
  * opponent (exactly one id). Undefined when nothing names it — the opponent side then shows the coach only.
@@ -162,18 +173,20 @@ export function projectWaitingBanner(
   const opponentCoach = opponentCoachKnown ?? opp?.coach;
   return {
     mine: {
-      teamName: text(wait.teamName) ?? own?.name ?? 'Your team',
+      teamName: text(wait.teamName) ?? own?.name ?? listedMine(wait, entry).teamName ?? 'Your team',
       coach: text(wait.coach) ?? own?.coach,
       race: own?.race,
       tv: own?.tv,
       teamId: own?.id ?? myId,
     },
     opponent: {
-      teamName: opp?.name ?? listed.teamName ?? (opponentCoach ? `${opponentCoach}'s team` : 'Opponent'),
+      // nothing names the opponent until a source does: say so instead of a stand-in team name (owner 10-08)
+      teamName: opp?.name ?? listed.teamName ?? (opponentCoach ? `${opponentCoach}'s team` : 'Waiting for opponent'),
       coach: opponentCoach,
       race: opp?.race,
       tv: opp?.tv,
       teamId: opp?.id ?? expectedOpponentId,
+      ...(!opp && !listed.teamName && !opponentCoach ? { unknown: true } : {}),
     },
   };
 }

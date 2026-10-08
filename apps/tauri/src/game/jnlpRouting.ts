@@ -557,6 +557,14 @@ function proceedFumbblPlayer(
     return;
   }
 
+  // Owner 10-08: a JNLP join by game id (Gamefinder / a scheduled match) carries no team and never listed the
+  // lobby, so the waiting board's VS banner had nothing but the coach name. The server's own open-games list is
+  // the one source naming both teams of a game that has not started: ask for it once, on this socket, before the
+  // join (the list branch spends no token - the same request "List Games" makes). Never blocks or fails the join.
+  if (!lobby.password && target.gameId && !fumbblLobbyGames.value.some((e) => Number(e.gameId) === target.gameId)) {
+    try { prepared.requestPreparedGameList(); } catch { /* the banner keeps what the join knew */ }
+  }
+
   preparedFumbblHandedOff = true;
   void gameStore.connectAsPlayer(activeParams, {
     session: prepared,

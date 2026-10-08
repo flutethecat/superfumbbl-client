@@ -33,7 +33,7 @@ function initials(name: string): string {
       <span class="vs-crest">
         <img v-if="crest(model[slot], slot === 'mine' ? 'home' : 'away')" :src="crest(model[slot], slot === 'mine' ? 'home' : 'away')!"
           :alt="`${model[slot].teamName} logo`" @error="crestFailed(crest(model[slot], slot === 'mine' ? 'home' : 'away'))" />
-        <span v-else class="vs-initials" aria-hidden="true">{{ initials(model[slot].teamName) }}</span>
+        <span v-else class="vs-initials" aria-hidden="true">{{ model[slot].unknown ? '?' : initials(model[slot].teamName) }}</span>
       </span>
       <span class="vs-text">
         <strong class="vs-team" data-testid="vs-team">{{ model[slot].teamName }}</strong>
