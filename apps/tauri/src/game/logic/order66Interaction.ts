@@ -304,6 +304,8 @@ export interface EscCascadeInput {
   pendingHandOff: boolean;
   pendingFoul: boolean;
   pendingGaze: boolean;
+  /** Owner 10-08: a gaze victim is ARMED (picked at gaze time). Esc disarms it first; the activation stays. */
+  armedGazeVictim?: boolean;
   thrownMatePending: boolean;
   pendingBlock: boolean;
   /** Owner 09-28 (Spec S3 v2 #3, Sol round-3 fix): the Kick 'em Blitz Yes/No commit card (state.yesNo keyed
@@ -382,6 +384,7 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
   if (routeCancelAsk) return { level: 1, kind: 'ask-end-activation', confirmKind: routeCancelAsk, wire: 'none' };
   if (input.pendingMove || input.pendingPass || input.pendingPunt || input.pendingHandOff
     || input.pendingFoul || input.thrownMatePending || input.pendingBlock
+    || input.armedGazeVictim
     || input.aggroStage === 1) {
     return { level: 1, kind: 'abort-preview', wire: 'none' };
   }

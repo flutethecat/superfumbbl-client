@@ -7,8 +7,14 @@
 import { computed } from 'vue';
 import { deriveRejoinModal, dismissRejoin, rejoinFlow, retryOfficialJoin, storeRejoinSnapshot } from '../../../game/rejoinFlow';
 import { formatTeamValue } from '../../../game/teamChoice';
+import { ui } from '../../../game/ui';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
+
+// Bug report JLeav 10-08 (1.0.136): "The esc menu pops up behind the waiting for opponent to connect pop up. Making
+// the esc menu inaccessible then". This modal is z 200; the Esc game menu and Settings are z 100. While either is
+// open the modal steps below them and goes inert, so a focused "Stop waiting" cannot be fired through the menu.
+const underAppMenu = computed(() => ui.gameMenuOpen || ui.settingsOpen);
 
 const STATUS_GLYPH = { pending: '○', active: '◌', done: '●', failed: '×' } as const;
 
@@ -20,6 +26,7 @@ function chooseTeam(teamId: string): void {
 
 <template>
   <div v-if="modal.kind !== 'closed'" class="modal-backdrop save-prompt-backdrop rejoin-progress-backdrop"
+    :class="{ 'under-app-menu': underAppMenu }" :inert="underAppMenu || undefined"
     role="alertdialog" aria-modal="true" aria-labelledby="rejoin-progress-title">
     <div class="save-prompt rejoin-progress">
       <h3 id="rejoin-progress-title">{{ modal.title }}</h3>
@@ -61,6 +68,8 @@ function chooseTeam(teamId: string): void {
 
 <style scoped>
 .rejoin-progress { min-width: 320px; }
+/* JLeav 10-08: below App.vue .modal-backdrop (z 100) so the Esc game menu and Settings stay reachable. */
+.rejoin-progress-backdrop.under-app-menu { z-index: 90; }
 .rejoin-steps { display: grid; gap: 6px; margin: 10px 0 4px; padding: 0; list-style: none; text-align: left; }
 .rejoin-steps li { display: flex; gap: 8px; align-items: baseline; color: #888; font-size: max(var(--ui-min-text-size, 12px), 12px); }
 .rejoin-steps li[data-status="active"] { color: #ddd; }

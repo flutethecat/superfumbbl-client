@@ -102,7 +102,7 @@ import {
 } from './logic/apothecaryOffer';
 import { holdsBall, type HoldsBallFieldModel } from './logic/holdsBall'; // #233: pure UtilPlayer.hasBall port (Echo item-① tooth imports it)
 import { deriveClientState, type ClientStateContext } from './logic/clientStateMachine';
-import { canConfirmGazeAtCurrentPosition, canNominateGazeVictim, gazeConfirmRefusalReason, type GazeIntent } from './logic/gazeMovementState';
+import { armedGazeVictim, canConfirmGazeAtCurrentPosition, canNominateGazeVictim, declaredGazeTargetId, gazeConfirmRefusalReason, matchesDeclaredGazeTarget, type GazeIntent } from './logic/gazeMovementState';
 import { dialogDescriptor, dialogRuntimeHandler, resolveDialogIntent, resolveDialogSurface } from './dialogRegistry';
 import { describeUnknownDialog, type UnknownDialogLookup, type UnknownDialogView } from './unknownDialogView';
 import { playerActionClientState, playerActionDescriptor, playerActionFallbackState, resolvePlayerActionSelection } from './playerActionRegistry';
@@ -1003,7 +1003,8 @@ const legacyState = reactive({
   ballDirection: null as { playerId: string; direction: string; seq: number } | null,
   /** Owner 07-08: Hypnotic-Gaze victims → 👁 marker (not the generic '?'); pruned to still-confused; per game. */
   gazeVictims: [] as string[],
-  /** W40: menu-declared gaze intent. Only the pre-confirm candidate is replaceable. */
+  /** W40: menu-declared gaze intent. Owner 10-08: Modern names no victim at declare - the activation is live on the
+   *  server echo and `pendingVictimId` is the ARMED victim, picked at gaze time. Classic keeps its locked declaration. */
   gazeIntent: null as GazeIntent | null,
   /** Owner 09-15: the DECLARED gaze target as the wire shows it to EVERY seat — the server sets `defenderId` to the
    *  victim while the acting player's action is a gaze (StepInitMoving CLIENT_GAZE → StepHypnoticGaze), in the same
@@ -8583,11 +8584,47 @@ function gazeIntentOnModelApplied() {
   const actingId = String(acting?.playerId ?? '');
   const action = String(acting?.playerAction ?? '');
   if (actingId === intent.actingPlayerId && (action === 'gazeMove' || action === 'gazeSelect' || action === 'gaze')) {
-    if (intent.phase === 'declaring') intent.phase = 'targeting';
+    // Owner 10-08 (JLeav, 1.0.135): BB2025 names no victim at declare (StepInitSelecting takes CLIENT_GAZE with the
+    // victim id, no GAZE_SELECT stage), so Modern is live on the echo. Classic keeps its up-front declaration.
+    if (settings.uiMode === 'classic') { if (intent.phase === 'declaring') intent.phase = 'targeting'; }
+    else if (intent.phase !== 'active') intent.phase = 'active'; // also a Classic declaration left open by a mode switch
+    // Astra P2 (10-08): BB2020 - the server's declared target is the only victim. A Classic lock made before the
+    // server rail was answered follows the server's selection, so the lock never names anybody else.
+    const declared = game.value ? declaredGazeTargetId(game.value) : null;
+    const locked = state.gazeIntent;
+    if (declared && locked?.phase === 'active' && locked.victimId && locked.victimId.toLowerCase() !== declared.toLowerCase()) {
+      state.gazeIntent = { ...locked, victimId: declared, pendingVictimId: null, seq: locked.seq + 1 };
+    }
     return;
   }
   if (intent.phase !== 'declaring') state.gazeIntent = null;
 }
+
+/**
+ * Owner 10-08 (Astra P2): the two UI modes read one gaze intent differently - Classic needs its up-front declaration
+ * ('targeting' -> 'targetSelected' -> 'active' with a LOCKED victim), Modern is 'active' at once with at most an ARMED
+ * victim. A mode switch in the middle of a gaze activation re-shapes the intent for the mode being entered so neither
+ * view is stranded. Local state only: nothing is sent in either direction. 'declaring' (no server echo yet) is shared.
+ */
+function convertGazeIntentForUiMode(mode: 'fumbbl40k' | 'classic') {
+  const intent = state.gazeIntent;
+  if (!intent || intent.phase === 'declaring') return;
+  if (mode === 'classic') {
+    // Modern live activation with nothing locked -> Classic asks for its declaration (an armed victim is dropped).
+    if (intent.phase === 'active' && !intent.victimId) {
+      state.gazeIntent = { ...intent, pendingVictimId: null, phase: 'targeting', seq: intent.seq + 1 };
+    }
+    return;
+  }
+  if (intent.phase === 'targeting' || intent.phase === 'targetSelected') {
+    // Classic declaration still open -> Modern is simply live; the unconfirmed candidate is not carried over.
+    state.gazeIntent = { ...intent, victimId: null, pendingVictimId: null, phase: 'active', seq: intent.seq + 1 };
+  } else if (intent.phase === 'active' && intent.victimId) {
+    // Classic locked victim -> Modern keeps it as the ARMED victim (replaceable, still one confirm before the send).
+    state.gazeIntent = { ...intent, victimId: null, pendingVictimId: intent.victimId, seq: intent.seq + 1 };
+  }
+}
+watch(() => settings.uiMode, (mode) => convertGazeIntentForUiMode(mode), { flush: 'sync' });
 
 // Arm timeout auto-end on the received rising edge, allow one send until the server clears it, and re-arm after reconnect.
 /** #14b TB-7 gate (lane review 08-03): SERVER-derived timeout-eligible modes — exactly upstream Game.isTurnTimeEnabled()'s pair (TurnMode wire names 'regular', 'blitz'; TurnMode.java:10,12). */
@@ -11352,9 +11389,16 @@ export function installBlitzTargetLockTestHarness(
 export function installGazeIntentTestHarness(
   fixture: GameJson,
   send: (command: Record<string, unknown>) => void,
+  options: { uiMode?: 'fumbbl40k' | 'classic' } = {},
 ): {
   declare(playerId: string): void;
   echoDeclared(playerId: string): void;
+  /** A later applied frame: re-run the intent lifecycle over the model as it stands. */
+  echoModel(): void;
+  /** Switch the UI mode mid-activation (the production settings write; the store's watcher converts the intent). */
+  setUiMode(mode: 'fumbbl40k' | 'classic'): void;
+  armTarget(victimId: string): boolean;
+  armedVictim(): string | null;
   nominateTarget(victimId: string): boolean;
   confirmDeclaration(victimId: string): boolean;
   confirmArmed(victimId: string): boolean;
@@ -11372,6 +11416,7 @@ export function installGazeIntentTestHarness(
   const priorSession = session;
   const priorPlay = { ...play };
   const priorOrder66 = settings.order66;
+  const priorUiMode = settings.uiMode;
   const priorIntent = state.gazeIntent;
   const priorActionNotice = state.actionNotice;
   const priorMoveOfferOccurrences = new Map(moveOfferOccurrences);
@@ -11382,12 +11427,17 @@ export function installGazeIntentTestHarness(
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = true;
+  settings.uiMode = options.uiMode ?? 'fumbbl40k';
   state.gazeIntent = null;
   state.actionNotice = null;
   session = { send } as unknown as GameSession;
 
   return {
     declare: (playerId) => gameStore.declareGazeIntent(playerId),
+    echoModel: () => gazeIntentOnModelApplied(),
+    setUiMode(mode) { settings.uiMode = mode; },
+    armTarget: (victimId) => gameStore.armGazeTarget(victimId),
+    armedVictim: () => gameStore.armedGazeVictimId(),
     echoDeclared(playerId) {
       game.value!.actingPlayer = { ...(game.value!.actingPlayer ?? {}), playerId, playerAction: 'gazeMove' } as GameJson['actingPlayer'];
       seedMoveOfferSnapshot(playerId);
@@ -11416,6 +11466,7 @@ export function installGazeIntentTestHarness(
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
       settings.order66 = priorOrder66;
+      settings.uiMode = priorUiMode;
       state.gazeIntent = priorIntent;
       state.actionNotice = priorActionNotice;
       moveOfferOccurrences.clear();
@@ -12446,6 +12497,8 @@ export function installPlayerChoiceTestHarness(
   resync(): void;
   /** A later applied frame (new command number, e.g. a timeout flag) over the SAME standing dialog object. */
   frame(commandNr: number): void;
+  /** Push one raw command through the production outbound gates. True = it reached the transport. */
+  sendRaw(command: Record<string, unknown>): boolean;
   bloodlustAction(playerId: string, playerAction: string): void;
   /** The server replaced/cleared the dialog — a stale pick must clear, not send. */
   replaceDialog(dialogId: string | null): void;
@@ -12457,6 +12510,16 @@ export function installPlayerChoiceTestHarness(
   railLogs(): string[];
   pick(): typeof state.playerPick;
   bloodlust(): typeof state.bloodlust;
+  /** The server shows `confirmEndAction` for my team (a new dialog object), driven as the LIVE UI drives it
+   *  (interactive rerolls on, as both views set at mount). `interactive: false` = the reconnect snapshot: the
+   *  followups run BEFORE either view has mounted, so the flag is still off. */
+  confirmEndAction(playerAction: string, options?: { interactive?: boolean }): void;
+  /** The view mounting: the production `setInteractiveReRolls` (restored on dispose). */
+  setInteractiveReRolls(on: boolean): void;
+  /** Test aid: the card was replaced/lost while its dialog is still live (no send, no latch). */
+  dropYesNo(): void;
+  yesNo(): typeof state.yesNo;
+  answerYesNo(yes: boolean): void;
   /** Toggle + Confirm on the confirm-mode pick rail. */
   choose(playerId: string): void;
   toggle(playerId: string): void;
@@ -12473,10 +12536,15 @@ export function installPlayerChoiceTestHarness(
   const priorSession = session;
   const priorPlay = { ...play };
   const priorInteractiveSetup = interactiveSetup;
+  const priorInteractiveReRollsFlag = interactiveReRolls;
+  const priorFollowupHandled = [...followupHandled]; // the headless confirmEnd latch is module state: isolate it per harness
+  followupHandled.clear();
   const priorHandled = [...pregameHandled];
   const priorPick = state.playerPick;
   const priorEndGame = state.endGame;
   const priorBloodlust = state.bloodlust;
+  const priorYesNo = state.yesNo;
+  const priorYesNoResolver = yesNoResolver;
   const priorCommandNr = lastAppliedCommandNr;
   const priorAnsweredKey = answeredDialogInstanceKey;
   const priorAnsweredRef = answeredDialogInstanceRef;
@@ -12568,6 +12636,7 @@ export function installPlayerChoiceTestHarness(
       .filter((text) => text.includes('rail:')),
     resync() { drivePregameStep(); },
     frame(commandNr) { lastAppliedCommandNr = commandNr; drivePregameStep(); },
+    sendRaw: (command) => sendCommand(command),
     replaceDialog(dialogId) {
       if (!game.value) return;
       game.value.dialogParameter = (dialogId ? { dialogId } : null) as GameJson['dialogParameter'];
@@ -12576,6 +12645,18 @@ export function installPlayerChoiceTestHarness(
     },
     pick: () => state.playerPick,
     bloodlust: () => state.bloodlust,
+    confirmEndAction(playerAction, options) {
+      if (!game.value) return;
+      game.value.dialogParameter = { dialogId: 'confirmEndAction', teamId: homeTeamId, playerAction } as GameJson['dialogParameter'];
+      lastAppliedCommandNr += 1;
+      const priorInteractive = interactiveReRolls;
+      interactiveReRolls = options?.interactive ?? true;
+      try { resolvePlayFollowups(); drivePregameStep(); } finally { interactiveReRolls = priorInteractive; }
+    },
+    setInteractiveReRolls(on) { gameStore.setInteractiveReRolls(on); },
+    dropYesNo() { clearYesNo(); },
+    yesNo: () => state.yesNo,
+    answerYesNo(yes) { gameStore.resolveYesNo(yes); },
     choose(playerId) { gameStore.resolvePlayerPick(playerId); gameStore.confirmPlayerPick(); },
     toggle(playerId) { gameStore.resolvePlayerPick(playerId); },
     undo() { gameStore.undoLastPlayerPick(); },
@@ -12592,6 +12673,8 @@ export function installPlayerChoiceTestHarness(
       state.playerPick = priorPick;
       state.endGame = priorEndGame;
       state.bloodlust = priorBloodlust;
+      state.yesNo = priorYesNo;
+      yesNoResolver = priorYesNoResolver;
       lastAppliedCommandNr = priorCommandNr;
       latchAnsweredDialogInstance(priorAnsweredKey, priorAnsweredRef);
       session = priorSession;
@@ -12600,6 +12683,9 @@ export function installPlayerChoiceTestHarness(
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
       interactiveSetup = priorInteractiveSetup;
+      interactiveReRolls = priorInteractiveReRollsFlag;
+      followupHandled.clear();
+      for (const key of priorFollowupHandled) followupHandled.add(key);
       moveOfferOccurrences.clear();
       for (const [key, occurrence] of priorMoveOfferOccurrences) moveOfferOccurrences.set(key, occurrence);
       moveOfferRevision = priorMoveOfferRevision;
@@ -15170,6 +15256,48 @@ function ownedBlitzTargetDialogCommandPermitted(g: GameJson, command: Record<str
   return !!targetId && (g.fieldModel?.playerDataArray ?? []).some((data) => data.playerId === targetId);
 }
 
+/** The victims a BB2020 `selectGazeTarget` dialog offers. Upstream `SelectGazeTargetLogicModule.isValidGazeTarget`:
+ *  not on the acting team, and its PlayerState `hasTacklezones()` - anywhere on the pitch, with no distance check (the
+ *  server step `StepSelectGazeTarget` accepts any non-acting-team player). The dialog itself carries no ids
+ *  (DialogSelectGazeTargetParameter is bare), so the pick rail and the outbound gate both read this one set. */
+function selectGazeTargetEligibleIds(g: GameJson, actingId: string): string[] {
+  return (g.fieldModel?.playerDataArray ?? [])
+    .filter((p) => canNominateGazeVictim(g, actingId, p.playerId))
+    .map((p) => p.playerId);
+}
+
+/** Owner 10-08: the answer to the BB2020 `selectGazeTarget` dialog is CLIENT_TARGET_SELECTED - the only target command
+ *  `StepSelectGazeTarget.handleCommand` consumes, and what upstream's client sends (`sendTargetSelected`). It is
+ *  declaration-shaped, so the live-dialog gate needs this twin of the blitz-target case above: only while that dialog
+ *  is live and addressed to me, only for the acting player I control, and only for a victim upstream allows - or the
+ *  gazer itself, which is upstream's cancel (the step ends the selection on `selectedPlayerId == acting`). The coach
+ *  confirms or declines on the pick rail; no auto-answer rides this. CLIENT_GAZE is NOT an answer to this dialog. */
+function ownedGazeTargetDialogCommandPermitted(g: GameJson, command: Record<string, unknown>): boolean {
+  if (String(command.netCommandId ?? '') !== NetCommandId.CLIENT_TARGET_SELECTED) return false;
+  const dialog = g.dialogParameter as { dialogId?: unknown; teamId?: unknown } | null | undefined;
+  if (String(dialog?.dialogId ?? '') !== 'selectGazeTarget') return false;
+  const actingId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+  if (!actingId || !iControlPlayer(actingId)) return false;
+  const myTeamId = String((myPlayTeam(g) as { teamId?: unknown } | undefined)?.teamId ?? '');
+  if (dialog?.teamId != null && String(dialog.teamId) !== myTeamId) return false;
+  const targetId = String(command.playerId ?? '');
+  return !!targetId && (targetId === actingId || selectGazeTargetEligibleIds(g, actingId).includes(targetId));
+}
+
+/** The coach's pick rail for the BB2020 gaze target. Armed even with no legal target, so the dialog can always be
+ *  answered: Decline (an empty pick) names the gazer itself, which is upstream's cancel. */
+function armGazeTargetPick(g: GameJson, actingId: string, answer: (playerId: string) => void): void {
+  const turnNr = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
+  armPlayerPick({
+    key: `gazeTarget:${actingId}:${turnNr}`,
+    prompt: 'Hypnotic Gaze — nominate the target, then Confirm',
+    eligibleIds: selectGazeTargetEligibleIds(g, actingId),
+    confirm: true,
+    declinable: true,
+    onPick: (picked) => { answer(picked[0] ?? actingId); },
+  });
+}
+
 function isSelfBlitzNomination(g: GameJson, targetId: string, expectedActingId?: string): boolean {
   const actingId = expectedActingId
     ?? String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
@@ -15192,6 +15320,7 @@ function sendPlayerBlitzTarget(attackerId: string, defenderId: string): boolean 
 function ownedDeclarationInsideLiveDialogPermitted(g: GameJson, command: Record<string, unknown>): boolean {
   return isOwnedOnTheBallDialogCommand(onTheBallFrame(g), command)
     || ownedBlitzTargetDialogCommandPermitted(g, command)
+    || ownedGazeTargetDialogCommandPermitted(g, command)
     || ownedSwoopCoordinateCommandPermitted(g, command)
     || ownedPlaceCarriedCoordinateCommandPermitted(g, command)
     || ownedSetupPhaseDialogCommandPermitted(g, command);
@@ -17540,8 +17669,36 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       if (state.yesNo?.key.startsWith('confirmEnd:')) clearYesNo();
       return;
     }
-    if (interactiveReRolls) {
+    // Astra P1 (10-08): the Decline confirmation is never answered for a seated coach - including before the view
+    // mounts (a reconnect snapshot runs these followups first, with `interactiveReRolls` still at its default).
+    // Same seat test as the selectGazeTarget rail; only a declared headless/bot seat falls to the auto-confirm.
+    const gazeSelectCancel = String(g.turnMode ?? '') === 'selectGazeTarget';
+    if (interactiveReRolls || (gazeSelectCancel && (interactiveSetup || settings.uiMode === 'classic'))) {
       const rawAction = String(dp?.playerAction ?? '').toLowerCase();
+      // Astra P2 (10-08): BB2020 StepSelectGazeTarget asks this when the coach Declines the target dialog after the
+      // gazer has already acted. The turn mode is still `selectGazeTarget` (the step restores it only once it is done),
+      // which the right-click back-out below never is. The coach pressed Decline, not "end the action": offer the
+      // confirmation. Yes = CLIENT_CONFIRM (the step then cancels the selection). No sends nothing, as upstream, and
+      // the step keeps waiting for a target - so the target rail comes back.
+      if (gazeSelectCancel) {
+        const gazerId = String((g.actingPlayer as { playerId?: unknown } | null | undefined)?.playerId ?? '');
+        askYesNo({
+          key: `confirmEnd:gazeSelect:${instanceKey}`,
+          text: 'Cancel the Hypnotic Gaze? This ends the action.',
+          onAnswer: (yes) => {
+            if (yes) { sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef); return; }
+            if (!acknowledgeAnsweredDialogInstance(instanceKey, instanceRef)) return;
+            const now = game.value;
+            if (now && gazerId && iControlPlayer(gazerId)) {
+              armGazeTargetPick(now, gazerId, (playerId) => {
+                if (game.value?.dialogParameter !== instanceRef || !dialogInstanceLive(instanceKey)) return;
+                sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId });
+              });
+            }
+          },
+        });
+        return;
+      }
       // Right-click does not end the turn during gaze, so confirming back-out is pointless friction.
       if (rawAction.includes('gaze') || rawAction.includes('hypno')) {
         sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_CONFIRM }, instanceKey, instanceRef);
@@ -19389,41 +19546,41 @@ function drivePregameStep() {
       return;
     }
     case 'selectGazeTarget': {
-      // Hypnotic Gaze targets an adjacent opponent; only the acting player's coach answers, bots pick first.
+      // BB2020 GAZE_SELECT (StepSelectGazeTarget): the acting coach names the gaze target BEFORE moving. Mirrors
+      // upstream SelectGazeTargetLogicModule: any opponent with tackle zones, anywhere on the pitch, answered with
+      // CLIENT_TARGET_SELECTED{that player}; selecting the gazer itself (the rail's Decline) cancels the selection.
+      // Only the acting player's coach answers; a headless seat picks the first target.
       if (!addressedToMe) return;
+      {
+        const mode = String(g.turnMode ?? '');
+        if (mode && mode !== 'selectGazeTarget') {
+          // The step restores the previous turn mode as it consumes the answer; a dialog left behind is not a prompt.
+          if (state.playerPick?.key.startsWith('gazeTarget:')) clearPlayerPick();
+          return;
+        }
+      }
       const ap = (g.actingPlayer as { playerId?: string } | undefined)?.playerId ?? '';
       const mine = myPlayIds(g);
       if (!ap || !mine.has(ap)) return; // only the coach whose vampire is acting answers
-      const apc = (g.fieldModel?.playerDataArray ?? []).find((p) => p.playerId === ap)?.playerCoordinate;
-      if (!apc) return;
-      const eligible = (g.fieldModel?.playerDataArray ?? [])
-        .filter((p) => {
-          if (mine.has(p.playerId) || !p.playerCoordinate) return false;
-          const [x, y] = p.playerCoordinate;
-          if (x < 0 || x > 25 || y < 0 || y > 14) return false;
-          if (Math.max(Math.abs(x - apc[0]), Math.abs(y - apc[1])) !== 1) return false; // adjacent to the vampire
-          const base = playerStateBase(p.playerState) ?? (((p.playerState as number) ?? 0) & 0xff);
-          return base === 1 || base === 2; // STANDING | MOVING
-        })
-        .map((p) => p.playerId);
-      if (eligible.length === 0) return; // server auto-skips when none adjacent
-      const turnNr = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
-      const key = `gazeTarget:${ap}:${turnNr}`;
-      if (interactiveSetup && !pregameHandled.has(key)) {
-        armPlayerPick({
-          key,
-          prompt: 'Hypnotic Gaze — nominate the target, then Confirm',
-          eligibleIds: eligible,
-          confirm: true,
-          onPick: (picked) => {
-            if (picked[0] && once(key))
-              sendCommand({ netCommandId: NetCommandId.CLIENT_GAZE, actingPlayerId: ap, victimId: picked[0] });
-          },
-        });
+      // One answer per dialog OCCURRENCE (not per turn): a cancelled selection may be followed by a fresh declaration.
+      const instanceKey = dialogInstanceKey(g);
+      const instanceRef = g.dialogParameter as object | null;
+      if (dialogAlreadyAnswered()) {
+        if (state.playerPick?.key.startsWith('gazeTarget:')) clearPlayerPick();
         return;
       }
-      if (!interactiveSetup && once(key))
-        sendCommand({ netCommandId: NetCommandId.CLIENT_GAZE, actingPlayerId: ap, victimId: eligible[0] });
+      const eligible = selectGazeTargetEligibleIds(g, ap);
+      const answer = (playerId: string) =>
+        sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId }, instanceKey, instanceRef);
+      // Astra P1 (10-08): `interactiveSetup === false` alone is NOT "headless" - connectAsPlayer leaves it false for a
+      // Classic coach until ClassicView mounts, and the snapshot drives this step first (a reconnect into a standing
+      // dialog). Same seat test as selectBlitzTarget above, plus the live-UI reroll flag: any sign of a seated human
+      // arms the rail (both views render state.playerPick, so a pick armed before the mount is offered once it is up).
+      if (interactiveSetup || interactiveReRolls || settings.uiMode === 'classic') {
+        armGazeTargetPick(g, ap, answer);
+        return;
+      }
+      answer(eligible[0] ?? ap); // a declared headless/bot seat only
       return;
     }
     case 'kickOffResult':
@@ -19495,6 +19652,8 @@ function drivePregameStep() {
     blockChoiceEpoch++;
   }
   if (state.playerPick?.key.startsWith('blitzTarget:') && dlg !== 'selectBlitzTarget') clearPlayerPick();
+  // The gaze-target rail lives exactly as long as the step that reads it (it can outlive the dialog: see confirmEndAction).
+  if (state.playerPick?.key.startsWith('gazeTarget:') && String(g.turnMode ?? '') !== 'selectGazeTarget') clearPlayerPick();
   if (state.playerPick?.key.startsWith('pchoice:') && dlg !== 'playerChoice') clearPlayerPick();
   if (state.bloodlust?.stage === 'bite' && dlg !== 'playerChoice') state.bloodlust = null;
   const onTheBallLive = (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock')
@@ -20672,6 +20831,12 @@ export const gameStore = {
     const dialog = g?.dialogParameter as Record<string, unknown> | null | undefined;
     if (on && play.active && g && dialog && dialogRuntimeHandler(String(dialog.dialogId ?? '')) === 'apothecary-election') {
       armApothecaryPrompt(g, dialog);
+    }
+    // Astra P1 (10-08): the view is up - if the server is still waiting on the gaze Decline confirmation and its card
+    // is not showing (armed before the mount and since replaced, or never armed), offer it now. Sends nothing.
+    if (on && play.active && g && dialog && String(dialog.dialogId ?? '') === 'confirmEndAction'
+        && String(g.turnMode ?? '') === 'selectGazeTarget' && !state.yesNo?.key.startsWith('confirmEnd:gazeSelect:')) {
+      try { resolvePlayFollowups(); } catch (e) { console.error('[play] gaze confirmation re-drive error:', e); }
     }
   },
 
@@ -22709,7 +22874,8 @@ export const gameStore = {
     return game.value ? liveBigGuyActivateIntent(game.value)?.playerId ?? null : null;
   },
 
-  /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent. */
+  /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent.
+   *  No victim is named here (owner 10-08): the server echo makes the activation live and the victim is picked later. */
   declareGazeIntent(playerId: string) {
     if (!play.active || !game.value || !iControlPlayer(playerId)) return;
     state.gazeIntent = {
@@ -22726,8 +22892,10 @@ export const gameStore = {
   nominateGazeTarget(victimId: string): boolean {
     const intent = state.gazeIntent;
     const g = game.value;
+    // Astra P2 (10-08): BB2020 - once the server holds a declared target, nobody else can be nominated or locked.
     if (!intent || !g || !gameStore.hasGazeTargetDeclaration()
-        || !canNominateGazeVictim(g, intent.actingPlayerId, victimId)) return false;
+        || !canNominateGazeVictim(g, intent.actingPlayerId, victimId)
+        || !matchesDeclaredGazeTarget(g, victimId)) return false;
     state.gazeIntent = { ...intent, pendingVictimId: victimId, phase: 'targetSelected', seq: intent.seq + 1 };
     return true;
   },
@@ -22738,7 +22906,8 @@ export const gameStore = {
     const g = game.value;
     if (!intent || !g || intent.phase !== 'targetSelected' || intent.pendingVictimId !== victimId
         || !gameStore.hasGazeTargetDeclaration()
-        || !canNominateGazeVictim(g, intent.actingPlayerId, victimId)) return false;
+        || !canNominateGazeVictim(g, intent.actingPlayerId, victimId)
+        || !matchesDeclaredGazeTarget(g, victimId)) return false;
     state.gazeIntent = {
       ...intent,
       victimId,
@@ -22754,15 +22923,32 @@ export const gameStore = {
     const g = game.value;
     return !!intent && !!g && intent.phase === 'targetSelected' && intent.pendingVictimId === victimId
       && gameStore.hasGazeTargetDeclaration()
-      && canNominateGazeVictim(g, intent.actingPlayerId, victimId);
+      && canNominateGazeVictim(g, intent.actingPlayerId, victimId)
+      && matchesDeclaredGazeTarget(g, victimId);
+  },
+
+  /** Owner 10-08: ARM a victim on a live gaze activation (no wire). The armed victim is replaceable until the confirm;
+   *  a distant one may be armed too (the view plots the walk to contact), the send-time check still decides the send. */
+  armGazeTarget(victimId: string): boolean {
+    const intent = state.gazeIntent;
+    const g = game.value;
+    if (!intent || !g || intent.victimId || !gameStore.hasLiveGazeIntent()
+        || !canNominateGazeVictim(g, intent.actingPlayerId, victimId)) return false;
+    if (intent.pendingVictimId !== victimId) state.gazeIntent = { ...intent, pendingVictimId: victimId, seq: intent.seq + 1 };
+    return true;
+  },
+
+  /** The victim the confirm would send: Classic's locked declaration, else Modern's armed victim. */
+  armedGazeVictimId(): string | null {
+    return armedGazeVictim(state.gazeIntent);
   },
 
   /** True only while the selected victim can legally be sent from the gazer's current square. */
   canConfirmGazeTarget(victimId: string): boolean {
     const intent = state.gazeIntent;
     const g = game.value;
-    return !!intent && !!g && intent.phase === 'active' && intent.victimId === victimId
-      && gameStore.hasLiveGazeIntent() && canConfirmGazeAtCurrentPosition(g, intent);
+    return !!intent && !!g && intent.phase === 'active' && gameStore.armedGazeVictimId() === victimId
+      && gameStore.hasLiveGazeIntent() && canConfirmGazeAtCurrentPosition(g, { ...intent, victimId });
   },
 
   /** Confirm the selected victim at the current square; this is the sole UI path to CLIENT_GAZE. */
@@ -22771,9 +22957,9 @@ export const gameStore = {
     const g = game.value;
     if (!gameStore.canConfirmGazeTarget(victimId)) {
       const reason = !intent || !g ? 'the Gaze activation is no longer active'
-        : intent.victimId !== victimId ? 'the nominated victim has changed'
+        : gameStore.armedGazeVictimId() !== victimId ? 'the nominated victim has changed'
           : !gameStore.hasLiveGazeIntent() ? 'the Gaze activation is no longer active'
-            : gazeConfirmRefusalReason(g, intent) ?? 'the target is no longer legal';
+            : gazeConfirmRefusalReason(g, { ...intent, victimId }) ?? 'the target is no longer legal';
       const text = `Gaze not confirmed — ${reason}.`;
       log('system', `⚠ ${text}`);
       state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
@@ -22786,11 +22972,12 @@ export const gameStore = {
     return true;
   },
 
-  /** The ordinary gaze move rail exists only until the target-confirm send. */
+  /** The ordinary gaze move rail exists only until the target-confirm send. Owner 10-08: it needs no victim - Classic
+   *  reaches 'active' only through its declaration confirm, Modern on the server echo of the declare. */
   hasLiveGazeIntent(): boolean {
     const intent = state.gazeIntent;
     const g = game.value;
-    if (!intent || !g || !isMyTurn(g) || intent.phase !== 'active' || !intent.victimId) return false;
+    if (!intent || !g || !isMyTurn(g) || intent.phase !== 'active') return false;
     const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
     const action = String(acting?.playerAction ?? '');
     return String(acting?.playerId ?? '') === intent.actingPlayerId
@@ -22814,6 +23001,9 @@ export const gameStore = {
     const intent = state.gazeIntent;
     if (intent?.phase === 'targetSelected') {
       state.gazeIntent = { ...intent, pendingVictimId: null, phase: 'targeting', seq: intent.seq + 1 };
+    } else if (intent?.phase === 'active' && !intent.victimId && intent.pendingVictimId) {
+      // Owner 10-08: disarm Modern's armed victim; the activation (and its move rail) stays live.
+      state.gazeIntent = { ...intent, pendingVictimId: null, seq: intent.seq + 1 };
     }
   },
 

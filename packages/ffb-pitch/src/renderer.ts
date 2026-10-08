@@ -3839,6 +3839,11 @@ export class PitchRenderer {
     this.refresh();
   }
   onTilePick: ((coord: [number, number]) => void) | null = null;
+  /** Owner 10-08: a tap that landed on NO player and was not delivered through `onTilePick` - an empty square outside
+   *  the armed tile-pick mask (swallowed there), or any empty square while no mask is armed. Purely a report: it never
+   *  changes which squares are eligible or what the tap does. The host uses it to drop an armed two-click target
+   *  (a "click elsewhere"). `null` = the tap was off the pitch. */
+  onInertTileClick: ((coord: [number, number] | null) => void) | null = null;
   /** owner o66 (complete pass): an EXTRA set of clickable squares beyond `eligible` — clicks on them fire
    *  onTilePick, but they are NOT drawn as walkable move-dots. Used in PASS for the throwing-RANGE template
    *  (the reach dots show where the passer can WALK; the range squares show where it can THROW). Drawn as a
@@ -5229,6 +5234,7 @@ export class PitchRenderer {
     this.onPlayerPick = null;
     this.onPlayerDoubleClick = null;
     this.onTilePick = null;
+    this.onInertTileClick = null;
     this.onSetupClick = null;
     this.onInspectPlayer = null;
     this.onDugoutSetupDragStart = null;
@@ -19243,7 +19249,10 @@ export class PitchRenderer {
         // overlay is armed, but a click on a PLAYER-occupied square that is NOT a move target — the blitz block
         // target, or another own player to switch to — must reach onPlayerClick (the o66 router → sendBlock /
         // menu). Let it fall through instead of swallowing. Off-flag: unchanged (always swallowed when armed).
-        if (!(this.order66 && onPitch && this.playersBySquare.get(`${sx},${sy}`))) return;
+        if (!(this.order66 && onPitch && this.playersBySquare.get(`${sx},${sy}`))) {
+          if (!(onPitch && this.playersBySquare.get(`${sx},${sy}`))) this.onInertTileClick?.(onPitch ? [sx, sy] : null);
+          return;
+        }
         // else fall through to the player-click dispatch below
       }
       // Owner 2026-07-04d: bomb/Throw-Keg targeting owns taps — a click on any
@@ -19314,6 +19323,7 @@ export class PitchRenderer {
         }
         const [sx, sy] = worldToSquare(worldX, worldY);
         const playerId = this.playersBySquare.get(`${sx},${sy}`);
+        if (!playerId) this.onInertTileClick?.(sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null);
         if (playerId) {
           // Owner 2026-07-04c: a SECOND click on the armed action target confirms
           // it (foul/handoff/pass) — "on a further click, commit the path".

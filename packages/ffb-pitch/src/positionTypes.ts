@@ -154,6 +154,11 @@ export const POSITION_TYPE_BY_NAME: Record<string, RingType> = {
   skavenrenegade: 'lineman',
   skeleton: 'lineman',
   skeletonlineman: 'lineman',
+  // Owner 10-08: Lizardmen Chameleon Skinks ring as THROWER (white) - bare + race-qualified keys. Plain Skinks
+  // stay catchers.
+  chameleonskink: 'thrower',
+  lizardmenchameleonskink: 'thrower',
+  lizardmanchameleonskink: 'thrower',
   skink: 'catcher',
   skrorgsnowpelt: 'star',
   skrullhalfheight: 'star',

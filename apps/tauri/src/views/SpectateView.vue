@@ -146,7 +146,7 @@ import { prettySkillName } from '../game/logic/prettySkillName';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
 import { decidingCoachSide, reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
 import { playerSkillCategoryClass } from '../game/skillCategory';
-import { gazeTargetClick, isGazeMovementState } from '../game/logic/gazeMovementState';
+import { gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
@@ -253,8 +253,10 @@ const o66PendingHandOff = ref<string | null>(null);
 // Owner o66aa: FOUL joins click-to-act — click a DOWN enemy in MOVE → declare foulMove; the reach planner plots
 // the walk + the armor-break cue shows over the victim; walk adjacent, then a click on the victim boots.
 const o66PendingFoul = ref<string | null>(null);
-// HYPNOTIC GAZE reuses the target-confirm rail before locking its one activation target.
-const o66PendingGaze = ref<string | null>(null);
+// HYPNOTIC GAZE (owner 10-08): the ARMED victim, picked at gaze time. Click 1 arms, click 2 on the same victim sends.
+// Seeded from the store: a view mounted mid-activation (Classic -> Modern with a locked victim) starts armed, so Esc
+// disarms first instead of going straight to the end-activation ask.
+const o66PendingGaze = ref<string | null>(gameStore.armedGazeVictimId());
 // A residual opponent click during a movement activation is read-only. This latch makes the next actor/empty
 // click a dismiss-only gesture, so the renderer returns to the actor without changing or sending the plan.
 const o66InspectedOpponent = ref<string | null>(null);
@@ -2111,9 +2113,10 @@ const gazeVictimPresentation = installGazeVictimPresentation(
 );
 // Owner 09-15: the target marker has two sources — the acting coach's local intent, and the wire's declared target
 // (gazeTargetReveal) that every seat sees; either paints the hypno token + crosshair on the victim.
+// Owner 10-08: the local source is the ARMED victim (nothing is named at declare, so nothing is marked until then).
 watch(
   [() => gameStore.state.gazeIntent, () => gameStore.state.gazeTargetReveal],
-  ([intent, reveal]) => renderer?.setGazeTarget(intent?.phase === 'active' ? intent.victimId : (reveal?.targetId ?? null)),
+  ([intent, reveal]) => renderer?.setGazeTarget(gazeTargetMarkerId(intent, reveal)),
   { deep: true },
 );
 // Owner 2026-07-04d: bomb blast — the 3×3 explosion (injuries cascade separately).
@@ -6180,14 +6183,13 @@ function pushBlitzTokens() {
   renderer?.setBlitzTokens(t ? { blitzerId: t.blitzerId, targetId: t.targetId } : null);
 }
 watch(() => gameStore.state.blitzTokens?.seq, pushBlitzTokens);
-// Blitz and Gaze share the acting-token target-declaration prompt.
+// The acting-token target-declaration prompt. Owner 10-08: Gaze left it - no victim is named at declare.
 const o66TargetDeclarePos = ref<{ x: number; y: number } | null>(null);
 let targetDeclareRaf = 0;
 const targetDeclarePrompt = computed(() => {
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return null;
-  if (deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET') return 'Choose a blitz target';
-  return gameStore.hasGazeTargetDeclaration() ? 'Choose a gaze target' : null;
+  return deriveClientState(g, o66Ctx()) === 'SELECT_BLITZ_TARGET' ? 'Choose a blitz target' : null;
 });
 function trackTargetDeclaration() {
   cancelAnimationFrame(targetDeclareRaf);
@@ -7664,7 +7666,7 @@ function clearTtmTargetingSurface() {
 function clearO66Arms() {
   if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); }
   o66PendingPass.value = null; o66PendingThrowKind.value = null; o66PendingPunt.value = null; o66PendingHandOff.value = null; o66PendingFoul.value = null;
-  if (o66PendingGaze.value) gameStore.clearGazeVictim();
+  gameStore.clearGazeVictim();
   o66PendingGaze.value = null; clearTtmTargetingSurface(); o66PendingBlitzTarget.value = null; o66PendingLeftClickBlitzPlan.value = null;
   o66PendingBlock.value = null; o66AggroStage.value = null; o66PendingBlitzBlockKind.value = null;
   o66InspectedOpponent.value = null;
@@ -8194,7 +8196,8 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
       if (ttmCancel === 'already-cancelled') return;
       const hasPlan = !!o66PendingMove.value || !!o66PendingPass.value || !!o66PendingPunt.value || !!o66PendingHandOff.value
         || !!o66PendingFoul.value || !!o66ThrownMate.value
-        || !!o66PendingBlock.value || !!o66AggroStage.value;
+        || !!o66PendingBlock.value || !!o66AggroStage.value
+        || !!gameStore.armedGazeVictimId(); // owner 10-08: a right-click disarms the gaze victim, the activation stays
       if (hasPlan) {
         const cancelDeclaredFoul = !!o66PendingFoul.value
           && !!gRc
@@ -8503,17 +8506,19 @@ function nominateOrConfirmPunt(g: Parameters<typeof o66SquareClick>[0], actingId
   }
 }
 
-function confirmPendingGazeDeclaration(): boolean {
-  const victimId = o66PendingGaze.value;
-  if (!victimId || !gameStore.confirmGazeDeclaration(victimId)) return false;
+/** Owner 10-08: drop the armed gaze victim; the gaze activation (and its move rail) stays live. */
+function disarmGazeVictim() {
+  gameStore.clearGazeVictim();
   o66PendingGaze.value = null;
-  return true;
 }
+// The store's armed victim is the truth (it is what the confirm sends); the view ref only drives the cue and Esc.
+watch(() => gameStore.armedGazeVictimId(), (victimId) => { o66PendingGaze.value = victimId; }, { immediate: true });
 
-function confirmDeclaredGaze(): boolean {
-  const intent = gameStore.state.gazeIntent;
-  const victimId = intent?.phase === 'active' ? intent.victimId : null;
+/** The single confirmation before the wire: sends the one CLIENT_GAZE for the armed victim (store re-checks legality). */
+function confirmArmedGaze(): boolean {
+  const victimId = gameStore.armedGazeVictimId();
   if (!victimId || !gameStore.confirmGazeTarget(victimId)) return false;
+  o66PendingGaze.value = null;
   o66PendingMove.value = null;
   renderer?.setO66Path([]);
   renderer?.setTilePick(false);
@@ -8617,12 +8622,10 @@ function o66ConfirmPending(): boolean {
     o66PendingPunt.value = null;
     return true;
   }
-  if ((st === 'GAZE_MOVE' || st === 'GAZE') && o66PendingGaze.value) {
-    confirmPendingGazeDeclaration();
-    return true;
-  }
-  if ((st === 'GAZE_MOVE' || st === 'GAZE') && gameStore.state.gazeIntent?.phase === 'active') {
-    confirmDeclaredGaze();
+  // Owner 10-08: an armed victim that is gazeable from here confirms; otherwise Space keeps its move-rail meaning
+  // (a walk plotted toward a distant armed victim commits below, the victim stays armed for the arrival click).
+  if ((st === 'GAZE_MOVE' || st === 'GAZE') && canConfirmArmedGaze.value) {
+    confirmArmedGaze();
     return true;
   }
   // The Modern target was already confirmed; declaration/target acknowledgement now owns the route.
@@ -8801,13 +8804,11 @@ const aggroConfirmLabel = computed(() => {
   if (st.kind === 'blitz') return 'Confirm Blitz';
   return st.stage === 1 ? 'Declare Block' : 'Confirm Block';
 });
-const canConfirmPendingGaze = computed(() => {
-  const victimId = o66PendingGaze.value;
-  return !!victimId && gameStore.canConfirmGazeDeclaration(victimId);
-});
-const canConfirmDeclaredGaze = computed(() => {
+/** Owner 10-08: the armed gaze victim can be sent from the gazer's current square (the store's send-time mirror). */
+const canConfirmArmedGaze = computed(() => {
   const intent = gameStore.state.gazeIntent;
-  return intent?.phase === 'active' && !!intent.victimId && gameStore.canConfirmGazeTarget(intent.victimId);
+  const victimId = intent?.phase === 'active' ? (intent.victimId ?? intent.pendingVictimId) : null;
+  return !!victimId && gameStore.canConfirmGazeTarget(victimId);
 });
 /** #48 (owner, confirm-bar parity): the bottom confirm-bar label for a nominated o66 PUNT, MOVE route or FOUL.
  *  Click/Space both confirm via o66ConfirmPending. Pass/hand-off stay single-click (EX-1) → no bar. */
@@ -8816,8 +8817,7 @@ const o66PendingConfirmLabel = computed(() => {
   if (o66AggroStage.value || o66PendingLeftClickBlitzPlan.value) return null;
   if (o66PendingPunt.value) return 'Confirm Punt';
   if (o66PendingFoul.value) return 'Confirm Foul';
-  if (canConfirmPendingGaze.value) return 'Confirm Gaze Target';
-  if (canConfirmDeclaredGaze.value) return 'Confirm Gaze';
+  if (canConfirmArmedGaze.value) return 'Confirm Gaze';
   if (o66PendingMove.value) {
     const g = gameStore.game.value;
     return g && deriveClientState(g, o66Ctx()) === 'BLITZ' ? 'Confirm Blitz' : 'Confirm Move';
@@ -8856,6 +8856,7 @@ function escO66Cascade() {
     pendingHandOff: !!o66PendingHandOff.value,
     pendingFoul: !!o66PendingFoul.value,
     pendingGaze: !!gameStore.state.gazeIntent,
+    armedGazeVictim: !!gameStore.armedGazeVictimId(), // the store, not the view ref: true from the first frame of a fresh mount
     thrownMatePending: !!o66ThrownMate.value,
     pendingBlock: !!o66PendingBlock.value,
     kickEmConfirmationCardOpen: !!gameStore.state.yesNo?.key.startsWith('kickEmConfirm:'),
@@ -9464,25 +9465,65 @@ onMounted(async () => {
           nominateOrConfirmThrow(ix.square, 'pass');
           return;
         }
-        // Gaze first confirms one range-free declaration; only that locked victim can later send.
+        // HYPNOTIC GAZE (owner 10-08, JLeav 1.0.135): no victim is named at declare. The victim is picked here, read
+        // against the gazer's CURRENT square: an ADJACENT gazeable opponent arms on click 1 and sends the one
+        // CLIENT_GAZE on click 2 (the same two-click as Foul); a DISTANT one plots the walk to contact (click 1) and
+        // walks it (click 2) with the victim still armed, so one more click on arrival sends. Any other click disarms.
         {
           const gazeActing = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
           const gst = deriveClientState(g, o66Ctx());
-          if ((gst === 'GAZE_MOVE' || gst === 'GAZE') && gazeActing && gameStore.iControl(gazeActing)) {
+          if ((gst === 'GAZE_MOVE' || gst === 'GAZE') && gazeActing && gameStore.iControl(gazeActing) && gameStore.hasLiveGazeIntent()) {
             if (endActConfirm.value) return;
-            const gazeClick = gazeTargetClick(gameStore.state.gazeIntent, o66PendingGaze.value, playerId);
-            if (gazeClick === 'confirmDeclared') {
-              confirmDeclaredGaze();
+            const gazeClick = gazeVictimClick(g, gameStore.state.gazeIntent, playerId);
+            if (gazeClick === 'confirm') {
+              confirmArmedGaze();
               return;
             }
-            if (gazeClick === 'confirmCandidate' && gameStore.hasGazeTargetDeclaration()) {
-              confirmPendingGazeDeclaration();
+            if (gazeClick === 'arm') {
+              if (gameStore.armGazeTarget(playerId)) {
+                o66PendingGaze.value = playerId;
+                if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); } // gaze from HERE
+              }
               return;
             }
-            if (gazeClick === 'nominate' && gameStore.hasGazeTargetDeclaration() && gameStore.nominateGazeTarget(playerId)) {
+            if (gazeClick === 'refused') {
+              disarmGazeVictim();
+              const reason = gazeConfirmRefusalReason(g, { ...gameStore.state.gazeIntent!, victimId: playerId });
+              const vsq = playerSquareById(playerId);
+              const p = vsq ? renderer?.squareToCanvas(vsq) : null;
+              showToast(`Can't gaze — ${reason ?? 'the target is not legal'}`, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+              return;
+            }
+            if (gazeClick === 'approach') {
+              const step = gazeApproachClick({
+                victimId: playerId,
+                victimSquare: playerSquareById(playerId),
+                armedVictimId: gameStore.armedGazeVictimId(),
+                plannedRoute: o66PendingMove.value?.route ?? null,
+                contactReach: (square) => renderer?.o66ContactReach(gazeActing, square) ?? null,
+              });
+              if (step.kind === 'walk') {
+                // 2nd click: walk the plotted route as an ordinary gaze move. Nothing gaze-specific is sent.
+                gameStore.o66Move(gazeActing, step.route);
+                o66PendingMove.value = null; renderer?.setO66Path([]);
+                return;
+              }
+              if (step.kind === 'unreachable') {
+                const vsq = playerSquareById(playerId);
+                const p = vsq ? renderer?.squareToCanvas(vsq) : null;
+                showToast(step.surrounded ? "Can't gaze — the target is surrounded" : "Can't gaze — too far to reach this turn",
+                  p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+                disarmGazeVictim();
+                return;
+              }
+              // 1st click: arm the victim and show the walk to contact from the shared stance picker (unchanged).
+              if (!gameStore.armGazeTarget(playerId)) return;
               o66PendingGaze.value = playerId;
+              o66PendingMove.value = { dest: step.route[step.route.length - 1]!, route: step.route };
+              setO66PathFromOrigin(playerSquareById(gazeActing), step.route, gazeActing);
               return;
             }
+            disarmGazeVictim(); // 'ordinary': not a gaze victim - the click keeps its usual meaning below
           }
         }
         // Owner o66am: THROW/KICK TEAM-MATE (pass-rail) — after declaring, click an OWN Right Stuff team-mate to PICK
@@ -9736,7 +9777,11 @@ onMounted(async () => {
       o66NominateHighKick(playerId);
       return;
     }
+    // Owner 10-08: the touchback nomination also opens the player card, so the coach can see who has SPP before
+    // giving the ball away. The pick is confirm-mode: the tap only toggles the nominee, Confirm sends it.
+    const touchbackPick = gameStore.state.playerPick?.key === 'touchback';
     gameStore.resolvePlayerPick(playerId);
+    if (touchbackPick) showPopup(playerId);
   };
   // Owner 2026-07-14 (#5): the double-click stand gesture is RETIRED in o66 — a single left-click already
   // declares Move (incl. stand-up-into-move for a prone player), so the first click of any double-click has
@@ -9882,6 +9927,12 @@ onMounted(async () => {
         // First click previews a move-family route; the second commits it. Pass targets outside reach are throws.
         const handleMoveFamilyClick = () => {
           if (isGazeMovementState(st) && !gameStore.hasLiveGazeIntent()) return;
+          // Owner 10-08: a click elsewhere disarms the gaze victim (the activation stays) - except the click that
+          // confirms the plotted walk, which keeps the victim armed for the arrival click.
+          {
+            const gazeDest = o66PendingMove.value?.dest ?? null;
+            if (!(gazeDest && gazeDest[0] === c[0] && gazeDest[1] === c[1])) disarmGazeVictim();
+          }
           // Owner 09-27 (live g1947538, plain move on 1.0.25): the 09-23 swallow guarded the legacy planner only, so
           // this route still plotted and committed walks mid-animation. Movement clicks now hold until the token has
           // landed; throw targeting below is not movement and stays live.
@@ -10020,6 +10071,10 @@ onMounted(async () => {
     else if (st === 'PUNT' && isPuntTargeting(g)) nominateOrConfirmPunt(g, actingId, coord as [number, number]);
     else if (st === 'SWOOP') gameStore.sendSwoop(actingId, coord as [number, number]);
   };
+  // Owner 10-08 (Astra P2): an armed gaze victim is dropped by ANY click that is not on it. A tap on empty grass
+  // outside the movement mask never reaches onTilePick (the renderer swallows it), so it is reported here instead.
+  // Under an open End Activation / End Turn confirmation the pitch takes no clicks, this one included.
+  renderer.onInertTileClick = () => { if (!pitchHeldByConfirmation() && gameStore.armedGazeVictimId()) disarmGazeVictim(); };
   // Owner ⑩ (08-12): feed the pass/bomb targeting tooltip — fires on pointermove over any on-pitch square while
   // pass/bomb free-select is armed (null off-pitch / on mode-exit). The watch above derives the throw/catch roll.
   renderer.onSquareHover = (coord) => {
@@ -10103,6 +10158,9 @@ onMounted(async () => {
   } : null);
   // A mode switch/reconnect/replay mount can begin with an already-successful, still-CONFUSED
   // victim. Seed the report-authoritative set before the first model token is constructed.
+  // The armed / declared gaze TARGET marker is seeded the same way: its watcher only fires on a change, and the
+  // renderer did not exist yet for whatever the store already held at mount (Classic -> Modern, locked victim).
+  renderer.setGazeTarget(gazeTargetMarkerId(gameStore.state.gazeIntent, gameStore.state.gazeTargetReveal));
   gazeVictimPresentation.publish();
   setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, gameStore.game.value);
   const publishedPosition = gameStore.spectatorPublishedPosition.value;
@@ -11907,7 +11965,9 @@ function sendChat() {
 
     <!-- Owner 2026-07-09: FUMBBL matchmaking — connected + waiting for the other coach to join the
          same game name before the game starts. Auto-dismisses when the gameState arrives. -->
-    <div v-if="gameStore.state.waitingForMatch" class="conn-closed-overlay" role="alertdialog" aria-modal="true">
+    <!-- Bug report JLeav 10-08: the Esc game menu (App.vue .modal-backdrop, z 100) opened BEHIND this overlay (z 200)
+         and could not be reached. While the game menu or Settings is open the overlay steps below them. -->
+    <div v-if="gameStore.state.waitingForMatch" class="conn-closed-overlay" :class="{ 'under-app-menu': ui.gameMenuOpen || ui.settingsOpen }" role="alertdialog" aria-modal="true">
       <div class="conn-closed-card">
         <h2 v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for {{ gameStore.state.waitingForMatch.opponentCoach }}</h2>
         <h2 v-else>Waiting for the other coach</h2>
@@ -13821,7 +13881,7 @@ function sendChat() {
         <div v-for="(m, i) in multiBlockMarkers" :key="'mb-' + i" class="mb-target" :class="{ selected: m.selected }"
           :style="{ left: m.x + 'px', top: m.y + 'px' }"></div>
 
-        <!-- Blitz and Gaze share the target-declaration prompt anchored over the acting player. -->
+        <!-- The blitz target-declaration prompt anchored over the acting player. -->
         <div v-if="o66TargetDeclarePos && targetDeclarePrompt" class="blitz-target-prompt"
           :style="{ left: o66TargetDeclarePos.x + 'px', top: o66TargetDeclarePos.y + 'px' }">{{ targetDeclarePrompt }}</div>
 
@@ -13880,9 +13940,9 @@ function sendChat() {
 
         <!-- Owner o66aa: 2-click target cue — 🏈 over a pass/hand-off target, 🥾 AV+ over a foul victim. -->
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
-        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !!o66AggroStage || !!o66PendingFoul || canConfirmPendingGaze, 'pass-destination': o66TargetCue.throwRoll != null }"
+        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze, 'pass-destination': o66TargetCue.throwRoll != null }"
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
-          @click="o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmPendingGaze) && confirmPlannerFromButton())">
+          @click="o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton())">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">Pass
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="`Pass needs ${o66TargetCue.throwRoll}`" />+
@@ -19002,6 +19062,8 @@ function sendChat() {
   backdrop-filter: blur(2px);
   animation: coin-fade 0.3s ease-out;
 }
+/* JLeav 10-08: below App.vue .modal-backdrop (z 100) so the game menu / Settings stay reachable. */
+.conn-closed-overlay.under-app-menu { z-index: 90; }
 .conn-closed-card {
   max-width: 380px;
   background: var(--ui-surface-2);
