@@ -210,5 +210,15 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-amazon-4f6548a0.zip",
     "size": 2863838,
     "sha256": "76182087cff83a2fd23da3172c95ddc6e16d92108de9d64d391ad6531ff7695f"
+  },
+  "walk/bretonnian@001fc2208abf3e82": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-bretonnian-001fc220.zip",
+    "size": 2877296,
+    "sha256": "f72ed7503e896fa8fe7965770614ec270fce108f3ee2b1e65bb88e42cd8421c3"
+  },
+  "walk/lizardmen@82e41cffd098f9be": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-lizardmen-82e41cff.zip",
+    "size": 4183953,
+    "sha256": "91502a4d26273a40641ee0b330683c39e2313545fa21a15279612790d09e7a1b"
   }
 }
