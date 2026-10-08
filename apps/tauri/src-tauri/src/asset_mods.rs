@@ -71,9 +71,64 @@ struct Manifest {
     // acts on that metadata; activation is controlled by the user's selections.
     #[serde(default, rename = "upstreamPolicy")]
     _ignored_precedence_metadata: Option<serde_json::Value>,
+    #[serde(deserialize_with = "deserialize_v1_capabilities")]
     capabilities: HashMap<String, HashMap<String, String>>,
     files: Vec<ManifestFile>,
     signature: serde_json::Value,
+}
+
+/// Schema-1 capability sections are `{ key: path }` maps. The 1.8.0 FUMBBL
+/// Original pack (owner 10-07) also carries `block-dice` in the schema-2 list
+/// shape `[{ face, path }]`; accept that one list form (block-dice only) and
+/// fold it into the same `face -> path` map the schema-2 path produces.
+fn deserialize_v1_capabilities<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, HashMap<String, String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Section {
+        Map(HashMap<String, String>),
+        List(Vec<BlockDieBindingV2>),
+    }
+    let raw: HashMap<String, Section> = HashMap::deserialize(deserializer)?;
+    let mut out = HashMap::with_capacity(raw.len());
+    for (capability, section) in raw {
+        let bindings = match section {
+            Section::Map(map) => map,
+            Section::List(list) => {
+                if capability != "block-dice" {
+                    return Err(serde::de::Error::custom(format!(
+                        "capability \"{}\" must be an object of bindings",
+                        describe_key(&capability)
+                    )));
+                }
+                let mut map = HashMap::with_capacity(list.len());
+                for binding in list {
+                    if map.insert(binding.face.clone(), binding.path).is_some() {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate block-dice face \"{}\"",
+                            describe_key(&binding.face)
+                        )));
+                    }
+                }
+                map
+            }
+        };
+        out.insert(capability, bindings);
+    }
+    Ok(out)
+}
+
+/// Pack-controlled text echoed in an error: printable ASCII only, bounded.
+fn describe_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(64)
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -788,7 +843,65 @@ fn validate_pack_v1(bytes: Vec<u8>) -> Result<ValidatedPack, String> {
         return Err(generic_error());
     }
     let (payload_start, manifest_bytes) = manifest_slice(&bytes)?;
-    let manifest: Manifest = serde_json::from_slice(manifest_bytes).map_err(|_| generic_error())?;
+    let manifest: Manifest = serde_json::from_slice(manifest_bytes).map_err(|error| {
+        let detail: String = error
+            .to_string()
+            .chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .take(200)
+            .collect();
+        format!("Asset pack manifest is invalid: {detail}")
+    })?;
+    // Schema 1 remains import-compatible. Its retired precedence metadata is
+    // ignored; these capabilities become usable only through explicit client
+    // presentation choices (or, for pitches, an explicitly selected theme).
+    // New packs are always emitted with the typed schema-2 contract below.
+    // `block-dice` (owner 10-07): the 1.8.0 FUMBBL Original pack is schema 1.
+    let allowed = [
+        "skill-icons",
+        "player-iconsets",
+        "fumbbl-id-images",
+        "kickoff-art",
+        "pitch-images",
+        "sound-events",
+        "block-dice",
+    ];
+    // Bound the key sets before building any message from them.
+    if manifest.capabilities.len() > allowed.len()
+        || manifest.capability_versions.len() > allowed.len()
+    {
+        return Err(format!(
+            "Asset pack declares more than {} capabilities",
+            allowed.len()
+        ));
+    }
+    let mut unknown: Vec<String> = manifest
+        .capabilities
+        .keys()
+        .chain(manifest.capability_versions.keys())
+        .filter(|key| !allowed.contains(&key.as_str()))
+        .map(|key| describe_key(key))
+        .collect();
+    unknown.sort();
+    unknown.dedup();
+    if !unknown.is_empty() {
+        let more = if unknown.len() > 5 { ", ..." } else { "" };
+        unknown.truncate(5);
+        return Err(format!(
+            "Asset pack capability not supported by this version: {}{more}",
+            unknown.join(", ")
+        ));
+    }
+    if manifest.capability_versions.len() != manifest.capabilities.len()
+        || manifest
+            .capabilities
+            .keys()
+            .any(|key| manifest.capability_versions.get(key) != Some(&1))
+    {
+        return Err(
+            "Asset pack capabilityVersions must list every capability at version 1".into(),
+        );
+    }
     if manifest.pack_format != "F40KMOD1"
         || manifest.schema_version != 1
         || !valid_pack_id(&manifest.pack_id)
@@ -804,31 +917,6 @@ fn validate_pack_v1(bytes: Vec<u8>) -> Result<ValidatedPack, String> {
         || manifest.files.is_empty()
         || manifest.files.len() > MAX_FILES
         || manifest.capabilities.is_empty()
-        || manifest.capabilities.len() > 5
-    {
-        return Err(generic_error());
-    }
-    // Schema 1 remains import-compatible. Its retired precedence metadata is
-    // ignored; these capabilities become usable only through explicit client
-    // presentation choices (or, for pitches, an explicitly selected theme).
-    // New packs are always emitted with the typed schema-2 contract below.
-    let allowed = [
-        "skill-icons",
-        "player-iconsets",
-        "fumbbl-id-images",
-        "kickoff-art",
-        "pitch-images",
-        "sound-events",
-    ];
-    if manifest
-        .capabilities
-        .keys()
-        .any(|key| !allowed.contains(&key.as_str()))
-        || manifest.capability_versions.len() != manifest.capabilities.len()
-        || manifest
-            .capabilities
-            .keys()
-            .any(|key| manifest.capability_versions.get(key) != Some(&1))
     {
         return Err(generic_error());
     }
@@ -961,6 +1049,8 @@ fn validate_pack_v1(bytes: Vec<u8>) -> Result<ValidatedPack, String> {
                         && file.width == 782
                         && file.height == 452
                 }
+                // Mirrors the schema-2 block-dice rule: static PNG faces.
+                "block-dice" => file.mime == "image/png",
                 _ => matches!(file.mime.as_str(), "image/png" | "image/gif"),
             });
             if key.is_empty()
@@ -970,6 +1060,7 @@ fn validate_pack_v1(bytes: Vec<u8>) -> Result<ValidatedPack, String> {
                 || !binding_type_valid
                 || (capability == "sound-events" && !valid_sound_event_id(raw_key))
                 || (capability == "pitch-images" && !valid_pitch_image_id(raw_key))
+                || (capability == "block-dice" && !valid_block_die_face(raw_key))
             {
                 return Err(generic_error());
             }
@@ -2140,6 +2231,11 @@ fn descriptor(
                 pitch_image_bindings.insert(key.clone(), register(path));
             }
         }
+        if let Some(bindings) = pack.manifest.capabilities.get("block-dice") {
+            for (face, path) in bindings {
+                block_dice_bindings.insert(face.clone(), register(path));
+            }
+        }
     } else {
         for binding in &skill_icon_bindings {
             if binding.position_id.is_none() && binding.side == AssetSide::Any {
@@ -3195,6 +3291,141 @@ mod tests {
         let installed = descriptor(&parsed, Path::new("fixture.f40kmod"), &mut locations);
         assert!(installed.classic_image_bindings.contains_key("436254"));
         assert_eq!(locations.len(), 1);
+    }
+
+    fn schema1_block_dice_manifest(image: &[u8]) -> serde_json::Value {
+        let faces = ["skull", "bothdown", "push", "powpush", "pow"];
+        let paths: Vec<String> = faces.iter().map(|f| format!("block-dice/{f}.png")).collect();
+        let images: Vec<(&str, &[u8])> = paths.iter().map(|p| (p.as_str(), image)).collect();
+        let mut value = manifest(&images);
+        value["capabilityVersions"] = serde_json::json!({"block-dice": 1});
+        value["capabilities"] = serde_json::json!({
+            "block-dice": faces
+                .iter()
+                .zip(&paths)
+                .map(|(face, path)| serde_json::json!({"face": face, "path": path}))
+                .collect::<Vec<_>>()
+        });
+        value
+    }
+
+    #[test]
+    fn schema1_accepts_block_dice_list_and_map_and_installs_face_bindings() {
+        let image = png_bytes([9, 8, 7, 255]);
+        let payloads: Vec<&[u8]> = vec![&image; 5];
+        let value = schema1_block_dice_manifest(&image);
+        let parsed = validate_pack(container(&value, &payloads)).unwrap();
+        let mut locations = HashMap::new();
+        let installed = descriptor(&parsed, Path::new("fixture.f40kmod"), &mut locations);
+        assert_eq!(installed.block_dice_bindings.len(), 5);
+        for face in ["skull", "bothdown", "push", "powpush", "pow"] {
+            assert!(installed.block_dice_bindings.contains_key(face), "{face}");
+        }
+        assert_eq!(installed.capabilities, vec!["block-dice".to_string()]);
+        assert_eq!(locations.len(), 5);
+
+        // The plain schema-1 map shape is accepted too.
+        let mut map_form = value.clone();
+        map_form["capabilities"] = serde_json::json!({"block-dice": {
+            "skull": "block-dice/skull.png", "bothdown": "block-dice/bothdown.png",
+            "push": "block-dice/push.png", "powpush": "block-dice/powpush.png",
+            "pow": "block-dice/pow.png"
+        }});
+        let parsed = validate_pack(container(&map_form, &payloads)).unwrap();
+        let mut locations = HashMap::new();
+        let installed = descriptor(&parsed, Path::new("fixture.f40kmod"), &mut locations);
+        assert_eq!(installed.block_dice_bindings.len(), 5);
+        assert_eq!(locations.len(), 5);
+
+        // Unknown face and non-PNG faces stay rejected, as on schema 2.
+        let mut bad_face = value.clone();
+        bad_face["capabilities"]["block-dice"][0]["face"] = serde_json::json!("explode");
+        assert!(validate_pack(container(&bad_face, &payloads)).is_err());
+        // A genuine GIF face (valid file, GIF mime) is refused by the
+        // block-dice PNG-only rule, not by the file checks.
+        let gif = gif_bytes(1, 1, 1);
+        let mut gif_face = value.clone();
+        let mut offset = 0_u64;
+        let gif_payloads: Vec<&[u8]> = (0..5)
+            .map(|i| if i == 0 { gif.as_slice() } else { image.as_slice() })
+            .collect();
+        for (i, payload) in gif_payloads.iter().enumerate() {
+            gif_face["files"][i]["offset"] = serde_json::json!(offset);
+            gif_face["files"][i]["length"] = serde_json::json!(payload.len());
+            gif_face["files"][i]["sha256"] =
+                serde_json::json!(format!("{:x}", Sha256::digest(payload)));
+            offset += payload.len() as u64;
+        }
+        gif_face["files"][0]["mime"] = serde_json::json!("image/gif");
+        // Control: the same GIF file bound to a non-block-dice capability passes.
+        let mut control = gif_face.clone();
+        control["capabilityVersions"] = serde_json::json!({"player-iconsets": 1});
+        control["capabilities"] = serde_json::json!({"player-iconsets": {
+            "a": "block-dice/skull.png", "b": "block-dice/bothdown.png",
+            "c": "block-dice/push.png", "d": "block-dice/powpush.png",
+            "e": "block-dice/pow.png"
+        }});
+        assert!(validate_pack(container(&control, &gif_payloads)).is_ok());
+        assert!(validate_pack(container(&gif_face, &gif_payloads)).is_err());
+        // The list shape is block-dice only.
+        let mut list_elsewhere = manifest(&[("player-iconsets/a.png", &image)]);
+        list_elsewhere["capabilityVersions"] = serde_json::json!({"player-iconsets": 1});
+        list_elsewhere["capabilities"] = serde_json::json!({
+            "player-iconsets": [{"face": "skull", "path": "player-iconsets/a.png"}]
+        });
+        assert!(validate_pack(container(&list_elsewhere, &[&image])).is_err());
+    }
+
+    #[test]
+    fn schema1_unknown_capability_is_named_in_the_error() {
+        let image = png_bytes([1, 1, 1, 255]);
+        let mut value = manifest(&[("x/a.png", &image)]);
+        value["capabilityVersions"] = serde_json::json!({"skill-icons": 1, "laser-dice": 1});
+        value["capabilities"]["laser-dice"] = serde_json::json!({"a": "x/a.png"});
+        let error = validate_pack(container(&value, &[&image])).err().unwrap();
+        assert!(error.contains("laser-dice"), "{error}");
+        assert_ne!(error, generic_error());
+
+        // A flood of capability keys yields a short, bounded message.
+        let mut flood = manifest(&[("x/a.png", &image)]);
+        let many: serde_json::Map<String, serde_json::Value> = (0..20_000)
+            .map(|i| (format!("cap-{i}"), serde_json::json!({"a": "x/a.png"})))
+            .collect();
+        flood["capabilities"] = serde_json::Value::Object(many);
+        let error = validate_pack(container(&flood, &[&image])).err().unwrap();
+        assert!(error.len() < 200, "{}", error.len());
+        assert!(error.contains("more than"), "{error}");
+        let mut six = manifest(&[("x/a.png", &image)]);
+        for name in ["u1", "u2", "u3", "u4", "u5", "u6"] {
+            six["capabilities"][name] = serde_json::json!({"a": "x/a.png"});
+        }
+        let error = validate_pack(container(&six, &[&image])).err().unwrap();
+        assert!(error.ends_with(", ..."), "{error}");
+        assert!(!error.contains("u6"), "{error}");
+    }
+
+    /// Owner 10-07: validates the real tester pack. Run with
+    /// `cargo test real_original_assets_pack -- --ignored` (path overridable
+    /// via F40KMOD_PACK).
+    #[test]
+    #[ignore]
+    fn real_original_assets_pack_validates() {
+        let path = std::env::var("F40KMOD_PACK").unwrap_or_else(|_| {
+            "C:/Users/Jay/Documents/Claude/asset-mod-packs/Super-FUMBBL-Original-Assets-1.8.0.f40kmod"
+                .into()
+        });
+        let bytes = std::fs::read(&path).unwrap();
+        let parsed = validate_pack(bytes).unwrap();
+        let mut locations = HashMap::new();
+        let installed = descriptor(&parsed, Path::new(&path), &mut locations);
+        eprintln!(
+            "{} {} capabilities={:?} blockDice={}",
+            installed.pack_id,
+            installed.version,
+            installed.capabilities,
+            installed.block_dice_bindings.len()
+        );
+        assert_eq!(installed.block_dice_bindings.len(), 5);
     }
 
     #[test]

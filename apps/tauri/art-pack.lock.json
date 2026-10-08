@@ -205,5 +205,10 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-darkelf-bdddd682.zip",
     "size": 3331476,
     "sha256": "673978d68a6da9291075fcdad9f79a6569e336bc9b895a1925edec281d348c77"
+  },
+  "walk/amazon@4f6548a06a57cbca": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-amazon-4f6548a0.zip",
+    "size": 2863838,
+    "sha256": "76182087cff83a2fd23da3172c95ddc6e16d92108de9d64d391ad6531ff7695f"
   }
 }

@@ -1775,7 +1775,7 @@ mod tests {
         assert_eq!(a[8] & 0xc0, 0x80);
         assert_ne!(a, [0u8; 16]);
         // Source pin: macOS uses the data store identifier, every other platform the own data directory.
-        let src = include_str!("fumbbl_home.rs");
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
         let mac = src.find("#[cfg(target_os = \"macos\")]
         {
             builder = builder.data_store_identifier(home_data_store_id());").expect("macOS branch");
@@ -2002,7 +2002,7 @@ mod tests {
     /// The source wires that directory into the Home webview's builder (guards against the call being dropped).
     #[test]
     fn the_home_webview_builder_uses_the_own_profile() {
-        let source = include_str!("fumbbl_home.rs");
+        let source = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
         let builder_line = ["builder = builder.data_directory(", "home_profile_dir(&local_data));"].concat();
         assert!(source.contains(&builder_line));
         assert!(!source.contains([".incognito(", "true)"].concat().as_str()));
