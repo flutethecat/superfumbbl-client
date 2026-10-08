@@ -1651,6 +1651,10 @@ export interface MoveTweenRecord {
   /** Owner 10-05: an AIRBORNE kick phase (fly-in arc, snapshot arc, descent). While this exact tween drives the
    *  ball it draws over the dugouts; the ground bounce that follows is an ordinary tween without the mark. */
   kickAir?: boolean;
+  /** 10-08: the SQUARES a kick-flight ball tween runs through (`rise` = px above the square's anchor; 'rest' = the
+   *  ball sprite's own resting position). `waypoints` are pixels, so a projection toggle mid-flight re-derives them
+   *  from these on the SAME clock (refreshForProjectionChange) instead of letting the flight restart. */
+  kickPath?: ({ square: [number, number]; rise: number } | 'rest')[];
   /** step-stutter: the presentation step this tile tween presents (armPresentationStepTween only). Tagged so
    *  the ticker can mark exactly THAT step consumed at its visual end — never a neighbouring tween for the
    *  same player (a leap arc, a coalesced-jump path) that happens to finish first. */
@@ -2738,7 +2742,7 @@ export class PitchRenderer {
   private adCompletedMotionTargets = new Map<string, { x: number; y: number }>();
   private activeVisualEffects = 0;
   /** Owner 10-07: the running ball-out stand-in (playBallOut); null when idle. */
-  private ballOutFlight: { hidesModel: boolean; cleanup: () => void; travelUntil: number } | null = null;
+  private ballOutFlight: { hidesModel: boolean; cleanup: () => void; travelUntil: number; reproject: () => void } | null = null;
   /** Owner 10-07: keep the model ball hidden after a ball-out until the server clears outOfBounds. */
   private ballOutHideWhileOut = false;
 
@@ -2875,6 +2879,102 @@ export class PitchRenderer {
       return;
     }
     this.kickFollow = { track, until, savedX: this.world.position.x, savedY: this.world.position.y, returnStart: null, fromX: 0, fromY: 0 };
+  }
+  /** The movement ticker (item 12 + B3-3 styles): waypoint-driven travel. A method (10-08) only so a test can run
+   *  real frames; the body is the former inline ticker closure, unchanged. */
+  private tickMovement(app: Application): void {
+    // Owner 09-06: a zoom change wakes the walkers BEFORE the idle early-return, so the integer snap and the
+    // decoration scale land on the same frame the camera moved (they used to wait for the next wake-up).
+    if (Math.abs(app.renderer.resolution * this.world.scale.x - this.lastWalkerDeviceScale) > 1e-4) markWalkersDirty();
+    if (this.moveTweens.size === 0 && !walkersNeedTick(this.walkerOwnerId)) return;
+    const now = performance.now();
+    for (const [id, tween] of this.moveTweens) {
+      // Owner 09-19: a tween must move the token the viewer sees. refresh() rebuilds tokens; the carry-over paths
+      // rebind most tweens, but any that slipped through would animate a detached ghost (and the carried ball
+      // with it) while the visible token sat still — rebind to the live token, or drop the tween if there is none.
+      const visibleToken = this.tokensById.get(id);
+      if (visibleToken && !visibleToken.destroyed && visibleToken !== tween.token) {
+        (tween as { token: Container }).token = visibleToken;
+      } else if (!visibleToken || visibleToken.destroyed) {
+        if (tween.token.destroyed || tween.token.parent == null) { this.moveTweens.delete(id); continue; }
+      }
+      this.anchorPresentationTileOnFirstTweenPass(id, tween, now);
+      const segments = tween.waypoints.length - 1;
+      const total = segments * tween.segmentMs;
+      const elapsed = now - tween.start;
+      if (elapsed >= total || segments <= 0) {
+        const end = tween.waypoints[tween.waypoints.length - 1]!;
+        tween.token.position.set(end.x, end.y);
+        this.followTokenDecorations(id, end.x, end.y);
+        // kick grow: 'up' ends BIG (the ball hangs at the apex); the rest end at base.
+        if (tween.baseScale != null && tween.growTo)
+          tween.token.scale.set(tween.growMode === 'up' ? tween.baseScale * tween.growTo : tween.baseScale);
+        if (tween.movementIntent) {
+          // The bounded first stride is not a presented server step: hold short of the destination and never
+          // release the authoritative movement gate. Confirmation or rollback owns the next transition.
+          this.moveTweens.delete(id);
+          continue;
+        }
+        if (tween.reconcileKey) {
+          this.completeAuthoritativeReconciliation(id, tween.reconcileKey);
+          continue;
+        }
+        if (tween.postStepCorrectionKey) {
+          this.completePostStepCorrection(id, tween.postStepCorrectionKey);
+          continue;
+        }
+        this.finishPresentationStepTween(id, tween, end);
+        continue;
+      }
+      const segment = Math.min(segments - 1, Math.floor(elapsed / tween.segmentMs));
+      const t = (elapsed - segment * tween.segmentMs) / tween.segmentMs;
+      const ease = (tween.style === 'slide' || tween.style === 'trail') && tween.easeOut !== false
+        ? 1 - (1 - t) * (1 - t)
+        : t;
+      const a = tween.waypoints[segment]!;
+      const b = tween.waypoints[segment + 1]!;
+      let x = a.x + (b.x - a.x) * ease;
+      let y = a.y + (b.y - a.y) * ease;
+      if (tween.arc) {
+        ({ x, y } = kickArcTweenPosition(a, b, ease, elapsed / total, tween.arc)); // one big arc over the whole flight (kick)
+      } else if (tween.style === 'hop' || tween.style === 'hoptrail') {
+        y -= Math.sin(t * Math.PI) * 9; // per-tile arc (hop / bob-with-echo)
+      } else if (tween.style === 'walk') {
+        y -= Math.abs(Math.sin(t * Math.PI * 2)) * 1.6; // step bob
+      }
+      tween.token.position.set(x, y);
+      this.followTokenDecorations(id, x, y);
+      // kick grow/shrink: h∈[0,1] rises with the flight ('up'), falls on descent
+      // ('down'), or peaks mid-flight ('arc'). Scale = baseScale·(1+(growTo−1)·h).
+      if (tween.baseScale != null && tween.growTo) {
+        const h = tween.growMode === 'down' ? 1 - ease : tween.growMode === 'arc' ? Math.sin((elapsed / total) * Math.PI) : ease;
+        tween.token.scale.set(tween.baseScale * (1 + (tween.growTo - 1) * h));
+      }
+    }
+    // Owner 09-05: pick the walk-sheet sampling for the CURRENT effective scale (canvas resolution x camera zoom x
+    // sheet scale): >= 1 device px per art px -> nearest (crisp), else linear (minified, no pixel dropout).
+    // Owner 09-05 (round 8): the snap is PER TOKEN inside tickWalkers (depth x Strength folded in) — the renderer
+    // only supplies the device scale and keeps both sheets on nearest sampling.
+    const deviceScale = app.renderer.resolution * this.world.scale.x;
+    if (Math.abs(deviceScale - this.lastWalkerDeviceScale) > 1e-4) { this.lastWalkerDeviceScale = deviceScale; this.walkerZoomSettleAt = now + 250; }
+    const zoomSettled = now >= this.walkerZoomSettleAt;
+    // Owner 09-05 (round 10): pixel art samples NEAREST always — the linear-while-zooming pass read as a blur veil.
+    setWalkSheetSampling('nearest');
+    tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt());
+    this.redrawBlockPreviewOnDecorChange();
+    this.replaceActiveMarkerOnDecorChange();
+    this.syncKickBallLayer(); // a kick tween just ended (or began): re-seat the ball this frame
+  }
+
+  /** 10-08: a projection change re-fits the camera (resetCamera). A kick follow started under the OLD projection
+   *  would glide back to that projection's saved offset, which means nothing now: return to the re-fitted home
+   *  instead. Camera only; the follow window (`until`) and every kick timer are untouched. */
+  private rebaseKickFollowCamera(): void {
+    const kf = this.kickFollow;
+    if (!kf) return;
+    kf.savedX = this.world.position.x;
+    kf.savedY = this.world.position.y;
+    if (kf.returnStart !== null) { kf.fromX = kf.savedX; kf.fromY = kf.savedY; } // already gliding home: it is home
   }
   private tickKickFollow(dtMs: number, now: number): void {
     const kf = this.kickFollow;
@@ -3134,7 +3234,7 @@ export class PitchRenderer {
   /** Previous base state per playerId — feeds the knockdown flash (F-5). */
   private lastBaseStates = new Map<string, number>();
   /** Expanding knockdown/injury flash rings (F-5), self-removing. */
-  private flashRings: { g: Container; x: number; y: number; scale: number; start: number; grow?: number; durationMs?: number }[] = [];
+  private flashRings: { g: Container; x: number; y: number; scale: number; start: number; grow?: number; durationMs?: number; square?: [number, number] }[] = [];
   /** Owner o66 #7: over-head PASS/CATCH roll modals — a labelled pill above the passer/catcher, pop-in then fade. */
   private rollModals: { node: Container; start: number; baseY: number }[] = [];
   /** On-pitch action d6 (owner 2026-07-03 r3): a rolled die pops next to the
@@ -4548,89 +4648,7 @@ export class PitchRenderer {
       }
     });
     // move interpolation (item 12 + B3-3 styles): waypoint-driven travel
-    app.ticker.add(() => {
-      // Owner 09-06: a zoom change wakes the walkers BEFORE the idle early-return, so the integer snap and the
-      // decoration scale land on the same frame the camera moved (they used to wait for the next wake-up).
-      if (Math.abs(app.renderer.resolution * this.world.scale.x - this.lastWalkerDeviceScale) > 1e-4) markWalkersDirty();
-      if (this.moveTweens.size === 0 && !walkersNeedTick(this.walkerOwnerId)) return;
-      const now = performance.now();
-      for (const [id, tween] of this.moveTweens) {
-        // Owner 09-19: a tween must move the token the viewer sees. refresh() rebuilds tokens; the carry-over paths
-        // rebind most tweens, but any that slipped through would animate a detached ghost (and the carried ball
-        // with it) while the visible token sat still — rebind to the live token, or drop the tween if there is none.
-        const visibleToken = this.tokensById.get(id);
-        if (visibleToken && !visibleToken.destroyed && visibleToken !== tween.token) {
-          (tween as { token: Container }).token = visibleToken;
-        } else if (!visibleToken || visibleToken.destroyed) {
-          if (tween.token.destroyed || tween.token.parent == null) { this.moveTweens.delete(id); continue; }
-        }
-        this.anchorPresentationTileOnFirstTweenPass(id, tween, now);
-        const segments = tween.waypoints.length - 1;
-        const total = segments * tween.segmentMs;
-        const elapsed = now - tween.start;
-        if (elapsed >= total || segments <= 0) {
-          const end = tween.waypoints[tween.waypoints.length - 1]!;
-          tween.token.position.set(end.x, end.y);
-          this.followTokenDecorations(id, end.x, end.y);
-          // kick grow: 'up' ends BIG (the ball hangs at the apex); the rest end at base.
-          if (tween.baseScale != null && tween.growTo)
-            tween.token.scale.set(tween.growMode === 'up' ? tween.baseScale * tween.growTo : tween.baseScale);
-          if (tween.movementIntent) {
-            // The bounded first stride is not a presented server step: hold short of the destination and never
-            // release the authoritative movement gate. Confirmation or rollback owns the next transition.
-            this.moveTweens.delete(id);
-            continue;
-          }
-          if (tween.reconcileKey) {
-            this.completeAuthoritativeReconciliation(id, tween.reconcileKey);
-            continue;
-          }
-          if (tween.postStepCorrectionKey) {
-            this.completePostStepCorrection(id, tween.postStepCorrectionKey);
-            continue;
-          }
-          this.finishPresentationStepTween(id, tween, end);
-          continue;
-        }
-        const segment = Math.min(segments - 1, Math.floor(elapsed / tween.segmentMs));
-        const t = (elapsed - segment * tween.segmentMs) / tween.segmentMs;
-        const ease = (tween.style === 'slide' || tween.style === 'trail') && tween.easeOut !== false
-          ? 1 - (1 - t) * (1 - t)
-          : t;
-        const a = tween.waypoints[segment]!;
-        const b = tween.waypoints[segment + 1]!;
-        let x = a.x + (b.x - a.x) * ease;
-        let y = a.y + (b.y - a.y) * ease;
-        if (tween.arc) {
-          ({ x, y } = kickArcTweenPosition(a, b, ease, elapsed / total, tween.arc)); // one big arc over the whole flight (kick)
-        } else if (tween.style === 'hop' || tween.style === 'hoptrail') {
-          y -= Math.sin(t * Math.PI) * 9; // per-tile arc (hop / bob-with-echo)
-        } else if (tween.style === 'walk') {
-          y -= Math.abs(Math.sin(t * Math.PI * 2)) * 1.6; // step bob
-        }
-        tween.token.position.set(x, y);
-        this.followTokenDecorations(id, x, y);
-        // kick grow/shrink: h∈[0,1] rises with the flight ('up'), falls on descent
-        // ('down'), or peaks mid-flight ('arc'). Scale = baseScale·(1+(growTo−1)·h).
-        if (tween.baseScale != null && tween.growTo) {
-          const h = tween.growMode === 'down' ? 1 - ease : tween.growMode === 'arc' ? Math.sin((elapsed / total) * Math.PI) : ease;
-          tween.token.scale.set(tween.baseScale * (1 + (tween.growTo - 1) * h));
-        }
-      }
-      // Owner 09-05: pick the walk-sheet sampling for the CURRENT effective scale (canvas resolution x camera zoom x
-      // sheet scale): >= 1 device px per art px -> nearest (crisp), else linear (minified, no pixel dropout).
-      // Owner 09-05 (round 8): the snap is PER TOKEN inside tickWalkers (depth x Strength folded in) — the renderer
-      // only supplies the device scale and keeps both sheets on nearest sampling.
-      const deviceScale = app.renderer.resolution * this.world.scale.x;
-      if (Math.abs(deviceScale - this.lastWalkerDeviceScale) > 1e-4) { this.lastWalkerDeviceScale = deviceScale; this.walkerZoomSettleAt = now + 250; }
-      const zoomSettled = now >= this.walkerZoomSettleAt;
-      // Owner 09-05 (round 10): pixel art samples NEAREST always — the linear-while-zooming pass read as a blur veil.
-      setWalkSheetSampling('nearest');
-      tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt());
-      this.redrawBlockPreviewOnDecorChange();
-      this.replaceActiveMarkerOnDecorChange();
-      this.syncKickBallLayer(); // a kick tween just ended (or began): re-seat the ball this frame
-    });
+    app.ticker.add(() => this.tickMovement(app));
     // Unified Auto Director runs after visual movement advances, so it follows the
     // presented token/ball rather than an immediate-apply model endpoint.
     app.ticker.add(() => {
@@ -5266,6 +5284,7 @@ export class PitchRenderer {
     // refresh queued before it is already represented by the synchronous state
     // below and must not rebuild the just-painted token generation afterward.
     this.perf.setGames++;
+    this.projectionKickCarriedInSetGame = false;
     this.absorbQueuedProjectionRefresh();
     this.absorbQueuedOverlayRedraw();
     const dialogId = String((game?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '')
@@ -5376,12 +5395,16 @@ export class PitchRenderer {
       // changed, so repaint those against the latest model and leave every token/tween/container untouched.
       this.redrawOverlays();
       this.suppressGenericBallInThisRefresh = false;
+      this.projectionKickCarriedInSetGame = false;
       priorClassicLeaseToRelease?.release();
       return;
     }
     this.drawStadiumIfChanged(); // fan attendance (dedicatedFans) shapes the crowd; otherwise the stands stay put (P3)
-    try { this.refresh(); }
+    // 10-08: when the field flip above carried an in-air kick onto the new projection, this second rebuild of the
+    // same model keeps carrying it (same tween, same clock, same timers) instead of starting the flight again.
+    try { if (this.projectionKickCarriedInSetGame) this.refreshCarryingKickFlight(); else this.refresh(); }
     finally {
+      this.projectionKickCarriedInSetGame = false;
       this.suppressGenericBallInThisRefresh = false;
       // refresh destroyed every prior-game token, so no mounted texture remains.
       priorClassicLeaseToRelease?.release();
@@ -5487,6 +5510,8 @@ export class PitchRenderer {
     this.lastBallResolved = false; // owner 2026-07-12: fresh game re-arms the kick-trail settle detector
     this.kickApexAim = null; this.pendingKickAim = null; this.kickInHoldUntil = 0; this.kickInVisualUntil = 0; this.kickInFlyStart = null;
     this.kickDescendSnapshot = null; this.kickDescendSeqSeen = -1; // #124: a stale kickoff-descend snapshot must not leak games
+    this.kickFlightSeq = null;
+    this.kickFlightPending = null;
     this.arcArmedAt = null; this.pendingKickDescendClear = false; // #185: a fresh game re-arms the arc-in-flight cap clock / clears any deferred snapshot-clear
     this.kickoffVictimSeqSeen = -1; // #131: a stale victim-splash dedup-seq must not leak games
     this.kegThrowerSquare = null; this.kegTargetSet = null; this.destroyKegCrosshairs(); this.skillTargetSet = null; this.destroySkillTargetMarks(); this.jumpCrosshairSquares = []; // #181/KG-6: a stale keg range/target set must not leak games
@@ -5589,6 +5614,8 @@ export class PitchRenderer {
     this.kickInFlyStart = null;
     this.kickDescendSnapshot = null;
     this.kickDescendSeqSeen = -1;
+    this.kickFlightSeq = null;
+    this.kickFlightPending = null;
     this.arcArmedAt = null;
     this.pendingKickDescendClear = false;
     if (this.kickInReleaseTimer != null) {
@@ -5658,6 +5685,10 @@ export class PitchRenderer {
   /** Re-renders tokens from the current game state (call after model sync). */
   refresh(): void {
     if (!this.app || this.destroyed) return;
+    // 10-08 (Astra P2, third pass): the ball sprite + tween as they stand BEFORE this rebuild, so a kick flight that
+    // is already in the air can be re-bound to the rebuilt sprite (see kickFlightInAir) instead of started again.
+    const priorKickBall = this.renderedBall;
+    const priorKickTween = this.moveTweens.get('__ball__');
     this.perf.refreshes++;
     this.absorbQueuedOverlayRedraw();
     const suspendedPostStep = this.suspendPostStepConvergenceForRefresh();
@@ -6315,6 +6346,7 @@ export class PitchRenderer {
       // F-5: ball flight — tween from the previous square on change
       let heldKickIn = false;
       let heldBounce = false;
+      let carryKickFlightInRefresh = false;
       const prevBall = this.lastBallSquare;
       const ballScatter = this.pendingScatter.get('__ball__');
       if (ballScatter && ballScatter.path.length > 1) {
@@ -6392,7 +6424,7 @@ export class PitchRenderer {
           const edge = squareAnchor(ex, ey);
           if (this.kickInFlyStart == null) {
             this.kickInFlyStart = performance.now();
-            this.showKickTrail(edge, a, apex); // travel arc: edge → apex → destination
+            this.showKickTrail([ex, ey], [aim[0], aim[1]], true); // travel arc: edge → apex → destination
           }
           if (performance.now() - this.kickInFlyStart < presentationMs(KICK_FLYIN_MS)) {
             g.position.set(edge.x, edge.y);
@@ -6425,10 +6457,19 @@ export class PitchRenderer {
           const apx = squareAnchor(this.kickApexAim[0], this.kickApexAim[1]);
           g.position.set(apx.x, apx.y - KICK_APEX_RISE);
           g.scale.set(g.scale.x * KICK_BALL_GROW); // start the descent at full apex size, shrink as it falls
-          this.animateKickDescent(g, descLanding, targetPos, this.kickApexAim);
+          this.animateKickDescent(g, descLanding, targetPos, this.kickApexAim, this.kickDescendSnapshot ? [descLanding[0], descLanding[1]] : null);
           this.kickApexAim = null;
           this.pendingKickAim = null;
           this.kickInFlyStart = null;
+        } else if (this.projectionKickCarry) {
+          // 10-08: a display toggle redrew the pitch while this kick was already in the air. The flight is carried
+          // onto this rebuilt sprite by refreshForProjectionChange (same clock, same timers) - never a second flight.
+        } else if (this.kickFlightInAir()) {
+          // 10-08 (Astra P2, third pass): THE invariant. The flight for the armed snapshot is already in the air and
+          // its completion timer is pending, so this rebuild (a repeated setGame, the apex-release refresh, any
+          // refresh) is the SAME kick: no second flight, no second completion. The live tween moves to the rebuilt
+          // sprite below. A different kick (another snapshot seq, or no snapshot) never matches and flies as before.
+          carryKickFlightInRefresh = true;
         } else {
           this.animateKickIn(g, [ball[0], ball[1]], { x: g.position.x, y: g.position.y });
           // #27 (owner): the kick-target crosshair is a KICKOFF-EVENT cue only. This branch ALSO handles
@@ -6447,6 +6488,9 @@ export class PitchRenderer {
       if (!heldKickIn && !arcActive) this.lastBallOnPitch = true;
       this.ballEverRendered = true;
       this.lastCarrierId = carrier?.playerId ?? null;
+      if (carryKickFlightInRefresh) {
+        this.carryKickFlight(priorKickBall, priorKickTween?.kickPath && priorKickTween.token === priorKickBall ? priorKickTween : null, g);
+      }
       this.syncKickBallLayer(); // owner 10-05: an airborne kick ball draws over the dugouts
 
       // Ball-carrier marker (owner 2026-07-02, queue item 9): halo under the
@@ -11698,6 +11742,7 @@ export class PitchRenderer {
       this.kickHoverMarker = null;
       if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
       this.kickScatterMarker = null;
+      this.kickHoverLast = null;
       if (this.app) this.app.canvas.style.cursor = this.restingCursor();
     }
   }
@@ -12173,6 +12218,8 @@ export class PitchRenderer {
     this.kickInFlyStart = null;
     this.kickInHoldUntil = 0;
     this.kickInVisualUntil = 0;
+    this.kickFlightSeq = null;
+    this.kickFlightPending = null;
     this.arcArmedAt = null;
     this.moveTweens.delete('__ball__');
     this.clearKickTarget();
@@ -12293,7 +12340,7 @@ export class PitchRenderer {
     // fly in from a CORNER beyond the kicking side's end zone (curved trail, owner)
     const edge: [number, number] = this.kickInEdge(aim);
     this.showKickTarget(aim[0], aim[1]);
-    this.showKickTrail(squareAnchor(edge[0], edge[1]), squareAnchor(aim[0], aim[1])); // travel arc (edge → aim)
+    this.showKickTrail(edge, [aim[0], aim[1]], false); // travel arc (edge → aim)
     const bounceSteps = Math.max(Math.abs(landing[0] - aim[0]), Math.abs(landing[1] - aim[1]));
     const bounceMs = bounceSteps * presentationMs(KICK_HOP_SEGMENT_MS);
     // phase 1: edge → aim, one big arc. Longer flight than the old kicker→aim hop —
@@ -12303,11 +12350,18 @@ export class PitchRenderer {
     const tween = this.moveTweens.get('__ball__');
     // grow to the apex (mid-flight) then shrink back as it drops to the aim
     if (tween) { tween.baseScale = g.scale.x; tween.growTo = KICK_BALL_GROW; tween.growMode = 'arc'; tween.kickAir = true; }
+    if (tween) tween.kickPath = [{ square: [edge[0], edge[1]], rise: 0 }, bounceSteps === 0 ? 'rest' : { square: [aim[0], aim[1]], rise: 0 }];
+    const bouncePending = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] as [number, number] };
+    this.kickBouncePending = bouncePending;
     // B0: the persistent target crosshair clears once the ball has LANDED
     const flyClearMs = presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS) + bounceMs + presentationMs(KICK_CLEAR_TAIL_MS);
     this.kickInVisualUntil = performance.now() + flyClearMs; // #59a: suppress the carrier-clear until this landing
+    this.kickFlightSeq = this.kickDescendSnapshot?.seq ?? null; // which kick this flight belongs to (kickFlightInAir)
+    const flight = {}; // this flight's completion is pending from here until the callback below runs
+    this.kickFlightPending = flight;
     this.startKickFollow(g, flyClearMs + Math.max(0, this.kickInHoldUntil - performance.now())); // owner 09-14: slow pan with the ball, then return
     this.scheduleTimer(() => {
+      if (this.kickFlightPending === flight) this.kickFlightPending = null;
       this.clearKickTarget();
       // Owner 09-10 (game 947): the store's kickArc barrier waits for a kickDescend landing signal; when the
       // snapshot descent did not arm (whatever the reason) this plain fly-in is the only landing there is, so it
@@ -12320,16 +12374,23 @@ export class PitchRenderer {
     }
     // phase 2: bounce aim → final landing with small per-tile hops
     this.scheduleTimer(() => {
-      if (g.destroyed) return;
+      if (this.kickBouncePending === bouncePending) this.kickBouncePending = null;
+      // 10-08: a projection toggle may have rebuilt the sprite mid-flight; the bounce continues on its successor.
+      const live = this.liveKickBall(g);
+      if (live.token.destroyed) return;
       const waypoints: { x: number; y: number }[] = [];
+      const kickPath: ({ square: [number, number]; rise: number } | 'rest')[] = [];
       for (let i = 0; i <= bounceSteps; i++) {
         const sx = Math.round(aim[0] + ((landing[0] - aim[0]) * i) / bounceSteps);
         const sy = Math.round(aim[1] + ((landing[1] - aim[1]) * i) / bounceSteps);
         const p = squareAnchor(sx, sy);
         waypoints.push({ x: p.x, y: p.y });
+        kickPath.push({ square: [sx, sy], rise: 0 });
       }
-      waypoints[waypoints.length - 1] = targetPos; // keep the ball's render offset
-      this.moveTweens.set('__ball__', { token: g, waypoints, style: 'hop', start: performance.now(), segmentMs: presentationMs(KICK_HOP_SEGMENT_MS) });
+      // keep the ball's render offset (re-derived when the sprite was rebuilt under another projection)
+      waypoints[waypoints.length - 1] = live.rest ? (live.rest) : targetPos;
+      kickPath[kickPath.length - 1] = 'rest';
+      this.moveTweens.set('__ball__', { token: live.token, waypoints, style: 'hop', start: performance.now(), segmentMs: presentationMs(KICK_HOP_SEGMENT_MS), kickPath });
     }, presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS));
   }
 
@@ -12341,6 +12402,9 @@ export class PitchRenderer {
     landing: [number, number],
     targetPos: { x: number; y: number },
     aim: [number, number],
+    /** 10-08: the square `targetPos` is the anchor of (the snapshot landing), or null when it is the sprite's own
+     *  resting position - so a projection toggle can re-derive it. */
+    targetSquare: [number, number] | null = null,
   ): void {
     this.showKickTarget(aim[0], aim[1]);
     const bounceSteps = Math.max(Math.abs(landing[0] - aim[0]), Math.abs(landing[1] - aim[1]));
@@ -12355,7 +12419,11 @@ export class PitchRenderer {
     // Capture our seq at arm and only clear/reconcile if it's still the one we armed for (the newer descend's
     // own wall-clock timer stays the KD-4 fail-open for it). undefined seq (inert, no snapshot) → never fires.
     const mySeq = this.kickDescendSnapshot?.seq;
+    this.kickFlightSeq = mySeq ?? null; // which kick this flight belongs to (kickFlightInAir)
+    const flight = {}; // this flight's completion is pending from here until the callback below runs
+    this.kickFlightPending = flight;
     this.scheduleTimer(() => {
+      if (this.kickFlightPending === flight) this.kickFlightPending = null;
       this.clearKickTarget();
       // #124 KD-4/KD-2: this setTimeout is the WALL-CLOCK cap (throttle-resistant; fires late but always,
       // unlike rAF). It is the fail-open for the snapshot descend: fire the visual-complete signal so the
@@ -12385,22 +12453,35 @@ export class PitchRenderer {
       kickAir: true,
       // shrink from the apex size back to 1× as the ball falls (g starts at base·grow here)
       baseScale: g.scale.x / KICK_BALL_GROW, growTo: KICK_BALL_GROW, growMode: 'down',
+      kickPath: [
+        { square: [aim[0], aim[1]], rise: KICK_APEX_RISE },
+        bounceSteps > 0 ? { square: [aim[0], aim[1]], rise: 0 } : targetSquare ? { square: [targetSquare[0], targetSquare[1]], rise: 0 } : 'rest',
+      ],
     });
+    const bouncePending = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] as [number, number] };
+    this.kickBouncePending = bouncePending;
     if (bounceSteps === 0) return;
     // phase 2: the ball has REACHED the target (descent done + a landing beat) — NOW it
     // bounces aim → final landing with small per-tile hops. Owner 2026-07-08: the bounce
     // starts only after the ball has visibly hit the target square (KICK_BOUNCE_DELAY_MS).
     this.scheduleTimer(() => {
-      if (g.destroyed) return;
+      if (this.kickBouncePending === bouncePending) this.kickBouncePending = null;
+      // 10-08: a projection toggle may have rebuilt the sprite mid-flight; the bounce continues on its successor.
+      const live = this.liveKickBall(g);
+      if (live.token.destroyed) return;
       const waypoints: { x: number; y: number }[] = [];
+      const kickPath: ({ square: [number, number]; rise: number } | 'rest')[] = [];
       for (let i = 0; i <= bounceSteps; i++) {
         const sx = Math.round(aim[0] + ((landing[0] - aim[0]) * i) / bounceSteps);
         const sy = Math.round(aim[1] + ((landing[1] - aim[1]) * i) / bounceSteps);
         const p = squareAnchor(sx, sy);
         waypoints.push({ x: p.x, y: p.y });
+        kickPath.push({ square: [sx, sy], rise: 0 });
       }
-      waypoints[waypoints.length - 1] = targetPos; // keep the ball's render offset
-      this.moveTweens.set('__ball__', { token: g, waypoints, style: 'hop', start: performance.now(), segmentMs: presentationMs(KICK_HOP_SEGMENT_MS) });
+      // keep the ball's render offset (re-derived when the sprite was rebuilt under another projection)
+      waypoints[waypoints.length - 1] = live.rest ? (targetSquare ? squareAnchor(targetSquare[0], targetSquare[1]) : live.rest) : targetPos;
+      kickPath[kickPath.length - 1] = targetSquare ? { square: [targetSquare[0], targetSquare[1]], rise: 0 } : 'rest';
+      this.moveTweens.set('__ball__', { token: live.token, waypoints, style: 'hop', start: performance.now(), segmentMs: presentationMs(KICK_HOP_SEGMENT_MS), kickPath });
     }, presentationMs(KICK_DESCENT_MS) + presentationMs(KICK_BOUNCE_DELAY_MS));
   }
 
@@ -12410,7 +12491,27 @@ export class PitchRenderer {
    *  ball lands. Replaces any prior target; cleared by clearKickTarget()/landing/
    *  clearEffects. The one-shot showKickTarget flash still fires at flight start
    *  as an emphasis pulse on top. */
-  private kickTarget: { g: Graphics; tick: () => void } | null = null;
+  private kickTarget: { g: Graphics; tick: () => void; square: [number, number] } | null = null;
+  /** 10-08: the square the kicking coach's aim markers were last built for (pointermove); a projection change
+   *  rebuilds them from it so they are not stale until the pointer moves. */
+  private kickHoverLast: [number, number] | null = null;
+  /** 10-08: the landing beat between a kick's air phase and its bounce (no tween runs): the ball rests on `aim`. */
+  private kickBouncePending: { aim: [number, number] } | null = null;
+  /** 10-08: a projection toggle rebuilt the ball sprite mid kick flight: old sprite -> the sprite (and its resting
+   *  position) that carries the flight on. Only refreshForProjectionChange writes it. */
+  private kickBallSuccessor = new WeakMap<Container, { token: Container; rest: { x: number; y: number } }>();
+  /** 10-08: true only inside a projection setter's refresh() while a kick flight is in the air: the ball branch
+   *  must not start a second flight (the carried one continues on its own clock and timers). */
+  private projectionKickCarry = false;
+  private kickCueScale(x: number, y: number): number {
+    return depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(x))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(y))));
+  }
+  private liveKickBall(g: Container): { token: Container; rest: { x: number; y: number } | null } {
+    let token = g;
+    let rest: { x: number; y: number } | null = null;
+    for (let next = this.kickBallSuccessor.get(token); next; next = this.kickBallSuccessor.get(token)) { token = next.token; rest = next.rest; }
+    return { token, rest };
+  }
   /** #25 (owner 07-16): guaranteed-clear backstop. The reticle is normally cleared by a setTimeout scheduled
    *  INSIDE the kick-in flight; skip-paths (immediate catch / carrier-less touchback / re-scatter) never schedule
    *  it, so the reticle can stick forever. This TTL fires from ARM time — a fixed timer with no model/animation
@@ -12437,6 +12538,7 @@ export class PitchRenderer {
     reticle.moveTo(0, -3 - TILE_H * 0.5).lineTo(0, -3 + TILE_H * 0.44).stroke({ color: 0x22d3ee, width: 1.5, alpha: 0.7 });
     reticle.moveTo(-TILE_W * 0.6, -3).lineTo(TILE_W * 0.6, -3).stroke({ color: 0x22d3ee, width: 1.5, alpha: 0.7 });
     reticle.position.set(anchor.x, anchor.y);
+    reticle.scale.set(this.kickCueScale(x, y)); // 10-08: sized to the square's depth scale, like the flash
     reticle.zIndex = 0.55; // over turf, under tokens
     this.effectsLayer.addChild(reticle);
     const tick = () => {
@@ -12444,7 +12546,7 @@ export class PitchRenderer {
       reticle.alpha = 0.75 + 0.25 * Math.sin(performance.now() / presentationMs(260)); // gentle pulse
     };
     this.app.ticker.add(tick);
-    this.kickTarget = { g: reticle, tick };
+    this.kickTarget = { g: reticle, tick, square: [x, y] };
     // #25: arm the guaranteed-clear TTL from arm-time (replaces any prior). setTimeout (not rAF) so it fires even
     // when a spectator tab throttles the render ticker.
     this.cancelTimer(this.kickTargetTtl);
@@ -12463,6 +12565,126 @@ export class PitchRenderer {
     this.kickTarget = null;
   }
 
+  /** Bug report 10-08 (JLeav, "display settings during a charge distort where the ball is going to land"): the
+   *  landing reticle and the travel-arc trail are placed ONCE in world pixels on the effects layer, which no
+   *  projection toggle redraws. Every setter that changes the projection (orientation, flat, uniform figures, field
+   *  flip) calls this after its redraw: the reticle moves to the anchor of the SAME server square and the trail is
+   *  redrawn from the SAME squares. Position only: no timer, TTL, pulse or kick pacing state is touched. */
+  private reprojectKickCues(): void {
+    const target = this.kickTarget;
+    if (target && !target.g.destroyed) {
+      const anchor = squareAnchor(target.square[0], target.square[1]);
+      target.g.position.set(anchor.x, anchor.y);
+      target.g.scale.set(this.kickCueScale(target.square[0], target.square[1])); // flat <-> perspective, uniform figures
+    }
+    const trail = this.kickTrailSquares;
+    if (trail && this.kickTrail && !this.kickTrail.destroyed) this.showKickTrail(trail.edge, trail.aim, trail.viaApex);
+    // The brief emphasis flash: same square, new anchor + depth scale. `start` is untouched, so the ticker carries
+    // on expanding/fading from where it was (it multiplies `scale` each frame).
+    for (const flash of this.flashRings) {
+      if (!flash.square || flash.g.destroyed) continue;
+      const anchor = squareAnchor(flash.square[0], flash.square[1]);
+      const t = Math.min(1, Math.max(0, (performance.now() - flash.start) / (flash.durationMs ?? presentationMs(600))));
+      const live = 1 + t * (flash.grow ?? 0.9); // the ticker's growth factor at this instant
+      flash.x = anchor.x; flash.y = anchor.y;
+      flash.scale = depthScale(flash.square[0], flash.square[1]);
+      flash.g.position.set(anchor.x, anchor.y);
+      flash.g.scale.set(flash.scale * live);
+    }
+    this.ballOutFlight?.reproject(); // the ball-out stand-in + TOUCHBACK / OUT OF BOUNDS stamp (elapsed time kept)
+    // The kicking coach's aim markers are rebuilt only on pointer move: rebuild them from the last hovered square.
+    const hover = this.kickHoverLast;
+    if (hover && this.kickPickSquares && this.kickScatterMarker && !this.kickScatterMarker.destroyed) {
+      const legal = this.kickPickSquares.has(`${hover[0]},${hover[1]}`);
+      this.kickScatterMarker.destroy({ children: true });
+      this.kickScatterMarker = this.buildKickScatterGrid(hover[0], hover[1]);
+      this.kickScatterMarker.alpha = legal ? 1 : 0.45;
+      this.overlayLayer.addChild(this.kickScatterMarker);
+      if (this.kickHoverMarker && !this.kickHoverMarker.destroyed) this.kickHoverMarker.destroy({ children: true });
+      // The pointer has not moved, so its old world position means nothing under the new projection: the
+      // crosshair sits on the hovered square's anchor until the next pointer move free-follows again.
+      this.kickHoverMarker = this.buildKickBallCrosshair([hover[0], hover[1]]);
+      this.kickHoverMarker.alpha = legal ? 1 : 0.4;
+      this.overlayLayer.addChild(this.kickHoverMarker);
+    }
+  }
+
+  /** 10-08 (Astra P2-a): the projection setters' refresh. A plain refresh() rebuilds the ball sprite and drops its
+   *  tween; mid kick flight (after the apex hold) the ball branch then started the flight AGAIN from the edge while
+   *  the first flight's clear timer stayed armed. Here the in-air flight is carried instead: the same tween (same
+   *  start clock and duration) moves to the rebuilt sprite with its waypoints re-derived from its squares, and the
+   *  pending bounce timer finds the sprite through kickBallSuccessor. No kickAim / kickDescend state or timer is
+   *  created, cancelled or re-timed. Outside a kick flight this is exactly refresh() + reprojectKickCues(). */
+  private refreshForProjectionChange(): void {
+    if (this.refreshCarryingKickFlight()) this.projectionKickCarriedInSetGame = true;
+    this.reprojectKickCues();
+  }
+
+  /** 10-08 (Astra P2, second pass): set by a projection setter that carried an in-air kick. setGame() applies the
+   *  spectator field flip through setFieldFlipMode() and then runs its own refresh(); that second rebuild of the
+   *  same model must carry the flight too, or it destroys the carried sprite and the ball branch starts a second
+   *  flight (a second clear timer, a second kickDescend completion). setGame clears it on entry and on exit. */
+  private projectionKickCarriedInSetGame = false;
+
+  /** refresh(), but an in-air kick flight (see refreshForProjectionChange) continues on the rebuilt ball sprite.
+   *  Returns whether a kick was in the air. */
+  private refreshCarryingKickFlight(): boolean {
+    const now = performance.now();
+    const oldBall = this.renderedBall;
+    const inFlight = this.kickApexAim == null && now >= this.kickInHoldUntil && now < this.kickInVisualUntil;
+    const tween = this.moveTweens.get('__ball__');
+    const carried = inFlight && tween?.kickPath && tween.token === oldBall ? tween : null;
+    this.projectionKickCarry = inFlight;
+    try { this.refresh(); } finally { this.projectionKickCarry = false; }
+    if (inFlight) this.carryKickFlight(oldBall, carried, this.renderedBall);
+    return inFlight;
+  }
+
+  /** 10-08 (Astra P2, third pass): which kick the flight now in the air belongs to - the descend snapshot's seq it
+   *  was started for (null = a plain ball-in with no snapshot). A label only, written where the flight starts
+   *  (animateKickIn / animateKickDescent); it holds no clock and arms nothing. */
+  private kickFlightSeq: number | null = null;
+
+  /** 10-08 (Astra confirmation review, P2): the identity of the newest kick flight whose completion callback has
+   *  NOT run yet; null once it has run, or after a kick reset. A marker only: it is written where the completion
+   *  timer is scheduled and cleared inside that timer's own callback - it holds no clock and neither creates,
+   *  cancels nor re-times anything. It replaces the wall-clock test `now < kickInVisualUntil`, which is false on a
+   *  frame that runs after the deadline but before a late timer callback (a busy main thread): that frame started
+   *  a second fly-in, and both callbacks then signalled kickDescend. */
+  private kickFlightPending: object | null = null;
+
+  /** True while the flight started for the ARMED descend snapshot is still presenting: its tween may be running,
+   *  its bounce pending, or its landing tail playing, and its completion callback has not run yet - however late
+   *  the timer is delivered. Read-only: the caller must then start nothing. */
+  private kickFlightInAir(): boolean {
+    const snapshot = this.kickDescendSnapshot;
+    return snapshot != null && this.kickFlightSeq === snapshot.seq && this.kickFlightPending != null;
+  }
+
+  /** Re-bind a kick flight to the ball sprite a refresh() just rebuilt: the SAME tween object (start clock and
+   *  duration untouched) gets the new sprite and waypoints re-derived from its squares; the pending bounce timer
+   *  finds the sprite through kickBallSuccessor. Nothing is scheduled, cancelled or re-timed. */
+  private carryKickFlight(oldBall: Container | null, carried: MoveTweenRecord | null, ball: Container | null): void {
+    if (!oldBall || !ball || ball === oldBall || ball.destroyed) return;
+    const rest = { x: ball.position.x, y: ball.position.y };
+    this.kickBallSuccessor.set(oldBall, { token: ball, rest });
+    const claimed = this.moveTweens.get('__ball__');
+    if (carried && (!claimed || claimed === carried)) { // a tween refresh() itself armed for the new model wins
+      carried.token = ball;
+      carried.waypoints = carried.kickPath!.map((point) => {
+        if (point === 'rest') return rest;
+        const anchor = squareAnchor(point.square[0], point.square[1]);
+        return { x: anchor.x, y: anchor.y - point.rise };
+      });
+      if (carried.baseScale != null) carried.baseScale = ball.scale.x; // the rebuilt sprite's resting scale
+      this.moveTweens.set('__ball__', carried);
+    } else if (this.kickBouncePending) {
+      const anchor = squareAnchor(this.kickBouncePending.aim[0], this.kickBouncePending.aim[1]);
+      ball.position.set(anchor.x, anchor.y); // landed on the aim, waiting for its bounce
+    }
+    this.syncKickBallLayer();
+  }
+
   /** Owner 2026-07-07: the faint CYAN TRAVEL-ARC trail — the kick's path from the fly-in
    *  edge, up through the apex (the ball in the air), down to the destination square. Drawn
    *  once at flight start, cleared with the target crosshair when the ball lands. Ball cues
@@ -12470,9 +12692,15 @@ export class PitchRenderer {
    *  uses (slide ease + sin arc) so the trail overlays the ball's actual travel.
    *  `apex` present ⇒ two-phase (edge→apex arc, then apex→dest fall); absent ⇒ one arc. */
   private kickTrail: Graphics | null = null;
-  private showKickTrail(edge: { x: number; y: number }, dest: { x: number; y: number }, apex?: { x: number; y: number }): void {
+  /** The SQUARES the live trail was drawn from (10-08): the trail is world pixels, so a projection change redraws
+   *  it from these (reprojectKickCues). `viaApex` = the two-phase held kick (edge -> apex over the aim -> aim). */
+  private kickTrailSquares: { edge: [number, number]; aim: [number, number]; viaApex: boolean } | null = null;
+  private showKickTrail(edgeSquare: [number, number], aimSquare: [number, number], viaApex: boolean): void {
     if (!this.app || !this.kickTrailEnabled) return;
     this.clearKickTrail();
+    const edge = squareAnchor(edgeSquare[0], edgeSquare[1]);
+    const dest = squareAnchor(aimSquare[0], aimSquare[1]);
+    const apex = viaApex ? { x: dest.x, y: dest.y - KICK_APEX_RISE } : undefined;
     const pts: { x: number; y: number }[] = [];
     const seg = (from: { x: number; y: number }, to: { x: number; y: number }, arc: number, n: number) => {
       for (let i = 0; i <= n; i++) {
@@ -12491,8 +12719,10 @@ export class PitchRenderer {
     g.zIndex = 0.5; // over turf, under the crosshair (0.55) + tokens
     this.effectsLayer.addChild(g);
     this.kickTrail = g;
+    this.kickTrailSquares = { edge: [edgeSquare[0], edgeSquare[1]], aim: [aimSquare[0], aimSquare[1]], viaApex };
   }
   private clearKickTrail(): void {
+    this.kickTrailSquares = null;
     if (!this.kickTrail) return;
     if (!this.kickTrail.destroyed) {
       this.kickTrail.parent?.removeChild(this.kickTrail);
@@ -12776,7 +13006,7 @@ export class PitchRenderer {
     reticle.position.set(anchor.x, anchor.y);
     reticle.zIndex = 0.55; // over turf, under tokens
     this.effectsLayer.addChild(reticle);
-    this.flashRings.push({ g: reticle, x: anchor.x, y: anchor.y, scale, start: performance.now() });
+    this.flashRings.push({ g: reticle, x: anchor.x, y: anchor.y, scale, start: performance.now(), square: [x, y] });
   }
 
   /** Owner 2026-07-05 (from `docs/action-icons.csv`, authoritative): the active-player
@@ -14776,11 +15006,12 @@ export class PitchRenderer {
     this.drawStadium();
     this.drawPitch();
     this.redrawSetupZones();
-    this.refresh();
+    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     // sweet-spot logos + crosshairs are positioned via squareAnchor, so they go
     // stale on a toggle — re-place them at the new orientation (B8-8)
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
+    this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
   }
 
@@ -14793,9 +15024,10 @@ export class PitchRenderer {
     this.drawStadium();
     this.drawPitch();
     this.redrawSetupZones();
-    this.refresh();
+    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
+    this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
   }
 
@@ -14806,9 +15038,10 @@ export class PitchRenderer {
     this.drawStadium();
     this.drawPitch();
     this.redrawSetupZones();
-    this.refresh();
+    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
+    this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
   }
 
@@ -14824,9 +15057,10 @@ export class PitchRenderer {
     this.drawStadium();
     this.drawPitch();
     this.redrawSetupZones();
-    this.refresh();
+    this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
+    this.rebaseKickFollowCamera();
     refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
   }
 
@@ -17227,7 +17461,7 @@ export class PitchRenderer {
     const startAt = performance.now() + Math.max(0, cue.delayMs ?? 0);
     const exit = cue.exit;
     const stops: [number, number][] = exit ? [...cue.path, exit] : [...cue.path];
-    const points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
+    let points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
     const travelMs = exit ? (stops.length - 1) * hopMs : 0;
     const fadeMs = presentationMs(250);
     const stampMs = Math.max(450, presentationMs(1200));
@@ -17253,7 +17487,7 @@ export class PitchRenderer {
 
     const plate = this.buildBallOutStamp(cue.label);
     const sp = fractionalSquareAnchor(stampSquare[0], stampSquare[1]);
-    const stampScale = depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(stampSquare[0]))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(stampSquare[1]))));
+    let stampScale = depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(stampSquare[0]))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(stampSquare[1]))));
     plate.position.set(sp.x, sp.y);
     plate.scale.set(stampScale);
     plate.zIndex = 99500;
@@ -17294,7 +17528,23 @@ export class PitchRenderer {
       if (elapsed >= travelMs + Math.max(stampMs, exit ? fadeMs : 0)) { settledNaturally = true; cleanup(); }
     };
     this.ballOutHideWhileOut = !!exit;
-    const flight = { hidesModel: !!exit, cleanup: () => cleanup(), travelUntil: startAt + travelMs };
+    // 10-08: a projection change re-derives every cached pixel from the same squares / exit point; `startAt` is
+    // untouched, so the hop, the fade and the >= 450 ms stamp hold carry on from their elapsed time.
+    const reproject = () => {
+      points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
+      if (ball && !ball.destroyed) {
+        ball.position.set(points[0]!.x, points[0]!.y - 3);
+        ball.scale.set(depthScale(Math.max(0, Math.min(PITCH_COLS - 1, last[0])), Math.max(0, Math.min(PITCH_ROWS - 1, last[1]))));
+      }
+      if (!plate.destroyed) {
+        const at = fractionalSquareAnchor(stampSquare[0], stampSquare[1]);
+        stampScale = depthScale(Math.max(0, Math.min(PITCH_COLS - 1, Math.round(stampSquare[0]))), Math.max(0, Math.min(PITCH_ROWS - 1, Math.round(stampSquare[1]))));
+        plate.position.set(at.x, at.y);
+        plate.scale.set(stampScale);
+      }
+      tick(); // place the ball / pop the stamp for the CURRENT elapsed time
+    };
+    const flight = { hidesModel: !!exit, cleanup: () => cleanup(), travelUntil: startAt + travelMs, reproject };
     this.ballOutFlight = flight;
     cleanup = this.registerEffectTicker(app, tick, nodes, () => {
       finishEffect();
@@ -19103,6 +19353,7 @@ export class PitchRenderer {
           // ball's landing square if clicked here) even though the crosshair itself free-follows the raw pointer.
           if (this.kickScatterMarker && !this.kickScatterMarker.destroyed) this.kickScatterMarker.destroy({ children: true });
           this.kickScatterMarker = this.buildKickScatterGrid(sx, sy);
+          this.kickHoverLast = [sx, sy];
           this.kickScatterMarker.alpha = this.kickPickSquares.has(`${sx},${sy}`) ? 1 : 0.45;
           this.overlayLayer.addChild(this.kickScatterMarker);
           this.kickHoverMarker = this.buildKickBallCrosshair([sx, sy]);

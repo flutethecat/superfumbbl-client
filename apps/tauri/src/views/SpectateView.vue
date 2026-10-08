@@ -123,6 +123,7 @@ import { swoopChoiceCopy } from '../game/logic/swoopPresentation';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
 import { snapshotTickNeedsRebuild } from '../game/spectatorSnapshotTick';
+import { seedRendererBoardMarks } from '../game/rendererBoardSeed';
 import { watchBoardPresentationReconciliation, watchMovementPresentationReconciliation, watchMovementPresentationRecovery } from '../game/movementPresentationReconciliation';
 import { furySecondBlockTargeting as projectFurySecondBlockTargeting } from '../game/furyOfTheBloodGod';
 // Claim modern live decisions during setup, before any async mount work or incoming frame can auto-answer.
@@ -6794,8 +6795,7 @@ watch(
 watch(() => gameStore.state.snapshotEpoch, async () => {
   await nextTick();
   if (!renderer) return;
-  renderer.setActivePlayer(gameStore.state.activePlayerId);
-  renderer.setActedPlayers(gameStore.state.actedPlayers ?? []);
+  seedRendererBoardMarks(renderer, gameStore.state);
   // 09-14: the game watcher below already rebuilt for this exact snap publication — one rebuild per snap.
   if (!snapshotTickNeedsRebuild(gameStore.spectatorPublishedPosition.value, lastSnapRestoredPublication)) return;
   renderer.refresh();
@@ -10174,6 +10174,12 @@ onMounted(async () => {
       heldTeamMate: p.heldTeamMate, passDestination: publishedPosition.passive.passDestination,
       hmpScatterMarks: publishedPosition.passive.hmpScatterMarks,
     });
+  } else {
+    // Owner 10-08: this view only mounts once a game exists, so on every join / reconnect the store has ALREADY derived
+    // the board marks from the snapshot (forceSnapshotTick) before the watchers above were created - and they are not
+    // `immediate`. Seed them here or the snapshot paints with nobody activated until the next server command.
+    seedRendererBoardMarks(renderer, gameStore.state);
+    renderer.o66OppTzActive = settings.order66 && gameStore.isPlaying.value && gameStore.myTurn.value && !!gameStore.state.activePlayerId;
   }
   // The held-mate watcher can run before Pixi exists on reconnect/mode mount. Reassert the complete shared Pass
   // surface after the authoritative model is installed so the Quick+Short chart is never reduced to a lone ruler.
