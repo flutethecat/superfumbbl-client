@@ -306,6 +306,8 @@ export interface AppSettings extends ConfirmationSettings {
   hudToastOpacity: number;
   /** Owner 10-08: opacity of the Roster pop-out window (it used to follow the Log window's opacity). */
   rosterOpacity: number;
+  /** Owner 10-08: hide the bottom "Confirm ..." bar (move / block / blitz / foul). Space and the second click still confirm. */
+  hideConfirmBar: boolean;
   /** Show the pitch grid/yard lines (off = clean field for legibility). */
   gridLines: boolean;
   /** Grid line width multiplier (0.5–3, 1 = default). */
@@ -622,6 +624,7 @@ const DEFAULTS: AppSettings = {
   hudQuickBarOpacity: 0.9,
   hudToastOpacity: 0.92,
   rosterOpacity: 0.79, // the Log window's default, which the roster followed before it had its own setting
+  hideConfirmBar: false,
   gridLines: true,
   gridLineWidth: 0.5, // owner 09-05: default 1 -> 0.5
   gridLineColor: '#e8e4d8',
@@ -966,6 +969,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
     merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on
+    merged.hideConfirmBar = raw.hideConfirmBar === true; // owner 10-08: the bar shows unless the user hid it
     merged.replaySearchHideScores = raw.replaySearchHideScores !== false; // owner 10-06: ON by default; only an explicit false turns it off
     // owner 10-07: camera pan speed default 9 -> 16; a blob still on the old default (or without the key) takes the new one
     if ((raw.settingsVersion ?? 0) < 35 && (raw.cameraPanSpeed == null || raw.cameraPanSpeed === 9)) merged.cameraPanSpeed = 16;

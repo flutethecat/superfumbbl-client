@@ -2874,6 +2874,15 @@ function captureKey(event: KeyboardEvent) {
           </fieldset>
 
           <fieldset class="settings-group">
+            <legend>Confirm bar</legend>
+            <label class="row">
+              <span>Hide the Confirm bar</span>
+              <input v-model="settings.hideConfirmBar" type="checkbox" data-testid="hide-confirm-bar" />
+            </label>
+            <p class="hint">Hides the bar at the bottom of the pitch that confirms a move, block, blitz or foul. The confirm key and a second click still confirm.</p>
+          </fieldset>
+
+          <fieldset class="settings-group">
             <legend>Chat &amp; notifications</legend>
           <label class="row">
             <span>Disable chat</span>

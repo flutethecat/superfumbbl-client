@@ -6113,7 +6113,12 @@ const WISDOM_PCHOICE_MODE = 'wisdomOfTheWhiteDwarf';
 // menu was treated as already handled and never opened, and the server waited on the coach for an answer that had
 // no surface. Per dialog instance: each `feed` dialog the server sets opens its own bite menu, while later frames
 // over the same standing dialog still do not re-arm it.
-const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp', 'feed']);
+// Owner 10-08 ("Fix the other prompts"): the same collision applies to every choice the server can ask twice in one
+// turn (two Animal Savagery lash-outs, two Diving Tackles, two Diving Catches ...). Astra's list, all keyed per
+// dialog instance now so the second one surfaces instead of reading as already handled.
+const DIALOG_INSTANCE_PCHOICE_MODES = new Set([WISDOM_PCHOICE_MODE, 'pickMeUp', 'feed',
+  'animalSavagery', 'divingTackle', 'divingCatch', 'declareDivingCatch', 'card', 'block', 'raidingParty',
+  'balefulHex', 'blackInk', 'autoGazeZoat', 'armBar', 'briberyAndCorruption']);
 /** Owner 10-05 (g1950390): "We should be declining future offers from the server if the user did not select them ...
  *  Only on pick me up". The players the coach LEFT OUT of a confirmed Pick-Me-Up selection, with the turn it was
  *  confirmed in. A same-turn re-offer made up only of those players is declined for them (empty clientPlayerChoice)

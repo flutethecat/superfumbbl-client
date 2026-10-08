@@ -12555,7 +12555,7 @@ function sendChat() {
             </form>
           </ChatDock>
         </div>
-        <ConfirmActionButton v-if="queuedSteps > 0 && !settings.spectatorClean" class="confirm-move"
+        <ConfirmActionButton v-if="queuedSteps > 0 && !settings.spectatorClean && !settings.hideConfirmBar" class="confirm-move"
           :disabled="!gameStore.state.demoMode && !gameStore.isPlaying.value"
           :label="`Confirm ${plannedAction ?? 'move'} · ${queuedSteps} ${queuedSteps === 1 ? 'square' : 'squares'}`"
           :shortcut-code="settings.confirmKey"
@@ -12563,12 +12563,12 @@ function sendChat() {
           @activate="confirmMove()" />
         <!-- Owner 2026-07-13 (#7): the bottom Confirm-Blitz / Confirm-Block bar — mirrors the move-confirm bar
              (same Space binding shown), shown while the Blitz/Block stage is armed. Clickable too. -->
-        <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && gameStore.isPlaying.value"
+        <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="confirm-move confirm-aggro" tone="aggressive" :label="aggroConfirmLabel"
           :shortcut-code="settings.confirmKey" @activate="confirmAggroStage()" />
         <!-- #48 (owner, confirm-bar parity): the same bar for a nominated o66 MOVE route / FOUL (mirrors the
              blitz/block bar; Space also confirms via o66ConfirmPending). Pass/hand-off stay single-click (EX-1). -->
-        <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && gameStore.isPlaying.value"
+        <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="confirm-move confirm-aggro" tone="aggressive" :label="o66PendingConfirmLabel"
           :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
 
