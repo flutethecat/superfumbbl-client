@@ -4061,7 +4061,7 @@ async function pauseSpectatorView(): Promise<void> {
       // the offer was declined: drop the pin now so the die fades with the answer.
       const reviewRerollPin = transitionRerollPin;
       transitionRerollPin = null;
-      if (reviewRerollPin && rerolledRolls.length === 0 && state.rerollResultPending?.seq === reviewRerollPin.seq) state.rerollResultPending = null;
+      if (reviewRerollPin && rerolledRolls.length === 0) releaseRerollResultPin(reviewRerollPin.seq);
       const staged = await presentStages([
         { delayBefore: 0, present: () => showRolls(firstRolls) },
         { delayBefore: failBeat, present: () => {
@@ -4075,12 +4075,12 @@ async function pauseSpectatorView(): Promise<void> {
           // (raised below, before the first stage); it is released shortly after the result has been shown.
           if (reviewRerollPin && rerolledRolls.length > 0) {
             const pin = reviewRerollPin;
-            scheduleGameTimeout(() => { if (state.rerollResultPending?.seq === pin.seq) state.rerollResultPending = null; }, presentationMs(REROLL_RESULT_PIN_TAIL_MS));
+            scheduleGameTimeout(() => releaseRerollResultPin(pin.seq), presentationMs(REROLL_RESULT_PIN_TAIL_MS));
           }
         } },
         ...(reroll?.lonerFailed ? [{ delayBefore: presentationMs(REROLL_SPLASH_HOLD_MS), present: () => {} }] : []),
       ], signal);
-      if (!staged) { if (reviewRerollPin && state.rerollResultPending?.seq === reviewRerollPin.seq) state.rerollResultPending = null; return; }
+      if (!staged) { if (reviewRerollPin) releaseRerollResultPin(reviewRerollPin.seq); return; }
       if (projectile) {
         if (projectile.unknownAnimationType && !warnedAnimationTypes.has(projectile.unknownAnimationType)) {
           warnedAnimationTypes.add(projectile.unknownAnimationType);
@@ -7926,7 +7926,7 @@ function applyFrameContents(frame: QueuedFrame) {
       if (reRolledRolls.length > 0 && !playback.catchingUp) {
         const pin = { seq: (state.rerollResultPending?.seq ?? 0) + 1 };
         state.rerollResultPending = pin;
-        rerollStageTimers.push(scheduleGameTimeout(() => { if (state.rerollResultPending?.seq === pin.seq) state.rerollResultPending = null; },
+        rerollStageTimers.push(scheduleGameTimeout(() => releaseRerollResultPin(pin.seq),
           failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
       }
       // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
@@ -10253,6 +10253,17 @@ interface PlannerPlan {
   /** A successful re-roll can return the server to move selection without applying the attempted coordinate.
    *  In that exact case the same still-offered destination must be sent once more before the route can continue. */
   retryResolvedIdx: number | null;
+  /** Owner 10-08 (fork g1012 seq 74-90): the sent move the server SPENT on an activation roll without moving the
+   *  player. `idx` is the route index; `offerFloor` is the move-offer revision when the mark was set, so only a
+   *  square the server offers in a LATER frame can release the single resend.
+   *  - `bloodlust`: bb2025 BloodLustBehaviour:124 publishes MOVE_STACK = null when the failure is final (reroll
+   *    declined, reroll failed, or none on offer). The logged gaze-move then reaches bb2025 StepEndMoving:264-284,
+   *    which republishes the squares and pushes a Move sequence with no stack, so StepInitMoving:161-175 waits for a
+   *    NEW clientMove. A successful (re)roll clears the mark: the server then performs the original move itself.
+   *  The player has not moved; the same still-offered square must be sent once more, exactly as upstream's coach
+   *  clicks it again. An Animal Savagery lash-out against an opponent spends the move the same way but is NOT
+   *  marked (owner/Astra 10-08, see plannerOnModelApplied). */
+  spentMove: { idx: number; cause: 'bloodlust'; offerFloor: number } | null;
   /** Owner 09-15 (g1942731 cmd 770): the last FAILED flagged roll for the current square, pending a re-roll or the
    *  fall/turnover. When the server then drops the activation, the plan ended on that roll — an expected outcome,
    *  not a cancelled plan — so it retires quietly instead of the "lost the activation" warning. A later successful
@@ -10467,6 +10478,14 @@ function currentMoveOffer(
       ? occurrence : null;
 }
 let plannerPlan: PlannerPlan | null = null;
+/** Release the accepted-reroll result pin (state.rerollResultPending) if `seq` still owns it. The pin holds the
+ *  planner's spent-move resend (plannerAdvance), so its release is a planner trigger like an applied frame: every
+ *  hold needs a wake, never the abort watchdog. */
+function releaseRerollResultPin(seq: number): void {
+  if (state.rerollResultPending?.seq !== seq) return;
+  state.rerollResultPending = null;
+  if (plannerPlan) plannerAdvance();
+}
 let plannerSeq = 0;
 let answeredDialogInstanceKey: string | null = null;
 // The shared key separates dialog kinds/modes; object identity separates a byte-identical replacement
@@ -10695,7 +10714,7 @@ function plannerStart(input: {
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
-    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, failedRoll: null, sentOfferRevisions: [],
+    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, failedRoll: null, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
@@ -10846,23 +10865,47 @@ function plannerAdvance() {
         // Keep it strictly server-bounded: only a successful re-roll can arm this path, every owed roll must be
         // resolved, the destination must be freshly offered, and clearing the marker before send prevents a
         // duplicate applied frame from issuing it twice. A refused transport re-arms for the next model frame.
-        if (p.retryResolvedIdx === p.sentIdx && (!curRolls || curRolls.size === 0)) {
+        const rescuedByReRoll = p.retryResolvedIdx === p.sentIdx && (!curRolls || curRolls.size === 0);
+        // Owner 10-08 (fork g1012 seq 74-90, "a declined reroll holds the planner until it fails open"): a FINAL failed
+        // Bloodlust roll spends the move command without moving the player (PlannerPlan.spentMove). The server says
+        // the failure is final in the model itself: bb2025 BloodLustBehaviour:78/102 sets sufferingBloodLust in the
+        // same step execution that drops the move stack (:124); until then (the reroll offer is open, or an accepted
+        // reroll is still to be reported) nothing is sent. The resend is bounded like the rescued-dodge one below:
+        // the player is not at the sent destination, and the server has offered that exact destination AGAIN, from
+        // the player's current square, in a frame after the mark (and after the spent send). Without it the plan sat
+        // here for PLANNER_ABORT_MS.
+        const spent = p.spentMove?.idx === p.sentIdx ? p.spentMove : null;
+        const spentFinal = !!spent && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true;
+        if (rescuedByReRoll || spentFinal) {
+          // Astra 10-08: an ACCEPTED reroll that fails again is staged (splash, then the rerolled die). The roll
+          // beat stays: nothing is re-sent until that result has been shown. releaseRerollResultPin wakes the plan.
+          if (!rescuedByReRoll && state.rerollResultPending) return;
           const retry = p.route[p.sentIdx];
-          const priorRevision = p.sentOfferRevisions[p.sentIdx] ?? -1;
+          const priorRevision = Math.max(p.sentOfferRevisions[p.sentIdx] ?? -1, !rescuedByReRoll && spent ? spent.offerFloor : -1);
           const retryOffer = retry ? currentMoveOffer(p.playerId, retry, priorRevision) : null;
           if (!retryOffer) return;
           if (!retry || !moveSquareInfo(g).has(`${retry[0]},${retry[1]}`)) return;
+          const wasRescued = p.retryResolvedIdx === p.sentIdx;
           p.retryResolvedIdx = null;
+          p.spentMove = null; // cleared before the send: a duplicate applied frame cannot issue it twice
+          // The spent move never rolled its square: bind the owed Dodge/Rush/Pickup results from the fresh offer.
+          if (!rescuedByReRoll) p.squareResolutions[p.sentIdx] = plannerSquareResolutions(g, retry);
           const accepted = p.actKind === 'blitz' || p.actKind === 'blitzWalk'
             ? gameStore.o66BlitzMove(p.playerId, [retry], priorRevision)
             : gameStore.o66Move(p.playerId, [retry], priorRevision);
-          if (!accepted) { p.retryResolvedIdx = p.sentIdx; plannerClearAbort(); return; }
+          if (!accepted) {
+            if (wasRescued) p.retryResolvedIdx = p.sentIdx;
+            if (spentFinal) p.spentMove = spent;
+            plannerClearAbort();
+            return;
+          }
           p.sentOfferRevisions[p.sentIdx] = retryOffer.revision;
           plannerArmAbort();
         }
         return; // still walking to the last-sent square
       }
       if (p.retryResolvedIdx === p.sentIdx) p.retryResolvedIdx = null; // a late authoritative echo won the race
+      if (p.spentMove?.idx === p.sentIdx) p.spentMove = null; // the server moved the player after all
       if (curRolls && curRolls.size > 0) return; // arrived, but this square's flagged roll(s) haven't all resolved-successful yet
       if (p.sentIdx < p.route.length - 1) {
         // reached square N, its rolls resolved → send square N+1 (single square, live coordinateFrom). Idempotent:
@@ -14670,10 +14713,25 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
   if (p.phase === 'moving' && p.sentIdx >= 0) {
     const cur = p.squareResolutions[p.sentIdx];
     const target = p.route[p.sentIdx];
+    const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown }[] } | undefined)?.reports ?? [];
+    // Owner 10-08: Bloodlust is rolled on the activation's first command, BEFORE the move. A failure marks the sent
+    // square as possibly spent (plannerAdvance resends only once the model says the failure is final); a success,
+    // first roll or reroll, means the server carries the original move out itself.
+    // Owner/Astra 10-08: an Animal Savagery lash-out against an OPPONENT (bb2025 AnimalSavageryBehaviour:280-284)
+    // drops the move stack too, but its `animalSavagery` report deliberately arms NOTHING here: that plan still
+    // waits out the planner watchdog (PLANNER_ABORT_MS). The resend was withheld because (1) the drop-player frame
+    // re-offers the square BEFORE a possible apothecary dialog, so the single resend would be spent on a server
+    // that is not yet selecting a move, and (2) the armour/injury presentation gate does not hold the planner and
+    // has no wake of its own, so the walk could overtake the injury beat. Needs its own build.
+    for (const r of reps) {
+      if (String(r.reportId ?? '') === 'bloodLustRoll' && String(r.playerId ?? '') === p.playerId) {
+        if (r.successful === false) p.spentMove = { idx: p.sentIdx, cause: 'bloodlust', offerFloor: moveOfferRevision };
+        else if (p.spentMove?.cause === 'bloodlust') p.spentMove = null;
+      }
+    }
     if (cur && cur.size > 0 && target) {
       const coord = plannerCoord(p.playerId);
       const arrived = !!coord && coord[0] === target[0] && coord[1] === target[1];
-      const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown }[] } | undefined)?.reports ?? [];
       for (const r of reps) {
         if (String(r.playerId ?? '') !== p.playerId) continue;
         const kind = PLAN_RESOLUTION_REPORT[String(r.reportId ?? '')];
