@@ -8779,7 +8779,8 @@ function applyFrameContents(frame: QueuedFrame) {
     freeSelectPassOnModelApplied(); // spec-252 R-1: drop the free-select-pass arm once the activation leaves PASS
     gazeSentOnModelApplied(cmd); // owner 10-08: a CLIENT_GAZE spent by a final failed Bloodlust roll gives the gaze back
     gazeIntentOnModelApplied(); // W40: ack the menu declare; clear only after its live gaze activation leaves
-    gazeToMoveOnModelApplied(); // owner 10-08: a confirmed gaze→move change walks on its echo
+    gazeMoveResumeOnModelApplied(); // owner 10-08: a walk from a consumed gaze goes out on the gazeMove echo
+    foulAppearanceFailureOnModelApplied(cmd); // owner 10-08: a final failed Foul Appearance roll retires the plan at once
     if (game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock') {
       armOnTheBall(game.value, game.value.turnMode);
     }
@@ -8920,29 +8921,45 @@ function gazeIntentOnModelApplied() {
 }
 
 /**
- * Owner 10-08 (Astra P2): walking instead of gazing after a consumed gaze.
+ * Owner 10-08: moving after a consumed gaze, with the Hypnotic Gaze still usable afterwards
+ * ("Users should be able to perform hypnotic gaze after moving").
  *
  * A CLIENT_GAZE spent by a final failed Bloodlust roll leaves the server's action at the NON-moving `gaze`
  * (bb2025 StepInitMoving:334-337; PlayerAction.isMoving:68-71). StepEndMoving:250-255 + 342-345 pushes a fresh Move
  * sequence without refreshing the move squares (:278 is the moving branch only), and a raw CLIENT_MOVE there keeps
  * GAZE and the old defender, so StepHypnoticGaze:106 would roll the OLD gaze before any step (generator Move:30-37).
- * Upstream's client walks through an explicit action change instead: LogicModule.isMoveAvailable:625-627 offers Move
- * while the action is GAZE and MoveLogicModule.performAvailableAction:106-109 sends
- * sendActingPlayer(player, MOVE, jumping). StepInitMoving:239-246 answers with UtilServerSteps.changePlayerAction:76-83:
- * same player, so only the action changes (sufferingBloodLust and the used skills stay, UtilActingPlayer:75-87), and
- * updateMoveSquares re-publishes the squares under `move`. StepHypnoticGaze:106-111 then skips and clears the
- * defender. With the action `move` neither client offers the gaze again this activation (bb2025
- * declareGazeActionAtStart; here declaresAllowed needs an empty usedSkills list), so the coach confirms first.
  *
- * The confirmation is client-owned (the server asks nothing). Yes sends that one CLIENT_ACTING_PLAYER; the walk goes
- * out through the ordinary o66Move guard once the model shows `move` with its fresh offers. The applied frame is the
- * wake; the timeout below only gives the gaze back when the server never answers.
+ * The server's own rail for "walk, then gaze" is PlayerAction.GAZE_MOVE, the action every declared gaze starts in.
+ * StepInitMoving:239-246 takes CLIENT_ACTING_PLAYER {same player, gazeMove} without any check of the requested
+ * action and answers with UtilServerSteps.changePlayerAction:76-83: same player, so only the action changes
+ * (UtilActingPlayer:75-87: sufferingBloodLust, the used skills and the movement stay; nothing is rolled), and
+ * UtilServerPlayerMove.updateMoveSquares:78-86 re-publishes the squares because gazeMove is a moving action. From
+ * there the activation is an ordinary gaze move: a step skips StepHypnoticGaze (:106-111, which also clears the
+ * retained defender), Bloodlust is used (BloodLustBehaviour:81, no second roll), Hypnotic Gaze was never marked used
+ * (StepHypnoticGaze:123 did not run), a CLIENT_GAZE at any adjacent victim resolves normally (StepInitMoving:232-237),
+ * and StepEndMoving:269-270 keeps the activation open next to a gaze target. NOTHING is given up, so the coach is not
+ * asked: the walk click is the instruction.
+ *
+ * BEYOND UPSTREAM'S CLIENT: in this state the Java client offers only Move (LogicModule.isMoveAvailable,
+ * MoveLogicModule:108-112 -> sendActingPlayer(MOVE)); under MOVE neither client can gaze again in BB2025
+ * (declareGazeActionAtStart). The command sent here is the same CLIENT_ACTING_PLAYER with playerAction gazeMove
+ * instead of move: an existing command the server accepts, not one upstream's client sends in this state.
+ *
+ * ONE SERVER QUIRK REMAINS, only against a Foul Appearance victim. The server still holds the old defender until the
+ * first step runs, and the Move sequence rolls FOUL_APPEARANCE (generator Move:30, FoulAppearanceBehaviour:49-57)
+ * before HYPNOTIC_GAZE clears it: the first step away from a Foul Appearance victim rolls Foul Appearance. No command
+ * accepted at StepInitMoving clears the defender first, and upstream's GAZE->MOVE walk has the same roll. A final
+ * failure there does NOT end the activation (handleFailure:115-118 publishes END_PLAYER_ACTION for GAZE, block and
+ * blitz actions only): the step is not taken, the defender is cleared, the action stays gazeMove and the server
+ * waits for the next command. The owner ruled that this activation ends: see
+ * endActivationAfterFailedFoulAppearance.
+ *
+ * The walk goes out through the ordinary o66Move guard once the model shows `gazeMove` with its fresh offers. The
+ * applied frame is the wake; the timeout below only reports a server that never answered.
  */
-let gazeToMoveOffer: { playerId: string; route: [number, number][] } | null = null;
-let gazeToMovePending: { playerId: string; route: [number, number][]; seq: number; intent: GazeIntent | null } | null = null;
-let gazeToMoveSeq = 0;
-const GAZE_TO_MOVE_KEY = 'gazeToMove:';
-const GAZE_TO_MOVE_ACK_MS = 8000;
+let gazeMoveResumePending: { playerId: string; route: [number, number][]; seq: number } | null = null;
+let gazeMoveResumeSeq = 0;
+const GAZE_MOVE_RESUME_ACK_MS = 8000;
 
 /** My acting player holds a consumed gaze: the server action is `gaze`, the restored intent is live. */
 function gazeWalkNeedsConversion(playerId: string): boolean {
@@ -8953,76 +8970,162 @@ function gazeWalkNeedsConversion(playerId: string): boolean {
     && gameStore.hasLiveGazeIntent();
 }
 
-function dropGazeToMoveOffer() {
-  gazeToMoveOffer = null;
-  if (state.yesNo?.key.startsWith(GAZE_TO_MOVE_KEY)) clearYesNo();
-}
-
-/** A walk was asked for under the non-moving `gaze` action: ask before giving the gaze up. Sends nothing. */
-function offerGazeToMove(playerId: string, route: [number, number][]): false {
-  if (gazeToMovePending) { log('system', 'ignored: the change to a Move is already with the server'); return false; }
-  if (state.yesNo && !state.yesNo.key.startsWith(GAZE_TO_MOVE_KEY)) return false; // another question is open: answer it first
-  gazeToMoveOffer = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]) };
-  askYesNo({
-    key: `${GAZE_TO_MOVE_KEY}${playerId}`,
-    text: 'You\'ve declared a Hypnotic Gaze. Convert to a plain Move instead? The Gaze can\'t be used again this activation.',
-    yesLabel: 'Convert to Move',
-    noLabel: 'Keep Gaze',
-    onAnswer: (yes) => {
-      const offer = gazeToMoveOffer;
-      gazeToMoveOffer = null;
-      if (yes && offer) convertGazeToMove(offer.playerId, offer.route);
-    },
-  });
-  return false;
-}
-
-/** The coach confirmed: the one action change upstream's client sends (GAZE -> MOVE), then the walk on its echo. */
-function convertGazeToMove(playerId: string, route: [number, number][]): boolean {
-  if (!game.value || route.length === 0 || gazeToMovePending || !gazeWalkNeedsConversion(playerId)) {
-    log('system', 'ignored: no consumed Hypnotic Gaze to convert to a Move');
+/** A walk was asked for under the non-moving `gaze` action. GAZE -> GAZE_MOVE: the one action change, then the walk
+ *  on its echo. Nothing is given up, so nothing is asked. Returns whether the action change was sent. The gaze intent and any armed victim stay
+ *  exactly as they are: after the echo this is an ordinary gaze move activation. */
+function resumeGazeMove(playerId: string, route: [number, number][]): boolean {
+  if (gazeMoveResumePending) { log('system', 'ignored: the change back to a gaze move is already with the server'); return false; }
+  if (foulAppearanceEndLatched(playerId)) return refuseAfterFoulAppearance();
+  if (!game.value || route.length === 0 || !gazeWalkNeedsConversion(playerId)) {
+    log('system', 'ignored: no consumed Hypnotic Gaze to move from');
     return false;
   }
-  if (!sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: 'move', leaping: isJumping() })) {
-    log('system', '⚠ Convert to Move refused — the Hypnotic Gaze stays; try again once the prompt clears.');
+  if (!sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: 'gazeMove', leaping: isJumping() })) {
+    log('system', '⚠ Move refused — the Hypnotic Gaze stays; try again once the prompt clears.');
     return false;
   }
-  const seq = ++gazeToMoveSeq;
-  gazeToMovePending = { playerId, route, seq, intent: state.gazeIntent ? { ...state.gazeIntent } : null };
-  // The coach gave the gaze up: no victim click may send it while the action change is in flight.
+  const seq = ++gazeMoveResumeSeq;
+  gazeMoveResumePending = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]), seq };
   plannerClearAbort();
   plannerSet(null);
-  state.gazeIntent = null;
   gazeSent = null;
-  log('system', `play: CONVERT gaze→move ${playerName(game.value, playerId)} (server resolves)`);
+  log('system', `play: RESUME gaze move ${playerName(game.value, playerId)} (gaze→gazeMove; the Hypnotic Gaze stays available)`);
   scheduleGameTimeout(() => {
-    const pending = gazeToMovePending;
-    if (pending?.seq !== seq) return;
-    gazeToMovePending = null;
-    const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
-    // Never answered: the server still holds the gaze action, so the coach gets the gaze back as it was.
-    if (pending.intent && !state.gazeIntent && String(acting?.playerId ?? '') === playerId
-        && String(acting?.playerAction ?? '') === 'gaze' && iControlPlayer(playerId)) {
-      state.gazeIntent = { ...pending.intent, seq: pending.intent.seq + 1 };
-    }
-    const text = 'Move not started — the server did not answer the change to a Move.';
+    if (gazeMoveResumePending?.seq !== seq) return;
+    gazeMoveResumePending = null;
+    const text = 'Move not started — the server did not answer the change back to a gaze move.';
     log('system', `⚠ ${text}`);
     state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
-  }, GAZE_TO_MOVE_ACK_MS);
+  }, GAZE_MOVE_RESUME_ACK_MS);
   return true;
 }
 
-/** Applied frame: retire a stale question; on the `move` echo walk the confirmed route through the normal guard. */
-function gazeToMoveOnModelApplied() {
-  if (gazeToMoveOffer && !gazeWalkNeedsConversion(gazeToMoveOffer.playerId)) dropGazeToMoveOffer();
-  const pending = gazeToMovePending;
+/** Applied frame: retire a stale question; on the `gazeMove` echo walk the requested route through the normal guard. */
+function gazeMoveResumeOnModelApplied() {
+  const pending = gazeMoveResumePending;
   if (!pending) return;
   const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
   const action = String(acting?.playerAction ?? '');
   if (String(acting?.playerId ?? '') === pending.playerId && action === 'gaze') return; // not echoed yet
-  gazeToMovePending = null;
-  if (String(acting?.playerId ?? '') !== pending.playerId || action !== 'move') return;
+  gazeMoveResumePending = null;
+  if (String(acting?.playerId ?? '') !== pending.playerId || action !== 'gazeMove') return;
   gameStore.o66Move(pending.playerId, pending.route);
+}
+
+/**
+ * Owner 10-08: a FINAL failed Foul Appearance roll never leaves a plotted plan waiting for the watchdog, and it ends
+ * the activation.
+ *
+ * The acting player's last failed `foulAppearanceRoll` for MY seat, followed until the failure is final. The server
+ * says so in the model: FoulAppearanceBehaviour.handleFailure:104 sets hasBlocked (and :119 clears the defender) only
+ * when no reroll is offered, the offer was declined or the reroll failed too; while an offer is open neither is set.
+ * A success (first roll or reroll) forgets it.
+ *
+ * For a gaze (action GAZE), a block or a blitz the server ends the activation itself (:115-118) and feeding follows
+ * as the server dictates; the client adds nothing. For a walk step under `gazeMove` / `move` (only possible against
+ * the defender retained from a consumed gaze) the server keeps the activation alive: there the plan is retired with
+ * the usual notice, the gaze intent and armed victim are dropped, further move / gaze input for that activation is
+ * refused (foulAppearanceEnd) and endActivationAfterFailedFoulAppearance sends the ordinary End Activation.
+ */
+let foulAppearanceFailure: { playerId: string; turnKey: string } | null = null;
+/** The activation a final failed Foul Appearance roll ended on a walk: no more steps or gazes for it (owner 10-08). */
+let foulAppearanceEnd: { playerId: string; turnKey: string; endRequested: boolean } | null = null;
+const FOUL_APPEARANCE_END_TEXT = 'The Foul Appearance roll failed — this activation is over.';
+
+/** True while `playerId` is still the acting player of an activation that a failed Foul Appearance roll ended. */
+function foulAppearanceEndLatched(playerId: string): boolean {
+  const latch = foulAppearanceEnd;
+  const g = game.value;
+  if (!latch || !g || latch.playerId !== playerId) return false;
+  const acting = g.actingPlayer as { playerId?: string | null } | undefined;
+  return currentTurnKey(g) === latch.turnKey && String(acting?.playerId ?? '') === playerId;
+}
+function refuseAfterFoulAppearance(): false {
+  log('system', `ignored: ${FOUL_APPEARANCE_END_TEXT}`);
+  state.actionNotice = { text: FOUL_APPEARANCE_END_TEXT, seq: (state.actionNotice?.seq ?? 0) + 1 };
+  return false;
+}
+
+function foulAppearanceFailureOnModelApplied(cmd?: Record<string, unknown>) {
+  const g = game.value;
+  if (!g || !play.active) { foulAppearanceFailure = null; foulAppearanceEnd = null; return; }
+  if (foulAppearanceEnd && !foulAppearanceEndLatched(foulAppearanceEnd.playerId)) foulAppearanceEnd = null; // the activation is gone
+  const reports = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown }[] } | undefined)?.reports ?? [];
+  for (const report of reports) {
+    if (String(report.reportId ?? '') !== 'foulAppearanceRoll') continue;
+    const roller = String(report.playerId ?? '');
+    if (report.successful === false && roller && myPlayIds(g).has(roller)) foulAppearanceFailure = { playerId: roller, turnKey: currentTurnKey(g) };
+    else if (foulAppearanceFailure?.playerId === roller) foulAppearanceFailure = null;
+  }
+  foulAppearanceFailureSettle();
+}
+
+/** Also the wake after an accepted reroll's staged result has been shown (releaseRerollResultPin). */
+function foulAppearanceFailureSettle() {
+  const g = game.value;
+  if (!g) return;
+  const failure = foulAppearanceFailure;
+  if (failure) {
+    if (currentTurnKey(g) !== failure.turnKey) { foulAppearanceFailure = null; return; }
+    const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null; hasBlocked?: unknown } | undefined;
+    const stillActing = String(acting?.playerId ?? '') === failure.playerId;
+    // Not final yet: the reroll offer is open or being answered (handleFailure has not run), or the rerolled die is
+    // still to be shown (roll-beat hold).
+    if (stillActing && acting?.hasBlocked !== true) return;
+    if (state.rerollResultPending) return;
+    foulAppearanceFailure = null;
+    if (plannerPlan?.playerId === failure.playerId) plannerFlush('the Foul Appearance roll failed');
+    const action = String(acting?.playerAction ?? '');
+    // Any other action the server ends itself (FoulAppearanceBehaviour:115-118): nothing to do here.
+    // Astra P3 (10-08): BB2020 rolls Foul Appearance at gaze TARGET SELECTION (SelectGazeTarget:34-38) while the action
+    // is still gazeMove, and StepSelectGazeTargetEnd:76-100 ends that activation itself. That failure leaves a target
+    // selection state in the model (targetSelectionState.failed()); the BB2025 consumed-gaze walk has none. Only the
+    // walk is ours to end.
+    const targetSelection = (g.fieldModel as { targetSelectionState?: unknown } | undefined)?.targetSelectionState;
+    if (stillActing && (action === 'gazeMove' || action === 'move') && targetSelection == null) {
+      if (state.gazeIntent?.actingPlayerId === failure.playerId) state.gazeIntent = null; // the gaze is over
+      if (gazeSent?.actingPlayerId === failure.playerId) gazeSent = null;
+      if (gazeMoveResumePending?.playerId === failure.playerId) gazeMoveResumePending = null;
+      foulAppearanceEnd = { playerId: failure.playerId, turnKey: failure.turnKey, endRequested: false };
+    }
+  }
+  const latch = foulAppearanceEnd;
+  if (latch && !latch.endRequested && endActivationAfterFailedFoulAppearance(latch.playerId)) latch.endRequested = true;
+}
+
+/**
+ * OWNER RULING (Jay, 10-08), verbatim: "The player's activation should immediately end after the failed foul
+ * appearance to be clear, we should not be permitting additional steps. That *should* be the flow."
+ *
+ * ISOLATED so it can be reviewed and removed in one piece. The server already ends the activation after a final
+ * failed Foul Appearance roll for a gaze, a block and a blitz (bb2025 FoulAppearanceBehaviour.handleFailure:115-118).
+ * It leaves it ALIVE in one case: a WALK step under `gazeMove` (or `move`) that rolled Foul Appearance against the
+ * defender retained from a gaze consumed by a failed Bloodlust (see the note above gazeMoveResumePending; no command
+ * the server accepts there clears that defender first). Only there does this send anything: the ordinary End
+ * Activation (gameStore.endActivation -> CLIENT_ACTING_PLAYER with no player; StepInitMoving:259-262 -> END_MOVING
+ * -> EndPlayerAction with feeding allowed), a coach command upstream's server accepts. The server then runs its own
+ * end of activation: a vampire suffering Bloodlust is asked to bite (StepInitFeeding:136-160) and the client shows
+ * that dialog like any other. No confirmation is carried by this call: bb2025 asks none for an End at StepInitMoving,
+ * and if a server ever did the coach would be asked.
+ *
+ * Returns whether the End was requested; the caller requests it once per ended activation. Sends nothing unless ALL
+ * hold: my player and my turn, that player still the acting player (the server has not ended it), the action still
+ * a walk (`gazeMove` / `move`), an ordinary turn, and no server dialog or client question open. Until the guards
+ * hold the caller retries on later applied frames, while foulAppearanceEnd refuses further steps and gazes locally.
+ */
+function endActivationAfterFailedFoulAppearance(playerId: string): boolean {
+  const g = game.value;
+  if (!g || !play.active || !iControlPlayer(playerId)) return false;
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  const action = String(acting?.playerAction ?? '');
+  if (String(acting?.playerId ?? '') !== playerId || (action !== 'gazeMove' && action !== 'move')) return false;
+  if (String(g.turnMode ?? '') !== 'regular' || g.dialogParameter != null || state.yesNo) return false;
+  log('system', `play: Foul Appearance failed — ending ${playerName(g, playerId)}'s activation (owner ruling 10-08)`);
+  // Astra P3 (10-08): requested only if the End really went out. A refused send (transport or a late gate) leaves the
+  // request open, so the next applied frame retries; the latch keeps refusing steps meanwhile.
+  const sentBefore = emittedCommandCount;
+  gameStore.endActivation();
+  return emittedCommandCount > sentBefore;
 }
 
 /**
@@ -9770,7 +9873,7 @@ function resetPlayback() {
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
   gazeSent = null; // nor is a spent gaze given back across one
-  gazeToMovePending = null; dropGazeToMoveOffer(); // nor a gaze→move change or its question
+  gazeMoveResumePending = null; foulAppearanceFailure = null; foulAppearanceEnd = null; // nor a gaze→gazeMove change or a followed Foul Appearance roll
   gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
@@ -10966,6 +11069,7 @@ function releaseRerollResultPin(seq: number): void {
   state.rerollResultPending = null;
   if (plannerPlan) plannerAdvance();
   gazeSentRestore(); // owner 10-08: the same wake for a gaze spent by a failed Bloodlust reroll
+  foulAppearanceFailureSettle(); // and for a Foul Appearance reroll that failed again
 }
 /** Viewer-visible beat a HELD armour roll gets before the Animal Savagery resend starts the walk (owner 09-05). */
 const PLANNER_LASH_ARMOUR_BEAT_MS = 450;
@@ -23859,7 +23963,7 @@ export const gameStore = {
     }
     plannerClearAbort();
     plannerSet(null);
-    dropGazeToMoveOffer(); // the coach gazes after all: the walk question is moot
+    gazeMoveResumePending = null; // the coach gazes after all: no walk follows the action change
     state.gazeIntent = null;
     // Owner 10-08: remembered until the server shows what became of this command (see gazeSent).
     gazeSent = { actingPlayerId: intent!.actingPlayerId, victimId, seq: intent!.seq, bloodlustFailed: false };
@@ -23902,9 +24006,9 @@ export const gameStore = {
     }
   },
 
-  clearGazeIntent() { state.gazeIntent = null; gazeSent = null; gazeToMovePending = null; dropGazeToMoveOffer(); },
+  clearGazeIntent() { state.gazeIntent = null; gazeSent = null; gazeMoveResumePending = null; },
 
-  /** Owner 10-08: a walk from here first needs the gaze→move change (a consumed gaze, server action `gaze`). */
+  /** Owner 10-08: a walk from here first needs the gaze→gazeMove change (a consumed gaze, server action `gaze`). */
   gazeWalkNeedsConversion(playerId: string): boolean { return gazeWalkNeedsConversion(playerId); },
 
   /** Send a server-offered field target through the established coordinate wire. BB2025 Punt uses this after
@@ -23990,9 +24094,10 @@ export const gameStore = {
     const acting = (game.value.actingPlayer ?? {}) as { playerId?: string | null; playerAction?: string | null };
     if (acting.playerId !== playerId) { log('system', 'ignored: server has not confirmed this player as acting'); return false; }
     const action = String(acting.playerAction ?? '');
+    if (foulAppearanceEndLatched(playerId)) return refuseAfterFoulAppearance(); // owner 10-08: no further steps
     if ((action === 'gazeMove' || action === 'gaze') && !gameStore.hasLiveGazeIntent()) return false;
-    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs upstream's GAZE→MOVE change first.
-    if (action === 'gaze') return offerGazeToMove(playerId, [toSquare]);
+    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs the GAZE→GAZE_MOVE change first.
+    if (action === 'gaze') return resumeGazeMove(playerId, [toSquare]);
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
     if (!from) return false;
     // ClientStatePassBlock.java:32 and ClientStateKickoffReturn.java:30 both use the shared move state;
@@ -24037,9 +24142,10 @@ export const gameStore = {
     const acting = (game.value.actingPlayer ?? {}) as { playerId?: string | null; playerAction?: string | null };
     if (acting.playerId !== playerId) { log('system', 'ignored: server has not confirmed this player as acting'); return false; }
     const action = String(acting.playerAction ?? '');
+    if (foulAppearanceEndLatched(playerId)) return refuseAfterFoulAppearance(); // owner 10-08: no further steps
     if ((action === 'gazeMove' || action === 'gaze') && !gameStore.hasLiveGazeIntent()) return false;
-    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs upstream's GAZE→MOVE change first.
-    if (action === 'gaze') return offerGazeToMove(playerId, path);
+    // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs the GAZE→GAZE_MOVE change first.
+    if (action === 'gaze') return resumeGazeMove(playerId, path);
     // Hit & Run sends one CLIENT_FIELD_COORDINATE per step and closes with CLIENT_END_TURN.
     if (String(game.value.turnMode ?? '') === 'hitAndRun') {
       const dest = path[path.length - 1]!;
@@ -24156,7 +24262,7 @@ export const gameStore = {
     }
     state.gazeIntent = null;
     gazeSent = null; // the coach ended the activation: a spent gaze is not given back
-    gazeToMovePending = null; dropGazeToMoveOffer();
+    gazeMoveResumePending = null;
     // Spec S15B: Activate then End Activation with no step made: exactly ONE command, in place of the ordinary end.
     const activate = options.rollActivate ? liveBigGuyActivateIntent(game.value) : null;
     if (activate) {

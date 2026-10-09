@@ -37,15 +37,6 @@ export function gazeTargetClick(intent: GazeIntent | null, candidateId: string |
  */
 export type GazeVictimClick = 'confirm' | 'arm' | 'approach' | 'refused' | 'ordinary';
 
-/**
- * The server action is the NON-moving `gaze` (PlayerAction.isMoving:68-71): a CLIENT_GAZE was already taken and not
- * rolled (a final failed Bloodlust roll). Walking from here needs the GAZE -> MOVE action change, which gives the gaze
- * up, so there is no walk-to-contact: only a victim adjacent to the gazer's current square can still be gazed.
- */
-export function gazeWalkSpent(game: GameJson): boolean {
-  return String((game.actingPlayer as { playerAction?: string | null } | null | undefined)?.playerAction ?? '') === 'gaze';
-}
-
 export function gazeVictimClick(game: GameJson, intent: GazeIntent | null, clickedId: string): GazeVictimClick {
   if (!intent || intent.phase !== 'active') return 'ordinary';
   if (!canNominateGazeVictim(game, intent.actingPlayerId, clickedId)) return 'ordinary';
@@ -58,7 +49,7 @@ export function gazeVictimClick(game: GameJson, intent: GazeIntent | null, click
     Math.abs(actor.playerCoordinate[0] - victim.playerCoordinate[0]),
     Math.abs(actor.playerCoordinate[1] - victim.playerCoordinate[1]),
   ) === 1;
-  if (!adjacent) return gazeWalkSpent(game) ? 'refused' : 'approach';
+  if (!adjacent) return 'approach';
   if (gazeConfirmRefusalReason(game, { ...intent, victimId: clickedId }) !== null) return 'refused';
   return (intent.victimId ?? intent.pendingVictimId) === clickedId ? 'confirm' : 'arm';
 }
@@ -190,11 +181,7 @@ export function gazeConfirmRefusalReason(game: GameJson, intent: GazeIntent | nu
     Math.abs(actor.playerCoordinate[0] - victim.playerCoordinate[0]),
     Math.abs(actor.playerCoordinate[1] - victim.playerCoordinate[1]),
   ) === 1;
-  if (!adjacent) {
-    return gazeWalkSpent(game)
-      ? 'the victim is not adjacent, and walking now gives up the Hypnotic Gaze'
-      : 'the gazer is not adjacent to the nominated victim yet';
-  }
+  if (!adjacent) return 'the gazer is not adjacent to the nominated victim yet';
   return null;
 }
 
