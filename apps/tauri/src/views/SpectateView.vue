@@ -150,7 +150,7 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { actingHasBlocked, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, endActivationPromptKind, endRowClearsArmsBeforeEnding, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -7814,7 +7814,11 @@ function clearO66Arms() {
 
 // R3: every context-menu activation end owns the same planner cleanup and guarded wire path.
 function endActivationFromMenu() {
-  clearO66Arms();
+  // g1951755 (Elyod 10-09): when the end ASKS first, the prompt owns the cleanup (Confirm clears, Go back keeps the
+  // selection + movement overlay). Clearing here left a blitzer with movement remaining and no way to use it.
+  const endGame = gameStore.game.value;
+  const endPromptKind = endActivationPromptKind({ clientState: endGame ? deriveClientState(endGame, o66Ctx()) : '', gazeIntentLive: !!gameStore.state.gazeIntent });
+  if (endRowClearsArmsBeforeEnding({ promptKind: endPromptKind, promptEnabled: !!endPromptKind && endActivationConfirmEnabled(endPromptKind, settings) })) clearO66Arms();
   gameStore.cancelPlan();
   ctxMenu.visible = false;
   requestEndActivation();

@@ -32,6 +32,25 @@ export function declaredActionEndConfirmKind(state: ClientStateId | '' | null | 
 /** Spec S15B: how an end-activation confirm was opened. An explicit End gesture (End row, click on self) may roll a held
  *  Big Guy Activate intent; Esc and every other cancel gesture never does. */
 export type EndActivationOrigin = 'explicit' | 'cancel';
+/** The End Activation prompt an End gesture opens in this client state (null = nothing asks: the end goes straight to
+ *  the wire). The same order SpectateView.requestEndActivation dispatches in. */
+export function endActivationPromptKind(input: {
+  clientState: ClientStateId | '' | null | undefined; gazeIntentLive: boolean;
+}): EndActivationConfirmKind | null {
+  if (requiresBlitzEndConfirmation(input.clientState)) return 'blitz';
+  if (input.clientState === 'PUNT') return 'punt';
+  return declaredActionEndConfirmKind(input.clientState) ?? (input.gazeIntentLive ? 'generic' : null);
+}
+/** Bug report 10-09 (Elyod, FUMBBL g1951755, 1.0.151): "I blitzed ... pushed it twice, and then, with movement
+ *  remaining, was unable to dodge/move away". The End Activation row (and a right-click on the acting player whose menu
+ *  holds nothing else, e.g. a blitzer after his block) tore the planner arms down - selection, movement overlay, route -
+ *  BEFORE the "End your blitz?" prompt was answered. "Go back" then left the server's blitzMove with no movement
+ *  surface: nothing re-arms it until the next frame, and the server sends none while it waits for the coach.
+ *  When a prompt is about to ask, the prompt owns the cleanup: Confirm clears (confirmEndActivation), Go back leaves
+ *  the activation exactly as it was. True = no prompt will open, so the arms are cleared now (the pre-prompt R3 path). */
+export function endRowClearsArmsBeforeEnding(input: { promptKind: EndActivationConfirmKind | null; promptEnabled: boolean }): boolean {
+  return !(input.promptKind !== null && input.promptEnabled);
+}
 /** Astra 10-04 / 10-07 (P3): a client confirmation (End Activation prompt, End Turn warning) belongs to the activation
  *  it opened in. It is retired, sending nothing, once the turn is no longer mine or the acting player changed. */
 export function confirmationOutlivedActivation(mine: boolean, actingId: string, openedForActingId: string): boolean {
