@@ -14,7 +14,7 @@ import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
   PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceSide, pgGaugeX, pgLuck, pgOdds, pgZ,
-  postGamePublic, type PgMvpCard, type PostGameSnapshot, type Side,
+  postGamePublic, type PgMvpCard, type PostGameSnapshot, type RosterRowExtra, type Side,
 } from '../game/postGameProjection';
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
@@ -65,11 +65,9 @@ const postGamePhase = defineModel<'mvp' | 'stats' | 'roster'>('phase', { default
 const diceModalOpen = ref(false);
 const diceSide = ref<Side>('home');
 const selectedRosterTeam = ref<Side>(props.defaultRosterSide);
-const pgMvpSelected = ref<{ home: string | null; away: string | null }>({ home: null, away: null });
-function selectPgMvp(side: Side, playerId: string) { pgMvpSelected.value[side] = playerId; }
 watch(() => props.snapshot.key, () => {
   postGamePhase.value = 'mvp'; diceModalOpen.value = false; diceSide.value = 'home';
-  selectedRosterTeam.value = props.defaultRosterSide; pgMvpSelected.value = { home: null, away: null };
+  selectedRosterTeam.value = props.defaultRosterSide;
 });
 watch(() => props.defaultRosterSide, (s) => { selectedRosterTeam.value = s; });
 watch(() => props.showStats, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
@@ -77,7 +75,7 @@ watch(() => props.showStats, (on) => { if (!on) diceModalOpen.value = false; });
 const pgMvpCards = computed<Record<Side, PgMvpCard | null>>(() => {
   const out: Record<Side, PgMvpCard | null> = { home: null, away: null };
   for (const side of ['home', 'away'] as const) {
-    const playerId = pgMvpSelected.value[side] ?? pg.value[side].mvps[0]?.playerId;
+    const playerId = pg.value[side].mvps[0]?.playerId;
     if (playerId) out[side] = mvpCardFor(game.value, side, playerId, portrait(playerId));
   }
   return out;
@@ -92,6 +90,19 @@ const pgMvpCardList = computed<Record<Side, PgMvpCard[]>>(() => {
     } else {
       const selected = pgMvpCards.value[side];
       out[side] = selected ? [selected] : [];
+    }
+  }
+  return out;
+});
+// Owner 10-09: each team's MVP panel is the roster component (PostGameRoster) pinned to that team and narrowed to the
+// players the SERVER awarded; while the roulette spins nothing is listed yet. `awards` marks the row (x2 on a double).
+const pgMvpRows = computed<Record<Side, { ids: string[]; extras: Record<string, RosterRowExtra> }>>(() => {
+  const out: Record<Side, { ids: string[]; extras: Record<string, RosterRowExtra> }> = { home: { ids: [], extras: {} }, away: { ids: [], extras: {} } };
+  for (const side of ['home', 'away'] as const) {
+    if (roll.value[side].phase === 'cycling') continue;
+    for (const m of pg.value[side].mvps) {
+      out[side].ids.push(m.playerId);
+      out[side].extras[m.playerId] = { awards: m.awards };
     }
   }
   return out;
@@ -163,26 +174,23 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 
       <!-- Phase: MVP (server-decided award, see postGameSide's `mvps`) -->
       <section v-if="postGamePhase === 'mvp'" class="pg-mvp">
-        <div v-for="side in [pg.home, pg.away]" :key="side.team" class="pg-mvp-team">
-          <div class="pg-mvp-head">
-            <img v-if="side.logo" :src="side.logo" alt="" />
-            <span>{{ side.team }}</span>
-          </div>
-          <!-- #25-v2 (owner 2026-07-14): active reveal. ⚖ the roulette lands on side.mvps (the SERVER award). -->
-          <div v-if="roll[side.which].phase === 'cycling'" class="pg-mvp-roulette" aria-live="polite">
-            <span class="pg-star">★</span>
-            <span class="pg-mvp-name pg-mvp-spin">{{ roll[side.which].display }}</span>
-          </div>
-          <div v-else-if="side.mvps.length" class="pg-mvp-body">
-            <ul>
-              <li v-for="m in side.mvps" :key="m.playerId" class="pg-mvp-row"
-                :class="{ selected: pgMvpCardList[side.which].some((c) => c.playerId === m.playerId) }" @click="selectPgMvp(side.which, m.playerId)">
+        <!-- Owner 10-09: each team's MVP panel IS the roster pane (PostGameRoster, the Helmet / H pop-out's content) pinned
+             to that team - same header, same row, no team switch - listing the awarded player(s), marked as MVP. The
+             roulette / awaiting / no-MVP line and the winner's portrait card ride in its slots. -->
+        <div v-for="side in [pg.home, pg.away]" :key="side.which" class="pg-mvp-team" :data-side="side.which">
+          <PostGameRoster class="pg-mvp-roster" :side="side.which" :switcher="false" two-line :teams="pg" :portrait="portrait" :local-side="localSide"
+            :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="pgMvpRows[side.which].ids" :extras="pgMvpRows[side.which].extras">
+            <template #status>
+              <!-- #25-v2 (owner 2026-07-14): active reveal. ⚖ the roulette lands on side.mvps (the SERVER award). -->
+              <div v-if="roll[side.which].phase === 'cycling'" class="pg-mvp-roulette" aria-live="polite">
                 <span class="pg-star">★</span>
-                <span class="pg-mvp-name">{{ m.name }}</span>
-                <span class="pg-mvp-pos">{{ m.position }}</span>
-                <span v-if="m.awards > 1" class="pg-mvp-x">×{{ m.awards }}</span>
-              </li>
-            </ul>
+                <span class="pg-mvp-name pg-mvp-spin">{{ roll[side.which].display }}</span>
+              </div>
+              <template v-else-if="side.mvps.length" />
+              <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
+              <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
+            </template>
+            <template v-if="roll[side.which].phase !== 'cycling'" #footer>
             <!-- Owner 09-14: the selected winner's in-game portrait card, lifted onto the end screen; a concession
                  hands the winner two MVPs and BOTH cards show. -->
             <template v-for="card in pgMvpCardList[side.which]" :key="card.playerId">
@@ -202,9 +210,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 </div>
               </div>
             </template>
-          </div>
-          <p v-else-if="roll[side.which].phase === 'none'" class="pg-mvp-none">{{ pgMvpConceded[side.which] ? 'No MVP — conceded' : 'No MVP awarded' }}</p>
-          <p v-else class="pg-mvp-none pg-mvp-awaiting">Awaiting result</p>
+            </template>
+          </PostGameRoster>
         </div>
       </section>
 
@@ -642,17 +649,13 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.45);
 }
 .pg-mvp-head img { width: 30px; height: 30px; object-fit: contain; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6)); }
-.pg-mvp ul { list-style: none; margin: 0; padding: 0; }
-.pg-mvp li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; }
+/* Owner 10-09: the roster component is the MVP panel; the grid above already pads it, and each team column may narrow. */
+.pg-mvp .pg-mvp-roster { padding: 0; min-width: 0; }
+.pg-mvp-team { min-width: 0; }
 .pg-star { color: var(--ui-accent); }
 .pg-mvp-name { font-weight: 700; }
-.pg-mvp-pos { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); }
-.pg-mvp-x { margin-left: auto; color: var(--ui-accent); }
 .pg-mvp-none { color: var(--ui-text-dim); font-style: italic; }
 /* Owner 09-14: MVP rows select; the selected winner's portrait card sits under the list. */
-.pg-mvp-row { cursor: pointer; padding: 5px 8px; border-radius: 6px; }
-.pg-mvp-row:hover { background: color-mix(in srgb, var(--ui-surface-2) 70%, var(--ui-text) 8%); }
-.pg-mvp-row.selected { background: color-mix(in srgb, var(--ui-surface-2) 60%, var(--ui-text) 14%); }
 /* Owner 09-14 UAT: the portrait is a FIXED box (never stretched by a long name / advancement line) and its sprite is
    fitted inside it (the in-game card's 1.35 zoom crop is not applied here) so the MVP tab never overflows or scrolls. */
 .pg-mvp-card { display: flex; gap: 12px; margin-top: 6px; padding: 8px; align-items: flex-start; }

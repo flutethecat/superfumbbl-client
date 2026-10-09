@@ -47,6 +47,7 @@ import BlockDieFace from '../components/BlockDieFace.vue';
 import BlockChooserCopy from '../components/BlockChooserCopy.vue';
 import EligibleRosterPicker from '../components/EligibleRosterPicker.vue';
 import ChatDock from '../components/ChatDock.vue';
+import { useChatOverInducements } from '../game/chatOverInducements';
 import ChatToast from '../components/ChatToast.vue';
 import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/ballOutView';
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
@@ -88,8 +89,9 @@ import { resolveRuntimeFumbblAsset } from '../game/fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from '../game/teamCrests';
 import { teamDiceTally, teamLogo } from '../game/gameStatRows';
 import PostGamePanel from '../components/PostGamePanel.vue';
+import EndGamePickPane from '../components/EndGamePickPane.vue';
 import RosterPopout from '../components/RosterPopout.vue';
-import { mvpConcededSides, postGameKey, postGamePublic, type PostGameSnapshot } from '../game/postGameProjection';
+import { assignTouchdownPanel, mvpConcededSides, postGameKey, postGamePublic, type PostGameSnapshot, type RosterPick, type RosterRowExtra } from '../game/postGameProjection';
 import { savePostGameSnapshot } from '../game/postGameCache';
 import { revealedInducementCards } from '../game/inducementRevealCards';
 import { shouldShowOpponentSetupNotice } from '../game/opponentSetupNotice';
@@ -483,11 +485,10 @@ function growChatInput() {
 }
 function onChatKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
-  else if (e.key === 'Escape') { e.preventDefault(); chatInputEl.value?.blur(); } // Esc leaves the entry, nothing else
+  else if (e.key === 'Escape') { e.preventDefault(); chatInputEl.value?.blur(); chatOverInduce.lower(); } // Esc leaves the entry (and drops the dock back under an open inducement phase), nothing else
 }
-/** Owner 09-23: while the chat entry has focus the dock rides ABOVE a modal phase (inducements push it under the
- *  full-host shader, z 43 < 44) — Enter must reach a chat you can see and type into at any point of the game. */
-const chatFocused = ref(false);
+// Owner 09-23 / 10-09: the dock rides ABOVE the inducement phase while the coach is using it — see
+// `chatOverInduce` (declared beside `inducePhaseOpen`, which it watches).
 const pitchHost = ref<HTMLDivElement | null>(null);
 // Owner 10-01: the Shift+click mark-label field — a small input over the pitch for the square / player the coach just
 // marked. Client-local only: the text goes to the renderer (setSquareMarkLabel / setPlayerMarkLabel) and nowhere else —
@@ -1341,13 +1342,18 @@ watch(
     // don't nag when the chat window is already focused, or it's the user's own line.
     // Owner ruling 2026-08-17: a POPPED-OUT chat panel is always on screen, so it counts as
     // focused too — no toast when the panel itself is showing the line.
-    if ((panelTab.value === 'chat' && !panelCollapsed.value) || settings.chatPoppedOut) continue;
+    // Owner 10-09: ...except a docked Chat tab the inducement panes are covering — that line was NOT seen; it counts
+    // on the phase's Chat button (`induceChatUnseen`) instead of the tab badge / a toast under the panes.
+    const dockedChatShowing = panelTab.value === 'chat' && !panelCollapsed.value;
+    const dockCovered = dockedChatShowing && inducePhaseOpen.value && !chatRaisedOverInducements.value;
+    if ((dockedChatShowing && !dockCovered) || settings.chatPoppedOut) continue;
     const localCoach = (settings.activeServerTarget === 'fork' ? settings.coach40k : settings.coach)
       .trim().toLowerCase();
     if (localCoach && sender.trim().toLowerCase() === localCoach) continue;
     // owner ruling 2026-08-17: chat disabled — suppress DISPLAY only (badge + toast); the
     // line is already stored in chatEntries, so history is intact if chat is re-enabled.
     if (settings.chatDisabled) continue;
+    if (dockCovered) { induceChatUnseen.value = Math.min(100, induceChatUnseen.value + 1); continue; }
     // owner 2026-07-08: count the unread line(s) for the CHAT-tab badge (surfaced when
     // toasts are off) — the reset watcher below clears it when the tab is opened. Use the
     // length delta so a batch of lines arriving in one tick all count.
@@ -5018,6 +5024,42 @@ const inducePhaseOpen = computed(() => inducementsReadOnlyReview.value
 /** True only while I hold the live dialog — the only state in which I may send. */
 const induceCanAct = computed(() => !!gameStore.state.inducementBuy);
 
+/**
+ * Owner 10-09: "During inducements, users should be able to select and click the chat/log box. That should bring the
+ * chat/log box briefly above the z-layer of the inducement panels so that it's interactable."
+ * `chatRaisedOverInducements` is the ONE piece of state behind that: it drives `.over-inducements` on the dock (z 48,
+ * above the phase's 47). A press or focus on the dock raises it; a press anywhere else, focus moving to another
+ * element, Esc / empty-Enter in the entry, or the phase ending lowers it. View-local: nothing is sent, and the
+ * purchase is never touched. See game/chatOverInducements.ts.
+ */
+const chatOverInduce = useChatOverInducements({
+  phaseOpen: () => inducePhaseOpen.value,
+  panel: () => panelEl.value,
+});
+const chatRaisedOverInducements = chatOverInduce.raised;
+/** Chat lines from others that landed on a Chat tab the inducement panes were covering (the store's unread count
+ *  treats an open Chat tab as read, which is not true while the dock is under the phase). */
+const induceChatUnseen = ref(0);
+const induceChatButtonUnread = computed(() => chatUnread.value + induceChatUnseen.value);
+/** The phase's Chat button talks to the docked chat when there is one; otherwise it brings the Log forward. */
+const induceChatButtonIsChat = computed(() => !settings.chatDisabled && !settings.chatPoppedOut);
+watch(
+  () => [chatRaisedOverInducements.value, inducePhaseOpen.value, panelTab.value, panelCollapsed.value] as const,
+  ([raised, open, tab, collapsed]) => {
+    if (!open || (raised && tab === 'chat' && !collapsed)) induceChatUnseen.value = 0;
+  },
+);
+/** The phase's Chat button: the route to a dock that is wholly hidden behind an inducement pane. */
+function openChatOverInducements(): void {
+  chatOverInduce.raise();
+  panelCollapsed.value = false;
+  // The button opens the tab its label names, whatever tab was showing (Astra P3): LOG -> log, CHAT -> chat.
+  panelTab.value = induceChatButtonIsChat.value ? 'chat' : 'log';
+  if (!induceChatButtonIsChat.value) return;
+  if (reviewChatHidden.value) return; // a reviewing spectator lands on the Chat tab's opt-in; live chat stays their choice
+  void nextTick(() => chatInputEl.value?.focus());
+}
+
 /** My role, mirrored from the wire (dialog `usesTreasury`) — never inferred from TV. */
 const induceLiveMyRole = computed<InducementRole | null>(() => {
   const b = gameStore.state.inducementBuy;
@@ -8546,6 +8588,11 @@ function updatePanDir() {
   renderer?.setPanDirection(x, y);
 }
 /** A control that consumes letters/arrows itself (the window handler's HTMLInputElement bail covers inputs). */
+const NON_TEXT_INPUT_TYPES = new Set(['checkbox', 'radio', 'button']);
+function inputOwnsKey(input: HTMLInputElement, key: string): boolean {
+  if (!NON_TEXT_INPUT_TYPES.has(input.type)) return true;
+  return key === ' ' || key === 'Enter' || key.startsWith('Arrow');
+}
 function keyboardOwnedByTextControl(target: EventTarget | null): boolean {
   return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
     || (target instanceof HTMLElement && target.isContentEditable);
@@ -9032,7 +9079,9 @@ function onKeydown(event: KeyboardEvent) {
     if (ucKey.closeConfirmation) unknownConfirm.value = null;
     return;
   }
-  if (event.target instanceof HTMLInputElement) return;
+  // Astra 10-09: only a TEXT-entry input swallows the hotkeys. A check box / radio / button input (the end-game pick
+  // marks) keeps its own activation keys - Space, Enter, the arrows - and lets every other key (H, Escape ...) through.
+  if (event.target instanceof HTMLInputElement && inputOwnsKey(event.target, event.key)) return;
   if (event.target === chatInputEl.value) return; // owner 09-23: the chat entry (a textarea) owns its keys — no Esc cascade, no re-focus
   // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else).
   if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); rosterPopoutOpen.value = false; return; }
@@ -11421,6 +11470,21 @@ function mvpRosterFor(side: 'home' | 'away', pick: { eligibleIds?: readonly stri
   });
 }
 const mvpRoster = computed(() => mvpRosterFor(gameStore.myTeamIsHome.value ? 'home' : 'away'));
+// Owner 10-09: the end-game MVP panels ARE the H-roster pane's content (PostGameRoster on the same live projection the
+// Helmet pop-out reads), pinned to one team. Layered on: the SERVER's eligible ids + the store's picked ids (untouched),
+// and what the nomination list showed that the roster row does not - the SPP the player came into the game with.
+// Owner 10-09 (final): the row reads "<bank> SPP (+<earned>)" - "The total should be what they came into the game with.
+// The (+<N>) should be whatever they earned this game". bank = the server's PlayerResult.currentSpps (GameCache copies
+// RosterPlayer.currentSpps once at load; nothing adds this game's SPP to it - upstream's own card prints "old+new");
+// earned = the roster projection's exact figure. Never a bank + earned sum.
+function rosterExtrasFor(rows: readonly MvpRosterRow[]): Record<string, RosterRowExtra> {
+  return Object.fromEntries(rows.map((row) => [row.id, { sppBank: row.sppTotal }]));
+}
+const mvpRosterExtras = computed(() => rosterExtrasFor(mvpRoster.value));
+const mvpRosterPick = computed<RosterPick | null>(() => {
+  const pick = mvpPick.value;
+  return pick ? { eligibleIds: pick.eligibleIds, selectedIds: pick.picked, input: 'checkbox', label: pick.prompt } : null;
+});
 // Assign Touchdown rows: only the players the server offered (my side first), one selectable.
 const assignRoster = computed(() => {
   const pick = assignPick.value;
@@ -11428,6 +11492,31 @@ const assignRoster = computed(() => {
   const mine = gameStore.myTeamIsHome.value ? 'home' : 'away';
   return [...mvpRosterFor(mine, pick), ...mvpRosterFor(mine === 'home' ? 'away' : 'home', pick)].filter((row) => row.eligible);
 });
+// Owner 10-09: the Assign Touchdown step is ONE fixed team panel in the MVP nomination's layout - the team the offered
+// players belong to (the server offers the awarded team's own players). game/postGameProjection.ts assignTouchdownPanel
+// holds the rule, including the never-hide fallback if ids from both teams ever arrive (logged here, once per offer).
+let assignMixedWarnedKey = '';
+const assignPanel = computed(() => {
+  const teams = rosterPopoutTeams.value;
+  if (!teams) return null;
+  const panel = assignTouchdownPanel(teams, gameStore.myTeamIsHome.value ? 'home' : 'away', assignRoster.value.map((row) => row.id));
+  if (panel.mixed && assignPick.value && assignMixedWarnedKey !== assignPick.value.key) {
+    assignMixedWarnedKey = assignPick.value.key;
+    console.warn('[assignTouchdown] the server offered players of BOTH teams; listing all of them in one panel', panel.onlyIds);
+  }
+  const extras = rosterExtrasFor(assignRoster.value);
+  for (const [id, teamTag] of Object.entries(panel.teamTags)) extras[id] = { ...extras[id], teamTag };
+  return { ...panel, extras };
+});
+const assignRosterPick = computed<RosterPick | null>(() => {
+  const pick = assignPick.value;
+  return pick ? { eligibleIds: pick.eligibleIds, selectedIds: pick.picked, input: 'radio', label: 'Assign Touchdown' } : null;
+});
+/** A row already selected is left alone (the radio never toggles off); anything else goes to the store as before. */
+function onAssignRosterPick(playerId: string) {
+  if (!assignPick.value || assignPick.value.picked.includes(playerId)) return;
+  gameStore.resolvePlayerPick(playerId);
+}
 // Touchdowns already awarded this end game (server playerEvent reports), in order; the server sends no total.
 const assignAwarded = computed(() => gameStore.state.endGame.touchdownAwards.map((award, i) => {
   const g = gameStore.game.value;
@@ -12013,6 +12102,7 @@ function sendChat() {
   } else {
     // owner 2026-07-08: Enter on an empty field unfocuses the chat input.
     chatInputEl.value?.blur();
+    chatOverInduce.lower(); // owner 10-09: ...and that keyboard exit drops the dock back under an open inducement phase
   }
 }
 </script>
@@ -12610,9 +12700,16 @@ function sendChat() {
         <!-- floating MMO-style panel (owner 2026-07-02): Log | Chat | Roster.
              B2-8/9 (UI7): draggable by the tab bar, resizable, opacity/font
              settings via the gear; UI8: scroll freeze + new-event pill. -->
-        <div ref="panelEl" class="log-panel" :data-collapsed="panelCollapsed" :class="{ 'endgame-front': endGameFront }"
-          :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :data-chat-focused="chatFocused" :style="panelStyle"
-          @mouseenter="onLogHover(true)" @mouseleave="onLogHover(false)">
+        <!-- Owner 10-09: while the inducement phase is open, gaps between its panes land on this catcher (never the
+             pitch or the HUD under it) or, where the dock shows through, on the dock itself: it sits just above the
+             catcher (same layer, later in the tree). The phase container keeps its own hit area at 1020 px and
+             under, where it is one scrolling column. -->
+        <div v-if="inducePhaseOpen" class="induce-catcher" data-testid="induce-catcher" aria-hidden="true" />
+        <div ref="panelEl" class="log-panel" :data-collapsed="panelCollapsed"
+          :class="{ 'endgame-front': endGameFront, 'over-inducements': chatRaisedOverInducements }"
+          :data-swapped="settings.bottomBarsSwapped" :data-induce-open="inducePhaseOpen" :style="panelStyle"
+          @mouseenter="onLogHover(true)" @mouseleave="onLogHover(false)"
+          @pointerdown.capture="chatOverInduce.onPanelPointerDown" @focusin="chatOverInduce.onPanelFocusIn" @focusout="chatOverInduce.onPanelFocusOut">
           <span v-if="!panelCollapsed" class="log-resizer" data-tour="hud-log-resize" role="button" aria-label="Resize Log window"
             title="Resize Log window" @pointerdown="startLogResize">⤡</span>
           <!-- Owner 2026-07-03 r6f: stencil tabs — each tab is the stencil word in
@@ -12718,7 +12815,7 @@ function sendChat() {
               </button>
             </div>
             <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
-              <textarea ref="chatInputEl" v-model="chatInput" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown" @focus="chatFocused = true" @blur="chatFocused = false"></textarea>
+              <textarea ref="chatInputEl" v-model="chatInput" rows="1" :placeholder="gameStore.spectatorReview.value.active ? 'Live chat… (Enter)' : 'Chat… (Enter) · /help for dev commands'" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
             </form>
           </ChatDock>
         </div>
@@ -12833,7 +12930,15 @@ function sendChat() {
           :opp-cards="induceOppCards" :opp-cap="induceOppMoney?.cap ?? 0"
           @blade="induceBlade = $event" @add="inducePhaseAdd" @remove="inducePhaseRemove"
           @clear="inducePhaseClear" @confirm="inducePhaseConfirm" @acknowledge="acknowledgeInducementsReview"
-          @rosters="openInduceRosters" />
+          @rosters="openInduceRosters"
+          @pointerdown.self="chatOverInduce.onPhaseGapPointerDown" />
+        <!-- Owner 10-09: the way to a dock that is wholly hidden behind an inducement pane: a small tab on the strip
+             under the phase. It carries the unread count for chat that arrived under the panes, and steps aside
+             while the dock is raised. -->
+        <button v-if="inducePhaseOpen && !chatRaisedOverInducements" type="button" class="induce-chat-btn" data-testid="induce-chat-btn"
+          :title="induceChatButtonIsChat ? 'Bring the chat in front of the inducements' : 'Bring the log in front of the inducements'"
+          @click="openChatOverInducements"><span aria-hidden="true">{{ induceChatButtonIsChat ? '💬' : '📋' }}</span><span class="induce-chat-btn-label">{{ induceChatButtonIsChat ? 'CHAT' : 'LOG' }}</span><span
+            v-if="induceChatButtonIsChat && induceChatButtonUnread > 0" class="induce-chat-btn-badge" data-testid="induce-chat-unread">{{ induceChatButtonUnread > 99 ? '99+' : induceChatButtonUnread }}</span></button>
         <!-- Owner 09-25: the END-OF-GAME pane is components/PostGamePanel.vue (Result window + MVP/Stats/Roster tabs + the
              Dice overlay), rendered from a PostGameSnapshot: live here, cached on the Play blade's Details popup. The
              seat-specific exit bar rides in its slot. Gates unchanged: pgSurface raises the surface (spectate seat early,
@@ -13420,7 +13525,7 @@ function sendChat() {
         </PitchConfirmationPanel>
 
         <!-- Owner 10-03: Confirm Setup asks first; an illegal setup lists what is wrong (arrows mark the offenders). -->
-        <PitchConfirmationPanel v-if="setupConfirm" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup?'"
+        <PitchConfirmationPanel v-if="setupConfirm" :title="setupConfirm.problems.length ? 'Setup Not Legal' : 'Confirm Setup'"
           label="Setup confirmation" test-id="setup-confirm"
           :position-style="reactivePromptStyle('setupConfirm')" draggable
           @drag-start="startReactivePromptDrag('setupConfirm', $event)">
@@ -13429,7 +13534,7 @@ function sendChat() {
               <li v-for="problem in setupConfirm.problems" :key="problem">{{ problem }}</li>
             </ul>
           </template>
-          <template v-else>Lock in this setup? Players can't be moved once it is confirmed.</template>
+          <template v-else>Lock in the setup?</template>
           <!-- Astra review 10-03: a rejection from the server is shown here too, not only in the pane. -->
           <div v-if="setupConfirm.refereeErrors.length" class="setup-confirm-referee">
             The referee rejected the last setup:
@@ -13793,115 +13898,69 @@ function sendChat() {
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
           :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
 
-        <!-- Owner 09-29: ASSIGN TOUCHDOWN (concede) — the MVP pane's design, one radio row, before the MVP step. -->
-        <div v-if="assignScreenActive" class="mvp-nominate-overlay" data-testid="assign-touchdown-pane">
-          <div class="mvp-nominate-card">
-            <div v-if="!assignPick" class="mvp-waiting" role="status" aria-live="polite"><span class="mvp-waiting-dots"><i>.</i><i>.</i><i>.</i></span> {{ assignWaitingText }}</div>
+        <!-- Owner 10-09: the Assign Touchdown step and the MVP nomination are ONE pane design (EndGamePickPane): same
+             frame, title line, ONE fixed team roster panel (the H-roster pane's rows, the check mark beside the LVL
+             badge), footer (count + one confirm button), waiting line and idle button. They differ only in the title,
+             the button label, the maximum, the team and the eligible players. -->
+        <!-- Owner 09-29: ASSIGN TOUCHDOWN (concede) - its own end-game step before the MVP step; one pick, answered here. -->
+        <EndGamePickPane v-if="assignScreenActive" kind="assign-touchdown" data-testid="assign-touchdown-pane"
+          :pick="assignRosterPick" :round-key="assignRoundKey" title="Assign Touchdown" :max="1"
+          confirm-label="Assign Touchdown" :confirm-disabled="!assignPick || assignPick.picked.length !== 1"
+          :waiting-text="assignWaitingText" idle-label="Assign Touchdown"
+          :side="assignPanel?.side ?? mvpMySide" :only-ids="assignPanel?.onlyIds ?? []" :teams="assignPanel?.teams ?? null" :portrait="pgRosterPortrait" :local-side="mvpMySide"
+          :skill-mode="skillMode" :icon-style="effectiveIconStyle" :extras="assignPanel?.extras ?? null"
+          @pick="onAssignRosterPick" @confirm="gameStore.confirmPlayerPick()">
+          <template #banner>
             <div v-if="assignAwarded.length" class="mvp-screen-result" data-testid="assign-touchdown-awarded">
               <span class="mvp-screen-final">Awarded {{ assignAwarded.length }}</span>
               <span v-for="a in assignAwarded" :key="a.key" class="mvp-screen-team">{{ a.name }}</span>
             </div>
-            <div v-if="assignPick" :key="'assign-round-' + assignRoundKey" class="mvp-nominate-round">
-              <div class="mvp-nominate-head">
-                <span class="mvp-nominate-title">Assign Touchdown</span>
-              </div>
-              <ul class="mvp-nominate-list" role="radiogroup" aria-label="Assign Touchdown">
-                <li v-for="row in assignRoster" :key="row.id" class="mvp-nominate-row"
-                  :data-eligible="row.eligible" :data-checked="assignPick.picked.includes(row.id)"
-                  @click="!assignPick.picked.includes(row.id) && gameStore.resolvePlayerPick(row.id)">
-                  <input type="radio" class="mvp-nominate-check" tabindex="-1" name="assign-touchdown"
-                    :checked="assignPick.picked.includes(row.id)" />
-                  <span class="mvp-nominate-nr">#{{ row.nr }}</span>
-                  <span class="mvp-nominate-name">{{ row.name }}</span>
-                  <span class="mvp-nominate-pos">{{ row.position }}</span>
-                  <span v-if="row.skills" class="mvp-nominate-skills">{{ row.skills }}</span>
-                  <span class="mvp-nominate-spp" :data-zero="row.sppTotal === 0 && row.sppEarned === 0">
-                    {{ row.sppTotal }} SPP<span v-if="row.sppEarned > 0" class="mvp-nominate-spp-gain"> (+{{ row.sppEarned }})</span>
-                  </span>
-                </li>
-              </ul>
-              <div class="mvp-nominate-foot">
-                <span class="mvp-nominate-count" aria-live="polite" :data-complete="assignPick.picked.length >= 1">{{ assignPick.picked.length }}/1</span>
-                <button class="mvp-nominate-confirm" :disabled="assignPick.picked.length !== 1"
-                  @click="gameStore.confirmPlayerPick()">Assign Touchdown</button>
-              </div>
-            </div>
-          </div>
-        </div>
+          </template>
+        </EndGamePickPane>
 
-        <!-- MVP nomination uses roster rows as click targets; checkboxes are display-only. -->
         <!-- Owner 2026-07-15: unified staged MVP screen. Result banner · both-teams MVP chips (mvpRoll:
-             Pending…→roulette→reveal, opponent flashes in) · MY roster with checkbox nomination (only on my
+             Pending…→roulette→reveal, opponent flashes in) · MY roster with the nomination (only on my
              turn; the button is inert while it's the opponent's turn) · Continue once both sides resolve. -->
-        <div v-if="mvpScreenActive" class="mvp-nominate-overlay">
-          <div class="mvp-nominate-card">
-            <div v-if="mvpResult" class="mvp-screen-result">
-              <span class="mvp-screen-final">Final</span>
-              <span class="mvp-screen-team">{{ mvpResult.homeTeam }}</span>
-              <b>{{ mvpResult.homeScore }}</b><span class="mvp-screen-dot">·</span><b>{{ mvpResult.awayScore }}</b>
-              <span class="mvp-screen-team">{{ mvpResult.awayTeam }}</span>
-            </div>
-            <div class="mvp-screen-chips">
-              <div v-for="c in mvpChips" :key="c.side" class="mvp-screen-chip" :class="{ 'mvp-flash': c.flash, mine: c.mine }">
-                <div class="mvp-screen-chip-team">{{ c.team }}<span v-if="c.mine" class="mvp-screen-you"> (you)</span></div>
-                <!-- #44: winner portrait at roulette end — the in-game sprite portrait, revealed on 'landed'. -->
-                <img v-if="c.phase === 'landed' && c.portrait" class="mvp-screen-portrait" :src="c.portrait" alt="" />
-                <div class="mvp-screen-chip-mvp"><span class="mvp-screen-mvp-lbl">MVP:</span>
-                  <!-- #105: cycling/awaiting/none show the roulette/status text; landed shows the FIRST winner
-                       reactively off side.mvps (NOT the frozen roulette display, so a reorder can't desync it). -->
-                  <span class="mvp-screen-mvp-name" :data-phase="c.phase"><i v-if="c.phase === 'landed'" class="mvp-screen-star" aria-hidden="true"></i>{{ c.phase === 'landed' ? (c.winners[0]?.name ?? c.display) : c.display }}</span>
-                  <!-- #105 per-award badge: the head winner earned >1 MVP (same-player double) → unmistakable ×N. -->
-                  <span v-if="c.phase === 'landed' && (c.winners[0]?.awards ?? 0) > 1" class="mvp-screen-mvp-x">×{{ c.winners[0]?.awards }}</span>
+        <EndGamePickPane v-if="mvpScreenActive" kind="mvp" data-testid="mvp-nominate-pane"
+          :pick="mvpRosterPick" :round-key="mvpRoundKey" :title="mvpPick?.prompt ?? ''" :max="mvpPick?.maxPicks ?? 0"
+          confirm-label="Nominate MVP's" :confirm-disabled="!mvpPick || mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
+          :waiting-text="mvpWaiting ? 'Waiting for opponent' : null" :idle-label="mvpBothResolved ? 'Continue' : 'Nominate MVP\'s'" :idle-disabled="!mvpBothResolved"
+          :side="mvpMySide" :teams="rosterPopoutTeams" :portrait="pgRosterPortrait" :local-side="mvpMySide"
+          :skill-mode="skillMode" :icon-style="effectiveIconStyle" :extras="mvpRosterExtras"
+          @pick="(playerId: string) => gameStore.resolvePlayerPick(playerId)" @confirm="gameStore.confirmPlayerPick()"
+          @idle="mvpDismissed = true; postGamePhase = 'stats'">
+          <template #banner>
+              <div v-if="mvpResult" class="mvp-screen-result">
+                <span class="mvp-screen-final">Final</span>
+                <span class="mvp-screen-team">{{ mvpResult.homeTeam }}</span>
+                <b>{{ mvpResult.homeScore }}</b><span class="mvp-screen-dot">·</span><b>{{ mvpResult.awayScore }}</b>
+                <span class="mvp-screen-team">{{ mvpResult.awayTeam }}</span>
+              </div>
+              <div class="mvp-screen-chips">
+                <div v-for="c in mvpChips" :key="c.side" class="mvp-screen-chip" :class="{ 'mvp-flash': c.flash, mine: c.mine }">
+                  <div class="mvp-screen-chip-team">{{ c.team }}<span v-if="c.mine" class="mvp-screen-you"> (you)</span></div>
+                  <!-- #44: winner portrait at roulette end — the in-game sprite portrait, revealed on 'landed'. -->
+                  <img v-if="c.phase === 'landed' && c.portrait" class="mvp-screen-portrait" :src="c.portrait" alt="" />
+                  <div class="mvp-screen-chip-mvp"><span class="mvp-screen-mvp-lbl">MVP:</span>
+                    <!-- #105: cycling/awaiting/none show the roulette/status text; landed shows the FIRST winner
+                         reactively off side.mvps (NOT the frozen roulette display, so a reorder can't desync it). -->
+                    <span class="mvp-screen-mvp-name" :data-phase="c.phase"><i v-if="c.phase === 'landed'" class="mvp-screen-star" aria-hidden="true"></i>{{ c.phase === 'landed' ? (c.winners[0]?.name ?? c.display) : c.display }}</span>
+                    <!-- #105 per-award badge: the head winner earned >1 MVP (same-player double) → unmistakable ×N. -->
+                    <span v-if="c.phase === 'landed' && (c.winners[0]?.awards ?? 0) > 1" class="mvp-screen-mvp-x">×{{ c.winners[0]?.awards }}</span>
+                  </div>
+                  <!-- #105 additional DISTINCT MVP winners on this side (two different players), keyed by playerId.
+                       #168 (owner concede double-MVP; screenshot Umug + Yashnarz on the winning card): render each extra
+                       winner as its OWN full row matching the HEAD row's style — reuses `.mvp-screen-chip-mvp` markup
+                       ("MVP:" label + starred accent name + ×N badge) instead of a bare small name line. -->
+                  <div v-if="c.phase === 'landed'" v-for="w in c.winners.slice(1)" :key="w.id" class="mvp-screen-chip-mvp mvp-screen-extra">
+                    <span class="mvp-screen-mvp-lbl">MVP:</span>
+                    <span class="mvp-screen-mvp-name" data-phase="landed"><i class="mvp-screen-star" aria-hidden="true"></i>{{ w.name }}</span>
+                    <span v-if="w.awards > 1" class="mvp-screen-mvp-x">×{{ w.awards }}</span>
+                  </div>
                 </div>
-                <!-- #105 additional DISTINCT MVP winners on this side (two different players), keyed by playerId.
-                     #168 (owner concede double-MVP; screenshot Umug + Yashnarz on the winning card): render each extra
-                     winner as its OWN full row matching the HEAD row's style — reuses `.mvp-screen-chip-mvp` markup
-                     ("MVP:" label + starred accent name + ×N badge) instead of a bare small name line. -->
-                <div v-if="c.phase === 'landed'" v-for="w in c.winners.slice(1)" :key="w.id" class="mvp-screen-chip-mvp mvp-screen-extra">
-                  <span class="mvp-screen-mvp-lbl">MVP:</span>
-                  <span class="mvp-screen-mvp-name" data-phase="landed"><i class="mvp-screen-star" aria-hidden="true"></i>{{ w.name }}</span>
-                  <span v-if="w.awards > 1" class="mvp-screen-mvp-x">×{{ w.awards }}</span>
-                </div>
               </div>
-            </div>
-            <!-- #63 re-present mirror: :key bumps per MVP round → this block re-mounts + replays the pop-in so a
-                 2nd (or Nth) nominate round visibly re-pops (fresh checkboxes ride Tarkin's store re-arm). -->
-            <!-- Owner 09-27: "Waiting for opponent" sits in the card's flow — under the result + team chips, above the
-                 nomination list — instead of floating at the screen's top-right corner over the coach panel. -->
-            <div v-if="mvpWaiting" class="mvp-waiting" role="status" aria-live="polite"><span class="mvp-waiting-dots"><i>.</i><i>.</i><i>.</i></span> Waiting for opponent</div>
-            <div v-if="mvpPick" :key="'mvp-round-' + mvpRoundKey" class="mvp-nominate-round">
-              <div class="mvp-nominate-head">
-                <span class="mvp-nominate-title">{{ mvpPick.prompt }}</span>
-              </div>
-              <ul class="mvp-nominate-list">
-                <li v-for="row in mvpRoster" :key="row.id" class="mvp-nominate-row"
-                  :data-eligible="row.eligible" :data-checked="mvpPick.picked.includes(row.id)"
-                  @click="row.eligible && gameStore.resolvePlayerPick(row.id)">
-                  <input type="checkbox" class="mvp-nominate-check" tabindex="-1"
-                    :checked="mvpPick.picked.includes(row.id)" :disabled="!row.eligible" />
-                  <span class="mvp-nominate-nr">#{{ row.nr }}</span>
-                  <span class="mvp-nominate-name">{{ row.name }}</span>
-                  <span class="mvp-nominate-pos">{{ row.position }}</span>
-                  <span v-if="row.skills" class="mvp-nominate-skills">{{ row.skills }}</span>
-                  <span class="mvp-nominate-spp" :data-zero="row.sppTotal === 0 && row.sppEarned === 0">
-                    {{ row.sppTotal }} SPP<span v-if="row.sppEarned > 0" class="mvp-nominate-spp-gain"> (+{{ row.sppEarned }})</span>
-                  </span>
-                </li>
-              </ul>
-              <div class="mvp-nominate-foot">
-                <!-- Owner 09-25: the picked/needed counter sits beside the Nominate button at twice its old size. -->
-                <span class="mvp-nominate-count" aria-live="polite" :data-complete="mvpPick.picked.length >= mvpPick.maxPicks">{{ mvpPick.picked.length }}/{{ mvpPick.maxPicks }}</span>
-                <button class="mvp-nominate-confirm"
-                  :disabled="mvpPick.picked.length < mvpPick.minPicks || mvpPick.picked.length === 0"
-                  @click="gameStore.confirmPlayerPick()">Nominate MVP's</button>
-              </div>
-            </div>
-            <div v-else class="mvp-nominate-foot">
-              <button v-if="mvpBothResolved" class="mvp-nominate-confirm" @click="mvpDismissed = true; postGamePhase = 'stats'">Continue</button>
-              <button v-else class="mvp-nominate-confirm" disabled>Nominate MVP's</button>
-            </div>
-          </div>
-        </div>
+          </template>
+        </EndGamePickPane>
 
         <!-- g478 #1 (owner live g487) + Yularen audit rule: kickoff MINI-PHASE confirm bar (High Kick / Quick
              Snap). The coach interacts (optional), then Confirm ends the mini-phase via clientEndTurn{turnMode}.
@@ -14039,7 +14098,7 @@ function sendChat() {
              (the ball crosshair then follows the pointer over eligible squares). -->
         <div v-if="gameStore.state.kickPlacement" class="kick-aim-modal">
           <span class="kick-aim-modal-title">KICK-OFF</span>
-          <span class="kick-aim-modal-text">Choose a square to kick to</span>
+          <span class="kick-aim-modal-text">Select Target Square</span>
         </div>
 
         <!-- Owner o66aa: 2-click target cue — 🏈 over a pass/hand-off target, 🥾 AV+ over a foul victim. -->
@@ -15569,6 +15628,31 @@ function sendChat() {
   overflow: auto;
   overscroll-behavior: contain;
   background: transparent;
+  /* Owner 10-09: only the PANES take the pointer (InducementsPhase.vue: `.ind-grid > *`). The gaps between them belong
+     to .induce-catcher below, so a Log/Chat dock showing through a gap is pressable. */
+  pointer-events: none;
+}
+/* One scrolling column: the container must keep its scrollbar and wheel, so it keeps its gaps too. There a press on the
+   bare container over the dock raises the dock (chatOverInduce.onPhaseGapPointerDown); the Chat button does as well. */
+@media (max-width: 1020px) { .pitch-host > .induce-phase.ind-grid { pointer-events: auto; } }
+/* The phase's old hit area (the middle 84% of the host) on the phase's own layer: a press in a gap between the panes
+   stops here instead of reaching the pitch, the HUD, or a z-46 surface the old container used to cover
+   (.penalty-shootout, .kick-election-target). Tree order does the rest at 47: catcher, then the lowered dock, then the
+   phase's panes. */
+.induce-catcher { position: absolute; inset: 8% 0; z-index: 47; }
+/* Owner 10-09: the route to a dock hidden behind a pane: a small stencil tab centred on the strip under the phase. */
+.induce-chat-btn {
+  position: absolute; z-index: 48; left: 50%; bottom: calc(4% - 15px); transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 14px; box-sizing: border-box;
+  border: 2px solid #353b44; border-radius: 5px; cursor: pointer;
+  background: linear-gradient(180deg, #1c1f24, #07090b); color: var(--ui-text);
+  box-shadow: 0 3px 0 #050607, 0 6px 16px #000c, inset 0 1px 0 #68717d;
+  font-family: 'Nuffle', system-ui, sans-serif; font-size: max(var(--ui-min-text-size, 12px), 0.78rem); letter-spacing: .12em;
+}
+.induce-chat-btn:hover, .induce-chat-btn:focus-visible { border-color: var(--ui-accent); filter: brightness(1.2); }
+.induce-chat-btn-badge {
+  min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
+  background: #e5484d; color: #fff; font-weight: 800; font-size: max(var(--ui-min-text-size, 12px), 0.6rem); line-height: 16px; text-align: center;
 }
 /* Owner 10-01: uniform scale of the inducements pane by window width (percent insets are unaffected by zoom, so the
    pane still fills the host; only its px-sized columns, icons and text grow). 1390 px of columns x zoom stays inside
@@ -16035,74 +16119,7 @@ function sendChat() {
 /* Owner 09-20: the inducement Rosters popout fills the viewport like the Dice pane (94vw x 91vh) and its type scales
    with it — the roster rows and the popped card are em-sized off a vw-driven font-size. */
 /* Owner 2026-07-15: MVP NOMINATION roster-summary modal (mirrors .postgame / .pg-roster; theme-token driven). */
-.mvp-nominate-overlay {
-  position: absolute; z-index: 55; inset: 0;
-  display: flex; align-items: center; justify-content: center; padding: 24px;
-  background: radial-gradient(ellipse at center, #000c 0%, #0009 60%, #0006 100%);
-  animation: coin-caption-in var(--p-350) ease-out;
-}
-.mvp-nominate-card {
-  /* #45 (owner tester): the MVP / end-of-game screen fills ~the viewport (was a 460px modal). */
-  width: min(920px, 96vw); height: min(94vh, 940px);
-  display: flex; flex-direction: column; overflow: hidden;
-  background: linear-gradient(180deg, var(--ui-surface-2) 0%, var(--ui-surface) 100%);
-  border: 1px solid var(--ui-border); border-radius: 12px;
-  box-shadow: 0 12px 40px #000c; color: var(--ui-text);
-}
-/* #63 re-present mirror: per-round pop-in so a re-emitted nominate visibly re-pops (fresh-window motion). */
-/* Owner 08-17 (Riotous Rookies overflow): a roster can now exceed 16 (mid-game adds), and .mvp-nominate-card
-   is a fixed-height flex column with overflow:hidden — without its own flex sizing, .mvp-nominate-round grew
-   to fit ALL rows and got clipped by the card, carrying the confirm button off-screen with no way to reach it.
-   flex:1/min-height:0 lets the round claim only the space left after the result banner + team chips, so its
-   OWN list (below) is what scrolls, not the card. */
-.mvp-nominate-round {
-  animation: mvp-round-pop 0.34s cubic-bezier(0.2, 0.9, 0.3, 1.3);
-  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
-}
-@keyframes mvp-round-pop {
-  0% { opacity: 0; transform: scale(0.94) translateY(6px); }
-  60% { opacity: 1; }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
-}
-@media (prefers-reduced-motion: reduce) { .mvp-nominate-round { animation: none; } }
-.mvp-nominate-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px 18px; border-bottom: 1px solid var(--ui-border);
-}
-.mvp-nominate-logo { width: 24px; height: 24px; object-fit: contain; }
-.mvp-nominate-title { font-weight: 700; color: var(--ui-heading); }
-.mvp-nominate-count { font-family: 'Nuffle', sans-serif; font-weight: 900; font-size: max(var(--ui-min-primary-text-size, 16px), 2rem); line-height: 1; color: var(--ui-accent); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; text-shadow: 2px 2px 0 #000; } /* owner 09-25: 2x, in the footer beside Nominate */
-.mvp-nominate-count[data-complete='true'] { color: var(--ui-success); }
-/* Roster scrolls INSIDE its own box (wide-content-scrolls-in-place discipline) — flex:1/min-height:0 lets it
-   shrink to the round's available space, max-height is a relative-unit backstop for small windows; the
-   confirm button in .mvp-nominate-foot (below, flex:0 0 auto) stays pinned and always reachable. */
-.mvp-nominate-list { list-style: none; margin: 0; padding: 2px 0; overflow-y: auto; flex: 1 1 auto; min-height: 0; max-height: 50vh; }
-.mvp-nominate-row {
-  /* #46 (owner tester): strict aligned columns — check | # | name | position | skills | SPP —
-     so every row's name/position/SPP line up (was a flex row that drifted with content width). */
-  display: grid;
-  grid-template-columns: 16px 2.6em minmax(7em, 1.4fr) minmax(6em, 1fr) minmax(0, 1.5fr) auto;
-  align-items: center; gap: 12px;
-  padding: 7px 18px; cursor: pointer; border-top: 1px solid var(--ui-border);
-}
-.mvp-nominate-row:first-child { border-top: none; }
-.mvp-nominate-row[data-eligible='true']:hover { background: var(--ui-hover); }
-.mvp-nominate-row[data-eligible='false'] { cursor: default; opacity: 0.45; }
-.mvp-nominate-row[data-checked='true'] { background: var(--ui-hover); box-shadow: inset 3px 0 0 var(--ui-accent); }
-.mvp-nominate-check { pointer-events: none; width: 16px; height: 16px; flex: none; accent-color: var(--ui-accent); }
-.mvp-nominate-nr { color: var(--ui-text-dim); min-width: 2.2em; font-variant-numeric: tabular-nums; }
-.mvp-nominate-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mvp-nominate-pos { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mvp-nominate-skills { font-size: max(var(--ui-min-text-size, 12px), 0.72rem); color: var(--ui-accent); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mvp-nominate-spp { justify-self: end; color: var(--ui-text); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.mvp-nominate-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
-.mvp-nominate-spp-gain { color: var(--ui-success); font-size: max(var(--ui-min-text-size, 12px), 0.85em); }
-.mvp-nominate-foot { padding: 12px 18px; border-top: 1px solid var(--ui-border); display: flex; align-items: center; justify-content: flex-end; gap: 18px; flex: 0 0 auto; }
-.mvp-nominate-confirm {
-  padding: 8px 18px; border: none; border-radius: 8px; font-weight: 700; cursor: pointer;
-  background: var(--ui-accent); color: var(--ui-text-on-accent);
-}
-.mvp-nominate-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Owner 10-09: the pane's frame, rounds, footer and waiting line live in components/EndGamePickPane.vue. */
 /* Owner 2026-07-15: unified staged MVP screen — result banner + both-teams chips + waiting/reveal. */
 .mvp-screen-result { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--ui-border); font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); color: var(--ui-text-dim); }
 .mvp-screen-result b { color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 1rem); font-variant-numeric: tabular-nums; }
@@ -16136,11 +16153,6 @@ function sendChat() {
 .mvp-screen-star::before { content: '\2605'; color: var(--ui-accent); margin-right: 4px; }
 @keyframes mvpChipFlash { 0% { box-shadow: 0 0 0 0 var(--ui-accent); } 30% { box-shadow: 0 0 16px 1px var(--ui-accent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .mvp-screen-chip.mvp-flash { animation: mvpChipFlash var(--p-1000) ease-out; }
-.mvp-waiting { flex: 0 0 auto; align-self: center; margin: 0 16px 10px; background: var(--ui-surface-2); border: 1px solid var(--ui-border); border-radius: 8px; padding: 8px 16px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.9rem); color: var(--ui-text-dim); text-align: center; } /* owner 09-27: in flow, between the chips and the nominations */
-.mvp-waiting-dots i { animation: mvp-wait-dot 1.2s infinite; opacity: 0; }
-.mvp-waiting-dots i:nth-child(2) { animation-delay: 0.2s; }
-.mvp-waiting-dots i:nth-child(3) { animation-delay: 0.4s; }
-@keyframes mvp-wait-dot { 0%, 60%, 100% { opacity: 0; } 30% { opacity: 1; } }
 /* #25-v2: MVP roulette reveal (presentation only — lands on the server award) */
 .pg-mvp-roulette { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; }
 .pg-mvp-spin {
@@ -18619,12 +18631,16 @@ function sendChat() {
   border-color: #b9c8da;
   filter: brightness(1.25);
 }
-/* The inducement phase is modal: keep the dock below the full-host shader (44) and
-   the complete picker/summary/footer surface (47). The attribute makes this phase-only;
-   ordinary log stacking stays at 11, while diagnostics at 52+ remain above the phase. */
-.log-panel[data-induce-open='true'] { z-index: 43; }
-/* Owner 09-23: …unless the coach is typing — Enter opens the chat on top of the phase, and it drops back on blur. */
-.log-panel[data-induce-open='true'][data-chat-focused='true'] { z-index: 48; }
+/* The inducement phase is modal: the dock stays UNDER the complete picker/summary/footer surface. It shares the
+   phase's layer (47) and comes earlier in the tree than the phase, so the panes paint and hit-test over it, while the
+   gap catcher (47, earlier still) sits under it. Being above the shader (44) now, it carries the shader's dim itself
+   until it is raised. The attribute makes this phase-only; ordinary log stacking stays at 11, while diagnostics at
+   52+ remain above the phase. */
+.log-panel[data-induce-open='true'] { z-index: 47; }
+.log-panel[data-induce-open='true']:not(.over-inducements) { filter: brightness(0.78); }
+/* Owner 09-23 / 10-09: …unless the coach is USING it: a press on the dock, or focus entering it (Enter opens the chat),
+   raises it over the phase (47); it drops back when the coach presses anything else. State: chatRaisedOverInducements. */
+.log-panel[data-induce-open='true'].over-inducements { z-index: 48; }
 /* Owner 2026-07-08 (default): swap the bottom bars — Log leads at the bottom-left. */
 .log-panel[data-swapped='true'] {
   left: 14px;

@@ -404,6 +404,9 @@ function panelColor(panel: PanelView): SeatColor {
   .ind-grid { grid-template-columns: minmax(0, 760px); grid-template-rows: none; }
   .ind-grid > * { grid-column: 1 !important; grid-row: auto !important; }
 }
+/* Owner 10-09: the panes always take the pointer. A host that lets the gaps between them through (the Modern view sets
+   `pointer-events: none` on this container so the Log/Chat dock is pressable there) must not switch the panes off. */
+.ind-grid > * { pointer-events: auto; }
 .ind-picker, .ind-lock-panel { grid-column: 2; grid-row: 1; }
 .ind-col1 { grid-column: 1; grid-row: 1; }
 .ind-col3 { grid-column: 3; grid-row: 1; }

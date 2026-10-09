@@ -48,6 +48,8 @@ export type PostGamePlayer = {
   positionId?: string | null;
   /** Owner 10-02: the injury this player suffered this game (or MNG when sitting one out) - replaces the LVL badge. */
   injury?: RosterInjuryBadge | null;
+  /** Owner 10-09: the badge is an injury SUFFERED THIS GAME (gold box, like an added skill); see rosterInjuryIsNew. */
+  injuryNew?: boolean;
   /** Owner 10-02: advancements taken (the "LVL n" badge; 0 = rookie, no badge) */
   advancements: number;
 }; // #25-v2 per-player roster/SPP row (+ owner 09-14 added skills, 09-15 player number)
@@ -72,11 +74,10 @@ export interface PostGameSide {
 export interface PostGamePublic { home: PostGameSide; away: PostGameSide; winner: PostGameSide | null; draw: boolean }
 
 const num = (r: Record<string, unknown>, k: string) => Number(r[k] ?? 0);
-// Derive game-earned SPP from serialized achievement fields, not lifetime currentSpps.
-const sppEarned = (r: Record<string, unknown>) =>
-  num(r, 'playerAwards') * 4 + num(r, 'touchdowns') * 3 + num(r, 'casualties') * 2 +
-  num(r, 'interceptions') * 2 + num(r, 'completions') + num(r, 'deflections') +
-  num(r, 'completionsWithAdditionalSpp') + num(r, 'casualtiesWithAdditionalSpp') + num(r, 'catchesWithAdditionalSpp');
+// Game-earned SPP from the serialized achievement fields, not lifetime currentSpps. Owner 10-09: ONE formula for every
+// surface - logic/sppEarned.ts mirrors upstream PlayerResult.totalEarnedSpps() on the BB2025 SppMechanic (the team's
+// Brawlin' Brutes swap, landings). The fixed 3 / 2 copy that lived here misread those teams and dropped landings.
+const teamSpecialRules = (team: unknown) => (team as { specialRules?: string[] } | null | undefined)?.specialRules;
 
 type Roster = { positionArray?: ({ positionId: string; positionName?: string; skillArray?: string[] } & ValuePosition)[]; logoUrl?: string; baseIconPath?: string };
 
@@ -124,6 +125,24 @@ export function rosterInjuryBadge(game: GameJson, playerId: string, result: Reco
   if (!badges.length) return null;
   return badges.sort((a, b) => INJURY_SEVERITY.indexOf(a) - INJURY_SEVERITY.indexOf(b))[0]!;
 }
+/**
+ * Owner 10-09 ("use the gold box over the injury to indicate injuries suffered that game"): is the row's badge an
+ * injury the player suffered in THIS game? Decided from the server's fields only, the same two the badge reads:
+ *  - the player's CURRENT state base in fieldModel.playerDataArray: 0x06 BADLY_HURT, 0x07 SERIOUS_INJURY, 0x08 RIP are
+ *    this game's casualty boxes (a player cannot start a game in them), so every casualty badge - BH, SH, NI, a stat
+ *    loss, RIP, classified from this game's playerResult.seriousInjury / seriousInjuryDecay - is new: gold.
+ *  - 0x0a MISSING (MNG) is a state the player carried INTO the game: not gold. 0x05 KO is not an injury: not gold.
+ *  - a casualty the apothecary patched back to the reserves, or a regenerated player, is no longer in 0x06-0x08, so
+ *    the row shows no badge at all (and nothing gold), whatever the result's seriousInjury text still says.
+ * Lasting injuries from EARLIER games (the roster's niggling / stat losses) have no badge in this row today, so there
+ * is nothing of theirs to outline.
+ */
+export function rosterInjuryIsNew(game: GameJson, playerId: string, badge: RosterInjuryBadge | null | undefined): boolean {
+  if (!badge || badge === 'mng' || badge === 'ko') return false;
+  const data = game.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId);
+  const base = Number(data?.playerState ?? 0) & 0xff;
+  return base >= 0x06 && base <= 0x08;
+}
 /** Most severe first: RIP, a lasting stat loss, NI, SH, BH. */
 const INJURY_SEVERITY: readonly RosterInjuryBadge[] = ['rip', 'ma', 'st', 'ag', 'pa', 'av', 'ni', 'sh', 'bh', 'mng'];
 function injuryBadgeForTier(tier: NonNullable<ReturnType<typeof casualtyTierLabel>>): RosterInjuryBadge {
@@ -141,7 +160,7 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
   const results = tr.playerResults as unknown as Record<string, unknown>[];
   const totals: Record<string, number> = {};
   for (const { key } of POSTGAME_STATS) {
-    if (key === 'spp') totals.spp = results.reduce((a, r) => a + sppEarned(r), 0);
+    if (key === 'spp') totals.spp = results.reduce((a, r) => a + sppEarnedThisGame(r, teamSpecialRules(team)), 0);
     else totals[key] = results.reduce((a, r) => a + num(r, key), 0);
   }
   const posName = (pid: string | undefined) =>
@@ -161,6 +180,7 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
     .sort((a, b) => (a.playerNr ?? 0) - (b.playerNr ?? 0))
     .map((p) => {
       const r = resultById.get(p.playerId) ?? { playerId: p.playerId };
+      const injury = rosterInjuryBadge(game, String(r.playerId ?? ''), r);
       // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
       // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
       const position = roster.positionArray?.find((q) => q.positionId === p?.positionId);
@@ -173,8 +193,8 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
       return {
         playerId: String(r.playerId ?? ''), nr: p?.playerNr ?? 0, name: p?.playerName ?? '(unknown)',
         position: rosterPositionLabel(posName(p?.positionId as string | undefined), (team as { race?: string }).race),
-        spp: sppEarned(r), addedSkills, addedSkillList, skillList, value: progress.value, advancements: progress.advancements,
-        injury: rosterInjuryBadge(game, String(r.playerId ?? ''), r),
+        spp: sppEarnedThisGame(r, teamSpecialRules(team)), addedSkills, addedSkillList, skillList, value: progress.value, advancements: progress.advancements,
+        injury, injuryNew: rosterInjuryIsNew(game, String(r.playerId ?? ''), injury),
         positionId: (p?.positionId as string | undefined) ?? null,
       };
     })
@@ -203,6 +223,54 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
 export function rosterTeamSubtext(team: Pick<PostGameSide, 'which' | 'race' | 'coach'>, localSide: Side | null | undefined): string {
   const who = localSide && team.which === localSide ? '(You)' : team.coach?.trim();
   return [team.race?.trim(), who].filter((part) => !!part).join(' · ');
+}
+
+/** Owner 10-09: the end-game MVP panels are PostGameRoster.vue with these layered on (selection + per-row additions). */
+export interface RosterPick {
+  eligibleIds: readonly string[];
+  selectedIds: readonly string[];
+  /** 'checkbox' = several (MVP nomination), 'radio' = exactly one (Assign Touchdown). */
+  input: 'checkbox' | 'radio';
+  /** The radio group's name / the list's accessible label. */
+  label?: string;
+}
+export interface RosterRowExtra {
+  /**
+   * Owner 10-09 (pick panes): the SPP the player brought INTO the game (the server's PlayerResult.currentSpps, copied
+   * from the roster at load and never added to). With it the row's SPP cell reads "<bank> SPP (+<earned this game>)" -
+   * the bracket only when something was earned, never a summed figure (owner's final word, 10-09: "The total should be
+   * what they came into the game with. The (+<N>) should be whatever they earned this game"). It is the old nomination
+   * list's own format. Without it the cell is the H pane's "<earned> SPP".
+   */
+  sppBank?: number;
+  /** A small team marker after the name: only when one panel has to list players of both teams (see assignTouchdownPanel). */
+  teamTag?: string;
+  /** MVP awards this game: the row is marked as the awarded MVP (a concession can award the same player twice). */
+  awards?: number;
+}
+
+/**
+ * Owner 10-09: "Assign touchdown will only ever have one team" - ONE fixed roster panel, the MVP nomination's layout.
+ * Upstream (ffb-server step/bb2020/end/StepAssignTouchdowns.java) offers findPlayers(game, winningTeam) only, in a
+ * dialog addressed to that team. The panel is the team the offered ids belong to. Defensive: should the server ever
+ * offer ids from BOTH teams, no offered player is hidden - the one panel lists them all (my team's first) with a team
+ * marker per row, and `mixed` tells the view to log a warning. Never a second layout.
+ */
+export function assignTouchdownPanel(
+  teams: { home: PostGameSide; away: PostGameSide }, mine: Side, offeredIds: readonly string[],
+): { side: Side; onlyIds: string[]; teams: { home: PostGameSide; away: PostGameSide }; teamTags: Record<string, string>; mixed: boolean } {
+  const other: Side = mine === 'home' ? 'away' : 'home';
+  const on = (side: Side) => offeredIds.filter((id) => teams[side].roster.some((pl) => pl.playerId === id));
+  const [my, their] = [on(mine), on(other)];
+  if (!my.length || !their.length) {
+    const side = their.length ? other : mine;
+    return { side, onlyIds: side === mine ? my : their, teams, teamTags: {}, mixed: false };
+  }
+  const merged = { ...teams[mine], roster: [...teams[mine].roster, ...teams[other].roster] };
+  const teamTags: Record<string, string> = {};
+  for (const id of my) teamTags[id] = teams[mine].team;
+  for (const id of their) teamTags[id] = teams[other].team;
+  return { side: mine, onlyIds: [...my, ...their], teams: { ...teams, [mine]: merged }, teamTags, mixed: true };
 }
 
 export function postGamePublic(game: GameJson | null | undefined): PostGamePublic | null {

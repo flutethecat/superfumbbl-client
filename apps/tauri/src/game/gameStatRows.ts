@@ -3,6 +3,7 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { assetMods } from './assetMods';
 import { diceStats, emptyTally, type DiceTally } from './diceStats';
+import { sppEarnedThisGame } from './logic/sppEarned';
 import { selectedLocalFumbblAssetUrl } from './fumbblAssetCache';
 import { crestDataUrl, type CrestSide } from './teamCrests';
 
@@ -23,11 +24,6 @@ export const POSTGAME_STATS: { key: string; label: string }[] = [
 
 type Side = 'home' | 'away';
 const num = (r: Record<string, unknown>, k: string) => Number(r[k] ?? 0);
-/** Game-earned SPP from the serialized achievement fields, not lifetime currentSpps. */
-export const sppEarned = (r: Record<string, unknown>) =>
-  num(r, 'playerAwards') * 4 + num(r, 'touchdowns') * 3 + num(r, 'casualties') * 2 +
-  num(r, 'interceptions') * 2 + num(r, 'completions') + num(r, 'deflections') +
-  num(r, 'completionsWithAdditionalSpp') + num(r, 'casualtiesWithAdditionalSpp') + num(r, 'catchesWithAdditionalSpp');
 
 function playerResults(game: GameJson, side: Side): Record<string, unknown>[] {
   const tr = side === 'home' ? game.gameResult?.teamResultHome : game.gameResult?.teamResultAway;
@@ -37,9 +33,12 @@ function playerResults(game: GameJson, side: Side): Record<string, unknown>[] {
 /** Per-team totals keyed by POSTGAME_STATS. */
 export function teamStatTotals(game: GameJson, side: Side): Record<string, number> {
   const results = playerResults(game, side);
+  // Owner 10-09: the one SPP formula (logic/sppEarned.ts = upstream totalEarnedSpps on the BB2025 SppMechanic), with the
+  // team's special rules, so this total equals the sum of the roster rows.
+  const specialRules = ((side === 'home' ? game.teamHome : game.teamAway) as { specialRules?: string[] } | undefined)?.specialRules;
   const totals: Record<string, number> = {};
   for (const { key } of POSTGAME_STATS) {
-    totals[key] = key === 'spp' ? results.reduce((a, r) => a + sppEarned(r), 0) : results.reduce((a, r) => a + num(r, key), 0);
+    totals[key] = key === 'spp' ? results.reduce((a, r) => a + sppEarnedThisGame(r, specialRules), 0) : results.reduce((a, r) => a + num(r, key), 0);
   }
   return totals;
 }
