@@ -209,6 +209,8 @@ const side = defineModel<Side>('side', { default: 'home' });
 .pg-roster-skill-icon:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
 .pg-roster-skills[data-mode='icons'] + .pg-roster-value { margin-left: 0; }
 .pg-roster-skill-icon[data-added='true'] { border-color: #e6b422; box-shadow: 0 0 0 1px #e6b422, inset 0 0 0 1px rgb(0 0 0 / 55%); }
+/* Owner 10-09: Skill Markings mode - an ADDED skill's name wears the same gold outline (text keeps its category colour). */
+.pg-roster-skill[data-added='true'] { padding: 0 0.3em; border-radius: 3px; box-shadow: 0 0 0 1px #e6b422; } /* a shadow, not a border: the row keeps its height */
 .pg-roster-skill.skill-general { color: var(--ui-skill-general); }
 .pg-roster-skill.skill-agility { color: var(--ui-skill-agility); }
 .pg-roster-skill.skill-strength { color: var(--ui-skill-strength); }

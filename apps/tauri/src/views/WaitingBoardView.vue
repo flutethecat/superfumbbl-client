@@ -14,8 +14,9 @@ import { gameStore } from '../game/store';
 import { fumbblLobbyGames } from '../game/jnlpRouting';
 import WaitingVsBanner from '../components/WaitingVsBanner.vue';
 import {
-  clearFumbblTeamCache, projectWaitingBanner, resolveBannerTeams, type FumbblTeamInfo,
+  clearFumbblTeamCache, projectWaitingBanner, resolveBannerTeams, waitingBanner, type FumbblTeamInfo,
 } from '../game/waitingVsBanner';
+import { deriveRejoinModal, rejoinFlow, storeRejoinSnapshot } from '../game/rejoinFlow';
 
 const host = ref<HTMLElement | null>(null);
 let renderer: PitchRenderer | null = null;
@@ -75,6 +76,11 @@ const banner = computed(() => {
   if (!wait) return null;
   return projectWaitingBanner(wait, fumbblLobbyGames.value, { mine: fetchedMine.value, opponent: fetchedOpponent.value });
 });
+// Owner 10-09: "I don't know what the box in red is but it shouldn't be visible here" - while the app-level
+// join-progress window is up ("Waiting for Opponent" with its steps and Stop waiting), this board's own waiting card
+// sat half-hidden behind it. One box at a time: the join window when it is open (it shows the banner too), else ours.
+const joinWindowOpen = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()).kind !== 'closed');
+watch(banner, (model) => { waitingBanner.value = model; }, { immediate: true });
 /** Fills race/TV as the team records arrive. Runs on a waiting-state change or a lobby-list refresh - never on a timer;
  *  each team id is fetched once per wait (loadFumbblTeam caches). Never touches the waiting card. */
 async function loadBannerData(): Promise<void> {
@@ -95,6 +101,7 @@ onBeforeUnmount(() => {
   active = false;
   unmounted = true;
   bannerLoad += 1; // an in-flight banner lookup must not start its follow-up request after Cancel
+  waitingBanner.value = null;
   clearFumbblTeamCache();
   const r = renderer;
   renderer = null;
@@ -105,8 +112,9 @@ onBeforeUnmount(() => {
 <template>
   <div class="waiting-board">
     <div ref="host" class="waiting-board-pitch" aria-hidden="true"></div>
-    <div v-if="gameStore.state.waitingForMatch" class="waiting-board-overlay" :class="{ 'with-banner': banner }" role="alertdialog" aria-modal="true">
-      <WaitingVsBanner v-if="banner" :model="banner" />
+    <div v-if="gameStore.state.waitingForMatch && !joinWindowOpen" class="waiting-board-overlay" role="alertdialog" aria-modal="true">
+      <!-- Owner 10-09: the match-up sits directly above the waiting box, on top of the scrim (never shaded by it). -->
+      <WaitingVsBanner v-if="banner" :model="banner" inline />
       <div class="waiting-board-card">
         <h2 v-if="gameStore.state.waitingForMatch.opponentCoach">Waiting for {{ gameStore.state.waitingForMatch.opponentCoach }}</h2>
         <h2 v-else>Waiting for the other coach</h2>
@@ -131,11 +139,9 @@ onBeforeUnmount(() => {
 .waiting-board-pitch :deep(canvas) { display: block; width: 100%; height: 100%; }
 /* Lighter than the in-game connection scrim: the board stays readable behind the card. */
 .waiting-board-overlay {
-  position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center;
+  position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center;
   padding: 4vh 4vw; background: radial-gradient(ellipse at center, #0b122099 0%, #05070cc4 80%);
 }
-/* the VS banner sits across the top; keep the centred card clear of it on short windows */
-.waiting-board-overlay.with-banner { padding-top: max(4vh, 120px); }
 .waiting-board-card {
   max-width: 380px; background: var(--ui-surface-2); border: 1px solid #6a2b2b; border-radius: 12px;
   padding: 22px 26px; box-shadow: 0 16px 44px #000c; color: var(--ui-text); text-align: center;

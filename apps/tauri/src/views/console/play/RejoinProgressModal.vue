@@ -8,6 +8,8 @@ import { computed } from 'vue';
 import { deriveRejoinModal, dismissRejoin, rejoinFlow, retryOfficialJoin, storeRejoinSnapshot } from '../../../game/rejoinFlow';
 import { formatTeamValue } from '../../../game/teamChoice';
 import { ui } from '../../../game/ui';
+import { waitingBanner } from '../../../game/waitingVsBanner';
+import WaitingVsBanner from '../../../components/WaitingVsBanner.vue';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
 
@@ -28,6 +30,9 @@ function chooseTeam(teamId: string): void {
   <div v-if="modal.kind !== 'closed'" class="modal-backdrop save-prompt-backdrop rejoin-progress-backdrop"
     :class="{ 'under-app-menu': underAppMenu }" :inert="underAppMenu || undefined"
     role="alertdialog" aria-modal="true" aria-labelledby="rejoin-progress-title">
+    <!-- Owner 10-09: the Team v Team match-up sits directly above this box, over the backdrop (it was across the top
+         of the board, shaded by it). Shown whenever the waiting board has one. -->
+    <WaitingVsBanner v-if="waitingBanner" :model="waitingBanner" inline />
     <div class="save-prompt rejoin-progress">
       <h3 id="rejoin-progress-title">{{ modal.title }}</h3>
       <ul class="rejoin-steps">
@@ -68,6 +73,7 @@ function chooseTeam(teamId: string): void {
 
 <style scoped>
 .rejoin-progress { min-width: 320px; }
+.rejoin-progress-backdrop { flex-direction: column; gap: 16px; }
 /* JLeav 10-08: below App.vue .modal-backdrop (z 100) so the Esc game menu and Settings stay reachable. */
 .rejoin-progress-backdrop.under-app-menu { z-index: 90; }
 .rejoin-steps { display: grid; gap: 6px; margin: 10px 0 4px; padding: 0; list-style: none; text-align: left; }

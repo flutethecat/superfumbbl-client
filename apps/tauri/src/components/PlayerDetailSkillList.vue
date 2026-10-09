@@ -141,6 +141,8 @@ function hideTip(): void { tip.skill = null; }
 /* Owner 10-01 (S87): an ADDED skill's icon wears a gold outline (icons mode; the text chips keep their colours). */
 .skill-chip[data-display='icons'][data-added='true'] { border-color: #e6b422; box-shadow: 0 0 0 1px #e6b422, inset 0 0 0 1px rgb(0 0 0 / 55%); }
 .skill-chip[data-display='icons'][data-added='true']:hover, .skill-chip[data-display='icons'][data-added='true']:focus-visible { border-color: #ffd75e; box-shadow: 0 0 0 1px #ffd75e, inset 0 0 0 1px rgb(0 0 0 / 55%); }
+/* Owner 10-09: the same gold outline on an ADDED skill in Skill Markings mode (the chip keeps its category colour). */
+.skill-chip[data-display='markings'][data-added='true'] { border-color: #e6b422; box-shadow: 0 0 0 1px #e6b422; }
 .skill-chip img { width: 42.67px; height: 42.67px; image-rendering: pixelated; }
 .skill-chip img.chip-master { image-rendering: auto; } /* a minified illustration: smooth, not decimated */
 /* owner 10-05: Hatred's keyword under its icon - the chip grows a text line; the icon keeps its size */

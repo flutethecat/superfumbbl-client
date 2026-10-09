@@ -15,7 +15,12 @@
  *     local pack's race logo, else the bundled race crest; runtime FUMBBL CDN requests are disabled client-wide. For a scheduled tournament game
  *     my team's `tournament.opponents` names the opponent team when it holds exactly one id.
  */
+import { shallowRef } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
+
+/** Owner 10-09: the banner the waiting board is showing right now (null = none). The app-level join-progress window
+ *  reads it so the match-up sits directly ABOVE that window, over its backdrop, instead of shaded behind it. */
+export const waitingBanner = shallowRef<WaitingBannerModel | null>(null);
 
 export type WaitingForMatch = {
   gameName?: string;

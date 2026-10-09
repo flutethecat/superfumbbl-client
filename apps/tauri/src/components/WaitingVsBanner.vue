@@ -5,7 +5,8 @@ import { ref, watch } from 'vue';
 import { teamLogoUrl } from '../game/teamLogos';
 import { formatBannerTv, type BannerSide, type WaitingBannerModel } from '../game/waitingVsBanner';
 
-const props = defineProps<{ model: WaitingBannerModel }>();
+/** `inline` (owner 10-09): sits in the flow directly above the waiting box instead of across the top of the board. */
+const props = defineProps<{ model: WaitingBannerModel; inline?: boolean }>();
 
 /** A crest that failed to load falls back to the initials (like the Play blade). */
 const failed = ref(new Set<string>());
@@ -28,7 +29,7 @@ function initials(name: string): string {
 </script>
 
 <template>
-  <section class="vs-banner" data-testid="waiting-vs-banner" aria-label="Match-up">
+  <section class="vs-banner" :class="{ inline }" data-testid="waiting-vs-banner" aria-label="Match-up">
     <div v-for="slot in (['mine', 'opponent'] as const)" :key="slot" class="vs-side" :class="slot" :data-testid="`vs-${slot}`">
       <span class="vs-crest">
         <img v-if="crest(model[slot], slot === 'mine' ? 'home' : 'away')" :src="crest(model[slot], slot === 'mine' ? 'home' : 'away')!"
@@ -58,6 +59,7 @@ function initials(name: string): string {
   border: 2px solid #e03030cc; box-shadow: 0 10px 28px #000c, inset 0 0 0 1px #00000080;
   color: var(--ui-text, #f0f0f0); pointer-events: none;
 }
+.vs-banner.inline { position: relative; top: auto; left: auto; transform: none; flex: none; }
 .vs-side { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .vs-side.mine { grid-area: mine; }
 .vs-side.opponent { grid-area: opponent; flex-direction: row-reverse; text-align: right; }
