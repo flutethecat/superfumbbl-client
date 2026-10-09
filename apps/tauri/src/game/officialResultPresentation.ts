@@ -109,6 +109,90 @@ export function apothecaryOutcomePresentation(
   };
 }
 
+export interface ApothecaryFixUpCue {
+  playerId: string;
+  player: string;
+  side: 'home' | 'away';
+  /** Where the server put the player: Reserves (the bench), or left on the pitch Stunned. */
+  outcome: 'bench' | 'stunned';
+  text: string;
+}
+
+/** What an `apothecaryChoice` report claims for a player: Reserves (9) or Stunned (4). */
+export interface ApothecaryFixUpClaim { playerId: string; reported: 4 | 9 }
+export type ApothecaryFixUpVerdict = 'agrees' | 'pending' | 'contradicted';
+
+/** Owner 10-09: the server resolved the apothecary by itself - no `apothecaryChoice` dialog, nothing to choose.
+ *  Upstream writes ReportApothecaryChoice ONLY on that branch (StepApothecary.rollApothecary, `!apothecaryChoice`;
+ *  the multi-block step is identical), with the state that treatment produced:
+ *    - a casualty whose reroll is Badly Hurt              -> RESERVE (9), preceded by an `apothecaryRoll` report
+ *    - a Badly Hurt original                              -> RESERVE (9), no roll
+ *    - a KO from a crowd push / trapdoor / KTM fumble     -> RESERVE (9), no roll
+ *    - any other KO (InjuryType.canApoKoIntoStun)         -> STUNNED (4), the player stays on the pitch
+ *  The LAST report per player in the frame is the claim; any other reported state claims nothing. */
+export function apothecaryFixUpClaims(
+  reports: readonly Record<string, unknown>[],
+  game: GameJson,
+): ApothecaryFixUpClaim[] {
+  const last = new Map<string, number | null>();
+  for (const report of reports) {
+    if (String(report.reportId) !== 'apothecaryChoice') continue;
+    const playerId = String(report.playerId ?? '');
+    if (!playerId) continue;
+    last.delete(playerId);
+    last.set(playerId, stateBase(report.playerState));
+  }
+  const claims: ApothecaryFixUpClaim[] = [];
+  for (const [playerId, reported] of last) {
+    if (reported !== 4 && reported !== 9) continue;
+    if (![...game.teamHome.playerArray, ...game.teamAway.playerArray].some((player) => player.playerId === playerId)) continue;
+    claims.push({ playerId, reported });
+  }
+  return claims;
+}
+
+/** The report alone is NOT the player's destination, and it is not always in the same frame as it either:
+ *   - a multi-block attacker with two injuries can get a Reserves report for one while the other leaves them Dead;
+ *   - StepApothecaryMultiple writes every report first, then applies and syncs each injury separately, and the first
+ *     sync carries the whole report list - so a treated player's report can arrive a frame or two BEFORE their own
+ *     state change, which then arrives with no report.
+ *  So the claim is checked against the model: `agrees` (Reserves; or Stunned on the pitch) -> the line is true now;
+ *  `contradicted` (the model put the player in a different final state: Stunned / KO / casualty / Dead / Reserves)
+ *  -> never; `pending` (not moved yet) -> ask again after the next frame. */
+export function apothecaryFixUpVerdict(game: GameJson, claim: ApothecaryFixUpClaim): ApothecaryFixUpVerdict {
+  const data = game.fieldModel.playerDataArray.find((entry) => entry.playerId === claim.playerId);
+  const base = stateBase(data?.playerState);
+  if (base === null) return 'contradicted';
+  if (base === claim.reported) {
+    if (claim.reported === 9) return 'agrees';
+    const square = data?.playerCoordinate;
+    return square && square[0]! >= 0 && square[0]! < 26 && square[1]! >= 0 && square[1]! < 15 ? 'agrees' : 'pending';
+  }
+  return base >= 4 && base <= 9 ? 'contradicted' : 'pending';
+}
+
+export function apothecaryFixUpCue(game: GameJson, claim: ApothecaryFixUpClaim): ApothecaryFixUpCue {
+  const player = playerName(game, claim.playerId);
+  const outcome = claim.reported === 9 ? 'bench' : 'stunned';
+  return {
+    playerId: claim.playerId, player, outcome,
+    side: game.teamHome.playerArray.some((entry) => entry.playerId === claim.playerId) ? 'home' : 'away',
+    text: outcome === 'bench'
+      ? `The Apothecary fixes up ${player} and they return to the bench!`
+      : `The Apothecary fixes up ${player} and they stay on the pitch, Stunned!`,
+  };
+}
+
+/** The lines that are true in this very frame (`game` = the model AFTER it). When in doubt, none. */
+export function apothecaryFixUpPresentation(
+  reports: readonly Record<string, unknown>[],
+  game: GameJson,
+): ApothecaryFixUpCue[] {
+  return apothecaryFixUpClaims(reports, game)
+    .filter((claim) => apothecaryFixUpVerdict(game, claim) === 'agrees')
+    .map((claim) => apothecaryFixUpCue(game, claim));
+}
+
 export interface SendOffOutcomeCue {
   kind: 'argue' | 'bribe';
   success: boolean;

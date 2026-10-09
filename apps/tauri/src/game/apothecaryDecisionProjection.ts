@@ -4,6 +4,29 @@ import { apothecaryNoneLabel, apothecaryTypeOptions, parseApothecaryOffer, type 
 import { playerName } from './reportFormatter';
 import { playerStateBase } from './logic/apothecaryOffer';
 import { casualtyRollFor, casualtyRollBase, casualtyRollLabel, type CasualtyRollProjection } from './casualtyRollProjection';
+import { casualtyTierLabel } from './injuryOutcomeProjection';
+
+const COARSE_INJURY_LABELS: Record<number, string> = { 4: 'STUNNED', 5: 'KNOCKED OUT', 6: 'BADLY HURT', 7: 'SERIOUS INJURY', 8: 'DEAD' };
+
+function seriousInjuryName(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && 'name' in value) return String((value as { name: unknown }).name ?? '');
+  return '';
+}
+
+/** One side of the `apothecaryChoice` dialog as a label. The dialog's own playerState + seriousInjury are the
+ *  authority (owner 10-09): the raw D16 is NOT, because the server adds casualty modifiers to it and downgrades an
+ *  irreducible Lasting Injury to Seriously Hurt (bb2025 RollMechanic.interpretCasualtyRollAndAddModifiers / mapSIRoll),
+ *  so a raw 13 can be "Seriously Hurt". A Lasting Injury carries its stat, else two of them read identically. The raw
+ *  roll only labels a base-7 side whose injury string is absent or unrecognised. */
+function apothecarySideLabel(base: number, serious: unknown, raw: number | null, rawMatchesBase: boolean): string {
+  const name = seriousInjuryName(serious);
+  const tier = base === 6 || base === 8 || (base === 7 && name) ? casualtyTierLabel(name, base) : null;
+  if (tier && !(base === 7 && tier.tier === 'BADLY_HURT')) {
+    return (tier.stat ? `${tier.label} (${tier.stat})` : tier.label).toUpperCase();
+  }
+  return rawMatchesBase && raw !== null ? casualtyRollLabel(raw) : COARSE_INJURY_LABELS[base] ?? 'INJURY';
+}
 
 export function buildApothecaryResult(game: GameJson, dialog: Record<string, unknown>, rolls: CasualtyRollProjection) {
   const playerId = String(dialog.playerId ?? '');
@@ -14,14 +37,13 @@ export function buildApothecaryResult(game: GameJson, dialog: Record<string, unk
   const newRaw = entry?.newRoll ?? null;
   const oldOk = oldRaw !== null && casualtyRollBase(oldRaw) === oldBase;
   const newOk = newRaw !== null && casualtyRollBase(newRaw) === newBase;
-  const labels: Record<number, string> = { 4: 'STUNNED', 5: 'KNOCKED OUT', 6: 'BADLY HURT', 7: 'SERIOUS INJURY', 8: 'DEAD' };
   const data = game.fieldModel.playerDataArray.find((p) => p.playerId === playerId);
   const side: TeamSide = game.teamHome.playerArray.some((p) => p.playerId === playerId) ? 'home' : 'away';
   return {
     playerId, player: playerName(game, playerId), side,
     square: data?.playerCoordinate && data.playerCoordinate[0] >= 0 ? [...data.playerCoordinate] as [number, number] : null,
-    oldInjury: oldOk ? casualtyRollLabel(oldRaw) : labels[oldBase] ?? 'INJURY',
-    newInjury: newOk ? casualtyRollLabel(newRaw) : labels[newBase] ?? 'INJURY',
+    oldInjury: apothecarySideLabel(oldBase, dialog.seriousInjuryOld, oldRaw, oldOk),
+    newInjury: apothecarySideLabel(newBase, dialog.seriousInjuryNew, newRaw, newOk),
     oldRoll: oldOk ? oldRaw : null, newRoll: newOk ? newRaw : null,
   };
 }

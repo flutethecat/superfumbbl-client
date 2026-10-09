@@ -68,7 +68,7 @@ defineEmits<{
         <img v-if="portrait" class="apo-portrait" :src="portrait" :alt="`${subjectName} portrait`" />
         <span v-else class="apo-portrait apo-portrait-fallback" aria-hidden="true">👤</span>
         <strong class="apo-player-name">{{ subjectName }}</strong>
-        <PlayerDetailSkillList v-if="skills?.length" class="apo-skills" :skills="skills"
+        <PlayerDetailSkillList v-if="skills?.length" list-class="apo-skills" :skills="skills"
           :mode="skillMode ?? 'markings'" :icon-style="skillIconStyle ?? 'bb3'"
           :position-id="positionId" :side="playerSide ?? prompt.side" mark-added />
       </aside>
@@ -116,8 +116,9 @@ defineEmits<{
 .apo-portrait { width: 104px; height: 104px; flex: 0 0 104px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 4px 3px #000b); }
 .apo-portrait-fallback { display: grid; place-items: center; color: #7e8b99; font-size: max(var(--ui-min-primary-text-size, 16px), 2.2rem); }
 .apo-player-name { max-width: 100%; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.83rem); line-height: 1.14; overflow-wrap: anywhere; text-align: center; white-space: normal; }
-.apo-skills { width: 100%; max-width: 100%; justify-content: center; margin-top: 0; padding-top: 6px; }
-.apo-skills :deep(.skill-chip) { font-size: max(var(--ui-min-text-size, 12px), 0.62rem); }
+/* The skill list is a multi-root child: the class is handed to it as a prop and styled through :deep. */
+.apo-player-card :deep(.apo-skills) { width: 100%; max-width: 100%; justify-content: center; margin-top: 0; padding-top: 6px; }
+.apo-player-card :deep(.apo-skills .skill-chip) { font-size: max(var(--ui-min-text-size, 12px), 0.62rem); }
 .apo-treatment { display: flex; min-width: 0; flex-direction: column; justify-content: center; }
 .apo-kicker { color: var(--seat-home-text, #4a86fe); font-size: max(var(--ui-min-text-size, 12px), 0.61rem); font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }
 .seat-opposition .apo-kicker { color: var(--seat-away-text, #fe6666); }

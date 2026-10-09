@@ -14,11 +14,16 @@ const props = withDefaults(defineProps<{
   /** Owner 10-01 (S87): Modern player cards put ADDED skills last and ring their icons in gold. Opt-in, so a caller
    *  that does not ask for it (Classic) keeps its own order and look. */
   markAdded?: boolean;
+  /** Extra class for the list element itself. This component has more than one root (the list and its teleported
+   *  tooltip), so a `class` attribute on it is NOT inherited and silently lands nowhere; a caller that styles the
+   *  row passes it here. Opt-in: callers that do not pass it are unchanged. */
+  listClass?: string;
 }>(), {
   iconStyle: 'bb3',
   positionId: null,
   side: null,
   markAdded: false,
+  listClass: undefined,
 });
 
 const shownSkills = computed(() => (props.markAdded ? addedSkillsLast(props.skills) : props.skills));
@@ -81,7 +86,7 @@ function hideTip(): void { tip.skill = null; }
 </script>
 
 <template>
-  <div class="card-skills" role="list" aria-label="Player skills">
+  <div class="card-skills" :class="listClass" role="list" aria-label="Player skills">
     <span v-for="skill in shownSkills" :key="`${skill.name}:${skill.label}`"
       class="skill-chip" :class="mode === 'markings' ? playerSkillCategoryClass(skill.name) : undefined"
       :data-display="mode" :data-added="markAdded && skill.added ? 'true' : undefined"

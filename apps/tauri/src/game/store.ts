@@ -4,7 +4,7 @@ import { ballProjectilePresentation, createBallOutContext, createBallProjectileC
 export { throwPresentationKind } from './ballProjectilePresentation';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
 import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
-import { apothecaryOutcomePresentation, sendOffOutcomePresentation } from './officialResultPresentation';
+import { apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
 import { injuryPresentation, armourPresentation, type InjuryEvent } from './injuryPresentation';
 import { rerollPresentation } from './rerollPresentation';
@@ -1080,6 +1080,7 @@ const legacyState = reactive({
    * Informational result for the upstream Apothecary fast path. BB2025 auto-keeps a re-rolled
    * Badly Hurt result and sends the player straight to Reserves without opening
    * `apothecaryChoice`; this surface reports that authoritative outcome and never owns a wire answer.
+   * Owner 10-09: fed for ClassicView only - Modern shows the fix-up splash on `rerollSplash` instead.
    */
   apothecaryAutoReturn: null as {
     key: string;
@@ -1259,6 +1260,10 @@ const legacyState = reactive({
   opponentLeft: null as { coach: string; seq: number } | null,
   /** Owner 07-06: top-centre mini splash when a coach spends a TEAM RE-ROLL. */
   rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string } | null,
+  /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
+   *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
+   *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
+  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned'; text: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
 function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof legacyState> {
@@ -1327,7 +1332,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
   'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPuff',
-  'apothecaryAnim', 'apothecaryAutoReturn', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
+  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
   'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
@@ -2001,6 +2006,158 @@ function showMascotSplash(g: GameJson, teamId: string, roll: number | null): voi
     text: `${coach}'s Team Mascot comes through${roll != null ? ` (${roll})` : ''} - free reroll!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
+}
+/** Owner 10-09 (g1951682): "If the server is auto-selecting Badly Hurt results, let's instead surface a splash that
+ *  says 'The Apothecary fixes up <Player> and they return to the bench!'" - the Original/Rerolled card "is not
+ *  informative at that point". Not seat-gated: both coaches, spectators and replays see it.
+ *  A small FIFO on its own state (`apothecaryFixUp`), separate from the reroll-toast rail: each line is shown for
+ *  the toast's standard hold, then the rail is empty for a short gap before the next one mounts, so two fix-ups in
+ *  one frame are each seen in full. The queue holds toasts only - nothing reads it, waits on it or gates on it. */
+const APOTHECARY_FIX_UP_HOLD_MS = 2000; // = REROLL_SPLASH_HOLD_MS, the toast's own animation length (--p-2000)
+const APOTHECARY_FIX_UP_GAP_MS = 250;
+const APOTHECARY_FIX_UP_QUEUE_CAP = 8;
+/** A claim the model does not confirm yet. There is NO command or time bound on it: uninterrupted, the player's own
+ *  state change is one sync behind the report, but StepApothecaryMultiple can stop on another injury's result-choice
+ *  dialog before applying anything, and any number of unrelated syncs (marker updates from either coach) can pass
+ *  while that dialog is open. It lives until an EVENT ends it - see surfaceApothecaryFixUps. */
+interface PendingApothecaryFixUp {
+  claim: ApothecaryFixUpClaim; gameId: string; turn: string; commandNr: number | null;
+  /** The acting player when the report arrived ('' = none, e.g. a kick-off event injury). */
+  actingId: string;
+}
+const APOTHECARY_DIALOG_IDS = new Set(['useApothecary', 'useApothecaries', 'apothecaryChoice']);
+let apothecaryFixUpQueue: ApothecaryFixUpClaim[] = [];
+let apothecaryFixUpTimer: ReturnType<typeof setTimeout> | null = null;
+let apothecaryFixUpSeq = 0;
+/** Owner 10-09: the line sits in the band the full-width centre banners use (measured: it landed on top of
+ *  "HAS TURNED OVER"), so the queue does not START a line while one of them is ON SCREEN. The Modern view publishes
+ *  that as one flag from the very conditions it renders them with (SpectateView `centreBannerVisible`): store state
+ *  is not a reliable proxy - e.g. the Riotous Rookies state outlives its banner, which the view hides on a timer.
+ *  With no Modern view mounted the flag is false and nothing is deferred. Presentation only: the wake is the flag
+ *  going false, with a timeout as backstop so a banner that never clears cannot strand a line. A line already on
+ *  screen is never cut: it finishes its time on top of the banner (toast z-index 52, banner row 42). */
+const APOTHECARY_FIX_UP_BANNER_WAIT_MS = 6000;
+let apothecaryFixUpBannerBackstop: ReturnType<typeof setTimeout> | null = null;
+let apothecaryFixUpBannerWaitExpired = false;
+let centreBannerVisible = false;
+/** Catch-up silence covers claims that ARISE during catch-up (they are never queued). A line confirmed live and
+ *  merely waiting - behind a showing line or a banner - is RETAINED through a catch-up: the pump does not start it,
+ *  the catch-up exit wakes the pump (pumpPlayback), and a short retry timer covers every other exit. It is still
+ *  re-validated before it shows. Retained past this long it is no longer news and is dropped. */
+const APOTHECARY_FIX_UP_CATCH_UP_MAX_MS = 10000;
+const APOTHECARY_FIX_UP_CATCH_UP_RETRY_MS = 250;
+let apothecaryFixUpCatchUpSince: number | null = null;
+let apothecaryFixUpCatchUpRetry: ReturnType<typeof setTimeout> | null = null;
+/** Claims whose player has not reached the reported state yet, by playerId. Data only: nothing waits on it. */
+const pendingApothecaryFixUps = new Map<string, PendingApothecaryFixUp>();
+const apothecaryFixUpTurnKey = (g: GameJson): string =>
+  `${String(g.half)}:${String(g.homePlaying)}:${String(g.turnDataHome?.turnNr)}:${String(g.turnDataAway?.turnNr)}`;
+function clearApothecaryFixUps(): void {
+  if (apothecaryFixUpTimer) cancelGameTimeout(apothecaryFixUpTimer);
+  apothecaryFixUpTimer = null;
+  if (apothecaryFixUpBannerBackstop) cancelGameTimeout(apothecaryFixUpBannerBackstop);
+  apothecaryFixUpBannerBackstop = null;
+  apothecaryFixUpBannerWaitExpired = false;
+  if (apothecaryFixUpCatchUpRetry) cancelGameTimeout(apothecaryFixUpCatchUpRetry);
+  apothecaryFixUpCatchUpRetry = null;
+  apothecaryFixUpCatchUpSince = null;
+  apothecaryFixUpQueue = [];
+  pendingApothecaryFixUps.clear();
+  state.apothecaryFixUp = null;
+}
+function pumpApothecaryFixUps(): void {
+  if (apothecaryFixUpTimer || state.apothecaryFixUp) return;
+  if (!apothecaryFixUpQueue.length) return;
+  if (apothecaryFixUpCatchUpRetry) cancelGameTimeout(apothecaryFixUpCatchUpRetry);
+  apothecaryFixUpCatchUpRetry = null;
+  if (playback.catchingUp) {
+    // Nothing STARTS during catch-up, but the waiting lines are kept (see APOTHECARY_FIX_UP_CATCH_UP_MAX_MS).
+    apothecaryFixUpCatchUpSince ??= Date.now();
+    if (Date.now() - apothecaryFixUpCatchUpSince >= APOTHECARY_FIX_UP_CATCH_UP_MAX_MS) {
+      apothecaryFixUpQueue = [];
+      apothecaryFixUpCatchUpSince = null;
+      return;
+    }
+    apothecaryFixUpCatchUpRetry = scheduleGameTimeout(() => {
+      apothecaryFixUpCatchUpRetry = null;
+      pumpApothecaryFixUps();
+    }, APOTHECARY_FIX_UP_CATCH_UP_RETRY_MS);
+    return;
+  }
+  if (apothecaryFixUpCatchUpSince !== null) {
+    const retainedFor = Date.now() - apothecaryFixUpCatchUpSince;
+    apothecaryFixUpCatchUpSince = null;
+    if (retainedFor >= APOTHECARY_FIX_UP_CATCH_UP_MAX_MS) { apothecaryFixUpQueue = []; return; }
+  }
+  if (centreBannerVisible && !apothecaryFixUpBannerWaitExpired) {
+    // Deferred behind the banner. Woken by the banner clearing; this timer only backstops a banner that never does.
+    apothecaryFixUpBannerBackstop ??= scheduleGameTimeout(() => {
+      apothecaryFixUpBannerBackstop = null;
+      apothecaryFixUpBannerWaitExpired = true;
+      pumpApothecaryFixUps();
+    }, APOTHECARY_FIX_UP_BANNER_WAIT_MS);
+    return;
+  }
+  if (apothecaryFixUpBannerBackstop) cancelGameTimeout(apothecaryFixUpBannerBackstop);
+  apothecaryFixUpBannerBackstop = null;
+  apothecaryFixUpBannerWaitExpired = false;
+  const g = game.value;
+  let cue: ReturnType<typeof apothecaryFixUpCue> | null = null;
+  while (g && !cue && apothecaryFixUpQueue.length) {
+    const claim = apothecaryFixUpQueue.shift()!;
+    // Re-validated at the moment it is shown: a player who was re-fielded or changed state while the line waited
+    // behind another one is skipped.
+    if (apothecaryFixUpVerdict(g, claim) === 'agrees') cue = apothecaryFixUpCue(g, claim);
+  }
+  if (!cue) { apothecaryFixUpQueue = []; return; }
+  state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, text: cue.text, seq: ++apothecaryFixUpSeq };
+  apothecaryFixUpTimer = scheduleGameTimeout(() => {
+    state.apothecaryFixUp = null;
+    apothecaryFixUpTimer = scheduleGameTimeout(() => {
+      apothecaryFixUpTimer = null;
+      pumpApothecaryFixUps();
+    }, APOTHECARY_FIX_UP_GAP_MS);
+  }, Math.max(450, presentationMs(APOTHECARY_FIX_UP_HOLD_MS)));
+}
+/** Called for every applied frame with the model AFTER it. One line per server occurrence (game + the report's
+ *  commandNr + player): a frame applied twice (a resend) cannot show it twice and catch-up shows nothing. A claim the
+ *  model does not confirm yet is kept pending and re-checked here on the following frames. It ends only on an event:
+ *  the model agrees (the line is emitted); the model puts the player in a contradicting final state; a newer report
+ *  for the player replaces it; the game changes; a replay seek/stop resets presentation (which also drops the seen
+ *  set - seeking back and playing forward shows the event again, because it happens again on the timeline); or,
+ *  while NO apothecary dialog is open, the turn ends or the sequence it belongs to is over (the acting player is
+ *  no longer the one it arrived under - the apothecary step runs inside that player's block sequence, and the
+ *  owner's g1951682 wire clears the acting player two commands AFTER the state change). While an apothecary
+ *  dialog is open nothing expires: the remaining injuries are applied only after it is answered. */
+function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g: GameJson, commandNr: number | null): void {
+  const gameId = String((g as { gameId?: unknown }).gameId ?? 'unknown');
+  const turn = apothecaryFixUpTurnKey(g);
+  const actingId = String(g.actingPlayer?.playerId ?? '');
+  const apothecaryDialogOpen = APOTHECARY_DIALOG_IDS.has(String(g.dialogParameter?.dialogId ?? ''));
+  const claims = apothecaryFixUpClaims(reports, g);
+  const ready: ApothecaryFixUpClaim[] = [];
+  for (const [playerId, pending] of [...pendingApothecaryFixUps]) {
+    if (pending.commandNr !== null && commandNr !== null && commandNr <= pending.commandNr) continue; // its own frame again
+    const drop = () => pendingApothecaryFixUps.delete(playerId);
+    if (claims.some((claim) => claim.playerId === playerId) || pending.gameId !== gameId) { drop(); continue; }
+    const verdict = apothecaryFixUpVerdict(g, pending.claim);
+    if (verdict === 'agrees') { drop(); ready.push(pending.claim); continue; }
+    const sequenceOver = !apothecaryDialogOpen && (pending.turn !== turn || pending.actingId !== actingId);
+    if (verdict === 'contradicted' || sequenceOver) drop();
+  }
+  for (const claim of claims) {
+    const key = `fixup:${gameId}:${commandNr ?? 'unknown'}:${claim.playerId}`;
+    if (apothecaryAutoReturnSeen.has(key)) continue;
+    apothecaryAutoReturnSeen.add(key);
+    const verdict = apothecaryFixUpVerdict(g, claim);
+    if (verdict === 'agrees') ready.push(claim);
+    else if (verdict === 'pending') {
+      pendingApothecaryFixUps.set(claim.playerId, { claim, gameId, turn, commandNr, actingId });
+    }
+  }
+  if (!ready.length || playback.catchingUp) return;
+  for (const claim of ready) if (apothecaryFixUpQueue.length < APOTHECARY_FIX_UP_QUEUE_CAP) apothecaryFixUpQueue.push(claim);
+  pumpApothecaryFixUps();
 }
 /** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
  *  ordinary reRoll report's splash; a failed one without fallback shows nothing new). */
@@ -3385,6 +3542,8 @@ let pendingApothecaryResult: ({
   pick: 'old' | 'new'; mine: boolean;
 }) | null = null;
 
+const CLASSIC_APOTHECARY_HOLD_SLICE_MS = 100;
+
 function clearApothecaryResult(): void {
   if (apothecaryResultTimer) cancelGameTimeout(apothecaryResultTimer);
   apothecaryResultTimer = null;
@@ -3408,14 +3567,17 @@ function playerStateBase(v: unknown): number | null {
   return null;
 }
 
-/** Surface the authoritative post-treatment result. This handles both the normal
- * old/new election report and BB2025's command-free, auto-kept Badly Hurt branch. */
+/** Surface the authoritative post-treatment result. Modern shows the fix-up splash (owner 10-09). The
+ * Original/Rerolled card below is now the CLASSIC view's feed only (ClassicView renders `apothecaryAutoReturn`);
+ * Modern never sets that state, so it has no card, no timer and nothing to dismiss. */
 function surfaceAutoAcceptedApothecaryReturn(
   reports: Record<string, unknown>[],
   commandNr: number | null,
 ): void {
   const g = game.value;
   if (!g) return;
+  surfaceApothecaryFixUps(reports, g, commandNr);
+  if (settings.uiMode !== 'classic') return;
   const accepted = reports.find((report) => String(report.reportId) === 'apothecaryChoice');
   if (!accepted) return;
   const playerId = String(accepted.playerId ?? '');
@@ -4273,11 +4435,24 @@ async function pauseSpectatorView(): Promise<void> {
           outcome: apothecaryOutcome.autoReturn ? 'reserves' : 'building',
           side: apothecaryOutcome.side, medic: true, seq: (state.apothecaryAnim?.seq ?? 0) + 1,
         };
-        if (!await holdSurface(3000, () => { state.apothecaryAutoReturn = {
-          ...apothecaryOutcome, mine: false, audience: 'spectator',
-          seq: (state.apothecaryAutoReturn?.seq ?? 0) + 1,
-        }; }, () => { state.apothecaryAutoReturn = null; })) return;
+        // Classic keeps its result card and the hold that shows it; Modern has no card to wait for. The hold is
+        // waited in short slices so that leaving Classic mid-hold releases it at once (every hold needs a wake).
+        if (settings.uiMode === 'classic') {
+          if (signal.aborted) return;
+          state.apothecaryAutoReturn = {
+            ...apothecaryOutcome, mine: false, audience: 'spectator',
+            seq: (state.apothecaryAutoReturn?.seq ?? 0) + 1,
+          };
+          const holdUntil = Date.now() + presentationMs(3000);
+          while (settings.uiMode === 'classic' && Date.now() < holdUntil) {
+            const slice = Math.max(1, Math.min(CLASSIC_APOTHECARY_HOLD_SLICE_MS, holdUntil - Date.now()));
+            if (!await presentStages([{ delayBefore: slice, present: () => {} }], signal)) return;
+          }
+          state.apothecaryAutoReturn = null;
+        }
       }
+      // Owner 10-09: the fix-up splash is fire-and-forget - the review pipeline does not wait on it.
+      surfaceApothecaryFixUps(reports, position.model, commandNr);
       if (sendOffOutcome === null) {
         state.sendOffResult = null;
       } else if (sendOffOutcome) {
@@ -9442,6 +9617,7 @@ function pumpPlayback() {
     setSoundsSuppressed(false);
     clearCatchupTransients();
     playback.holdUntil = 0;
+    pumpApothecaryFixUps(); // wake a fix-up line that was retained through the catch-up
     // Historical prayer occurrences stay suppressed, but a dialog still authoritative at the live tail must mount
     // once, read-only or interactive as appropriate.
     const livePrayer = game.value ? interactivePrayerDialog(game.value) : null;
@@ -10097,7 +10273,7 @@ function resetPlayback() {
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
   prevTimeoutEnforced = false; timeoutAutoEndArmed = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
-  apothecaryAutoReturnSeen.clear(); pendingApothecaryResult = null; clearApothecaryResult();
+  apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
   resetEndGameSettle(); // owner 2026-07-08 (queue 1): fresh game — endGame pacing re-arms
   state.pushChoice = null; // owner 2026-07-03: drop a stale interactive push choice
@@ -10160,13 +10336,13 @@ function clearCinematics(hardGameBoundary = false) {
   state.fanFactorCine = null; state.inducementReveal = null; state.apothecaryChoice = null;
   pendingApothecaryResult = null;
   clearApothecaryResult();
-  if (hardGameBoundary) apothecaryAutoReturnSeen.clear();
+  if (hardGameBoundary) { apothecaryAutoReturnSeen.clear(); pendingApothecaryFixUps.clear(); }
   state.apothecaryAnim = null; state.crowdSurf = null; state.rockThrow = null; state.turnover = null;
   state.injurySplash = null; state.injuryPuff = null;
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash();
+  state.turnStart = null; clearRerollSplash(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
@@ -10216,6 +10392,7 @@ function clearCollapsedReplayPresentation(preserveConnection = false): void {
   turnStartClearTimer = null;
   turnToastTimer = null;
   rerollSplashClearTimer = null;
+  clearApothecaryFixUps();
   pendingKickoffVictimSplash = null;
   pendingWinnerKickoff = null;
   clearPregameCine();
@@ -10283,6 +10460,7 @@ function clearLeaveGameResidualState(): void {
   turnStartTimer = null;
   turnStartClearTimer = null;
   rerollSplashClearTimer = null;
+  clearApothecaryFixUps();
   rerollStageTimers = [];
   injuryPlaying = false;
 
@@ -10354,6 +10532,9 @@ watch(
   ([active, replayActive]) => setPresentationMode(replayActive ? 'replay' : active ? 'live' : 'spectator'),
   { immediate: true },
 );
+// Owner 10-09: the Original/Rerolled apothecary card exists in Classic only. Leaving Classic drops it and its timer
+// at once (sync, so the review pipeline's sliced hold sees the mode and the cleared card together).
+watch(() => settings.uiMode, (mode) => { if (mode !== 'classic') clearApothecaryResult(); }, { flush: 'sync' });
 
 // Suppress duplicate blitz-target handling while playerBlitz owns it; reset on send, actor change, or new game.
 let blitzDriving = false;
@@ -12335,6 +12516,8 @@ export function installApothecaryTestHarness(
 ): {
   applyDialog(dialog: Record<string, unknown> | null, commandNr: number): void;
   applyReports(reports: Record<string, unknown>[], commandNr: number): void;
+  /** Apply one captured server command exactly as the wire delivered it (dialog change and reports in one frame). */
+  applyCommand(cmd: Record<string, unknown>): void;
   snapshotFollowup(dialog: Record<string, unknown>): void;
   setLiveDialog(dialog: Record<string, unknown> | null): void;
   runFollowups(): void;
@@ -12342,6 +12525,18 @@ export function installApothecaryTestHarness(
   prompt(): typeof state.apothecaryChoice;
   d16(): typeof state.apothecaryD16;
   autoReturn(): typeof state.apothecaryAutoReturn;
+  /** The reroll-toast rail (untouched by the apothecary). */
+  splash(): typeof state.rerollSplash;
+  /** Owner 10-09: the Modern fix-up line, on its own rail. */
+  fixUp(): typeof state.apothecaryFixUp;
+  /** Put a toast on the reroll rail through the real Mascot path, to prove the two rails do not collide. */
+  showMascotToast(): void;
+  /** What the Modern view reports: a full-width centre banner is on screen. */
+  setCentreBanner(on: boolean): void;
+  /** Store state that outlives its banner (the Riotous Rookies state is never nulled on one path). */
+  setStaleBannerState(): void;
+  /** A queued-but-not-yet-shown count is not exposed; this is the open pending-claim count. */
+  pendingFixUps(): number;
   resolve(injuryIndex: number | null, apothecaryType?: ApothecaryType | null): void;
   dismissAutoReturn(): void;
   chooseResult(pick: 'old' | 'new'): void;
@@ -12350,6 +12545,7 @@ export function installApothecaryTestHarness(
   setReplayActive(active: boolean): void;
   setUiMode(mode: 'fumbbl40k' | 'classic'): void;
   setCatchingUp(on: boolean): void;
+  endCatchUp(): void;
   hardBoundary(): void;
   dispose(): void;
 } {
@@ -12360,6 +12556,10 @@ export function installApothecaryTestHarness(
   const priorUiMode = settings.uiMode;
   const priorChoice = state.apothecaryChoice;
   const priorAutoReturn = state.apothecaryAutoReturn;
+  const priorSplash = state.rerollSplash;
+  const priorRiotous = state.riotousRookiesSplash;
+  const priorTurnStart = state.turnStart;
+  const priorCentreBanner = centreBannerVisible;
   const priorSurfaces = [...apothecaryElectionSurfaces];
   const priorHandled = [...followupHandled];
   const priorCasualtyRollProjection = visibleCasualtyRollProjection;
@@ -12375,6 +12575,9 @@ export function installApothecaryTestHarness(
   apothecaryElectionSurfaces.clear();
   state.apothecaryChoice = null;
   clearApothecaryResult();
+  clearRerollSplash();
+  centreBannerVisible = false;
+  clearApothecaryFixUps();
   pendingApothecaryResult = null;
   visibleCasualtyRollProjection = createCasualtyRollProjection();
   visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
@@ -12419,6 +12622,9 @@ export function installApothecaryTestHarness(
         },
       });
     },
+    applyCommand(cmd) {
+      applyFrame({ receivedAt: Date.now(), cmd } as Parameters<typeof applyFrame>[0]);
+    },
     snapshotFollowup(dialog) {
       setLiveDialog(dialog);
       resolvePlayFollowups();
@@ -12429,6 +12635,15 @@ export function installApothecaryTestHarness(
     prompt: () => state.apothecaryChoice,
     d16: () => state.apothecaryD16,
     autoReturn: () => state.apothecaryAutoReturn,
+    splash: () => state.rerollSplash,
+    fixUp: () => state.apothecaryFixUp,
+    setCentreBanner(on) { gameStore.setCentreBannerVisible(on); },
+    setStaleBannerState() {
+      state.riotousRookiesSplash = { coach: 'Coach', amount: 3, rolls: [3], seq: (state.riotousRookiesSplash?.seq ?? 0) + 1 };
+      state.turnStart = { side: 'home', coach: 'Coach', teamName: 'Team', logo: null, seq: (state.turnStart?.seq ?? 0) + 1 };
+    },
+    pendingFixUps: () => pendingApothecaryFixUps.size,
+    showMascotToast() { if (game.value) showMascotSplash(game.value, String((game.value.teamHome as { teamId?: string }).teamId ?? ''), 4); },
     resolve(injuryIndex, apothecaryType) {
       const prompt = state.apothecaryChoice;
       if (prompt) gameStore.resolveApothecary(prompt.key, injuryIndex, apothecaryType);
@@ -12440,9 +12655,17 @@ export function installApothecaryTestHarness(
     setReplayActive(active) { replay.active = active; },
     setUiMode(mode) { settings.uiMode = mode; },
     setCatchingUp(on) { playback.catchingUp = on; },
+    /** Leave catch-up the way pumpPlayback does: the flag drops and the fix-up pump is woken. */
+    endCatchUp() { playback.catchingUp = false; pumpApothecaryFixUps(); },
     hardBoundary() { clearCinematics(true); },
     dispose() {
       clearApothecaryResult();
+      clearRerollSplash();
+      state.riotousRookiesSplash = priorRiotous;
+      state.turnStart = priorTurnStart;
+      centreBannerVisible = priorCentreBanner;
+      clearApothecaryFixUps();
+      state.rerollSplash = priorSplash;
       pendingApothecaryResult = priorPendingResult;
       apothecaryElectionController.clear();
       apothecaryElectionSurfaces.clear();
@@ -23621,6 +23844,14 @@ export const gameStore = {
     log('system', `apothecary result for ${c.player}: kept the ${useNew ? c.newInjury : c.oldInjury} outcome`);
     // the escort to the building plays after the re-roll choice is made
     state.apothecaryAnim = { playerId: c.playerId, square: c.square, outcome: 'building', side: c.side, medic: true, seq: (state.apothecaryAnim?.seq ?? 0) + 1 }; // #75: apo WAS used (keep-which path) → medic escort
+  },
+
+  /** The Modern view reports whether a full-width centre banner is on screen (its own render conditions). Going
+   *  false is the wake for a fix-up line deferred behind it. Presentation only. */
+  setCentreBannerVisible(visible: boolean) {
+    if (centreBannerVisible === visible) return;
+    centreBannerVisible = visible;
+    if (!visible) pumpApothecaryFixUps();
   },
 
   /** Dismiss the read-only treatment result. No wire command exists. */

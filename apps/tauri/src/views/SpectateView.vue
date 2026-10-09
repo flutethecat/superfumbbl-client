@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect } from 'vue';
 import { FORK_EDITION } from '../game/edition';
 import {
   cachedBundledFumbblAsset,
@@ -69,7 +69,6 @@ import ConfirmActionButton from '../components/ConfirmActionButton.vue';
 import PlayerDetailSkillList from '../components/PlayerDetailSkillList.vue';
 import ApothecaryPrompt from '../components/ApothecaryPrompt.vue';
 import ApothecaryResultChoice from '../components/ApothecaryResultChoice.vue';
-import ApothecaryAutoReturn from '../components/ApothecaryAutoReturn.vue';
 import SendOffPrompt from '../components/SendOffPrompt.vue';
 import SendOffResult from '../components/SendOffResult.vue';
 import { mergeRosteredStarCards, rosteredStarCards } from '../game/inducementRosterStars';
@@ -121,6 +120,7 @@ import { currentBlockChoosingTeamId, currentMultiBlockChoosingTeamId, isCurrentB
 import { savedSetupPreview, templatePreview } from '../game/setupTemplatePreview';
 import { hmpScatterSkillUseCardCopy, modifyingSkillCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
 import { swoopChoiceCopy } from '../game/logic/swoopPresentation';
+import { watchedCardHandoffMs } from '../game/logic/minimumVisible';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
 import { setGameWithConfirmedMovement, watchConfirmedMovementPresentation } from '../game/confirmedMovementPresentation';
 import { snapshotTickNeedsRebuild } from '../game/spectatorSnapshotTick';
@@ -3749,7 +3749,7 @@ watchDecisionSurface(
 // #237 (owner-fg 07-29): reactive prompt cards keep a per-instance manual position once dragged.
 type ReactivePromptDragKey =
   | 'skillChoice' | 'bloodlust' | 'reroll' | 'playerPick' | 'pickMeUp' | 'sendOff' | 'wideRailActivation'
-  | 'apothecaryChoice' | 'apothecaryD16' | 'apothecaryAutoReturn' | 'selectSkill' | 'endTurnWarn' | 'endActConfirm'
+  | 'apothecaryChoice' | 'apothecaryD16' | 'selectSkill' | 'endTurnWarn' | 'endActConfirm'
   | 'blitzMove' | 'keywordChoice' | 'cardChoice' | 'cardBuy' | 'coinChoice' | 'receiveChoice'
   | 'yesNo' | 'blockAlternative' | 'followup' | 'blockPartial' | 'multiBlock'
   | 'injuryInteraction' | 'shadowing' | 'puntConfirm' | 'tentacles' | 'onTheBallWaiting' | 'setupConfirm' | 'concedeOffer';
@@ -3764,7 +3764,6 @@ const reactivePromptDragPos = reactive<Record<ReactivePromptDragKey, ReactivePro
   wideRailActivation: null,
   apothecaryChoice: null,
   apothecaryD16: null,
-  apothecaryAutoReturn: null,
   selectSkill: null,
   endTurnWarn: null,
   endActConfirm: null,
@@ -3873,7 +3872,40 @@ const pickMeUpCardAnchor = computed(() => centerPanelBox.value
 watch(() => gameStore.state.sendOff, (prompt) => { if (!prompt) reactivePromptDragPos.sendOff = null; });
 watch(() => gameStore.state.apothecaryChoice?.seq, () => { reactivePromptDragPos.apothecaryChoice = null; });
 watch(() => gameStore.state.apothecaryD16?.seq, () => { reactivePromptDragPos.apothecaryD16 = null; });
-watch(() => gameStore.state.apothecaryAutoReturn?.seq, () => { reactivePromptDragPos.apothecaryAutoReturn = null; });
+// Owner 10-09 (Astra review): the WATCHED choice card (opponent / spectator, read-only) could flash for ~100 ms
+// when the deciding coach answered at once - the store clears it with the dialog, and in a multi-block the next
+// injury's card can open right behind it. The view keeps its own copy on screen until VIEWER_VISIBLE_MIN_MS has
+// passed, whether the card is being closed OR replaced by another watched card (which then waits its turn).
+// Presentation only: store state, the injury-decision gate and the wire are untouched; a card the LOCAL coach must
+// answer is shown at once and closes the moment it is answered; the only thing waiting is this timer. The watcher
+// runs pre-flush, so a card set and cleared in one batch is never shown at all.
+const apoResultCardShown = shallowRef<typeof gameStore.state.apothecaryD16>(null);
+let apoResultCardShownAt = 0;
+let apoResultCardLingerTimer: ReturnType<typeof setTimeout> | null = null;
+function dropApoResultCardLinger(): void {
+  if (apoResultCardLingerTimer) clearTimeout(apoResultCardLingerTimer);
+  apoResultCardLingerTimer = null;
+}
+/** Show whatever the store holds NOW (the timer may fire after further changes: only the latest card matters). */
+function settleApoResultCard(): void {
+  apoResultCardLingerTimer = null;
+  const latest = gameStore.state.apothecaryD16;
+  const shown = apoResultCardShown.value;
+  if (latest && !(shown && shown.seq === latest.seq && shown.playerId === latest.playerId)) apoResultCardShownAt = performance.now();
+  apoResultCardShown.value = latest;
+}
+watch(() => gameStore.state.apothecaryD16, (card) => {
+  dropApoResultCardLinger();
+  const shown = apoResultCardShown.value;
+  const sameCard = !!card && !!shown && shown.seq === card.seq && shown.playerId === card.playerId;
+  const wait = sameCard ? 0 : watchedCardHandoffMs(shown, card, apoResultCardShownAt, performance.now());
+  if (wait <= 0) settleApoResultCard();
+  else apoResultCardLingerTimer = setTimeout(settleApoResultCard, wait);
+}, { immediate: true });
+watch(() => gameStore.game.value?.gameId, () => { // a lingering card never crosses into another game
+  if (!gameStore.state.apothecaryD16) { dropApoResultCardLinger(); apoResultCardShown.value = null; }
+});
+onBeforeUnmount(dropApoResultCardLinger);
 watch(() => gameStore.state.selectSkill?.seq, () => { reactivePromptDragPos.selectSkill = null; });
 // Owner 10-05: the Raise the Dead position pick - upstream PositionChoiceMode.RAISE_DEAD header "Select position for raised player"
 const selectPositionTitle = computed(() => {
@@ -4012,10 +4044,6 @@ watch(
 // as the KO/casualty toast (square first, token fallback), RAF-follows pan/zoom.
 const apoChoicePos = reactive({ x: 0, y: 0, ready: false, leftEdge: false });
 const apoChoicePortrait = ref<string | null>(null);
-const apoResultPortrait = computed(() => {
-  const playerId = gameStore.state.apothecaryAutoReturn?.playerId;
-  return playerId && renderer ? renderer.playerPortrait(playerId) : null;
-});
 const apoChoiceSkills = ref<ReturnType<typeof playerDetailSkills>>([]);
 const apoChoicePositionId = ref<string | null>(null);
 const apoChoiceSide = ref<'home' | 'away' | null>(null);
@@ -6037,6 +6065,25 @@ const quickSnapAllowance = computed(() => {
 // Suppress the turn-start splash during drive setup and kickoff mini-phases, including kickoff-event blitz.
 const KICKOFF_DRIVE_TURN_MODES = new Set(['setup', 'solidDefence', 'kickoff', 'kickoffReturn', 'highKick', 'quickSnap', 'swarming', 'passBlock', 'blitz']);
 const inKickoffDrivePhase = computed(() => KICKOFF_DRIVE_TURN_MODES.has(gameStore.game.value?.turnMode ?? ''));
+// Owner 10-09: one flag for "a full-width centre banner is on screen", built from the SAME conditions the template
+// renders each of them with (never from store state alone: the Master Chef / Riotous Rookies states outlive their
+// banners, which this view hides on its own timers; the turn-start banner is not rendered in the kick-off drive
+// phase). The store holds the apothecary fix-up line back while it is true. Keep this list in step with the
+// template: turnover / turn-start banner row, Master Chef, Riotous Rookies, Dodgy Snack, and the full-screen
+// coin-toss, weather, kick-off and fan-factor cinematics.
+const centreBannerVisible = computed(() => !!(
+  gameStore.state.turnover
+  || (gameStore.state.turnStart && !inKickoffDrivePhase.value)
+  || (masterChefSplashVisible.value && gameStore.state.masterChefSplash)
+  || (riotousRookiesSplashVisible.value && gameStore.state.riotousRookiesSplash)
+  || gameStore.state.dodgySnackAnnouncement
+  || gameStore.state.coinToss
+  || gameStore.state.weatherCine
+  || gameStore.state.kickoffCine
+  || gameStore.state.fanFactorCine
+));
+watch(centreBannerVisible, (visible) => gameStore.setCentreBannerVisible(visible), { immediate: true, flush: 'sync' });
+onBeforeUnmount(() => gameStore.setCentreBannerVisible(false));
 // Quick Snap selects an owned player, highlights upstream-legal adjacent empty squares, and moves via CLIENT_SETUP_PLAYER.
 const selectedQuickSnap = ref<string | null>(null);
 // Owner 10-05: each DOM hit target covers the WHOLE tile (the renderer's projected square bounds), not a 26 px dot.
@@ -12705,20 +12752,14 @@ function sendChat() {
         <!-- Apothecary re-roll CHOICE (owner 2026-07-03 r6f; redesign owner 08-18): the d16
              disc is SUPPRESSED — the card is the red-cross identity plus the two result
              TITLES (Original vs Re-Rolled), console token/bevel/raised-caps treatment. -->
-        <ApothecaryResultChoice v-if="gameStore.state.apothecaryD16" :key="'d16-' + gameStore.state.apothecaryD16.seq"
-          :choice="gameStore.state.apothecaryD16" :icon-url="apothecaryIconUrl"
+        <ApothecaryResultChoice v-if="apoResultCardShown" :key="'d16-' + apoResultCardShown.seq + '-' + apoResultCardShown.playerId"
+          :choice="apoResultCardShown" :icon-url="apothecaryIconUrl"
           :position-style="reactivePromptStyle('apothecaryD16')"
           @drag-start="startReactivePromptDrag('apothecaryD16', $event)"
           @choose="gameStore.resolveApothecaryChoice($event)" />
 
-        <!-- Upstream auto-keeps a re-rolled Badly Hurt result and moves the player to
-             Reserves without opening a choice dialog. This is local information only. -->
-        <ApothecaryAutoReturn v-if="gameStore.state.apothecaryAutoReturn"
-          :key="'apo-auto-' + gameStore.state.apothecaryAutoReturn.seq"
-          :result="gameStore.state.apothecaryAutoReturn" :icon-url="apothecaryIconUrl"
-          :portrait="apoResultPortrait"
-          :position-style="reactivePromptStyle('apothecaryAutoReturn')"
-          @drag-start="startReactivePromptDrag('apothecaryAutoReturn', $event)" />
+        <!-- Owner 10-09: a server-resolved apothecary (no choice dialog) has no card here; the store puts
+             "The Apothecary fixes up <Player> and they return to the bench!" on its own toast (apothecaryFixUp). -->
 
         <!-- B6-5: coin-flip cinematic — coin spins up and is caught.
              Lift (translateY arc) and flip (rotateX) are separate nested
@@ -14241,6 +14282,14 @@ function sendChat() {
           <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? `${gameStore.state.rerollSplash.coach} uses ${gameStore.state.rerollSplash.source}!` }}</span>
+        </div>
+        <!-- Owner 10-09: the server-resolved apothecary line. The reroll toast's look on its OWN rail and position
+             (a match announcement, one band below the centred reroll announcements), so neither can cover or
+             replace the other. The key never repeats: each line mounts a fresh element and replays the entry. -->
+        <div v-if="gameStore.state.apothecaryFixUp" :key="'apo-fix-' + gameStore.state.apothecaryFixUp.seq"
+          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" data-testid="apothecary-fix-up">
+          <img class="reroll-toast-icon" :src="apothecaryIconUrl" alt="" />
+          <span class="reroll-toast-text">{{ gameStore.state.apothecaryFixUp.text }}</span>
         </div>
 
         <!-- U5 (owner UX ruling 08-11): while a Fumblerooski election is live (ball dropped, drops on the next
@@ -18475,6 +18524,7 @@ function sendChat() {
   85% { opacity: 1; transform: translate(-50%, 0); }
   100% { opacity: 0; transform: translate(-50%, -4px); }
 }
+.reroll-toast.apo-fixup-toast { top: calc(40% + 56px); }
 .reroll-toast[data-side='home'] {
   background: linear-gradient(120deg, #0c1e7af2, #0a1030e8);
   border-color: #3a5be0cc;

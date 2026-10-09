@@ -52,6 +52,9 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
 <style scoped>
 .apo-result-choice { z-index: 48; top: 42%; width: fit-content; min-width: 280px; max-width: calc(100% - 32px); border-left: 4px solid var(--seat-home-mid, #003eb3); }
 .apo-result-choice.seat-opposition { border-left-color: var(--seat-away-mid, #b30000); }
+/* Owner 10-09: the shared panel body is a no-wrap flex ROW, which laid the head, the two results and the help line
+   out as three squeezed columns. The sections stack: who, then the two results side by side, then the help line. */
+.apo-result-choice :deep(.pitch-confirm-body) { flex-direction: column; align-items: stretch; flex-wrap: nowrap; white-space: normal; }
 .apo-result-head { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; }
 .apo-result-head > span:last-child { display: flex; min-width: 0; flex-direction: column; }
 .apo-result-head strong { overflow: hidden; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.94rem); text-overflow: ellipsis; white-space: nowrap; }
@@ -62,7 +65,7 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
 /* Owner reflow: the two result buttons size to their one-line content (the card hugs them), wrapping
    only when the pitch is genuinely too narrow. */
 .apo-results { display: flex; flex-wrap: wrap; gap: 10px; width: 100%; margin-top: 8px; }
-.apo-result { display: flex; flex: 1 1 auto; min-width: 0; min-height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px 12px; color: var(--ui-text); border: 2px outset #59636e; border-radius: 5px; background: linear-gradient(180deg, #222931, #0c1015); font: inherit; cursor: pointer; }
+.apo-result { display: flex; box-sizing: border-box; flex: 1 1 auto; min-width: min(150px, 100%); min-height: 62px; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 8px 12px; color: var(--ui-text); border: 2px outset #59636e; border-radius: 5px; background: linear-gradient(180deg, #222931, #0c1015); font: inherit; cursor: pointer; }
 .apo-result.original { border-color: #a58a47; }
 .apo-result.rerolled { border-color: #5c9d6b; }
 .apo-result:not(:disabled):hover { filter: brightness(1.18); }
