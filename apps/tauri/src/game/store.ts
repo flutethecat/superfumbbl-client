@@ -8842,8 +8842,29 @@ function freeSelectPassOnModelApplied() {
  * The restore is local state only. NOTHING is sent: the server asks nothing here and the coach, now suffering
  * Bloodlust, may prefer to walk or end; the next click on the victim is the ordinary confirm (one CLIENT_GAZE).
  */
-let gazeSent: { actingPlayerId: string; victimId: string; seq: number; bloodlustFailed: boolean } | null = null;
+let gazeSent: { actingPlayerId: string; victimId: string; seq: number; bloodlustFailed: boolean; dieBeatPending: boolean } | null = null;
 const isGazeAction = (action: string) => action === 'gazeMove' || action === 'gazeSelect' || action === 'gaze';
+/** Astra P2 (10-09): the camera pan an off-camera die waits for (the renderer's ensureOnCamera, 420 ms) plus the
+ *  viewer-visible 450 ms. The failed Bloodlust die's beat is never shorter than this, whatever the presentation mode. */
+const GAZE_BLOODLUST_DIE_BEAT_MIN_MS = 900;
+/**
+ * Astra P2 (10-09): the FIRST failed Bloodlust roll's die is published by the frame that reports it, and with no
+ * reroll on offer that same frame makes the failure final. The roll beat (holdPlayback FAIL_BEAT_MS) holds LATER
+ * frames only, so the restore and its convert-to-Move question came up in the frame itself, before the die (which
+ * may still wait on a camera pan) had been shown. The restore now waits the die's own beat, the same way it waits
+ * the accepted-reroll pin: this timer's release is the WAKE (gazeSentRestore), so the question comes up with no
+ * further frame. It is the presentation beat itself, not a watchdog; a reset drains it with the game's timers and
+ * the identity check drops it for any other sent gaze. A rerolled die is the reroll pin's (releaseRerollResultPin).
+ */
+function holdGazeRestoreForBloodlustDie(sentGaze: NonNullable<typeof gazeSent>): void {
+  if (playback.catchingUp || sentGaze.dieBeatPending) return; // catch-up presents no die
+  sentGaze.dieBeatPending = true;
+  scheduleGameTimeout(() => {
+    if (gazeSent !== sentGaze) return;
+    sentGaze.dieBeatPending = false;
+    gazeSentRestore();
+  }, Math.max(presentationMs(FAIL_BEAT_MS), GAZE_BLOODLUST_DIE_BEAT_MIN_MS));
+}
 
 /** Follow the sent gaze through the applied frames: a resolved gaze, a passed Bloodlust roll (first roll or reroll),
  *  a different acting player/action or a re-made intent all forget it; only a failed `bloodLustRoll` for the gazer,
@@ -8860,16 +8881,20 @@ function gazeSentOnModelApplied(cmd?: Record<string, unknown>) {
     const reportId = String(report.reportId ?? '');
     if (reportId === 'hypnoticGazeRoll') { gazeSent = null; return; } // the gaze was rolled: not spent
     if (reportId === 'bloodLustRoll') {
-      if (report.successful === false) sentGaze.bloodlustFailed = true;
-      else { gazeSent = null; return; } // passed (first roll or reroll): the server carries the gaze out itself
+      if (report.successful === false) {
+        // the first roll's die is shown before anything is restored or asked (a rerolled die has the reroll pin)
+        if (!sentGaze.bloodlustFailed && (report as { reRolled?: unknown }).reRolled !== true) holdGazeRestoreForBloodlustDie(sentGaze);
+        sentGaze.bloodlustFailed = true;
+      } else { gazeSent = null; return; } // passed (first roll or reroll): the server carries the gaze out itself
     }
   }
   gazeSentRestore();
 }
 
 /** Give the gaze back once the failure is FINAL in the model (sufferingBloodlust) and nothing is still being shown or
- *  asked: the reroll offer has left the model and an accepted reroll's staged result has landed (roll-beat hold;
- *  releaseRerollResultPin is the wake when no further frame arrives). */
+ *  asked: the reroll offer has left the model, the first failed die has had its beat (holdGazeRestoreForBloodlustDie
+ *  is that wake) and an accepted reroll's staged result has landed (roll-beat hold; releaseRerollResultPin is the
+ *  wake when no further frame arrives). */
 function gazeSentRestore() {
   const sentGaze = gazeSent;
   const g = game.value;
@@ -8879,7 +8904,7 @@ function gazeSentRestore() {
     gazeSent = null;
     return;
   }
-  if (acting?.sufferingBloodlust !== true || g.dialogParameter || state.rerollResultPending) return;
+  if (acting?.sufferingBloodlust !== true || g.dialogParameter || state.rerollResultPending || sentGaze.dieBeatPending) return;
   gazeSent = null;
   if (state.gazeIntent || !iControlPlayer(sentGaze.actingPlayerId)) return;
   const base = { actingPlayerId: sentGaze.actingPlayerId, seq: sentGaze.seq + 1 };
@@ -8894,6 +8919,7 @@ function gazeSentRestore() {
     state.gazeIntent = { ...base, victimId: null, pendingVictimId: victimLegal ? sentGaze.victimId : null, phase: 'active' };
   }
   log('system', `play: HYPNOTIC GAZE not rolled — ${playerName(g, sentGaze.actingPlayerId)} failed Bloodlust; the gaze is available again${victimLegal ? ` (${playerName(g, sentGaze.victimId)} armed)` : ''}`);
+  offerGazeToMoveAfterBloodlust(sentGaze.actingPlayerId); // owner 10-09: ask now, not at a later walk request
 }
 
 /** W40 gaze intent lifecycle follows the server-echoed acting player; a pre-ack switch may pass through actor-null. */
@@ -8952,16 +8978,34 @@ function gazeIntentOnModelApplied() {
  * publishes END_PLAYER_ACTION for GAZE, block and blitz actions only). The owner ruled that this activation ends: see
  * endActivationAfterFailedFoulAppearance.
  */
-let gazeToMoveOffer: { playerId: string; route: [number, number][] } | null = null;
+let gazeToMoveOffer: { playerId: string; route: [number, number][]; afterBloodlust: boolean; retry: boolean } | null = null;
 let gazeToMovePending: { playerId: string; route: [number, number][]; seq: number; intent: GazeIntent | null } | null = null;
 /** Astra P2 (10-08): the acting player whose GAZE -> MOVE change was sent but never echoed in time. Silence does not
  *  prove the server refused it (the echo may only be late: the server may already be in MOVE, where it would still
  *  accept a CLIENT_GAZE), so the gaze is NOT given back; the coach may ask for the walk again, which re-sends the
  *  same change. Cleared when the model moves on (the echo, another action, another acting player) or on a reset. */
 let gazeToMoveUnanswered: string | null = null;
+/** Astra P3 (10-09): the unanswered change is asked about again on the card (raiseGazeToMoveRetry): the route the
+ *  first Convert carried, and whether the card is owed (set by the timeout, the Wait timer, or a retirement). */
+let gazeToMoveRetryRoute: [number, number][] = [];
+let gazeToMoveRetryDue = false;
 let gazeToMoveSeq = 0;
 const GAZE_TO_MOVE_KEY = 'gazeToMove:';
 const GAZE_TO_MOVE_ACK_MS = 8000;
+/**
+ * Astra P2 (10-09): the labels of the client-owned GAZE -> MOVE cards. Classic derives each yes/no button's keyboard
+ * mnemonic from the label's FIRST LETTER (ClassicView ynButtons) and every Classic dialog listens for its keys on the
+ * window, so two dialogs on screen answer one key press together. Classic's own End Activation confirmation (which
+ * the store cannot see or retire) uses E (End ...) and C (Cancel): "Convert to Move" shared C with Cancel, so
+ * cancelling the End also gave the gaze up. First letters here must stay out of C / E / X (Classic's Cancel and End
+ * keys) and Y / N / O (the Yes / No / OK family); gazeBloodlustConsumed.test.ts pins that against ClassicView's source.
+ */
+const GAZE_TO_MOVE_YES_LABEL = 'Move instead';
+const GAZE_TO_MOVE_NO_LABEL = 'Keep Gaze';
+const GAZE_TO_MOVE_RETRY_LABEL = 'Try again';
+const GAZE_TO_MOVE_WAIT_LABEL = 'Wait';
+const GAZE_TO_MOVE_RETRY_TEXT = 'The server did not answer the change to a Move. Try again, or wait for its answer? '
+  + 'The Hypnotic Gaze stays given up either way; End Activation is still available.';
 
 /** My acting player holds a consumed gaze: the server action is `gaze`, the restored intent is live. */
 function gazeWalkNeedsConversion(playerId: string): boolean {
@@ -8977,19 +9021,66 @@ function dropGazeToMoveOffer() {
   if (state.yesNo?.key.startsWith(GAZE_TO_MOVE_KEY)) clearYesNo();
 }
 
+/**
+ * OWNER RULING (Jay, 10-09), verbatim: "This flow seems weird. If a vampire fails bloodlust, we should be surfacing a
+ * modal that asks them if they'd like to convert to move immediately."
+ *
+ * The same client-owned question as offerGazeToMove, asked at the moment the Bloodlust failure that consumed the
+ * CLIENT_GAZE becomes final (gazeSentRestore, which is already ordered after the reroll card and its staged die and
+ * is woken by releaseRerollResultPin), instead of at a later walk request. It carries no route: Convert sends the one
+ * CLIENT_ACTING_PLAYER {move} and the coach then walks by clicking the squares the server re-publishes under `move`.
+ * Keep Gaze sends nothing and leaves the gaze exactly as gazeSentRestore restored it.
+ *
+ * SURFACE: the generic yes/no card, not the unified Bloodlust card (state.bloodlust 'decision'). That card belongs to
+ * the server's `bloodlustAction` dialog: both views answer it through resolveBloodlustDecision (CLIENT_BLOODLUST_ACTION,
+ * which the server did not ask for here), the dialog pipeline clears it whenever that dialog is not in the model, and
+ * its copy ("feed and perform ...") is fixed in the views and wrong for a gaze. The yes/no card is rendered by Modern
+ * and Classic alike and is keyed as client-owned (GAZE_TO_MOVE_KEY).
+ *
+ * Asked once per consumed gaze. Never for an automated seat (a bot must not be left waiting on a client question: it
+ * keeps the 1.0.149 behaviour, nothing asked, nothing sent), another seat's vampire, a spectator or a replay; never
+ * while a server dialog or another question is open. gazeWalkNeedsConversion is the rest of the guard (my acting
+ * player, my turn, server action `gaze`, the restored intent live): Case A, where the first command was a move step
+ * under `gazeMove`, never sent a CLIENT_GAZE and never gets here.
+ */
+function offerGazeToMoveAfterBloodlust(playerId: string): void {
+  const g = game.value;
+  if (!g || !play.active || seatIsAutomated() || g.dialogParameter != null || state.yesNo || gazeToMovePending) return;
+  if (!gazeWalkNeedsConversion(playerId)) return;
+  gazeToMoveOffer = { playerId, route: [], afterBloodlust: true, retry: false };
+  askYesNo({
+    key: `${GAZE_TO_MOVE_KEY}${playerId}`,
+    text: `Bloodlust failed. ${playerName(g, playerId) || 'The vampire'}'s Hypnotic Gaze was not rolled. Convert to a Move, or keep the Hypnotic Gaze? Converting gives up the Hypnotic Gaze for this activation.`,
+    yesLabel: GAZE_TO_MOVE_YES_LABEL,
+    noLabel: GAZE_TO_MOVE_NO_LABEL,
+    onAnswer: (yes) => {
+      const offer = gazeToMoveOffer;
+      gazeToMoveOffer = null;
+      if (yes && offer) convertGazeToMove(offer.playerId, offer.route);
+    },
+  });
+}
+
 /** A walk was asked for under the non-moving `gaze` action: ask before giving the gaze up. Sends nothing. */
 function offerGazeToMove(playerId: string, route: [number, number][]): false {
   if (gazeToMovePending) { log('system', 'ignored: the change to a Move is already with the server'); return false; }
   if (state.yesNo && !state.yesNo.key.startsWith(GAZE_TO_MOVE_KEY)) return false; // another question is open: answer it first
+  if (game.value?.dialogParameter != null) return false; // Astra P2 (10-09): never beside a server dialog; answer that first
+  // Owner 10-09: the question asked at the Bloodlust failure is still open. It is the same question; the click does
+  // not answer it and queues no walk (Convert there only changes the action).
+  if (gazeToMoveOffer?.afterBloodlust && gazeToMoveOffer.playerId === playerId && state.yesNo) {
+    log('system', `ignored: answer the Bloodlust question first (${GAZE_TO_MOVE_YES_LABEL} or ${GAZE_TO_MOVE_NO_LABEL})`);
+    return false;
+  }
   // The coach already chose Convert for this activation and the server did not answer in time: asking again would
   // be the same question twice. The walk request re-sends the same change.
   if (gazeToMoveUnanswered === playerId) { convertGazeToMove(playerId, route); return false; }
-  gazeToMoveOffer = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]) };
+  gazeToMoveOffer = { playerId, route: route.map((square) => [square[0], square[1]] as [number, number]), afterBloodlust: false, retry: false };
   askYesNo({
     key: `${GAZE_TO_MOVE_KEY}${playerId}`,
     text: 'You\'ve declared a Hypnotic Gaze. Convert to a plain Move instead? The Gaze can\'t be used again this activation.',
-    yesLabel: 'Convert to Move',
-    noLabel: 'Keep Gaze',
+    yesLabel: GAZE_TO_MOVE_YES_LABEL,
+    noLabel: GAZE_TO_MOVE_NO_LABEL,
     onAnswer: (yes) => {
       const offer = gazeToMoveOffer;
       gazeToMoveOffer = null;
@@ -8999,16 +9090,26 @@ function offerGazeToMove(playerId: string, route: [number, number][]): false {
   return false;
 }
 
-/** The coach confirmed: the one action change upstream's client sends (GAZE -> MOVE), then the walk on its echo. */
+/** The coach confirmed: the one action change upstream's client sends (GAZE -> MOVE), then the walk on its echo.
+ *  Owner 10-09: `route` is empty when the question was asked at the Bloodlust failure (no square was clicked): only
+ *  the action changes, and the coach walks through the ordinary Move rails once the server shows `move`. */
 function convertGazeToMove(playerId: string, route: [number, number][]): boolean {
-  if (!game.value || route.length === 0 || gazeToMovePending || !gazeWalkNeedsConversion(playerId)) {
-    log('system', 'ignored: no consumed Hypnotic Gaze to convert to a Move');
+  // Astra P2 (10-09): a Yes on the card never looks accepted while nothing was sent: every refusal says so.
+  const refused = (text: string): false => {
+    log('system', `⚠ ${text}`);
+    state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
     return false;
+  };
+  if (!game.value || gazeToMovePending || !gazeWalkNeedsConversion(playerId)) {
+    return refused(gazeToMovePending
+      ? 'The change to a Move is already with the server — nothing more was sent.'
+      : 'Not changed to a Move — there is no Hypnotic Gaze to convert. Nothing was sent.');
   }
   if (!sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: 'move', leaping: isJumping() })) {
-    log('system', '⚠ Convert to Move refused — the Hypnotic Gaze stays; try again once the prompt clears.');
-    return false;
+    return refused('Convert to Move refused — nothing was sent; try again once the prompt clears.');
   }
+  dropGazeToMoveOffer(); // any card still up for this change (a walk request re-sent it) is answered by the send
+  gazeToMoveRetryDue = false;
   const seq = ++gazeToMoveSeq;
   gazeToMovePending = { playerId, route, seq, intent: state.gazeIntent ? { ...state.gazeIntent } : null };
   // The coach gave the gaze up: no victim click may send it while the action change is in flight.
@@ -9023,30 +9124,109 @@ function convertGazeToMove(playerId: string, route: [number, number][]): boolean
     gazeToMovePending = null;
     const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
     // Not answered in time. The gaze is NOT given back (Astra P2): the server may already have changed to MOVE, and
-    // a gaze sent now would be accepted there, undoing "Convert gives the gaze up". The coach can ask for the walk again.
+    // a gaze sent now would be accepted there, undoing "Convert gives the gaze up".
+    // Astra P3 (10-09): the views take no square click here (no live gaze intent under `gaze`: SpectateView and
+    // ClassicView hide the squares and drop the click), so "click a square to try again" was false and the coach had
+    // only End Activation. The coach is asked again on the card instead (raiseGazeToMoveRetry).
+    let stillGaze = false;
     if (String(acting?.playerId ?? '') === playerId && String(acting?.playerAction ?? '') === 'gaze' && iControlPlayer(playerId)) {
+      stillGaze = true;
       gazeToMoveUnanswered = playerId;
+      gazeToMoveRetryRoute = route;
+      gazeToMoveRetryDue = true;
+      raiseGazeToMoveRetry();
     }
-    const text = 'Move not started — the server did not answer the change to a Move. Click a square to try again.';
+    const text = gazeToMoveOffer?.retry === true
+      ? `The server did not answer the change to a Move — choose ${GAZE_TO_MOVE_RETRY_LABEL} or ${GAZE_TO_MOVE_WAIT_LABEL}.`
+      : stillGaze
+        ? 'The server did not answer the change to a Move — you will be asked again once the open prompt is answered. End Activation is still available.'
+        : 'The server did not answer the change to a Move.';
     log('system', `⚠ ${text}`);
     state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
   }, GAZE_TO_MOVE_ACK_MS);
   return true;
 }
 
+/**
+ * Astra P3 (10-09): the coach chose Convert and the server never answered. The gaze was given up at the send and is
+ * NOT offered back: silence does not prove a refusal (see gazeToMoveUnanswered), so a "Keep Gaze" here could send a
+ * CLIENT_GAZE to a server that is already in MOVE. The same card is raised again with what the coach CAN do: Try again
+ * (re-sends the one CLIENT_ACTING_PLAYER {move}, with the route the first answer carried) or Wait (sends nothing; the
+ * coach is asked again after another GAZE_TO_MOVE_ACK_MS if the server is still silent). End Activation stays
+ * available through the views throughout. A late echo retires the card like any other (gazeToMoveOnModelApplied).
+ *
+ * Never beside a server dialog or another question, never for an automated seat. When it cannot be raised it stays
+ * owed (gazeToMoveRetryDue) and every wake retries it: an applied frame, an answered yes/no card, the Wait timer.
+ */
+function raiseGazeToMoveRetry(): void {
+  const playerId = gazeToMoveUnanswered;
+  const g = game.value;
+  if (!playerId || !gazeToMoveRetryDue || !g) return;
+  if (!play.active || seatIsAutomated() || g.dialogParameter != null || state.yesNo || gazeToMovePending) return;
+  if (!gazeWalkNeedsConversion(playerId)) return;
+  gazeToMoveRetryDue = false;
+  gazeToMoveOffer = { playerId, route: gazeToMoveRetryRoute, afterBloodlust: false, retry: true };
+  askYesNo({
+    key: `${GAZE_TO_MOVE_KEY}${playerId}:retry`,
+    text: GAZE_TO_MOVE_RETRY_TEXT,
+    yesLabel: GAZE_TO_MOVE_RETRY_LABEL,
+    noLabel: GAZE_TO_MOVE_WAIT_LABEL,
+    onAnswer: (yes) => {
+      const offer = gazeToMoveOffer;
+      gazeToMoveOffer = null;
+      if (!offer) return;
+      // A refused re-send keeps the question owed: resolveYesNo's wake raises the card again (with the notice).
+      if (yes) { if (!convertGazeToMove(offer.playerId, offer.route)) gazeToMoveRetryDue = true; }
+      else waitForGazeToMoveAnswer(offer.playerId);
+    },
+  });
+}
+
+/** The coach waits for the late answer: asked again after another ack window, unless the model or a re-send moved on. */
+function waitForGazeToMoveAnswer(playerId: string): void {
+  const seq = ++gazeToMoveSeq;
+  scheduleGameTimeout(() => {
+    if (gazeToMoveSeq !== seq || gazeToMoveUnanswered !== playerId) return;
+    gazeToMoveRetryDue = true;
+    raiseGazeToMoveRetry();
+  }, GAZE_TO_MOVE_ACK_MS);
+}
+
+/** Astra P2 (10-09): End Turn. The coach is ending: a restore still waiting on its die, the question and an owed
+ *  retry are all moot, and none of them may sit beside the feed prompt the server opens next (StepInitFeeding). */
+function retireGazeToMoveForEndTurn(): void {
+  gazeSent = null;
+  // Astra confirm (10-09): a Convert still waiting on the server is moot too. Left set, its timeout would raise
+  // the Try again card after End Turn and could re-send the action change into a turn that is ending.
+  gazeToMovePending = null;
+  gazeToMoveUnanswered = null;
+  gazeToMoveRetryDue = false;
+  dropGazeToMoveOffer();
+}
+
 /** Applied frame: retire a stale question; on the `move` echo walk the confirmed route through the normal guard. */
 function gazeToMoveOnModelApplied() {
-  if (gazeToMoveOffer && !gazeWalkNeedsConversion(gazeToMoveOffer.playerId)) dropGazeToMoveOffer();
+  // Astra P2 (10-09): a server dialog that arrives while the question is open retires it (the creation-time check did
+  // not cover the card's lifetime): the server's decision comes first and the two are never on screen together. The
+  // Bloodlust question is not raised again afterwards (asked once per consumed gaze; a walk request still asks on
+  // demand); an unanswered-change retry stays owed and returns when the dialog has gone.
+  const offer = gazeToMoveOffer;
+  if (offer && (game.value?.dialogParameter != null || !gazeWalkNeedsConversion(offer.playerId))) {
+    if (offer.retry) gazeToMoveRetryDue = true;
+    dropGazeToMoveOffer();
+  }
   const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
   const action = String(acting?.playerAction ?? '');
   // the model moved on (a late echo, another action or another acting player): the unanswered mark is spent
   if (gazeToMoveUnanswered && (String(acting?.playerId ?? '') !== gazeToMoveUnanswered || action !== 'gaze')) gazeToMoveUnanswered = null;
+  if (!gazeToMoveUnanswered) gazeToMoveRetryDue = false;
+  raiseGazeToMoveRetry();
   const pending = gazeToMovePending;
   if (!pending) return;
   if (String(acting?.playerId ?? '') === pending.playerId && action === 'gaze') return; // not echoed yet
   gazeToMovePending = null;
   if (String(acting?.playerId ?? '') !== pending.playerId || action !== 'move') return;
-  gameStore.o66Move(pending.playerId, pending.route);
+  if (pending.route.length > 0) gameStore.o66Move(pending.playerId, pending.route); // none queued: the coach clicks squares
 }
 
 /**
@@ -9910,7 +10090,7 @@ function resetPlayback() {
   state.ttmRailResetSeq += 1; // explicit snapshot boundary; ordinary authoritative triggerRef(game) frames do not pulse it
   state.gazeIntent = null; // W40: no declared gaze intent crosses games/reconnects
   gazeSent = null; // nor is a spent gaze given back across one
-  gazeToMovePending = null; gazeToMoveUnanswered = null; dropGazeToMoveOffer(); // nor a gaze→move change or its question
+  gazeToMovePending = null; gazeToMoveUnanswered = null; gazeToMoveRetryDue = false; dropGazeToMoveOffer(); // nor a gaze→move change or its question
   foulAppearanceFailure = null; foulAppearanceEnd = null; // nor a followed Foul Appearance roll
   gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
@@ -22569,6 +22749,7 @@ export const gameStore = {
     clearYesNo();
     log('system', `play: ${yes ? 'YES' : 'NO'} (${q.key})`);
     fn?.(yes);
+    raiseGazeToMoveRetry(); // Astra P3 (10-09): a question owed behind the one just answered (no frame needed)
   },
 
   /** Arm the generic yes/no prompt (consumers + demo verification). */
@@ -22655,6 +22836,7 @@ export const gameStore = {
       return;
     }
     endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? '');
+    retireGazeToMoveForEndTurn(); // Astra P2 (10-09): no convert-to-Move question beside the feed prompt that follows
     log('system', `play: end turn (${g.turnMode})`);
     // Owner 09-19: the turnover disarm waits for the SERVER's answer (ownRegularEndTurnAcked, set when the applied
     // model advances past this turn) — never at send time.
@@ -24004,7 +24186,7 @@ export const gameStore = {
     dropGazeToMoveOffer(); // the coach gazes after all: the walk question is moot
     state.gazeIntent = null;
     // Owner 10-08: remembered until the server shows what became of this command (see gazeSent).
-    gazeSent = { actingPlayerId: intent!.actingPlayerId, victimId, seq: intent!.seq, bloodlustFailed: false };
+    gazeSent = { actingPlayerId: intent!.actingPlayerId, victimId, seq: intent!.seq, bloodlustFailed: false, dieBeatPending: false };
     gameStore.sendGazeTarget(victimId);
     return true;
   },
@@ -24223,6 +24405,19 @@ export const gameStore = {
   /** Owner 10-08: the coach has just said Yes on the client's End Activation card; the `endActivation` that follows
    *  in the same gesture carries that confirmation (see `gazeEndRequest`). Spent by that one call, whatever it sends. */
   noteEndActivationConfirmed() { endActivationConfirmedByCoach = true; },
+
+  /** Astra P2 (10-09): the coach opened an End Activation confirmation (Modern's askEndActivation calls this). The
+   *  coach is ending, so the client-owned convert-to-Move question is moot: it is retired first and the two are never
+   *  on screen together. Sends nothing. If the End is then cancelled the Bloodlust question is not asked again (once
+   *  per consumed gaze; the gaze stays as restored and a walk request asks on demand); an unanswered-change retry
+   *  card is treated as Wait and comes back. Classic's confirmation is view-local and cannot call this: there the
+   *  cards' labels keep their keys apart (GAZE_TO_MOVE_YES_LABEL). */
+  retireGazeToMoveQuestionForEnd() {
+    const offer = gazeToMoveOffer;
+    if (!offer || !state.yesNo?.key.startsWith(GAZE_TO_MOVE_KEY)) return;
+    dropGazeToMoveOffer();
+    if (offer.retry) waitForGazeToMoveAnswer(offer.playerId);
+  },
 
   endActivation(options: { blitzConfirmed?: boolean; rollActivate?: boolean; gazeEndConfirmed?: boolean } = {}) {
     const coachConfirmedEnd = options.gazeEndConfirmed === true || endActivationConfirmedByCoach;

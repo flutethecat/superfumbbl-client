@@ -11786,6 +11786,8 @@ watch(() => [currentActingId(), gameStore.myTurn.value] as const, ([actingId, mi
   }
 });
 function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
+  // Astra P2 (10-09): the coach is ending; an open convert-to-Move question is moot and never shares the screen with this prompt.
+  gameStore.retireGazeToMoveQuestionForEnd();
   // Owner 10-04: each confirmation has its own Settings line. Switched off, the gesture does exactly what the
   // prompt's confirm button would have done (same arms cleared, same wire, same Blitz token / Activate roll).
   if (!endActivationConfirmEnabled(kind, settings)) {
