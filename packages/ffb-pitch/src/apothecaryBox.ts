@@ -26,7 +26,9 @@ export const APOTHECARY_STATION_LAYOUT = Object.freeze({
   /** Caption footprint relative to the projected square at that depth. */
   labelWidthRatio: 0.8,
   labelHeightRatio: 0.16,
-  tokenSizeTiles: 0.72,
+  /** Owner 10-09: 'a bit small on the pitch' — 0.72 drew the 115 px figure ~0.65 tiles tall, under a lineman
+   *  (~0.68); 0.85 puts him between a lineman and a big guy (~0.76). The box still has the room. */
+  tokenSizeTiles: 0.85,
 });
 
 export interface ProjectedApothecaryQuad {

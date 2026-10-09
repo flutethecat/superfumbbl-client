@@ -63,6 +63,7 @@ import {
 } from '../game/inducementRevealHold';
 import ChargePickPanel from '../components/ChargePickPanel.vue';
 import PitchConfirmationPanel from '../components/PitchConfirmationPanel.vue';
+import { PROMPT_ANSWER_SELECTOR, installPromptPointerTracker, vPromptDodge } from '../game/promptDodgeDom';
 import { deferredSwitchClick, deferredSwitchFollowUpFresh, deferredSwitchStillValid, type DeferredFriendlySwitch } from '../game/deferredFriendlySwitch';
 import ConfirmActionButton from '../components/ConfirmActionButton.vue';
 import PlayerDetailSkillList from '../components/PlayerDetailSkillList.vue';
@@ -3478,9 +3479,19 @@ function injuryPhraseLines(splash: { player: string; seriousInjury?: string | nu
   if (splash.injuryBase === DEAD_BASE) return [`${who} is`, 'KILLED!']; // DEAD state, no result string
   return [`${who} is`, 'Badly Hurt!']; // no lasting-injury string → the coarse casualty
 }
-const casualtyPhraseLines = computed<[string, string] | null>(() =>
-  gameStore.state.injurySplash ? injuryPhraseLines(gameStore.state.injurySplash) : null,
-);
+// Owner 10-09: the toast also states the effect the server reported for a lasting injury - "smashed their knee! (-MA)".
+// The tag is read from the server's own result string ("Smashed Knee (-MA)"); a result with no stat tag adds nothing.
+function injuryStatTag(seriousInjury: string | null | undefined): string {
+  const match = /\(\s*(-\s*(?:MA|ST|AG|PA|AV))\s*\)/i.exec(seriousInjury ?? '');
+  return match ? `(${match[1]!.replace(/\s+/g, '').toUpperCase()})` : '';
+}
+const casualtyPhraseLines = computed<[string, string] | null>(() => {
+  const splash = gameStore.state.injurySplash;
+  if (!splash) return null;
+  const [lead, casualty] = injuryPhraseLines(splash);
+  const tag = injuryStatTag(splash.seriousInjury);
+  return [lead, tag ? `${casualty} ${tag}` : casualty];
+});
 // Owner 2026-07-07: injury display — every injury also gets a token-bound toast at the injured
 // square (KO / casualty / stun), and a CASUALTY additionally KEEPS its full-width splash banner
 // (owner: the casualty splash returns + the red toast over the square). KO/stun are toast-only;
@@ -3789,7 +3800,15 @@ const onTheBallWaitingStyle = computed(() => {
   if (!base) return undefined;
   return box ? { ...base, width: `${Math.round((box.center - box.left) * 2)}px` } : base;
 });
-const REACTIVE_PROMPT_ANSWER_SELECTOR = 'button, .reroll-menu-item, .reroll-menu-decline, .bl-opt, .pick-confirm, .pick-decline, .sc-yes, .sc-no, .sendoff-btn, input, a, label, [role=button]';
+const REACTIVE_PROMPT_ANSWER_SELECTOR = PROMPT_ANSWER_SELECTOR;
+// Owner 10-09: the Follow up / Stay card and the skill decision cards open CLEAR of the pointer (`v-prompt-dodge`,
+// game/promptDodge.ts) so a click already on its way to the pitch cannot answer them; decided once per opening,
+// a drag wins, and a pointer click from before / right at the opening is dropped. Tracking starts with the view so
+// the pointer position is known by the time a card opens, and ends with it. Display only: no answer is ever sent from here.
+const releasePromptPointerTracker = installPromptPointerTracker();
+onBeforeUnmount(releasePromptPointerTracker);
+const promptDodgeBounds = () => pitchHost.value;
+const promptDodge = (key: ReactivePromptDragKey, epoch: unknown, layout?: unknown) => ({ dragged: !!reactivePromptDragPos[key], epoch, layout, bounds: promptDodgeBounds });
 function startReactivePromptDrag(key: ReactivePromptDragKey, event: PointerEvent) {
   // Class-wide freeze-while-pressed (see reactivePromptHeld): mark this card held on ANY pointerdown — set BEFORE
   // the answer-selector early-return so a press on a button (a decision click) freezes its RAF-follow too, not
@@ -12864,6 +12883,7 @@ function sendChat() {
              same tooltip (no buttons) until the coach resolves it. -->
         <!-- #237 (owner-fg 07-29): body drag; answer controls are excluded in the shared pointer guard. -->
         <div v-if="gameStore.state.skillChoice?.mine" class="skill-choice"
+          v-prompt-dodge="promptDodge('skillChoice', gameStore.state.skillChoice.seq, skillChoicePos.ready)"
           :style="reactivePromptStyle('skillChoice', skillChoicePos.ready ? { x: skillChoicePos.x, y: skillChoicePos.y } : undefined)"
           title="Drag to move" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
           <img v-if="skillSilhouette" class="sc-silhouette" :src="skillSilhouette" alt="" />
@@ -12923,6 +12943,7 @@ function sendChat() {
         </div>
 
         <PitchConfirmationPanel v-if="wideRailActivationPrompt" title="Special Ability"
+          v-prompt-dodge="promptDodge('wideRailActivation', wideRailActivationPrompt.seq)"
           label="Activation special confirmation">
           <div>Use a special before continuing {{ wideRailActivationPrompt.playerAction }}?</div>
           <template #actions>
@@ -13284,6 +13305,7 @@ function sendChat() {
 
         <!-- Generic selectSkill dialog. Skill icons (or plaintext when using markers). -->
         <div v-if="gameStore.state.selectSkill" class="yesno-card select-skill-card"
+          v-prompt-dodge="promptDodge('selectSkill', gameStore.state.selectSkill.seq)"
           :style="reactivePromptStyle('selectSkill')" title="Drag to move"
           @pointerdown="startReactivePromptDrag('selectSkill', $event)">
           <IntensiveTrainingChoice v-if="intensiveTrainingSelect"
@@ -13646,6 +13668,7 @@ function sendChat() {
         <!-- Owner 10-05: the Shadowing chip rides the modern confirmation panel too (Tentacles / pick-me-up language). -->
         <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" title="Shadow the runner?" label="Shadowing decision"
           compact draggable test-id="shadowing-panel"
+          v-prompt-dodge="promptDodge('shadowing', shadowingPick.seq)"
           :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('shadowing', $event)">
           <span>{{ shadowerName }} can follow the runner</span>
@@ -13661,6 +13684,7 @@ function sendChat() {
              anchored beside the tentacler and draggable. -->
         <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" title="Use Tentacles?" label="Tentacles decision"
           compact draggable test-id="tentacles-panel"
+          v-prompt-dodge="promptDodge('tentacles', tentaclesPick.seq)"
           :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('tentacles', $event)">
           <span>{{ tentaclerName }} can try to hold the runner</span>
@@ -14049,6 +14073,7 @@ function sendChat() {
              at the block square (offset so the square stays visible); the passive
              shared passive variant carries no buttons. -->
         <div v-if="gameStore.state.followupChoice && followupPos" class="followup-chip"
+          v-prompt-dodge="promptDodge('followup', gameStore.state.followupChoice.seq)"
           :style="reactivePromptStyle('followup', { x: followupPos.x, y: followupPos.y })"
           title="Drag to move" @pointerdown="startReactivePromptDrag('followup', $event)">
           <div class="fu-title">Follow up?</div>
