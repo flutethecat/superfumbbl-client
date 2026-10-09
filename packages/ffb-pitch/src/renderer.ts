@@ -2157,6 +2157,10 @@ export class PitchRenderer {
    *  of their token for position/scale — so a front-row figure never covers the row behind's markings, and the
    *  state markers (ROOTED / CHOMPED / DODGY SNACK …, token children) always sit under them. */
   private markingLayer = new RenderLayer();
+  /** Owner 10-09: the persistent Blitz badges (blitzer, blitz target, Kick 'em target) paint ABOVE the skill markings
+   *  and the player's own label - they stay token children (position, scale, alpha, removal) and only the paint order
+   *  moves. Still under the effects layer, so a block-result stamp lands over them. */
+  private blitzBadgeLayer = new RenderLayer({ sortableChildren: true });
   /** Queued path: line, step numbers, rush dice, dodge chips — over the tokens. */
   private pathLayer = new Container();
   private movementPathCostLayer = new Container();
@@ -3814,6 +3818,20 @@ export class PitchRenderer {
     this.kickEmTargetNominatedId = playerId;
     this.refresh();
   }
+  /** Owner 10-09: a badged player's status marks that drew OVER its Blitz badge inside the token (DISTRACTED, heat,
+   *  stunned banner, eye gouge... every token child above the badge row's zIndex 50) join the badge's layer, which
+   *  sorts by zIndex - so lifting the badge over the markings does not put it over them. Marks already in a render
+   *  layer (skill markings, the player's label) stay where they are: under the badge. Idempotent. */
+  private liftMarksOverBlitzBadges(): void {
+    const ids = [this.blitzTokens?.blitzerId, this.blitzTokens?.targetId, this.kickEmTargetNominatedId];
+    for (const id of ids) {
+      const token = id ? this.tokensById.get(id) : undefined;
+      if (!token || token.destroyed) continue;
+      for (const child of token.children) {
+        if (child.zIndex > 50 && !child.parentRenderLayer) this.blitzBadgeLayer.attach(child);
+      }
+    }
+  }
   private drawKickEmTargetMark(): void {
     if (this.kickEmTargetMarkNode) { this.kickEmTargetMarkNode.destroy(); this.kickEmTargetMarkNode = null; }
     const id = this.kickEmTargetNominatedId;
@@ -3832,6 +3850,7 @@ export class PitchRenderer {
     // Owner 09-28 (Sol round-3, item 5, waived — not built): being a token CHILD, this badge inherits the
     // token's own alpha (e.g. activation shading dimming an off-turn player) — no independent alpha is set.
     token.addChild(node);
+    this.blitzBadgeLayer.attach(node); // owner 10-09: over the markings, like the ordinary Blitz target badge
     this.kickEmTargetMarkNode = node;
   }
 
@@ -5159,6 +5178,7 @@ export class PitchRenderer {
       this.pathLayer,
       this.dugoutLayer,
       this.markingLayer, // owner 09-15: skill markings over every token, on-pitch and in the dugout
+      this.blitzBadgeLayer, // owner 10-09: the Blitz badges over the markings and player labels
       this.turnTrackLayer, // owner 2026-07-07: SW turn/score/re-roll track
       this.kickBallLayer, // owner 10-05: an airborne kick-off ball, over the dugouts (the trail is in effectsLayer above)
       this.effectsLayer, // F-5 transient effects — never cleared by refresh
@@ -6179,6 +6199,7 @@ export class PitchRenderer {
     this.drawPlayerPick();
     this.drawPersistentPickRings();
     this.drawKickEmTargetMark(); // Owner 09-28 (Spec S3 v2): the nominated Kick 'em Blitz target's badge only
+    this.liftMarksOverBlitzBadges();
     this.drawPersistentPlayerArrows();
     this.drawPickMeUpCue();
     this.drawQuickSnapArrows();
@@ -16744,6 +16765,9 @@ export class PitchRenderer {
       placeWalkerDecor(token, node, x0 + i * spacing, isDown(playerState) ? 0 : -16 + this.markerDropFor(token), art?.scale ?? m.scale ?? 1);
       node.zIndex = 50;
       token.addChild(node);
+      // Owner 10-09: over the markings - ON THE PITCH only. A badged player in a dugout box keeps the in-token order
+      // (its injury marker is added after this and must stay over the badge).
+      if ((m.art === 'blitzer' || m.art === 'blitzTarget') && coordinate && isOnPitch(coordinate)) this.blitzBadgeLayer.attach(node);
     });
   }
 
