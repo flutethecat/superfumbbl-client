@@ -119,7 +119,7 @@ import {
   type ShadowFrameInput,
 } from './rails/shadowRunner';
 // #173: the action-surface lock's wire-boundary consult (Meero SR-95 — one gate at sendCommand, not N view sites).
-import { actionAllowed, canFreeSelectPass, canSwitchMoveActingPlayer, friendlyActivationSwitchDisposition, throwTeamMateTerminalReason, blitzBlockChoiceStale, type ActionClass, type FriendlyActivationSwitchDisposition, type ThrowTeamMateTerminalReason } from './logic/order66Interaction';
+import { actionAllowed, canFreeSelectPass, canSwitchMoveActingPlayer, friendlyActivationSwitchDisposition, throwTeamMateTerminalReason, blitzBlockChoiceStale, blitzPlanGate, blitzTargetOutcome, actingHasBlocked, type ActionClass, type FriendlyActivationSwitchDisposition, type ThrowTeamMateTerminalReason } from './logic/order66Interaction';
 import {
   KickElectionController,
   projectAuthoritativeKick,
@@ -11257,6 +11257,8 @@ interface PlannerPlan {
    *  move), it ended on that roll - an expected outcome the roll's own toast already shows - so it retires quietly.
    *  A later successful roll (a reroll) clears it. */
   failedGate: string | null;
+  /** Astra 10-10: the server echoed this Blitz plan's declare (acting player + blitzMove) at least once. */
+  blitzDeclareSeen?: boolean;
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
    *  server republish of that target, never the surviving entry from the prior roll generation. */
   sentOfferRevisions: number[];
@@ -11366,6 +11368,14 @@ type MoveOfferOccurrence = {
   revision: number;
 };
 let moveOfferRevision = 0;
+/** Astra 10-10 (P2): the move-offer revision at the frame that last published a blitz target-selection state. SELECTED
+ *  acknowledges the NOMINATION only - upstream generator/bb2025/SelectBlitzTarget.java runs SELECT_BLITZ_TARGET, then
+ *  the activation checks (Animal Savagery, Bone Head, Really Stupid, Foul Appearance, Unchannelled Fury, Bloodlust),
+ *  JUMP_UP, STAND_UP, and only then SELECT_BLITZ_TARGET_END, which sets blitzUsed and re-declares BLITZ_MOVE (the
+ *  move squares are republished). Any of those steps can stop for a roll or a reroll, and a server standing there
+ *  drops a clientBlitzMove. A plan's first step therefore needs an offer NEWER than this floor. null = no selection
+ *  frame seen since the last snapshot (a rejoin: the snapshot's offers are current). */
+let blitzSelectionOfferFloor: number | null = null;
 const moveOfferOccurrences = new Map<string, MoveOfferOccurrence>();
 
 function currentGameId(): string {
@@ -11406,14 +11416,23 @@ function observeMoveOfferGeneration(cmd: Record<string, unknown>): void {
     modelChangeId?: unknown;
     modelChangeValue?: { coordinate?: unknown; minimumRollDodge?: unknown; minimumRollGfi?: unknown };
   }[] } | undefined)?.modelChangeArray ?? [];
-  if (!changes.some((change) => {
+  const hasMoveSquareChange = changes.some((change) => {
     const id = String(change.modelChangeId ?? '');
     return id === 'fieldModelAddMoveSquare' || id === 'fieldModelRemoveMoveSquare';
-  })) return;
+  });
+  if (!hasMoveSquareChange) {
+    // Astra 10-10: a blitz target-selection outcome with no squares in its frame - every offer so far predates it.
+    if (changes.some((change) => String(change.modelChangeId ?? '') === 'fieldModelSetTargetSelectionState')) {
+      blitzSelectionOfferFloor = moveOfferRevision;
+    }
+    return;
+  }
   const playerId = plannerActingId();
   const coordinate = playerId ? plannerCoord(playerId) : null;
   for (const change of changes) {
     const id = String(change.modelChangeId ?? '');
+    // In wire order: squares published before the selection outcome in this same frame predate it, squares after it do not.
+    if (id === 'fieldModelSetTargetSelectionState') { blitzSelectionOfferFloor = moveOfferRevision; continue; }
     const raw = change.modelChangeValue?.coordinate;
     if (!Array.isArray(raw) || raw.length < 2) continue;
     const target: [number, number] = [Number(raw[0]), Number(raw[1])];
@@ -11434,6 +11453,7 @@ function observeMoveOfferGeneration(cmd: Record<string, unknown>): void {
  * exactly at that trusted boundary (and in isolated production test harness setup), never during reroll retry. */
 function seedMoveOfferSnapshot(playerId = plannerActingId()): void {
   moveOfferOccurrences.clear();
+  blitzSelectionOfferFloor = null; // a snapshot is one coherent state: its offers are the server's current ones
   const coordinate = plannerCoord(playerId);
   if (!playerId || !coordinate || plannerActingId() !== playerId) return;
   const snapshotSquares = (game.value?.fieldModel.moveSquareArray ?? []) as {
@@ -11560,6 +11580,11 @@ function plannerArmAbort(silenceRearm = false) {
   plannerAbortTimer = scheduleGameTimeout(() => {
     plannerAbortTimer = null;
     // An owned decision prompt re-arms the planner watchdog; it is not a server timeout.
+    // Astra 10-10: a Blitz plan parked on the server's selectBlitzTarget is NOT answering a prompt of its own - nobody
+    // promised it a target. It is retired with a notice instead of waiting, silently, for as long as the dialog is up.
+    // The client-prompt hold comes first: time the coach spends on OUR prompt is never server silence, whatever the plan waits on.
+    if (plannerPlan && plannerClientPromptHold) { plannerArmAbort(); return; }
+    if (plannerPlan && plannerBlitzAwaitingTarget(plannerPlan, game.value)) { plannerFlush('no blitz target was selected'); return; }
     if (plannerPlan && plannerPromptPending()) { plannerArmAbort(); return; }
     if (plannerPlan?.failedGate) { plannerRetireQuietly(`the ${plannerPlan.failedGate} roll failed`); return; }
     plannerFlush('the server did not respond');
@@ -11648,6 +11673,25 @@ function acknowledgeAnsweredDialogInstance(
  *  reach the nomination-cancel / pass-through decision. Default (omitted) behaviour is byte-identical to
  *  before — this flag is consumed ONLY by the one Kick 'em right-click call site; every other caller (the
  *  planner watchdog, etc.) keeps treating every player-pick, including this one, as blocking. */
+/** Astra 10-10 (P2): a client End prompt (End Activation / End Turn warning) is open over a plan that was kept for
+ *  "Go back". Kept means PAUSED: nothing is sent underneath the question. Set by the view the moment a prompt opens;
+ *  cleared (with a wake: every hold needs one) when it closes. Confirm cancels the plan before it closes the prompt. */
+let plannerClientPromptHold = false;
+/** The server is in the blitz-MOVE state for this plan: SELECT_BLITZ_TARGET_END has run (it alone marks the team's
+ *  Blitz used on the way into BLITZ_MOVE) and - for a plan that walks - the first square carries an offer published
+ *  after the selection frame. Dialogs / rerolls / waitingForOpponent are the planner's ordinary pause above. */
+function plannerBlitzMoveReady(p: PlannerPlan, g: GameJson): boolean {
+  const sideHome = g.teamHome.playerArray.some((player) => player.playerId === p.playerId);
+  const turnData = (sideHome ? g.turnDataHome : g.turnDataAway) as { blitzUsed?: boolean } | undefined;
+  if (turnData?.blitzUsed !== true) return false;
+  if (!p.moving) return true;
+  return !!currentMoveOffer(p.playerId, p.route[0]!, blitzSelectionOfferFloor ?? -1);
+}
+/** A Blitz plan that has sent nothing while the server waits in selectBlitzTarget for the coach's target. */
+function plannerBlitzAwaitingTarget(p: PlannerPlan, g: GameJson | null): boolean {
+  return (p.actKind === 'blitz' || p.actKind === 'blitzWalk') && p.declare === 'blitzMove'
+    && p.phase === 'declaring' && String(g?.turnMode ?? '') === 'selectBlitzTarget';
+}
 function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): boolean {
   // Hold the planner on model-level dialogs/pushback; UI surfaces arm after model application.
   const g = game.value;
@@ -11856,6 +11900,10 @@ function plannerAdvance() {
   const allowedTurnMode = p.onTheBallMode !== null
     ? p.actKind === 'move' && turnMode === p.onTheBallMode
     : turnMode === 'regular' || turnMode === 'blitz';
+  // Astra 10-10 (P2, g1951755 cmd 1443-1447): the server answers a Blitz declare with the selectBlitzTarget turn mode.
+  // A Blitz plan that has sent nothing yet is waiting for exactly that selection: it holds here (the frames after
+  // targetSelected wake it; the watchdog still bounds it) instead of being flushed as "the turn ended".
+  if (plannerBlitzAwaitingTarget(p, g)) return;
   if (!allowedTurnMode) { plannerFlush(`the turn ended (${turnMode || 'no turn'})`); return; }
   if (currentTurnKey(g) !== p.turnKey) { plannerFlush('the turn changed'); return; }
   const base = plannerBase(p.playerId);
@@ -11864,6 +11912,7 @@ function plannerAdvance() {
   // presentation and the turnover splash already say it; no ⚠ "Plan cancelled" notice for an expected failure.
   if (base != null && base !== 0x01 && base !== 0x02) { plannerRetireQuietly(`${playerName(g, p.playerId)} is no longer standing`); return; }
   // ---- PAUSE (a decision surface is up) ----
+  if (plannerClientPromptHold) return; // Astra 10-10: the coach is being asked whether to end; the wake is the prompt closing
   if (plannerPromptPending()) return;
   const actingId = plannerActingId();
   switch (p.phase) {
@@ -11873,6 +11922,24 @@ function plannerAdvance() {
           plannerSet(null);
           plannerClearAbort();
           return;
+        }
+        // Astra 10-10 (P2): the declare echo is not the go-ahead for a Blitz. Nothing (no step, no block) leaves until
+        // the server has acknowledged the target selection; the next applied frame resumes this same plan.
+        if ((p.actKind === 'blitz' || p.actKind === 'blitzWalk') && p.declare === 'blitzMove') {
+          p.blitzDeclareSeen = true;
+          const gate = blitzPlanGate(g, p.actKind === 'blitz' ? p.targetPlayerId : null);
+          if (gate === 'wait') return;
+          if (gate === 'void') {
+            // The selection is over and not in this plan's favour: never park it. A cancelled / failed selection ends
+            // the action on the server and tells its own story; another target or a skipped selection gets the notice.
+            if (blitzTargetOutcome(g).kind === 'void') plannerRetireQuietly('the blitz target selection was cancelled or failed');
+            else plannerFlush('the server did not take that blitz target');
+            return;
+          }
+          // The selection status is necessary, not sufficient (see blitzSelectionOfferFloor): before the block, wait
+          // until SELECT_BLITZ_TARGET_END has run - the team's Blitz is marked used and, for a walk, the first square
+          // is offered afresh. The next applied frame resumes this same plan; a lost activation retires it below.
+          if (!actingHasBlocked(g) && !plannerBlitzMoveReady(p, g)) return;
         }
         // Send one live-coordinate move/blitzMove square per server echo; Blitz must retain blitzMove for its block.
         if (p.moving) {
@@ -11898,6 +11965,11 @@ function plannerAdvance() {
           plannerSentCommand(p);
         }
         else { p.phase = 'acting'; plannerSentCommand(p); plannerFireAct(); }
+      } else if (!actingId && p.blitzDeclareSeen && !p.failedGate) {
+        // Astra 10-10: the blitz was declared and acknowledged, and the activation is gone before any step left: an
+        // activation check failed for good (Animal Savagery, a failed stand-up, ...). Upstream's failed() does not
+        // republish the selection state, so this lost activation IS the signal. The roll's own report tells the story.
+        plannerRetireQuietly('the blitz ended before its first step');
       } else if (p.failedGate && actingId !== p.playerId) {
         plannerRetireQuietly(`the ${p.failedGate} roll failed`); // the activation was lost to the negatrait roll
       } else if (actingId && actingId !== p.playerId) {
@@ -13895,6 +13967,11 @@ export function installGoredBlitzTestHarness(
       (fixture.fieldModel as { targetSelectionState?: unknown }).targetSelectionState = selectedId == null
         ? null
         : { playerId: selectedId, targetSelectionStatus: options?.selectionStatus ?? 'SELECTED' };
+      // The armed state is the live blitz-move rail, i.e. past SELECT_BLITZ_TARGET_END, which marks the Blitz used.
+      for (const side of ['turnDataHome', 'turnDataAway'] as const) {
+        const turnData = (fixture as unknown as Record<string, { blitzUsed?: boolean } | undefined>)[side];
+        if (turnData) turnData.blitzUsed = true;
+      }
       (fixture.fieldModel as { diceDecorationArray?: unknown[] }).diceDecorationArray = options?.noDecoration
         ? []
         : [{ coordinate: targetPos, nrOfDice: options?.nrOfDice ?? 2 }];
@@ -25874,6 +25951,17 @@ export const gameStore = {
   isPlanWalking(playerId: string): boolean { return plannerPlan != null && plannerPlan.phase === 'moving' && plannerPlan.playerId === playerId; },
   /** ORDER 66 (#6.4): cancel the in-flight plan (e.g. user Esc / right-click clear). */
   cancelPlan() { plannerFlush('cancelled by you'); },
+  /** The coach confirmed End Activation / End Turn: the plan goes with it. Expected, so no "Plan cancelled" notice. */
+  retirePlanForConfirmedEnd() { plannerRetireQuietly('the coach confirmed the end'); },
+  /** Astra 10-10 (P2): the view reports its End prompts (End Activation / End Turn warning). Open = the planner sends
+   *  nothing; closed = it resumes at once from the current model (a plan cancelled by Confirm is already gone). */
+  setPlannerClientPromptHold(open: boolean) {
+    if (plannerClientPromptHold === open) return;
+    plannerClientPromptHold = open;
+    // Opening and closing both restart the watchdog's silence window from now (a prompt closed at 7.9 s must not time out at 8 s).
+    if (plannerPlan && plannerAbortTimer) plannerArmAbort();
+    if (!open && plannerPlan) plannerAdvance();
+  },
 
   /**
    * M4.2 real Block (play mode): declare the acting player then send the block as

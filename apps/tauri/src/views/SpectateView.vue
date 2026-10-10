@@ -150,7 +150,7 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { actingHasBlocked, endActivationPromptKind, endRowClearsArmsBeforeEnding, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -5812,7 +5812,28 @@ const fumblerooskieActive = computed(() => {
 // ORDER 66 (A.2): the server's move squares for the acting player, ONLY while the ported machine derives MOVE
 // for the local coach (deriveClientState with myIsHome). Empty otherwise — this is the render filter (paints
 // only for the acting side, never spectators/defenders — Yularen's task-5 rider, satisfied structurally).
+// Astra 10-10 (P2): `renderer` is a plain variable, so the reach below (read off the renderer) is invisible to Vue. This
+// tick is the one reactive handle on it: bumping it re-derives the movement surface from the CURRENT store + renderer
+// state and replays the arming watcher. Bumped only by rearmO66MovementSurface.
+const o66SurfaceEpoch = ref(0);
+/** The ONE state-derived re-arm of the movement surface (selection, reach overlay, tile pick). Run when the renderer
+ *  mounts (a rejoin while the server waits in a move state armed nothing: the surface had been derived before the
+ *  renderer existed) and from every prompt cancel / "Go back" (which must not depend on nothing having been cleared).
+ *  Idempotent, sends nothing, and arms only what the frame watcher itself would arm for this state. */
+function rearmO66MovementSurface() {
+  if (!renderer || !settings.order66) return;
+  o66SurfaceEpoch.value += 1;
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (movementSurfaceReselectsActing({
+    playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, actingId,
+    controlsActing: !!actingId && gameStore.iControl(actingId), selectedId: renderer.getSelectedPlayerId() ?? null,
+    moveSquareCount: o66MoveSquares.value.length, serverDialogOpen: !!g?.dialogParameter,
+    clientPromptOpen: pitchHeldByConfirmation(), planActive: gameStore.isPlanActive(),
+  })) renderer.selectPlayer(actingId);
+}
 const o66MoveSquares = computed<[number, number][]>(() => {
+  void o66SurfaceEpoch.value;
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return [];
   const st = deriveClientState(g, o66Ctx());
@@ -6265,7 +6286,7 @@ function acceptBlitzMoveConvert() {
   const tile = blitzMoveModalTile.value; blitzMoveModalTile.value = null;
   if (tile) gameStore.convertBlitzToMove(tile); // ⚖ Tarkin's hook: un-consume (self-target-cancel) → re-declare move → step
 }
-function dismissBlitzMoveModal() { blitzMoveModalTile.value = null; } // NO wire — blitz stays server-held-pending; coach re-picks the target
+function dismissBlitzMoveModal() { blitzMoveModalTile.value = null; rearmO66MovementSurface(); } // NO wire — blitz stays server-held-pending; coach re-picks the target
 // Feed the renderer the authoritative pickup target only while a Move preview approaches a settled ball.
 watch([o66PendingMove, () => {
   const fm = gameStore.game.value?.fieldModel as { ballInPlay?: boolean; ballMoving?: boolean; ballCoordinate?: unknown } | undefined;
@@ -7591,6 +7612,10 @@ function cancelWideRailBlitzTarget() {
   if (!prompt?.targetId) return false;
   wideRailActivationPrompt.value = null;
   o66PendingBlitzTarget.value = null;
+  // Astra 10-10 (P2): the quick-click route was plotted for the target just backed out of. Left behind it swallowed
+  // every enemy click, tile click and Space while the server waited for a target, with no plan and no watchdog.
+  retireStoredBlitzRoute();
+  rearmO66MovementSurface();
   return true;
 }
 
@@ -7651,15 +7676,28 @@ watch(() => gameStore.state.kickEmBlitzTarget?.targetId ?? null, (nominatedId) =
 // The confirming click owns the route before any wire leaves. Target selection and special elections remain
 // server-paced; once the received state is the declared Blitz movement rail, start the stored route with no
 // third target click.
+/** The stored quick-click route has ONE retirement: the ref, its preview and its drawn path go together. While the ref
+ *  is held it short-circuits enemy clicks, tile clicks and Space, so every exit of the quick-click blitz ends here. */
+function retireStoredBlitzRoute() {
+  if (!o66PendingLeftClickBlitzPlan.value) return;
+  o66PendingLeftClickBlitzPlan.value = null;
+  o66PendingMove.value = null;
+  renderer?.setO66Path([]);
+}
 watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
-  if (!g || !plan || deriveClientState(g, o66Ctx()) !== 'BLITZ') return;
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!plan) return;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  // Astra 10-10 (P2): the route belongs to one activation of one player on our turn; any other exit retires it.
+  if (!g || storedBlitzRouteOutlived({ playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, actingId, routePlayerId: plan.playerId })) { retireStoredBlitzRoute(); return; }
+  if (deriveClientState(g, o66Ctx()) !== 'BLITZ') return;
   if (actingId !== plan.playerId || !gameStore.iControl(actingId)) return;
-  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) {
-    o66PendingLeftClickBlitzPlan.value = null;
-    o66PendingMove.value = null;
-    renderer?.setO66Path([]);
-  }
+  // Astra 10-10 (P2, g1951755 cmd 1443-1447): the declare frame already derives BLITZ (blitzMove + move squares under
+  // turnMode regular) before the server opens selectBlitzTarget. The approach starts only once the server's own
+  // target-selection status says it took THIS target; every other outcome retires the stored route.
+  const routeDisposition = storedBlitzRouteDisposition(g, plan.targetId);
+  if (routeDisposition === 'wait') return;
+  if (routeDisposition === 'drop') { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
+  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) retireStoredBlitzRoute();
 }, { deep: true, flush: 'post' });
 
 // Focus an owned off-turn prompt when it arms; never focus spectator/opponent prompts.
@@ -7818,8 +7856,8 @@ function endActivationFromMenu() {
   // selection + movement overlay). Clearing here left a blitzer with movement remaining and no way to use it.
   const endGame = gameStore.game.value;
   const endPromptKind = endActivationPromptKind({ clientState: endGame ? deriveClientState(endGame, o66Ctx()) : '', gazeIntentLive: !!gameStore.state.gazeIntent });
-  if (endRowClearsArmsBeforeEnding({ promptKind: endPromptKind, promptEnabled: !!endPromptKind && endActivationConfirmEnabled(endPromptKind, settings) })) clearO66Arms();
-  gameStore.cancelPlan();
+  // Astra 10-10: the same holds for a store plan already executing - with a prompt pending it is cancelled on Confirm only.
+  if (endRowClearsArmsBeforeEnding({ promptKind: endPromptKind, promptEnabled: !!endPromptKind && endActivationConfirmEnabled(endPromptKind, settings) })) { clearO66Arms(); gameStore.cancelPlan(); }
   ctxMenu.visible = false;
   requestEndActivation();
 }
@@ -10264,6 +10302,7 @@ onMounted(async () => {
   renderer.onRightClickReset = () => { deferredFriendlySwitch.value = null; }; // Astra pass 4: renderer-consumed double right-click
   renderer.onWaypointPlanCancel = () => {
     deferredFriendlySwitch.value = null; // Astra pass 3: this right-click is consumed by the renderer - it cancels the pending switch too
+    if (routeRightClickAnswersOpenPrompt()) return; // Astra 10-10 (P3): under an open prompt this is "Go back", nothing else
     if (askInsteadOfRouteCancel()) return; // Astra 10-07 (P2): a declared, nominated Foul asks first
     clearO66Arms();
     ctxMenu.visible = false;
@@ -10308,6 +10347,7 @@ onMounted(async () => {
   renderer.setGazeTarget(gazeTargetMarkerId(gameStore.state.gazeIntent, gameStore.state.gazeTargetReveal));
   gazeVictimPresentation.publish();
   setGameWithConfirmedMovement(renderer, gameStore.state.confirmedMovementDrainActive, gameStore.game.value);
+  rearmO66MovementSurface(); // Astra 10-10: the movement surface was derived before this renderer existed
   const publishedPosition = gameStore.spectatorPublishedPosition.value;
   if (publishedPosition && gameStore.game.value) {
     const p = publishedPosition.checkpoint.durableProjection;
@@ -11892,6 +11932,7 @@ function endTurn() {
 const endTurnWarnBallAction = ref<'handOver' | 'pass' | 'foul' | null>(null);
 const END_TURN_ACTION_NOUN: Record<'handOver' | 'pass' | 'foul', string> = { handOver: 'hand-off', pass: 'pass', foul: 'foul' };
 function confirmEndTurnAnyway() {
+  gameStore.retirePlanForConfirmedEnd(); // Astra 10-10: before the prompt closes (closing it wakes a paused plan); quiet - the coach asked for this
   endTurnWarnCount.value = null;
   renderer?.clearUnactivatedCues(); // owner 09-08: End turn → tear the arrows down at once
   gameStore.playerEndTurn();
@@ -11899,6 +11940,7 @@ function confirmEndTurnAnyway() {
 function cancelEndTurnWarn() {
   endTurnWarnCount.value = null;
   renderer?.armUnactivatedCuesExpiry(UNACTIVATED_CUE_GRACE_MS); // owner 09-08: Go back → 2 s grace, or until a player click
+  rearmO66MovementSurface(); // Astra 10-10: every prompt cancel re-arms the movement surface from state
 }
 // #12/#231: one reusable guard owns Escape-driven activation ends plus the existing Blitz triggers. Confirm uses
 // the unchanged clear-selection + endActivation effects; decline only dismisses the modal and sends no wire.
@@ -11928,6 +11970,11 @@ watch(() => [
   if (!settings.deferFriendlySwitchEnd || String(gameStore.game.value?.gameId ?? '') !== (deferredSwitchFollowUp?.gameId ?? '')) deferredSwitchFollowUp = null;
 });
 watch(endActConfirm, () => { reactivePromptDragPos.endActConfirm = null; });
+// Astra 10-10 (P2): a plan kept for "Go back" is PAUSED while either End prompt is open - the store's planner cannot see
+// these view-local prompts by itself. Sync, so no frame can slip a step out between the prompt opening and the report;
+// the store wakes the plan when the prompt closes (Confirm has cancelled it by then).
+watch(() => pitchHeldByConfirmation(), (open) => gameStore.setPlannerClientPromptHold(open), { immediate: true, flush: 'sync' });
+onBeforeUnmount(() => gameStore.setPlannerClientPromptHold(false));
 // Astra review 10-04: the prompt belongs to ONE activation. It remembers whose it is and closes itself when the
 // acting player changes (the activation ended server-side, a turnover, the turn passed), so "End hand-off" can never
 // be confirmed against a different player.
@@ -12003,6 +12050,18 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
 /** Astra 10-07 (P2): a right-click that would clear a plotted route asks instead where Escape asks (a declared Foul with
  *  a nominated target). Go back keeps route + nomination: the renderer may already have wiped its drawn route
  *  (dismissWaypointPlanForContextMenu), so it is redrawn from the kept plan. Setting off: the old local clear. */
+/** Astra 10-10 (P3): a right-click on grass with a route plotted is consumed by the renderer's waypoint cancel before
+ *  openContextMenu's prompt guard can see it, so under an open End prompt it destroyed the route "Go back" was meant
+ *  to keep. Same doctrine as that guard (Astra pass 5, 10-04): a right-click under an open confirmation only answers
+ *  it with its safe option. The renderer has already wiped its drawn route, so it is redrawn from the kept plan. */
+function routeRightClickAnswersOpenPrompt(): boolean {
+  if (!pitchHeldByConfirmation()) return false;
+  const actingId = currentActingId();
+  if (o66PendingMove.value) setO66PathFromOrigin(playerSquareById(actingId), o66PendingMove.value.route, actingId);
+  ctxMenu.visible = false;
+  if (endActConfirm.value) cancelEndActivation(); else cancelEndTurnWarn();
+  return true;
+}
 function askInsteadOfRouteCancel(): boolean {
   const g = gameStore.game.value;
   if (!g || endActConfirm.value) return false;
@@ -12035,6 +12094,7 @@ function confirmEndActivation() {
   // Owner 10-08: this Yes is the coach's one confirmation for the back-out. The store spends it only on the server's
   // confirmEndAction for this same Hypnotic Gaze activation (an unused gaze), so the coach is not asked a second time.
   if (endActConfirm.value) gameStore.noteEndActivationConfirmed();
+  gameStore.retirePlanForConfirmedEnd(); // Astra 10-10: a plan paused under the prompt goes here - never before the answer, before the prompt closes (closing it wakes a paused plan), and quietly
   endActConfirm.value = null;
   clearO66Arms();
   renderer?.clearSelection();
@@ -12047,6 +12107,7 @@ function cancelEndActivation() {
   const kind = endActConfirm.value?.kind;
   endActConfirm.value = null;
   if (kind === 'punt') gameStore.returnPuntToMove();
+  rearmO66MovementSurface(); // Astra 10-10: Go back re-arms from state; it never relies on nothing having been cleared
 }
 
 // owner 2026-07-03 r6: the turn timer is a FLOATING, movable element. Default

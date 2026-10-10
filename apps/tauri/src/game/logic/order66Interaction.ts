@@ -48,6 +48,20 @@ export function endActivationPromptKind(input: {
  *  surface: nothing re-arms it until the next frame, and the server sends none while it waits for the coach.
  *  When a prompt is about to ask, the prompt owns the cleanup: Confirm clears (confirmEndActivation), Go back leaves
  *  the activation exactly as it was. True = no prompt will open, so the arms are cleared now (the pre-prompt R3 path). */
+/** Astra review of the g1951755 fix (10-10): the movement surface (selection, reach overlay, tile pick) was armed only
+ *  as a side effect of a watched change, so a cold renderer mount (rejoin while the server waits in blitzMove) or a
+ *  prompt cancelled after something had cleared the board left dead tiles until the next frame. The view now owns ONE
+ *  state-derived re-arm, run at renderer mount and from every prompt cancel. This is its selection half: re-select the
+ *  acting player only when the server is waiting on a move from this seat and nothing else owns the pitch.
+ *  moveSquareCount is the freshly derived surface (0 = the state offers no movement: nothing is armed). */
+export function movementSurfaceReselectsActing(input: {
+  playing: boolean; myTurn: boolean; actingId: string; controlsActing: boolean; selectedId: string | null;
+  moveSquareCount: number; serverDialogOpen: boolean; clientPromptOpen: boolean; planActive: boolean;
+}): boolean {
+  if (!input.playing || !input.myTurn || !input.actingId || !input.controlsActing) return false;
+  if (input.moveSquareCount <= 0 || input.serverDialogOpen || input.clientPromptOpen || input.planActive) return false;
+  return input.selectedId === null; // never steal a selection the coach made (an inspected opponent, a team-mate)
+}
 export function endRowClearsArmsBeforeEnding(input: { promptKind: EndActivationConfirmKind | null; promptEnabled: boolean }): boolean {
   return !(input.promptKind !== null && input.promptEnabled);
 }
@@ -577,6 +591,71 @@ function actingPlayerId(game: GameJson): string {
   return String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
 }
 
+/** Astra 10-10 (P2), seen in g1951755 (Mary Galzar, commandNr 1443-1447): the BB2025 blitz wire is
+ *  clientActingPlayer(blitzMove) -> [server: selectBlitzTarget] -> targetSelected -> [server: selection over] -> THEN
+ *  clientBlitzMove. The declare frame alone already carries playerAction blitzMove and move squares under turnMode
+ *  regular, so "derives BLITZ" is not the acknowledgement: a stored quick-click route started on it sent a
+ *  clientBlitzMove the server ignored, and the selectBlitzTarget frame then flushed the plan.
+ *
+ *  This reads the server's own outcome, by STATUS (upstream TargetSelectionState.Status: STARTED, CANCELED, SELECTED,
+ *  SKIPPED, FAILED), never by the mere presence of a player id:
+ *   - SELECTED (StepSelectBlitzTarget: a target on the other team; carries its id) -> 'selected': blitz movement
+ *     proceeds and that player is the block target (StepSelectBlitzTargetEnd -> BLITZ_MOVE).
+ *   - SKIPPED (no standing opponent, `new TargetSelectionState().skip()`: NO id) -> 'skipped': blitz movement
+ *     proceeds, there is no block target.
+ *   - CANCELED (a self-target: the blitz is called off, the server returns to player selection) and FAILED (Bone Head,
+ *     Really Stupid, Animal Savagery, Foul Appearance, Unchannelled Fury, a failed stand-up: the action ends; this one
+ *     can still carry the id of the target that was picked) -> 'void': nothing may be sent for this blitz.
+ *   - no state yet, STARTED, or the turn mode still selectBlitzTarget -> 'pending'.
+ *  The selectBlitzTarget DIALOG is deliberately not read: the server sets the target state and restores the turn mode
+ *  in one frame and clears the dialog in a later one (g1951755: 1445 then 1446), and after a self-target cancel it
+ *  never clears it at all (g986). Status + turn mode cannot go true early (both land in the same frame, after the
+ *  server has finished the selection) and cannot be held false by a dialog that outlived its phase. */
+export type BlitzTargetOutcome = { kind: 'pending' } | { kind: 'selected'; targetId: string } | { kind: 'skipped' } | { kind: 'void' };
+export function blitzTargetOutcome(game: GameJson | null | undefined): BlitzTargetOutcome {
+  if (!game || String(game.turnMode ?? '') === 'selectBlitzTarget') return { kind: 'pending' };
+  const state = (game.fieldModel as { targetSelectionState?: { playerId?: unknown; targetSelectionStatus?: unknown } | null } | undefined)?.targetSelectionState;
+  const status = String(state?.targetSelectionStatus ?? '');
+  if (status === 'SELECTED') {
+    const targetId = String(state?.playerId ?? '');
+    return targetId ? { kind: 'selected', targetId } : { kind: 'pending' }; // SELECTED always names its target upstream
+  }
+  if (status === 'SKIPPED') return { kind: 'skipped' };
+  if (status === 'CANCELED' || status === 'FAILED') return { kind: 'void' };
+  return { kind: 'pending' };
+}
+/** The server has taken THIS target (or, with no id given, some target) for the blitz. */
+export function blitzTargetAcknowledged(game: GameJson | null | undefined, targetId?: string | null): boolean {
+  const outcome = blitzTargetOutcome(game);
+  return outcome.kind === 'selected' && (!targetId || outcome.targetId === targetId);
+}
+/** What the view does with a stored quick-click Blitz route on each frame: wait while the selection is pending, start
+ *  the approach once the server has taken THAT target, or drop the route for every other outcome (another target, a
+ *  skipped / cancelled / failed selection): it was plotted to contact with the player the coach clicked. */
+export function storedBlitzRouteDisposition(game: GameJson | null | undefined, targetId: string): 'wait' | 'start' | 'drop' {
+  const outcome = blitzTargetOutcome(game);
+  if (outcome.kind === 'pending') return 'wait';
+  return outcome.kind === 'selected' && outcome.targetId === targetId ? 'start' : 'drop';
+}
+/** A stored quick-click route belongs to one activation of one player on our own turn. Every other exit (the turn
+ *  passed, another player is acting, the seat stopped playing) retires it: nothing else would, and while it is held it
+ *  short-circuits enemy clicks, tile clicks and Space. */
+export function storedBlitzRouteOutlived(input: { playing: boolean; myTurn: boolean; actingId: string; routePlayerId: string }): boolean {
+  return !input.playing || !input.myTurn || (!!input.actingId && input.actingId !== input.routePlayerId);
+}
+/** May a Blitz plan put its first command on the wire? `targetId` = the plan's block target (null for a walk-only
+ *  plan). 'send' once the selection is over in the plan's favour, or after the block (hasBlocked: the server cleared
+ *  the selection and returned the blitzer to blitzMove - ordinary movement again). 'wait' while the selection is
+ *  pending. 'void' when this plan can never run: the blitz was called off or failed, the server took another target,
+ *  or the selection was skipped and the plan wanted a block. */
+export function blitzPlanGate(game: GameJson | null | undefined, targetId: string | null): 'send' | 'wait' | 'void' {
+  if (actingHasBlocked(game)) return 'send';
+  const outcome = blitzTargetOutcome(game);
+  if (outcome.kind === 'pending') return 'wait';
+  if (outcome.kind === 'void') return 'void';
+  if (outcome.kind === 'skipped') return targetId ? 'void' : 'send';
+  return !targetId || outcome.targetId === targetId ? 'send' : 'void';
+}
 /** The acting player's block is on the wire (server actingPlayerSetHasBlocked) - the activation's block is spent. */
 export function actingHasBlocked(game: GameJson | null | undefined): boolean {
   return (game?.actingPlayer as { hasBlocked?: boolean } | undefined)?.hasBlocked === true;
