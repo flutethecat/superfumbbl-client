@@ -82,6 +82,10 @@ export interface AppSettings extends ConfirmationSettings {
   showBlockDice: boolean;
   /** FUMBBL auto-marking config JSON (UI-6); '' = markings off. */
   markingsConfig: string;
+  /** Owner 10-09: where the current markings were imported from (Settings shows it); '' / 0 = never imported, or
+   *  cleared since. Display only: nothing re-imports on its own. */
+  markingsImportCoach: string;
+  markingsImportAt: number;
   /** B2-17: skill icons and skill markings are mutually exclusive. */
   skillDisplay: 'icons' | 'markings';
   /** On-pitch skill-marking typography. Markings stay one line; these settings
@@ -515,6 +519,8 @@ const DEFAULTS: AppSettings = {
   showPositionRings: true,
   showBlockDice: false,
   markingsConfig: '',
+  markingsImportCoach: '',
+  markingsImportAt: 0,
   skillDisplay: 'icons',
   skillMarkingColor: '#f5c542',
   skillMarkingFont: 'arial',

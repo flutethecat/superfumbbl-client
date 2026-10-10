@@ -485,8 +485,8 @@ function openTournamentNotification() {
   dismissTournamentNotification(notification.id);
 }
 import { SOUND_CATALOG, previewSound, invalidateSoundCache } from './game/sounds';
-import { prefillMarkerTextFromJson } from './game/skillDisplay';
-import { importFumbblMarkings } from './game/fumbblMarkingsImport';
+import { commitMarkingStores, currentMarkingStores, invalidateMarkingsImports, normalizeMarkingStores, setTableMarker } from './game/markingRules';
+import SkillMarkingsSettings from './components/SkillMarkingsSettings.vue';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
@@ -987,77 +987,7 @@ function fillRange(el: HTMLInputElement): void {
   el.style.setProperty('--fill', `${pct}%`);
 }
 
-/**
- * UI-6: pulls the coach's auto-marking config from FUMBBL — the same
- * endpoint the FFB server uses (`api/clientoptions/get/<coach>`, edited via
- * fumbbl.com's client-options/markings page) — through the dev proxy.
- */
-const markingsStatus = ref('Empty config = markings off.');
-
-/**
- * B2-14: structured auto-marking rule editor, mirroring the fumbbl.com
- * Client Options page. Reads/writes the same markingsConfig JSON that the
- * import fills, so both paths stay interchangeable.
- */
-interface EditableRule {
-  skillArray: string[];
-  injuryAttributes: string[];
-  marking: string;
-  gainedOnly: boolean;
-  applyTo: 'OWN' | 'OPPONENT' | 'BOTH';
-  applyRepeatedly: boolean;
-}
-const newRule = reactive({ skills: '', marking: '', applyTo: 'BOTH' as EditableRule['applyTo'], gainedOnly: true });
-
-const markingRules = computed<EditableRule[]>(() => {
-  try {
-    const parsed = JSON.parse(settings.markingsConfig || '{}') as { autoMarkingRecords?: EditableRule[] };
-    return (parsed.autoMarkingRecords ?? []).map((r) => ({
-      skillArray: r.skillArray ?? [],
-      injuryAttributes: r.injuryAttributes ?? [],
-      marking: r.marking ?? '',
-      gainedOnly: !!r.gainedOnly,
-      applyTo: r.applyTo ?? 'BOTH',
-      applyRepeatedly: !!r.applyRepeatedly,
-    }));
-  } catch {
-    return [];
-  }
-});
-
-function writeMarkingRules(rules: EditableRule[]) {
-  const parsed = (() => {
-    try {
-      return JSON.parse(settings.markingsConfig || '{}') as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  })();
-  parsed.autoMarkingRecords = rules;
-  settings.markingsConfig = JSON.stringify(parsed);
-}
-
-function addMarkingRule() {
-  const skills = newRule.skills.split(',').map((s) => s.trim()).filter(Boolean);
-  if (!newRule.marking || skills.length === 0) return;
-  writeMarkingRules([
-    ...markingRules.value,
-    {
-      skillArray: skills,
-      injuryAttributes: [],
-      marking: newRule.marking,
-      gainedOnly: newRule.gainedOnly,
-      applyTo: newRule.applyTo,
-      applyRepeatedly: false,
-    },
-  ]);
-  newRule.skills = '';
-  newRule.marking = '';
-}
-
-function removeMarkingRule(index: number) {
-  writeMarkingRules(markingRules.value.filter((_, i) => i !== index));
-}
+// Owner 10-09: the skill-markings flow (import, table, add, clear all) lives in components/SkillMarkingsSettings.vue.
 
 // --- Per-skill display config (owner 2026-07-03 r6f) ------------------------
 // A menu over EVERY skill in the game (skillNames.json), grouped
@@ -1070,8 +1000,7 @@ const SKILL_CONFIG_AS_SKILL = new Set(['Team Captain']);
 const allSkills = [...new Set([...(skillNames as string[]), ...SKILL_CONFIG_EXTRA])].sort((a, b) => a.localeCompare(b));
 const skillConfigGroup = ref<'icons' | 'markers'>('icons');
 const skillFilter = ref('');
-const showImportInstructions = ref(false);
-const skillPrefillStatus = ref('');
+const skillConfigStatus = ref('');
 const filteredSkills = computed(() => {
   const q = skillFilter.value.trim().toLowerCase();
   return q ? allSkills.filter((s) => s.toLowerCase().includes(q)) : allSkills;
@@ -1107,35 +1036,25 @@ function skillBehaviour(skill: string, kind: 'icon' | 'marker', col: SkillCol): 
   return v ?? (kind === 'icon' ? iconBehaviourDefault() : MARKER_BEHAVIOUR_DEFAULT);
 }
 function setSkillBehaviour(skill: string, kind: 'icon' | 'marker', col: SkillCol, value: SkillBehaviour) {
+  if (kind === 'marker') {
+    // Owner 10-09: a marker changed here goes through the markings model (it also owns the imported rules for the skill).
+    commitMarkingStores(setTableMarker(currentMarkingStores(), skill, col === 'Mine' ? { markerMine: value } : { markerOpp: value }));
+    return;
+  }
   const entry = { ...(settings.skillConfig[skill] ?? {}) };
-  entry[`${kind}${col}` as 'iconMine' | 'iconOpp' | 'markerMine' | 'markerOpp'] = value;
+  entry[`${kind}${col}` as 'iconMine' | 'iconOpp'] = value;
   settings.skillConfig = { ...settings.skillConfig, [skill]: entry };
 }
 function skillMarkerText(skill: string): string {
   return settings.skillConfig[skill]?.markerText ?? '';
 }
 function setSkillMarkerText(skill: string, value: string) {
-  const entry = { ...(settings.skillConfig[skill] ?? {}) };
-  if (value) entry.markerText = value;
-  else delete entry.markerText;
-  settings.skillConfig = { ...settings.skillConfig, [skill]: entry };
-}
-/** Seed the per-skill marker glyphs from the imported FUMBBL markings JSON. */
-function prefillMarkerGlyphs() {
-  try {
-    const config = JSON.parse(settings.markingsConfig || '{}');
-    const n = prefillMarkerTextFromJson(config);
-    settings.skillConfig = { ...settings.skillConfig }; // persist + re-render
-    skillPrefillStatus.value =
-      n > 0 ? `Pre-filled ${n} marker glyph(s) from the markings JSON (yours are kept).`
-        : 'No single-skill markings found in the JSON to pre-fill.';
-  } catch {
-    skillPrefillStatus.value = 'The markings JSON is empty or invalid — import or paste it first.';
-  }
+  commitMarkingStores(setTableMarker(currentMarkingStores(), skill, { markerText: value }));
 }
 function resetSkillConfig() {
-  settings.skillConfig = {};
-  skillPrefillStatus.value = 'Per-skill config reset to defaults.';
+  // Owner 10-09: drop the JSON's copies of the table's markings first, or the reset brings them straight back.
+  commitMarkingStores({ markingsConfig: normalizeMarkingStores(currentMarkingStores()).markingsConfig, skillConfig: {} });
+  skillConfigStatus.value = 'Per-skill config reset to defaults.';
 }
 
 /** B3-8: UI-wide font choice — drives the CSS variable the root font uses.
@@ -1212,13 +1131,6 @@ function onFullscreenHotkey(e: KeyboardEvent): void {
 }
 onMounted(() => window.addEventListener('keydown', onFullscreenHotkey, true));
 onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenHotkey, true));
-
-// #16 (owner 08-11): the import coach — AUTOFILLED with the user's own FUMBBL coach, freely editable to any coach.
-const importCoach = ref(settings.coach);
-async function importMarkings() {
-  // Owner 10-06: the routine lives in game/fumbblMarkingsImport.ts so the first-launch setup wizard runs the same one.
-  markingsStatus.value = await importFumbblMarkings(importCoach.value, (status) => { markingsStatus.value = status; });
-}
 
 const settingsDialog = ref<HTMLElement | null>(null);
 let settingsOpener: HTMLElement | null = null;
@@ -1332,6 +1244,8 @@ function escSettings(e: KeyboardEvent) {
   void cancelSettingsChanges();
 }
 watch(() => ui.settingsOpen, (open) => {
+  // Astra F5: Settings closed or cancelled - a markings import still in flight must not land afterwards.
+  if (!open) invalidateMarkingsImports();
   if (open) {
     if (!settingsOpener && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
       settingsOpener = document.activeElement;
@@ -1405,6 +1319,7 @@ async function applySettingsChanges(closeAfter = false): Promise<boolean> {
 
 async function cancelSettingsChanges(): Promise<boolean> {
   if (settingsTransactionBusy.value) return false;
+  invalidateMarkingsImports(); // a pending markings import must not land on top of the restored snapshot
   if (!settingsDirty.value || settingsSnapshot.value == null) {
     ui.settingsOpen = false;
     return true;
@@ -2558,22 +2473,6 @@ function captureKey(event: KeyboardEvent) {
                  (home coach) / OPPOSITION (away coach) behaviour + a marker glyph. -->
             <details class="skill-config">
               <summary>Skill display config — per-skill icons &amp; markers</summary>
-              <div class="sc-instructions">
-                <button type="button" class="sc-help-toggle" @click="showImportInstructions = !showImportInstructions">
-                  {{ showImportInstructions ? '▾' : '▸' }} How to import FUMBBL skill markers (JSON)
-                </button>
-                <ol v-if="showImportInstructions" class="sc-steps">
-                  <li>On <b>fumbbl.com</b>, open <b>Settings → Client Options → Markings</b> and set up the
-                    markings you want (each rule = a skill/combo → a short marking).</li>
-                  <li>Enter that same FUMBBL <b>coach name</b> under <b>Settings → General</b> here.</li>
-                  <li>Choose <b>Skill Markings</b> above, then use the <b>“Import markings from
-                    fumbbl.com”</b> button (or paste the raw JSON there).</li>
-                  <li>Choose <b>Skill Markers</b> in the group dropdown and click
-                    <b>“Pre-fill marker glyphs from JSON”</b> — this copies the FUMBBL glyphs into the
-                    per-skill text fields. A value you type <b>overrides</b> the imported one.</li>
-                  <li>Set each skill’s <b>My team</b> / <b>Opposition</b> behaviour to show the marker.</li>
-                </ol>
-              </div>
               <label class="row">
                 <span>Configure</span>
                 <select v-model="skillConfigGroup">
@@ -2589,10 +2488,6 @@ function captureKey(event: KeyboardEvent) {
                   <option value="centre">On token</option>
                 </select>
               </label>
-              <div v-if="skillConfigGroup === 'markers'" class="sc-prefill">
-                <button type="button" @click="prefillMarkerGlyphs">Pre-fill marker glyphs from JSON</button>
-                <span class="hint">{{ skillPrefillStatus }}</span>
-              </div>
               <input class="sc-filter" v-model="skillFilter" placeholder="Filter skills…" spellcheck="false" />
               <div class="sc-table" :data-markers="skillConfigGroup === 'markers'">
                 <div class="sc-thead">
@@ -2653,38 +2548,12 @@ function captureKey(event: KeyboardEvent) {
               </div>
               <div class="actions" style="justify-content: flex-start">
                 <button type="button" @click="resetSkillConfig">Reset per-skill config</button>
+                <span class="hint" aria-live="polite">{{ skillConfigStatus }}</span>
               </div>
             </details>
-            <!-- owner 2026-07-06: FUMBBL auto-marking rules only surface when Skill
-                 Markings are the chosen display (the raw-JSON box was removed). -->
-            <div v-if="settings.skillDisplay === 'markings'" class="marking-editor">
-              <div class="marking-rules" v-if="markingRules.length">
-                <div v-for="(rule, i) in markingRules" :key="i" class="marking-rule">
-                  <b>{{ rule.marking }}</b>
-                  <span>{{ rule.skillArray.join(', ') || rule.injuryAttributes.join(', ') }}</span>
-                  <em>{{ rule.applyTo.toLowerCase() }}{{ rule.gainedOnly ? ' · gained' : '' }}{{ rule.applyRepeatedly ? ' · repeat' : '' }}</em>
-                  <button title="Remove rule" @click="removeMarkingRule(i)">✕</button>
-                </div>
-              </div>
-              <div class="marking-add">
-                <input v-model="newRule.skills" placeholder="Skills (comma-sep)" style="width: 130px" />
-                <input v-model="newRule.marking" placeholder="Mark" style="width: 44px" />
-                <select v-model="newRule.applyTo">
-                  <option value="BOTH">Both</option>
-                  <option value="OWN">Own</option>
-                  <option value="OPPONENT">Opponent</option>
-                </select>
-                <label class="row"><input v-model="newRule.gainedOnly" type="checkbox" />gained</label>
-                <button @click="addMarkingRule">Add</button>
-              </div>
-              <!-- #16 (owner 08-11): coach selector — autofilled with your coach, editable to import any coach's markings. -->
-              <div class="actions" style="justify-content: flex-start; gap: 6px; flex-wrap: wrap;">
-                <label class="row" style="gap: 4px;">Coach
-                  <input v-model="importCoach" type="text" spellcheck="false" placeholder="FUMBBL coach" style="width: 11em;" /></label>
-                <button @click="importMarkings">Import markings from fumbbl.com</button>
-              </div>
-              <p class="hint">{{ markingsStatus }}</p>
-            </div>
+            <!-- Owner 10-09: the skill-markings flow (source + import, table, add, clear all). Only while Skill
+                 markings are the chosen display, as before. -->
+            <SkillMarkingsSettings v-if="settings.skillDisplay === 'markings'" :skills="allSkills" />
           </fieldset>
 
           <fieldset class="settings-group">
@@ -4217,45 +4086,8 @@ textarea:focus-visible,
   padding: 0.4rem 0.9rem;
   cursor: pointer;
 }
-/* B2-14: marking rule editor */
-.marking-rules { display: flex; flex-direction: column; gap: 2px; max-height: 140px; overflow-y: auto; }
-.marking-rule {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  background: var(--ui-surface);
-  border: 1px solid var(--ui-border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.72rem);
-}
-.marking-rule b { color: var(--ui-accent); min-width: 30px; }
-.marking-rule span { flex: 1; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.marking-rule em { color: var(--ui-text-dim); font-style: normal; }
-.marking-rule button { background: none; border: none; color: var(--ui-muted); cursor: pointer; }
-.marking-add { display: flex; gap: 5px; align-items: center; font-size: max(var(--ui-min-text-size, 12px), 0.75rem); flex-wrap: wrap; }
-.marking-add input,
-.marking-add select {
-  background: var(--ui-surface);
-  color: inherit;
-  border: 1px solid var(--ui-border);
-  border-radius: 4px;
-  padding: 0.25rem 0.4rem;
-}
-.marking-add button { background: #3a5f3f; color: inherit; border: none; border-radius: 4px; padding: 0.25rem 0.7rem; cursor: pointer; }
-
-/* Per-skill display config (owner 2026-07-03 r6f) */
 .skill-config { margin: 0.3rem 0; border: 1px solid var(--ui-border); border-radius: 6px; padding: 0.3rem 0.5rem; }
 .skill-config summary { cursor: pointer; color: var(--ui-accent); font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem); padding: 0.2rem 0; font-weight: 600; }
-.sc-instructions { margin: 0.3rem 0; }
-.sc-help-toggle {
-  background: transparent; border: none; color: var(--ui-accent); cursor: pointer;
-  font-size: max(var(--ui-min-text-size, 12px), 0.78rem); padding: 0.15rem 0; text-align: left;
-}
-.sc-steps { margin: 0.2rem 0 0.4rem; padding-left: 1.2rem; color: var(--ui-text); font-size: max(var(--ui-min-text-size, 12px), 0.74rem); line-height: 1.5; }
-.sc-steps b { color: var(--ui-text); }
-.sc-prefill { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0.2rem 0; }
-.sc-prefill button { background: #3a4f6f; color: inherit; border: none; border-radius: 4px; padding: 0.25rem 0.7rem; cursor: pointer; font-size: max(var(--ui-min-text-size, 12px), 0.76rem); }
 .sc-filter {
   width: 100%; box-sizing: border-box; margin: 0.3rem 0;
   background: var(--ui-surface); color: inherit; border: 1px solid var(--ui-border); border-radius: 4px; padding: 0.3rem 0.5rem;
@@ -4545,7 +4377,6 @@ textarea:focus-visible,
    Global styles (App.vue + SpectateView are un-scoped) so this reaches both. */
 .cb-accent .menubar button,
 .cb-accent .game-browser button,
-.cb-accent .marking-add button,
 .cb-accent .settings-pane .actions .primary,
 .cb-accent .confirm-move,
 .cb-accent .apo-actions .apo-use,

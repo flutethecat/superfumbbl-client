@@ -270,8 +270,15 @@ export function jumpUpMenuPresentation(
  * Before this, the moment a marker was configured (which the import itself did) the JSON was ignored entirely,
  * so combo rules never drew, and the import mapped every rule to "always" (gainedOnly lost).
  */
-function singleSkillRecord(record: AutoMarkingRecord): string | null {
-  return (record.skillArray?.length ?? 0) === 1 && (record.injuryAttributes?.length ?? 0) === 0 ? record.skillArray[0]! : null;
+export function singleSkillRecord(record: Partial<AutoMarkingRecord>): string | null {
+  return (record.skillArray?.length ?? 0) === 1 && (record.injuryAttributes?.length ?? 0) === 0 ? record.skillArray![0]! : null;
+}
+/** The per-skill table COVERS a skill's marker when either side is set to show it; the imported JSON's single-skill
+ *  rule for that skill then draws nothing. A skill left on Never / Never is NOT covered (its JSON rule still draws):
+ *  that is how every config stored before 10-09 reads, and it must keep drawing the same until the coach changes
+ *  something. Turning a marker off in this build removes the JSON rule instead (markingRules.setTableMarker). */
+export function markerTableDecides(entry: SkillConfigEntry | undefined): boolean {
+  return (!!entry?.markerMine && entry.markerMine !== 'never') || (!!entry?.markerOpp && entry.markerOpp !== 'never');
 }
 export function perSkillMarkingRecords(config: Record<string, SkillConfigEntry> = settings.skillConfig): AutoMarkingRecord[] {
   const out: AutoMarkingRecord[] = [];
@@ -303,7 +310,7 @@ export function effectiveMarkingConfig(rawJson: string, config: Record<string, S
   let json: AutoMarkingConfig | null = null;
   const raw = rawJson.trim();
   if (raw) { try { json = JSON.parse(raw) as AutoMarkingConfig; } catch { json = null; } }
-  const covered = new Set(Object.entries(config).filter(([, e]) => (e.markerMine && e.markerMine !== 'never') || (e.markerOpp && e.markerOpp !== 'never')).map(([skill]) => skill));
+  const covered = new Set(Object.entries(config).filter(([, e]) => markerTableDecides(e)).map(([skill]) => skill));
   const fromJson = (json?.autoMarkingRecords ?? []).filter((record) => { const single = singleSkillRecord(record); return single === null || !covered.has(single); });
   const records = [...fromJson, ...perSkillMarkingRecords(config)];
   if (!records.length) return null;
@@ -315,7 +322,7 @@ export function effectiveMarkingConfig(rawJson: string, config: Record<string, S
  *  wrote; rules removed on fumbbl.com retire their imported entry. Hand-set entries for other skills are kept; a
  *  hand-set entry for an imported skill is overwritten (the coach asked for FUMBBL's version). Multi-skill and
  *  injury rules stay in the JSON and draw through effectiveMarkingConfig. */
-export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecord>[], prev: Record<string, SkillConfigEntry>): { next: Record<string, SkillConfigEntry>; imported: number; combos: number } {
+export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecord>[], prev: Record<string, SkillConfigEntry>, keptLocal: readonly Partial<AutoMarkingRecord>[] = []): { next: Record<string, SkillConfigEntry>; imported: number; combos: number } {
   const next: Record<string, SkillConfigEntry> = {};
   for (const [skill, entry] of Object.entries(prev)) {
     if (!entry.markerImported) { next[skill] = { ...entry }; continue; }
@@ -323,11 +330,28 @@ export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecor
     delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
     if (Object.keys(kept).length) next[skill] = kept; // icon settings survive a retired import
   }
+  // Owner 10-09: a skill with SEVERAL single-skill rules ("B" on my team, "b" on the opposition) does not fit the
+  // table's one glyph per skill - the last rule used to win and the others were lost. Those rules stay in the JSON,
+  // the table steps aside for the skill, and the generator draws them exactly as written.
+  // `keptLocal`: the coach's own JSON rules that ride along with this import count too (a site rule for my team plus
+  // the coach's rule for the opposition is two rules for the skill).
+  const singles = new Map<string, number>();
+  for (const record of [...records, ...keptLocal]) {
+    const single = singleSkillRecord(record);
+    if (single !== null && record.marking) singles.set(single, (singles.get(single) ?? 0) + 1);
+  }
   let imported = 0, combos = 0;
   for (const record of records) {
-    const single = singleSkillRecord(record as AutoMarkingRecord);
+    const single = singleSkillRecord(record);
     if (single === null) { combos++; continue; }
     if (!record.marking) continue;
+    if ((singles.get(single) ?? 0) > 1) {
+      const kept: SkillConfigEntry = { ...(next[single] ?? {}) };
+      delete kept.markerImported; delete kept.markerText; delete kept.markerMine; delete kept.markerOpp;
+      if (Object.keys(kept).length) next[single] = kept; else delete next[single];
+      imported++;
+      continue;
+    }
     const applyTo = record.applyTo ?? 'BOTH';
     const behaviour: SkillBehaviour = record.gainedOnly ? 'added' : 'always';
     next[single] = {
@@ -340,20 +364,4 @@ export function applyImportedMarkings(records: readonly Partial<AutoMarkingRecor
     imported++;
   }
   return { next, imported, combos };
-}
-
-/** Pre-fill the per-skill `markerText` defaults from a FUMBBL auto-marking config:
- *  every single-skill record (skillArray === [skill]) seeds that skill's glyph
- *  UNLESS the user already entered one. Returns the number of glyphs seeded. */
-export function prefillMarkerTextFromJson(config: AutoMarkingConfig): number {
-  let seeded = 0;
-  for (const record of config.autoMarkingRecords ?? []) {
-    if (record.skillArray?.length !== 1 || !record.marking) continue;
-    const skill = record.skillArray[0]!;
-    const entry = (settings.skillConfig[skill] ??= {});
-    if (entry.markerText && entry.markerText.trim()) continue; // user value wins
-    entry.markerText = record.marking;
-    seeded++;
-  }
-  return seeded;
 }

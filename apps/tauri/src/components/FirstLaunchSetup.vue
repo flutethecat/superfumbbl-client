@@ -3,12 +3,13 @@
  *  replaces the old account-setup splash; re-runnable from Settings → General. A gate like the legal notice: no
  *  dismiss, Esc does nothing. Every choice step is prefilled from the current settings and writes ONLY when an option
  *  is selected (immediately, so Back/Next never loses a choice). The step model lives in game/setupWizard.ts. */
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl } from '@fumbbl40k/ffb-pitch';
 import D6Face from './D6Face.vue';
 import { settings } from '../game/settings';
 import { flushFumbblPassword } from '../game/credentials';
 import { importFumbblMarkings } from '../game/fumbblMarkingsImport';
+import { invalidateMarkingsImports } from '../game/markingRules';
 import { openExternal } from '../game/openExternal';
 import { importAssetPackForApply, packCapabilityLabels, publishAssetAssignments, useWholeAssetPack } from '../game/assetPackActions';
 import { abandonAssetAssignmentIntent, assetMods, beginAssetAssignmentIntent, type InstalledAssetPack } from '../game/assetMods';
@@ -176,6 +177,11 @@ async function importMarkings(): Promise<void> {
     markingsBusy.value = false;
   }
 }
+// Astra 10-09 (F5): the wizard's import carries the same generation token as Settings. Leaving the step, picking
+// another skill display, finishing / skipping, or closing the wizard drops a reply that is still on its way.
+watch(index, () => invalidateMarkingsImports());
+watch(() => settings.skillDisplay, () => invalidateMarkingsImports());
+onBeforeUnmount(() => invalidateMarkingsImports());
 
 // Owner 10-06: the Super FUMBBL (fork) account entry is NOT part of the wizard; Settings → General keeps it.
 
@@ -255,6 +261,7 @@ onMounted(() => { void nextTick(focusInitial); });
 function back(): void { if (index.value > 0) index.value -= 1; }
 function next(): void { if (!isLast.value) index.value += 1; }
 function finish(): void {
+  invalidateMarkingsImports(); // Astra 10-09: a markings import still out must not land after the wizard is done
   flushPasswords();
   emit('finish');
 }
@@ -327,7 +334,7 @@ function finish(): void {
           </p>
           <div v-if="step.id === 'skills' && selectedFor(step) === 'markings'" class="setup-markings-import">
             <label class="setup-field">Coach
-              <input v-model="markingsCoach" type="text" spellcheck="false" placeholder="FUMBBL coach" />
+              <input v-model="markingsCoach" type="text" spellcheck="false" placeholder="FUMBBL coach" :disabled="markingsBusy" />
             </label>
             <button type="button" class="setup-secondary" :disabled="markingsBusy" @click="importMarkings">Import my markings from FUMBBL</button>
             <p v-if="markingsStatus" class="setup-hint" aria-live="polite">{{ markingsStatus }}</p>
