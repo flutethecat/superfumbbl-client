@@ -91,6 +91,8 @@ export interface ClientStateContext {
    *  A DEFINED value (null or a string) is the capability flag: a surface that can arm the intent and roll on End supplies it on every
    *  call (null when no intent is live); a context without it (Classic; `undefined` too) is offered no `Activate` row. */
   bigGuyActivateRollPlayerId?: string | null;
+  /** A gameplay command is out and unanswered: the model may be about to change, so the End row never reads "Cancel". */
+  commandUnanswered?: boolean;
   /** True while a skill lets this player block two foes at once (MULTIPLE_BLOCK → multi-block state). */
   canBlockTwoAtOnce?: boolean;
   /** Gameplay preference: a friendly-player click may leave the current movement activation. */

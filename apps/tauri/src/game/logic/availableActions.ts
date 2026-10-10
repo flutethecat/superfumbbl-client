@@ -571,6 +571,21 @@ export function actingHasActed(game: GameJson, playerId: string): boolean {
       || acting?.hasTriggeredEffect || acting?.forgone || (acting?.usedSkills?.length ?? 0) > 0);
 }
 
+/** Owner 10-10: "When a player stands up from a move, the context menu reads 'End Activation' when really it's a
+ *  'Cancel Activation'." Ending an activation in which the player has not acted is a cancel on the server: the
+ *  activation is handed back (a player who had only stood up for the move goes back to the ground: bb2025
+ *  StepInitSelecting clears standingUp; ActingPlayer.hasActed() is false until a step, block, foul, pass or skill
+ *  use). The End row says so. Once the player has acted it is a real End Activation. */
+export function endActivationRowLabel(game: GameJson | null | undefined, playerId: string | null | undefined, commandUnanswered = false): string {
+  if (!game || !playerId || commandUnanswered) return 'End Activation';
+  const acting = game.actingPlayer as { playerId?: string | null; currentMove?: number; standingUp?: boolean } | undefined;
+  if (String(acting?.playerId ?? '') !== playerId) return 'End Activation';
+  // Movement already spent without the stand-up flag is a step taken, whatever the hasMoved flag says (belt and braces:
+  // the 3 MA of a pending stand-up are not a step).
+  const stepped = (Number(acting?.currentMove) || 0) > 0 && acting?.standingUp !== true;
+  return actingHasActed(game, playerId) || stepped ? 'End Activation' : 'Cancel Activation';
+}
+
 /** PlayerState.hasTacklezones():230-233 — base STANDING|MOVING|BLOCKED, not confused, not hypnotized. */
 function stateHasTacklezones(ps: number | undefined): boolean {
   const st = ps ?? 0;
@@ -3402,7 +3417,7 @@ function availableActionsRaw(
     // Spec S15B #3: the store holds a live activate intent for this unmoved mover, so the End row rolls the negatrait.
     const rollsOnEnd = state === 'MOVE' && !!actingId && ctx.bigGuyActivateRollPlayerId === actingId
       && !actingHasActed(game, actingId);
-    out.push({ action: '', label: rollsOnEnd ? bigGuyRollEndLabel(game, actingId) : 'End Activation', kind: 'endMove', enabled: true });
+    out.push({ action: '', label: rollsOnEnd ? bigGuyRollEndLabel(game, actingId) : endActivationRowLabel(game, actingId, ctx.commandUnanswered === true), kind: 'endMove', enabled: true });
     return out;
   }
 

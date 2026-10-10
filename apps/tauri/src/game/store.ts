@@ -24,7 +24,7 @@ import { inducementChoiceLabel } from './inducementChoiceLabel';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
-import { appendLogLane, composeLogLanes, createLogLanes, type LogLane } from './logLanes';
+import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
 import { buildBlockDecision, createBlockContext, reduceBlockContext } from './blockDecisionProjection';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
 import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
@@ -305,6 +305,8 @@ function playPermitted(): boolean {
 export interface LogEntry {
   time: string;
   kind: 'report' | 'talk' | 'system';
+  /** A chat line put back after re-joining the same game: already shown once, so it raises no toast or unread count. */
+  restored?: true;
   /** Display classification only; the entry remains in state.log and diagnostic exports. */
   category?: 'server-sequencing';
   text: string;
@@ -462,13 +464,35 @@ function withLogReceipt<T>(receipt: SpectatorReceipt | null | undefined, action:
   try { return action(); } finally { activeLogReceipt = previous; }
 }
 function replaceVisibleLogEntries(entries: LogEntry[]): void {
-  const old = [...visibleLogLanes.match, ...visibleLogLanes.connection];
+  const old = [...visibleLogLanes.match, ...visibleLogLanes.connection, ...visibleLogLanes.chat];
   const match = new Set(visibleLogLanes.match.map((row) => row.entry));
-  visibleLogLanes.match = []; visibleLogLanes.connection = [];
+  visibleLogLanes.match = []; visibleLogLanes.connection = []; visibleLogLanes.chat = [];
   for (const entry of entries) {
     const prior = old.find((row) => row.entry === entry);
-    appendLogLane(visibleLogLanes, match.has(entry) || entry.kind === 'report' ? 'match' : 'connection', prior ?? { entry, order: ++nextVisibleLogOrder, receivedWallAt: Date.now() });
+    appendLogLane(visibleLogLanes, entry.kind === 'talk' ? 'chat' : match.has(entry) || entry.kind === 'report' ? 'match' : 'connection', prior ?? { entry, order: ++nextVisibleLogOrder, receivedWallAt: Date.now() });
   }
+}
+/** RickWreckless 10-10: chat is not part of the server's game history, so nothing can rebuild it after a reconnect.
+ *  A fresh connection used to wipe it with the rest of the log. It is now set aside (not shown) under the game it
+ *  belongs to and put back when that same game's state arrives again; another game's arrival discards it. */
+let chatGameKey = '';
+let chatStash: { key: string; rows: OrderedLogRow<LogEntry>[] } | null = null;
+/** Clear the visible log for a new connection / a left game, keeping this game's chat aside for a re-join. */
+function clearLogKeepingChatForRejoin(): void {
+  if (chatGameKey && visibleLogLanes.chat.length) chatStash = { key: chatGameKey, rows: [...visibleLogLanes.chat] };
+  chatGameKey = '';
+  legacyState.log = [];
+}
+/** A live game's state arrived on `url`: restore the chat kept for this very game, or drop another game's. */
+function noteChatGame(url: string, coach: string, gameId: unknown): void {
+  // Astra 10-10: the coach is part of the key, so another account joining the same game never inherits the chat.
+  const key = `${url}|${coach.trim().toLowerCase()}|${String(gameId ?? '')}`;
+  const stash = chatStash;
+  chatStash = null;
+  chatGameKey = key;
+  if (!stash || stash.key !== key) return;
+  for (const row of stash.rows) row.entry.restored = true;
+  restoreChatLane(visibleLogLanes, stash.rows);
 }
 
 const spectatorPublication = new SpectatorPublication();
@@ -1353,7 +1377,7 @@ const state = new Proxy(legacyState, {
     if (position) {
       if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'log') return composeLogLanes<LogEntry>({
-        connection: visibleLogLanes.connection,
+        connection: visibleLogLanes.connection, chat: visibleLogLanes.chat,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
           entry: { ...row, kind: 'report' as const, time: logTimestamp(new Date(row.receivedWallAt)), category: sequencingCategory('report', row.text) } })),
       });
@@ -4664,7 +4688,7 @@ const RECONNECT_MAX_ATTEMPTS = 15;
 const RECONNECT_DELAY_MS = 2500;
 const RECONNECT_MAX_DELAY_MS = 30000; // exponential-backoff ceiling
 
-function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : 'connection') {
+function log(kind: LogEntry['kind'], text: string, side?: LogEntry['side'], d6?: D6LogToken[], blockDice?: BlockDieLogToken[], names?: LogNameToken[], tags?: LogTagToken[], owner: LogLane = kind === 'report' ? 'match' : kind === 'talk' ? 'chat' : 'connection') {
   // Owner 08-18: military 24h timestamp (logTimestamp), not the locale's AM/PM form.
   const receivedWallAt = activeLogReceipt?.receivedWallAt ?? Date.now();
   appendLogLane(visibleLogLanes, owner, { entry: { time: logTimestamp(new Date(receivedWallAt)), kind, text, category: sequencingCategory(kind, text), side, d6, blockDice, names, tags }, receivedWallAt, order: activeLogReceipt?.order ?? ++nextVisibleLogOrder });
@@ -6894,6 +6918,7 @@ function applyFrame(frame: QueuedFrame) {
 
 function applyFrameContents(frame: QueuedFrame) {
   if (!game.value) return;
+  gameplaySendUnanswered = false;
   const cmd = frame.cmd;
   // Settlement later in this frame may run after the planner has already published the following square's
   // intent. Capture the occurrence that actually existed when this server frame arrived.
@@ -10201,6 +10226,7 @@ function resetPlayback() {
   clearAnsweredDialogInstance();
   primalSavageryIntent = null;
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null; // fresh game / reconnect: neither crosses a game boundary
+  gameplaySendUnanswered = false;
   foulChoice = null; state.foulChoiceHold = null; // S42: the Foul / Chainsaw choice never crosses a game boundary or reconnect
   visibleSkillDecisionProjection = createSkillDecisionProjection();
   visibleSkillDialog = null;
@@ -10484,7 +10510,7 @@ function clearLeaveGameResidualState(): void {
   state.demoMode = false;
   state.joinError = null;
   state.wireLogFile = '';
-  state.log = [];
+  clearLogKeepingChatForRejoin();
   state.injurySplash = null;
   clearActionDice();
   state.rollModal = null;
@@ -10632,6 +10658,9 @@ let srvActingAction: string | null = null;
  *  a fresh game. Never rebuilt from a snapshot, never sent alone. */
 interface BigGuyActivateIntent { playerId: string; turnKey: string; echoSeen: boolean }
 let bigGuyActivateIntent: BigGuyActivateIntent | null = null;
+/** Astra 10-10: a gameplay command went out and no server frame has been applied since. The model on screen may be
+ *  about to change (a sent Jump reads unmoved until the reply), so the End row must not promise a cancel. */
+let gameplaySendUnanswered = false;
 /** S42: the Foul / Chainsaw row the coach picked for THIS activation (the server has one foul declare; the chainsaw is
  *  the `usingChainsaw` flag on the terminal clientFoul). Client-held: armed at the declaration's wire boundary,
  *  carried by the terminal command, dropped when the activation ends or is cancelled (any change of acting player or
@@ -16658,7 +16687,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
     // send). Always-allowed commands (concede, time-out call, chat, ping ...) say nothing about the activation.
-    if (!ALWAYS_ALLOWED_COMMANDS.has(String(cmd.netCommandId ?? ''))) bigGuyActivateIntent = null;
+    if (!ALWAYS_ALLOWED_COMMANDS.has(String(cmd.netCommandId ?? ''))) { bigGuyActivateIntent = null; gameplaySendUnanswered = true; }
     return true;
   } catch (e) {
     // connection dropped between the state update and the send — ignore.
@@ -23271,7 +23300,7 @@ export const gameStore = {
     lastConnect = { mode: 'spectator', params }; // remember for a Reconnect after a drop
     state.demoMode = false;
     // B9-12 G6: fresh game — clear the previous game's log so lines don't pile up.
-    if (!retainedHistory) state.log = [];
+    if (!retainedHistory) clearLogKeepingChatForRejoin();
     // B9-12 G13: don't keep the PREVIOUS game rendered while the new one joins.
     state.joinError = null;
     state.spectateConnectError = null; // owner 08-18: fresh attempt — drop any prior connect-error modal
@@ -23368,6 +23397,7 @@ export const gameStore = {
             resetPlayback(); // fresh game: no stale queued frames
             clearPendingRailCommands();
             game.value = structuredClone(cmd.game) as GameJson;
+            noteChatGame(params.url, params.coach, game.value.gameId);
             normalizeZappedPlayerSnapshots(game.value);
             seedMoveOfferSnapshot();
             onTheBallReceiveTurnMode = String(game.value.turnMode ?? '');
@@ -23496,7 +23526,8 @@ export const gameStore = {
 
   async connectReplay(params: { url: string; coach: string; gameId: number; compression?: boolean; auth?: string }) {
     this.disconnect();
-    state.log = [];
+    clearLogKeepingChatForRejoin();
+    chatStash = null; // a replay is another session: live chat does not wait behind it
     game.value = null;
     triggerRef(game);
     replay.loading = true;
@@ -23527,7 +23558,8 @@ export const gameStore = {
     const bundle = parseReplayFile(text, byteLength);
     const preflighted = preflightReplayBundle(bundle);
     this.disconnect();
-    state.log = [];
+    clearLogKeepingChatForRejoin();
+    chatStash = null;
     try { installReplayBundle(bundle, preflighted); }
     catch (error) {
       replay.error = error instanceof Error ? error.message : String(error);
@@ -23624,7 +23656,7 @@ export const gameStore = {
     // load a newly issued JNLP after any socket loss.
     lastConnect = officialFumbbl ? null : { mode: 'player', params };
     state.demoMode = false;
-    state.log = [];
+    clearLogKeepingChatForRejoin();
     state.joinError = null;
     game.value = null;
     triggerRef(game);
@@ -23704,6 +23736,7 @@ export const gameStore = {
       resetPlayback();
       clearPendingRailCommands();
       game.value = structuredClone(cmd.game) as GameJson;
+      noteChatGame(params.url, params.coach, game.value.gameId);
       normalizeZappedPlayerSnapshots(game.value);
       seedMoveOfferSnapshot();
       onTheBallReceiveTurnMode = String(game.value.turnMode ?? '');
@@ -24420,6 +24453,8 @@ export const gameStore = {
   bigGuyActivateRollPlayerId(): string | null {
     return game.value ? liveBigGuyActivateIntent(game.value)?.playerId ?? null : null;
   },
+  /** True from an accepted gameplay send until the next applied server frame (the End row label reads it). */
+  gameplaySendUnanswered(): boolean { return gameplaySendUnanswered; },
 
   /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent.
    *  No victim is named here (owner 10-08): the server echo makes the activation live and the victim is picked later. */

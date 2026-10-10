@@ -161,7 +161,7 @@ import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
-import { allowsFumblerooskieAction, bigGuyRollEndLabel } from '../game/logic/availableActions';
+import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } from '../game/logic/availableActions';
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
 import { prettySkillName } from '../game/logic/prettySkillName';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
@@ -1292,7 +1292,7 @@ watch(reviewChatHidden, (hidden) => { if (hidden) clearChatToasts(); }, { flush:
 watch(replayerOpen, (open) => { if (open) clearChatToasts(); }, { flush: 'sync' });
 useChatToastQuietClear({
   open: () => chatPaneOpen.value,
-  // The store caps logs at 400 entries, so length can remain unchanged while a
+  // The store caps the chat ring, so length can remain unchanged while a
   // newly appended talk entry replaces the oldest. Object identity preserves
   // that occurrence signal at the cap.
   chatRevision: () => chatEntries.value.at(-1) ?? null,
@@ -1332,6 +1332,8 @@ watch(
   (entries, previous = []) => {
     const incoming = newlyAppendedChatOccurrences(entries, previous);
     for (const entry of incoming) {
+    // RickWreckless 10-10: a line put back after re-joining the same game was already shown; no toast, no unread.
+    if (entry.restored) continue;
     if (reviewChatHidden.value) {
       continue;
     }
@@ -7505,6 +7507,7 @@ function o66Ctx(): ClientStateContext {
   return {
     mode: 'player', loggedIn: true, myIsHome: gameStore.myTeamIsHome.value ?? true,
     friendlyPlayerSwitch: settings.friendlyPlayerSwitch,
+    commandUnanswered: gameStore.gameplaySendUnanswered(), // Astra 10-10: no 'Cancel Activation' while a send is unanswered
     bigGuyActivateRollPlayerId: gameStore.bigGuyActivateRollPlayerId(), // Spec S15B/S23: labels End Activation 'Roll <Negatrait> & End Activation'
     foulVariants: true, // S42: the main view offers Foul / Foul - Chainsaw; Classic's o66Ctx does not
     blastinReportedTargetId: gameStore.state.blastinBeat?.targetPlayerId ?? null, // S46: second-beat range origin fallback
@@ -8065,7 +8068,7 @@ function o66ArmPassTemplate(actingId: string) {
 }
 /** Spec S15B/S23: the hard-coded End rows say `Roll <Negatrait> & End Activation` exactly when the store will roll (same source as the availableActions row). */
 function endActivationLabel(playerId: string): string {
-  return gameStore.bigGuyActivateRollPlayerId() === playerId ? bigGuyRollEndLabel(gameStore.game.value, playerId) : 'End Activation';
+  return gameStore.bigGuyActivateRollPlayerId() === playerId ? bigGuyRollEndLabel(gameStore.game.value, playerId) : endActivationRowLabel(gameStore.game.value, playerId, gameStore.gameplaySendUnanswered());
 }
 /** R3/R4: assemble the acting-player rows (availableActions rows for MOVE/blitz-confirm, router endMove, blitz flavors,
  *  Show pass template, Throw Pass, Bounding Leap) as pure data — no UI placed, no callback run. Shared by openO66Menu
