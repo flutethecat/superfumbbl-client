@@ -40,6 +40,7 @@ import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
+import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
 import D6Face from '../components/D6Face.vue';
 import ActionTargetConfirmModal from '../components/ActionTargetConfirmModal.vue';
 import BlockAttackConfirmModal from '../components/BlockAttackConfirmModal.vue';
@@ -2450,7 +2451,7 @@ const bpPhase1ReRollOnly = computed(() =>
 const bpUphillDecision = computed(() => {
   const bp = gameStore.state.blockPartial;
   return blockDialogMine.value && !!bp && settings.order66 && !bp.pickable && bp.nrOfDice < 0
-    && (bp.teamRR || bp.mascot || bp.mascotTrr || bp.pro || bp.brawler || bp.consummate || !!bp.singleBlockDieLabel || !!bp.multiBlockDiceLabel || !!bp.singleSkullLabel);
+    && (bp.teamRR || bp.mascot || bp.mascotTrr || bp.pro || !!bp.proWithheld || bp.brawler || bp.consummate || !!bp.singleBlockDieLabel || !!bp.multiBlockDiceLabel || !!bp.singleSkullLabel);
 });
 function useBlockPartialOption(kind: 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice') {
   if (!blockDialogMine.value) return;
@@ -2482,6 +2483,12 @@ function clickBlockPartialDie(i: number) {
   // must NOT commit the die — the pick is the defender's. Ignore the click; the Decline button proceeds instead.
   if (bpPhase1ReRollOnly.value) return;
   gameStore.resolveBlockPartial('accept', i); // no reroll armed → accept that die
+}
+// Owner 10-10: Pro with a fallback ("Pro + RR" and the mascot variants) - one-die rolls only, so there is no die to
+// choose; the store sends the offered source or nothing.
+function useBlockProComposite(kind: BlockProCompositeKind) {
+  if (!blockDialogMine.value || !gameStore.state.blockPartial) return;
+  gameStore.resolveBlockPartial(kind);
 }
 function commitMultiBlockDice() {
   if (!blockDialogMine.value || bpDieMode.value !== 'multiBlockDice' || bpSelectedDice.value.size < 1) return;
@@ -2523,6 +2530,10 @@ function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' 
       else mbrDieMode.value = { targetId, kind };
       break;
   }
+}
+function multiBlockProComposite(targetId: string, kind: BlockProCompositeKind) {
+  if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
+  gameStore.sendMultiBlockProComposite(targetId, kind);
 }
 // Savage Blow rerolls the whole multi-block pool, so send its source with dieIndex -1.
 function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDice: number) {
@@ -14510,6 +14521,12 @@ function sendChat() {
                 :src="skillIconUrl(opt.skill, effectiveIconStyle)!" :alt="opt.label" />
               <span class="bp-opt-label">{{ opt.label }}</span>
             </button>
+            <!-- Owner 10-10: Pro with a fallback, as upstream's block dialog offers it (its "ReRoll" / "Mascot" /
+                 "TRR fallback" boxes under the Pro button). One-die rolls only - see blockProCompositeOptions. -->
+            <button v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind" class="bp-opt"
+              :title="opt.title" @click="useBlockProComposite(opt.kind)">
+              <span>{{ opt.label }}</span>
+            </button>
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
             <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot"
@@ -14592,6 +14609,10 @@ function sendChat() {
                 title="Pro" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" alt="Pro" />
                 <span class="bp-opt-label">Pro</span>
+              </button>
+              <button v-for="opt in row.proComposite" :key="opt.kind" class="bp-opt"
+                :title="opt.title" @click="multiBlockProComposite(row.targetId, opt.kind)">
+                <span>{{ opt.label }}</span>
               </button>
               <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? 'Consummate Professional'" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">

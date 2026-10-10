@@ -33,6 +33,61 @@ export function reduceBlockContext(previous: BlockContextProjection, game: GameJ
   return next;
 }
 
+/** ffb-common PlayerState._BIT_USED_PRO (PlayerState.java:37). The bb2025 server sets it whenever it rolls for Pro,
+ *  whatever the source and outcome (RollMechanic.useReRoll:319-322), sends it as fieldModelSetPlayerState ahead of
+ *  the re-presented dialog in the same sync (live g1920044: state change index 0, dialog index 3), refuses any
+ *  further Pro while it is set (:319-320) and clears it at the team's next turn (UtilPlayer.refreshPlayersForTurnStart
+ *  :420-425). */
+export const PLAYER_STATE_USED_PRO = 0x02000;
+/** True when the server's own state says this player's Pro is spent. The block dialogs can still LIST Pro after a
+ *  Pro-with-fallback whose fallback ran: those branches return before the skill is marked used (RollMechanic
+ *  :343-360 vs :374-380) and the dialog's source map reads the skill bookkeeping (UtilCards.getUnusedRerollSource
+ *  :160). Answering such an offer rerolls nothing and costs the roll its remaining rerolls. Used only to HIDE. */
+export function playerProSpent(game: GameJson | null | undefined, playerId: string): boolean {
+  const state = Number(game?.fieldModel?.playerDataArray?.find((data) => data.playerId === playerId)?.playerState);
+  return Number.isInteger(state) && (state & PLAYER_STATE_USED_PRO) !== 0;
+}
+
+/** Upstream ReRollSources names of the Pro-with-fallback block sources (ffb-common ReRollSources.java:39-41). */
+export const BLOCK_PRO_COMPOSITES = [
+  { kind: 'proTrr', source: 'Pro TRR', label: 'Pro + RR', title: 'Pro, then a Team Reroll of the Pro roll if it fails' },
+  { kind: 'proMascot', source: 'Pro Mascot', label: 'Pro + Mascot', title: 'Pro, then the Team Mascot if the Pro roll fails (no Team Reroll)' },
+  { kind: 'proMascotTrr', source: 'Pro Mascot TRR', label: 'Pro + Mascot + RR', title: 'Pro, then the Team Mascot, then a Team Reroll if both fail' },
+] as const;
+export type BlockProCompositeOption = (typeof BLOCK_PRO_COMPOSITES)[number];
+export type BlockProCompositeKind = BlockProCompositeOption['kind'];
+
+/** Owner 10-10: the "Pro, then Team Reroll" answers of a BLOCK dialog, offered as upstream's own client offers them
+ *  (DialogBlockRollProperties.proMascotPanelSingle:271-296 / determineProReRollSource:760-773, and the per-target
+ *  DialogReRollBlockForTargetsProperties:208-236, 338-352). `roll` is the dialog parameter (single block) or one
+ *  `blockRolls[]` entry (multiple block). The rule is NOT the action-dice one (proCompositeReRollOptions):
+ *   - Pro comes from reRollActionToSourceMap['Single Die Per Activation'], never from a PRO reroll property;
+ *   - the fallback needs the TRR property itself (the server spends a team reroll without re-checking,
+ *     bb2025 RollMechanic.useReRoll:354-355), so LONER / Brilliant Coaching alone never offer it;
+ *   - with a usable Team Mascot (MASCOT and no Brilliant Coaching / Pump up the Crowd / Star of the Show, upstream
+ *     DialogExtensionMascot.teamReRollSource) the fallbacks are Mascot and Mascot-then-TRR; plain Pro TRR is not
+ *     reachable there (the TRR box is disabled until Mascot is ticked). In the multiple-block dialog's one-die
+ *     panel that box is never enabled (its Mascot box has no listener, :223-233), so upstream cannot send
+ *     Pro Mascot TRR from there and neither do we.
+ *  ONE-DIE rolls only. Upstream also shows the boxes on 2 and 3 dice, but its answer for a composite source carries
+ *  no usable die index (single block: sendUseReRoll(BLOCK, source), DialogBlockRollPropertiesHandler:108) and the
+ *  server then rerolls EVERY die (bb2025 StepBlockRoll:242-278 and StepBlockRollMultiple.roll:401-424 test
+ *  `== ReRollSources.PRO` by identity, so a composite falls to the whole-roll branch). A die-select that rerolls
+ *  the whole roll is not offered; on one die the two are the same reroll. */
+export function blockProCompositeOptions(dialogId: unknown, roll: Record<string, unknown>): BlockProCompositeOption[] {
+  if (dialogId !== 'blockRollProperties' && dialogId !== 'reRollBlockForTargetsProperties') return [];
+  const a2s = (roll.reRollActionToSourceMap && typeof roll.reRollActionToSourceMap === 'object')
+    ? (roll.reRollActionToSourceMap as Record<string, unknown>) : {};
+  if (a2s['Single Die Per Activation'] !== 'Pro' || Number(roll.nrOfDice) !== 1) return [];
+  const rr = Array.isArray(roll.reRollProperties) ? (roll.reRollProperties as unknown[]).map(String) : [];
+  const trr = rr.includes('TRR');
+  const mascot = rr.includes('MASCOT') && !['BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].some((p) => rr.includes(p));
+  const sources = mascot
+    ? (trr && dialogId === 'blockRollProperties' ? ['Pro Mascot', 'Pro Mascot TRR'] : ['Pro Mascot'])
+    : trr ? ['Pro TRR'] : [];
+  return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source));
+}
+
 export function buildBlockDecision(game: GameJson | null, dp: Record<string, unknown>, readOnly: boolean) {
   const rr = readOnly ? [] : (Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : []);
   // Uphill phase one offers attacker rerolls; enable die commit only for the current chooser or when rerolls are exhausted.
