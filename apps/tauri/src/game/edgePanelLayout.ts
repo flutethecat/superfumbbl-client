@@ -416,3 +416,54 @@ export function bindPointerCompletion(
     remove();
   };
 }
+
+/**
+ * Owner 10-09 ("When in a game, I'm unable to drag/resize the current window"): the completion for a move / resize of
+ * a frame that hosts the FUMBBL site (components/FumbblFloat.vue).
+ *
+ * bindPointerCompletion above ends the gesture when the window blurs or the grip loses pointer capture. For that frame
+ * both are things its OWN gesture causes: the site is a second native webview, the gesture hides it, and the shell's
+ * hide moves keyboard focus between the two webviews (fumbbl_home.rs hide -> hand_focus_back_if_shown; wry hides the
+ * child with ShowWindow(SW_HIDE)). A focus change in the middle of the press must not be read as "the user let go".
+ *
+ * So this one ends ONLY when the pointer that started it is released or cancelled, or - the safety net for a release
+ * this window never saw (Alt+Tab mid-drag) - on the first move of that pointer with no button held. Focus and capture
+ * changes are ignored. The move check runs in the capture phase, before the gesture's own move handler, so a stray
+ * button-less move never moves the frame. The returned teardown is silent.
+ */
+export function bindHeldPointerCompletion(
+  windowTarget: EventTarget,
+  pointerId: number | undefined,
+  complete: () => void,
+): () => void {
+  let active = true;
+  const samePointer = (event: Event) => {
+    const id = (event as PointerEvent).pointerId;
+    return pointerId === undefined || typeof id !== 'number' || id === pointerId;
+  };
+  const remove = () => {
+    windowTarget.removeEventListener('pointerup', end);
+    windowTarget.removeEventListener('pointercancel', end);
+    windowTarget.removeEventListener('pointermove', released, true);
+  };
+  const finish = () => {
+    if (!active) return;
+    active = false;
+    remove();
+    complete();
+  };
+  function end(event: Event): void {
+    if (samePointer(event)) finish();
+  }
+  function released(event: Event): void {
+    if (samePointer(event) && (event as PointerEvent).buttons === 0) finish();
+  }
+  windowTarget.addEventListener('pointerup', end);
+  windowTarget.addEventListener('pointercancel', end);
+  windowTarget.addEventListener('pointermove', released, true);
+  return () => {
+    if (!active) return;
+    active = false;
+    remove();
+  };
+}

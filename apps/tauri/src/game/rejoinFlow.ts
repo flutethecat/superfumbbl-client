@@ -127,7 +127,7 @@ function baseSteps(launch: RejoinLaunch): RejoinStep[] {
   return [
     { key: 'connect', label: `Connecting to ${hostOf(launch.url)}…`, status: 'pending' },
     { key: 'join', label: `Joining ${launch.gameLabel ?? `game ${launch.gameId}`} as ${launch.coach}…`, status: 'pending' },
-    { key: 'game', label: 'Waiting for the game state…', status: 'pending' },
+    { key: 'game', label: 'Waiting for opponent…', status: 'pending' },
   ];
 }
 

@@ -10,6 +10,18 @@
  *  events at the window, before any handler sees them. */
 export const FOCUS_CLICK_GRACE_MS = 250;
 
+/** Owner 10-08 (the floating FUMBBL window): a press on an element carrying this attribute (or inside one) is never
+ *  swallowed. The site in that window is a separate native webview: a click into it takes keyboard focus away from
+ *  this page (the window "blurs" although the app never left the foreground), and the frame's own header - move,
+ *  Return, Close - must answer the very next press. Such a press is no order to the pitch; it still disarms the guard,
+ *  because it is the press that brought focus back. */
+export const FOCUS_CLICK_THROUGH_ATTRIBUTE = 'data-focus-click-through';
+
+function pressIsExempt(event: Event): boolean {
+  const target = event.target as { closest?: (selector: string) => unknown } | null;
+  return typeof target?.closest === 'function' && target.closest(`[${FOCUS_CLICK_THROUGH_ATTRIBUTE}]`) != null;
+}
+
 export interface FocusClickState {
   /** The window lost focus and has not yet been clicked back / grace-expired. */
   armed: boolean;
@@ -102,6 +114,7 @@ export function installFocusClickGuard(target: Window = window): () => void {
       || (gesture.releasedAt !== 0 && now - gesture.releasedAt > SWALLOWED_GESTURE_FORGET_MS))) gesture = null;
     const result = onPress(state, now, target.document.hasFocus());
     state = result.state;
+    if (result.swallow && pressIsExempt(event)) return; // disarmed, not swallowed (see FOCUS_CLICK_THROUGH_ATTRIBUTE)
     if (!result.swallow) return; // an unrelated pointer proceeds, and does not release a swallowed one
     gesture = { pointerId, button: Number((event as MouseEvent).button ?? 0), releasedAt: 0 };
     drop(event);

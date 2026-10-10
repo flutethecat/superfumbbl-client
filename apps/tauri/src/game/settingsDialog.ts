@@ -42,6 +42,7 @@ export const SETTINGS_TRANSACTION_EXCLUDED = new Set([
   // Owner 10-06: the FUMBBL.COM walkthrough / zoom keys.
   'homeTourSeenVersion', // the walkthrough sets it outside the dialog; its "run again" button must not be undone by Cancel
   'homePaneZoom', // the Home pane's own zoom strip
+  'fumbblFloatPos', 'fumbblFloatSize', 'fumbblFloatQueueSize', 'fumbblFloatZoom', // owner 10-08: the floating FUMBBL window is moved / resized outside the dialog
 ]);
 
 export function settingsTransactionSnapshot(value: Record<string, unknown>): string {

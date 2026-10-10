@@ -1,6 +1,6 @@
 {
   "_about": "The shell's command set (S51 E1). `version` MUST equal the version of the shell being built whenever `commands` change (bump it in the set-version step of that release): app patches require shell >= version (app-patch.json shell.min). A Rust test (app_patch.rs) fails when generate_handler! differs from `commands`; apps/tauri/test/shellApi.test.ts fails when the web app invokes a name missing here.",
-  "version": "1.0.127",
+  "version": "1.0.163",
   "commands": [
     "app_patch_activate",
     "app_patch_check",
@@ -30,8 +30,11 @@
     "discord_presence_set",
     "drain_launch_jnlps",
     "fumbbl_home_available",
+    "fumbbl_home_focus_region",
     "fumbbl_home_hide",
     "fumbbl_home_navigate",
+    "fumbbl_home_park",
+    "fumbbl_home_queue_watch",
     "fumbbl_home_set_filter",
     "fumbbl_home_set_zoom",
     "fumbbl_home_show",

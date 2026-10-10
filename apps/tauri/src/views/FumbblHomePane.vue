@@ -6,7 +6,7 @@
  * This element is a placeholder: the site itself is a shell-owned native webview positioned over it
  * (src-tauri/src/fumbbl_home.rs). The rules for when it may show live in game/fumbblHome.ts.
  */
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ui } from '../game/ui';
 import { flushSettingsFile, settings } from '../game/settings';
 import { HOME_TOUR_VERSION, shouldStartTour, tourCall } from '../game/homeTour';
@@ -14,48 +14,33 @@ import { colorblindFilter } from '../game/colorblindFilters';
 import { createTourController } from '../game/homeTourController';
 import {
   FUMBBL_HOME_URL,
-  HOME_BLOCKED,
   HOME_ZOOM_MAX,
   HOME_ZOOM_MIN,
   HOME_ZOOM_STEP,
   clampHomeZoom,
+  homeFocus,
+  homeJoinWatch,
+  homeSurface,
   homeZoomLabel,
   sendHomeFilter,
   sendHomeZoom,
+  startHomeJoinWatch,
   stepHomeZoom,
-  desiredHomeState,
-  detectHomeShell,
-  hideHomeQuietly,
-  isHomeBlockedError,
-  isPaneOccluded,
-  sameDesired,
-  sendHomeState,
-  type HomeDesired,
-  type HomeShellState,
 } from '../game/fumbblHome';
 
 
 const host = ref<HTMLElement | null>(null);
-const shell = ref<HomeShellState | 'detecting'>('detecting');
-const failed = ref(false);
-const showing = ref(false);
-/** The shell's loop guard stopped the pane (the site kept leaving fumbbl.com). Only "Try again" restarts it. */
-const blocked = ref(false);
-/** The next show carries `retry` so the shell resets its guard (set by Try again on the blocked notice). */
-let retryArmed = false;
+/** Owner 10-08: every show / hide of the site goes through the one driver (game/fumbblHome.ts homeSurface), which the
+ *  floating FUMBBL window shares. This pane only says "my element is the host" and reads the driver's state. */
+const surface = homeSurface.state;
+const shell = computed(() => surface.shell);
+const failed = computed(() => surface.failed);
+const blocked = computed(() => surface.blocked);
+/** The site is on screen over THIS pane. */
+const showing = computed(() => surface.showing && surface.owner === 'pane');
 
 let mounted = false;
-let lastSent: HomeDesired | null = null;
-let sending = false;
-let resend = false;
-let frameQueued = false;
-let frame = 0;
-let interval = 0;
-let resizeObserver: ResizeObserver | null = null;
-let mutationObserver: MutationObserver | null = null;
-let dprQuery: MediaQueryList | null = null;
-let unlistenHidden: (() => void) | null = null;
-let unlistenBlocked: (() => void) | null = null;
+let release: (() => void) | null = null;
 let unlistenTour: (() => void) | null = null;
 let unlistenTourPage: (() => void) | null = null;
 
@@ -96,118 +81,15 @@ function maybeStartTour(): void {
   })) return;
   void tour.start(settings.coach);
 }
-watch(() => ui.clientTourActive, () => invalidate());
+watch(() => ui.clientTourActive, () => homeSurface.invalidate());
 // Owner 10-06: the site follows the client's colorblind mode, live.
 watch(() => settings.colorblindMode, (mode) => { if (shell.value === 'available') void sendHomeFilter(colorblindFilter(mode)); });
 watch(() => [showing.value, settings.homeTourSeenVersion, settings.completedFirstRun, settings.setupWizardSeenVersion], maybeStartTour);
 
-
-function compute(): HomeDesired {
-  const el = host.value;
-  const state = shell.value === 'detecting' ? 'needs-installer' : shell.value;
-  if (!el || !mounted) return { visible: false };
-  const box = el.getBoundingClientRect();
-  const rect = { x: box.left, y: box.top, width: box.width, height: box.height };
-  const occluded = isPaneOccluded(el, rect, document, (e) => getComputedStyle(e));
-  return desiredHomeState({
-    shell: state,
-    // Owner 10-06: the client walkthrough (main webview) runs with the site hidden, so its cards are never under it.
-    active: !failed.value && !blocked.value && !ui.clientTourActive,
-    documentVisible: document.visibilityState !== 'hidden',
-    rect,
-    occluded,
-  });
-}
-
-async function flush(): Promise<void> {
-  if (sending) {
-    resend = true;
-    return;
-  }
-  sending = true;
-  try {
-    do {
-      resend = false;
-      let desired: HomeDesired;
-      try {
-        desired = compute();
-      } catch {
-        desired = { visible: false }; // cannot tell what is on screen: never show the site blind
-      }
-      if (sameDesired(lastSent, desired)) continue;
-      try {
-        const retry = desired.visible && retryArmed;
-        await sendHomeState(desired, { retry });
-        if (retry) retryArmed = false;
-        lastSent = desired;
-        showing.value = desired.visible;
-      } catch (error) {
-        if (desired.visible && isHomeBlockedError(error)) {
-          markBlocked(); // the event was missed (or raced this show): same outcome
-        } else if (desired.visible) {
-          // Creation (or a bounds update) failed: stop trying and offer the browser instead of an empty area.
-          failed.value = true;
-          showing.value = false;
-          lastSent = null;
-          hideHomeQuietly();
-        }
-      }
-    } while (resend && mounted);
-  } finally {
-    sending = false;
-  }
-}
-
-function schedule(): void {
-  if (frameQueued || !mounted || shell.value !== 'available') return;
-  frameQueued = true;
-  frame = requestAnimationFrame(() => {
-    frameQueued = false;
-    void flush();
-  });
-}
-
-/** Forget what we last sent so the next check re-sends (the shell hid it on its own, or the DPI changed). */
-function invalidate(): void {
-  lastSent = null;
-  schedule();
-}
-
-/** The shell stopped the pane: it already hid and blanked the webview; show the notice instead of an empty area. */
-function markBlocked(): void {
-  blocked.value = true;
-  retryArmed = false;
-  showing.value = false;
-  lastSent = null;
-}
-
-function watchDpr(): void {
-  dprQuery?.removeEventListener('change', onDprChange);
-  dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-  dprQuery.addEventListener('change', onDprChange);
-}
-function onDprChange(): void {
-  watchDpr();
-  invalidate();
-}
-
-async function start(): Promise<void> {
-  shell.value = await detectHomeShell();
-  if (!mounted || shell.value !== 'available') return;
-  // Before the first show: the shell applies both to the webview it creates (the zoom, then the client's colorblind
-  // correction - the same matrix the shell uses). One after the other: two concurrent first loads of the IPC module
-  // race under the test runner's module mock.
-  void sendHomeZoom(zoom.value).then(() => sendHomeFilter(colorblindFilter(settings.colorblindMode)));
-  // Listeners BEFORE anything can send a show: the shell's stop event (fumbbl-home-blocked) can follow the very first
-  // show (fumbbl.com redirecting off-domain on creation) and must never be missed.
+/** The walkthrough's two shell events, registered before the driver's first show for this pane (onShell below). */
+async function listenForTour(): Promise<void> {
   try {
     const { listen } = await import('@tauri-apps/api/event');
-    const unlisten = await listen('fumbbl-home-hidden', invalidate);
-    if (mounted) unlistenHidden = unlisten;
-    else unlisten();
-    const unlistenStop = await listen(HOME_BLOCKED, markBlocked);
-    if (mounted) unlistenBlocked = unlistenStop;
-    else unlistenStop();
     const offTour = await listen('fumbbl-home:tour', (e) => { void tour.siteEvent(e.payload); });
     if (mounted) unlistenTour = offTour;
     else offTour();
@@ -215,38 +97,18 @@ async function start(): Promise<void> {
     if (mounted) unlistenTourPage = offTourPage;
     else offTourPage();
     tourListening = mounted;
+    maybeStartTour();
   } catch {
-    /* the periodic check still runs; a stopped shell also refuses every show with the blocked error */
+    /* no walkthrough without its events; the site itself is unaffected */
   }
-  if (!mounted) return;
-  window.addEventListener('resize', schedule);
-  window.addEventListener('scroll', schedule, true);
-  document.addEventListener('visibilitychange', schedule);
-  resizeObserver = new ResizeObserver(schedule);
-  if (host.value) resizeObserver.observe(host.value);
-  // Anything of ours appearing, moving or disappearing (dialogs, menus, toasts, splash, layout shifts).
-  mutationObserver = new MutationObserver(schedule);
-  mutationObserver.observe(document.body, {
-    subtree: true,
-    childList: true,
-    attributes: true,
-    attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden', 'aria-modal', 'role'],
-  });
-  watchDpr();
-  // Safety net for changes no observer reports (CSS transitions, position-only moves).
-  interval = window.setInterval(schedule, 250);
-  schedule();
 }
 
 function retry(): void {
-  failed.value = false;
-  invalidate();
+  homeSurface.retry();
 }
 
 function retryBlocked(): void {
-  blocked.value = false;
-  retryArmed = true;
-  invalidate();
+  homeSurface.retryBlocked();
 }
 
 async function openInBrowser(): Promise<void> {
@@ -258,30 +120,44 @@ async function openInBrowser(): Promise<void> {
   }
 }
 
-function onPageHide(): void {
-  hideHomeQuietly();
+/** Owner 10-08: keep the site open in the floating window while another blade, a game or a replay is on screen. */
+function toggleFloating(): void {
+  ui.fumbblFloating = !ui.fumbblFloating;
+  ui.fumbblFloatHeldAt = 0; // the user's own choice: no launch brings it back or takes it away
 }
 
 onMounted(() => {
   mounted = true;
-  window.addEventListener('pagehide', onPageHide);
-  void start();
+  if (!host.value) return;
+  release = homeSurface.attach('pane', host.value, {
+    // Owner 10-06: the client walkthrough (main webview) runs with the site hidden, so its cards are never under it.
+    active: () => !ui.clientTourActive,
+    onShell: (detected) => {
+      if (!mounted || detected !== 'available') return undefined;
+      // Before the first show: the shell applies both to the webview it creates (the zoom, then the client's colorblind
+      // correction - the same matrix the shell uses). One after the other: two concurrent first loads of the IPC module
+      // race under the test runner's module mock.
+      // Owner 10-09: the docked page is always the WHOLE page at the pane's own zoom - the floating window's queue
+      // view and its own zoom never follow the site back here (the zoom just sent is the pane's saved one).
+      // Astra 10-09 (F3): "off" is sent every time the pane takes the site (forced), whatever the driver believes -
+      // the docked page must never be left cropped.
+      void sendHomeZoom(zoom.value)
+        .then(() => sendHomeFilter(colorblindFilter(settings.colorblindMode)))
+        .then(() => { if (mounted) homeFocus.set('off', true); })
+        // Owner 10-09: pressing the page's "Join the Draw" turns floating on. The watch belongs to the app, not to
+        // this pane (Astra R2): it only has to be started once the shell is known to have the site.
+        .then(() => startHomeJoinWatch());
+      return listenForTour();
+    },
+  });
 });
 
 onBeforeUnmount(() => {
   mounted = false;
-  if (frameQueued) cancelAnimationFrame(frame);
-  frameQueued = false;
-  window.clearInterval(interval);
-  window.removeEventListener('resize', schedule);
-  window.removeEventListener('scroll', schedule, true);
-  window.removeEventListener('pagehide', onPageHide);
-  document.removeEventListener('visibilitychange', schedule);
-  resizeObserver?.disconnect();
-  mutationObserver?.disconnect();
-  dprQuery?.removeEventListener('change', onDprChange);
-  unlistenHidden?.();
-  unlistenBlocked?.();
+  // Leaving the blade straight after pressing "Join the Draw" is the natural gesture: ask once more now, rather than
+  // waiting for the watch's next turn - the floating window then appears at once.
+  if (shell.value === 'available') void homeJoinWatch.poll();
+  tourListening = false;
   unlistenTour?.();
   unlistenTourPage?.();
   // Leaving mid-walkthrough: take the overlay off the site; it starts over the next time the pane shows.
@@ -291,13 +167,33 @@ onBeforeUnmount(() => {
       .catch(() => undefined);
   }
   tour.stop();
-  // Leaving the blade (or a game taking the window over): the site must never sit on top of what comes next.
-  hideHomeQuietly();
+  // Leaving the blade (or a game taking the window over): the site must never sit on top of what comes next. The driver
+  // hides it - unless the floating window takes the site over in the same tick.
+  release?.();
+  release = null;
 });
 </script>
 
 <template>
   <div class="fumbbl-home-blade">
+  <!-- Owner 10-09: the Float control sits in its own strip ABOVE the pane, at the top right (in the bottom strip it
+       ran under the shell's version / signed-in text). Above the pane element, never over it: the site's bounds are
+       the pane's own rect, so the native webview never covers it and the occlusion probe never sees it. -->
+  <div v-if="shell === 'available'" class="fumbbl-home-top">
+    <!-- Owner 10-08: keep the site (and a Gamefinder queue in it) open in a small movable window while watching a game
+         or a replay. In this strip, never over the site. -->
+    <!-- Owner 10-09: no explanatory line beside the button ("Delete this"); the button's title carries it. -->
+    <button
+      type="button"
+      class="float-toggle"
+      data-testid="fumbbl-float-toggle"
+      :aria-pressed="ui.fumbblFloating"
+      :title="ui.fumbblFloating
+        ? 'FUMBBL stays open in a small window when you leave this page. Click to turn that off.'
+        : 'Keep FUMBBL open in a small movable window while you watch a game or a replay - for example while you wait in the Gamefinder queue.'"
+      @click="toggleFloating()"
+    >{{ ui.fumbblFloating ? 'Keeping Queue Open' : 'Keep Queue Open' }}</button>
+  </div>
   <section ref="host" class="fumbbl-home-pane" aria-label="FUMBBL.COM" :data-showing="showing">
     <div v-if="shell === 'detecting'" class="fumbbl-home-note" role="note">
       <p class="hint">Loading FUMBBL…</p>
@@ -389,6 +285,31 @@ onBeforeUnmount(() => {
 }
 .fumbbl-home-zoom button:disabled { opacity: 0.45; cursor: default; }
 .fumbbl-home-zoom .zoom-value { min-width: 48px; font-variant-numeric: tabular-nums; }
+.fumbbl-home-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--ui-surface-2, var(--ui-surface));
+  border-bottom: 1px solid var(--ui-border);
+}
+.fumbbl-home-top .float-toggle {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  color: var(--ui-text);
+  font-size: max(var(--ui-min-text-size, 12px), 0.85rem);
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.fumbbl-home-top .float-toggle[aria-pressed='true'] { border-color: var(--ui-accent); box-shadow: inset 0 0 0 1px var(--ui-accent); }
 .fumbbl-home-note {
   margin: auto;
   display: flex;

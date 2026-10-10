@@ -156,6 +156,11 @@ export function stampAnchorSquare(last: readonly [number, number], exit: readonl
   return [last[0] + dx * t, last[1] + dy * t];
 }
 
+/** Owner 10-10: the server's PlayerAction.SECURE_THE_BALL wire name (`secureTheBall`), normalised like actionEmoji. */
+function isSecureTheBallAction(action: string | null | undefined): boolean {
+  return (action ?? '').toLowerCase().replace(/[^a-z]/g, '') === 'securetheball';
+}
+
 function isMovingPlayerAction(action: string | null | undefined): boolean {
   return action === 'move' || action === 'blitzMove' || action === 'handOverMove'
     || action === 'passMove' || action === 'foulMove' || action === 'throwTeamMateMove'
@@ -2248,6 +2253,9 @@ export class PitchRenderer {
   private actionPassDecoTexture: Texture | null = null;
   private actionFoulDecoTexture: Texture | null = null;
   private actionHandoffDecoTexture: Texture | null = null; // owner 09-08: Hand-off action decoration
+  /** Owner 10-10: Secure the Ball action decoration (approved art). The acting player's server-declared
+   *  `secureTheBall` action wears it over the head exactly like Pass / Hand-off; until now it wore the Move runner. */
+  private actionSecureBallDecoTexture: Texture | null = null;
   /** Owner 09-06: Settings > Appearance — 'art' (default) draws the decorations, 'emoji' keeps the glyph markers. */
   actionDecorationStyle: 'art' | 'emoji' = 'art';
   /** Live die sprites of the armed preview; the ticker animates them in sync. */
@@ -4565,6 +4573,7 @@ export class PitchRenderer {
       ['action-pass.png', 'actionPassDecoTexture'],
       ['action-foul.png', 'actionFoulDecoTexture'],
       ['action-handoff.png', 'actionHandoffDecoTexture'], // owner 09-08
+      ['action-secure-ball.png', 'actionSecureBallDecoTexture'], // owner 10-10
     ] as const) {
       try {
         const texture = await Assets.load<Texture>(new URL(`../assets/decorations/${file}`, import.meta.url).href);
@@ -13086,9 +13095,15 @@ export class PitchRenderer {
    *  fallback, so special-action precedence is untouched) and the sprite height that puts every figure's CONTENT at
    *  the Blitz marker's apparent size (Blitz: 40 units tall with its art 973/1024 opaque = 38 units of figure).
    *  Null = no art for the family, or the asset has not loaded, or the emoji style is selected. */
-  private actionDecorationArt(emoji: string): { texture: Texture; height: number } | null {
+  private actionDecorationArt(emoji: string, action: string | null = null): { texture: Texture; height: number } | null {
     if (this.actionDecorationStyle !== 'art') return null;
     const FIGURE_H = 20 * 973 / 1024; // owner 09-06: halved again (40 -> 20 for the Blitz marker)
+    // Owner 10-10: Secure the Ball is a member of the runner family (its glyph fallback stays the runner), but the
+    // declared `secureTheBall` action wears its own art. The PNG is trimmed to its content, so content height = 1/1.
+    // While that one texture is unloaded the family's Move art below keeps showing, as it did before.
+    if (emoji === '🏃' && this.actionSecureBallDecoTexture && isSecureTheBallAction(action)) {
+      return { texture: this.actionSecureBallDecoTexture, height: FIGURE_H };
+    }
     switch (emoji) {
       case '⚡': return this.blitzerDecoTexture ? { texture: this.blitzerDecoTexture, height: 20 } : null;
       case '🏃': return this.actionMoveDecoTexture ? { texture: this.actionMoveDecoTexture, height: FIGURE_H * 1024 / 1003 } : null; // move-v2 content 1003/1024
@@ -13106,7 +13121,7 @@ export class PitchRenderer {
     return this.trackLiveSkillAsset(c, () => {
       for (const child of c.removeChildren()) child.destroy({ children: true });
       // Use the same action-family resolver as the fallback, preserving special-action precedence.
-      const art = this.actionDecorationArt(this.actionEmoji(action));
+      const art = this.actionDecorationArt(this.actionEmoji(action), action);
       if (art) {
         const icon = new Sprite(art.texture);
         icon.anchor.set(0.5, 0.5);

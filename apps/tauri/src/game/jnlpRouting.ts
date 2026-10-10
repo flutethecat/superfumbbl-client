@@ -894,14 +894,25 @@ export async function readJnlpFile(file: Pick<File, 'text'>): Promise<Classified
 
 type NativeJnlpDrainItem = { Ok: string } | { Err: string };
 type NativeJnlpHandler = (request: JnlpJoinRequest) => void;
+/** A native launch ended without ever reaching the handler: the shell could not read or queue the file, the text did
+ *  not parse, or the queue could not be drained. Whoever is waiting on that launch must stop waiting. */
+type NativeJnlpFailureHandler = () => void;
 
-const nativeHandlers: Array<{ token: symbol; handler: NativeJnlpHandler }> = [];
+const nativeHandlers: Array<{ token: symbol; handler: NativeJnlpHandler; onFailure?: NativeJnlpFailureHandler }> = [];
 let nativeSetupPromise: Promise<void> | null = null;
 let nativeDrainRunning = false;
 let nativeDrainRequested = false;
 
 function currentNativeHandler(): NativeJnlpHandler | undefined {
   return nativeHandlers[nativeHandlers.length - 1]?.handler;
+}
+
+function reportNativeJnlpFailure(): void {
+  try {
+    nativeHandlers[nativeHandlers.length - 1]?.onFailure?.();
+  } catch {
+    /* a consumer's own bookkeeping never stops the intake */
+  }
 }
 
 async function drainNativeJnlps(): Promise<void> {
@@ -915,11 +926,26 @@ async function drainNativeJnlps(): Promise<void> {
         const { invoke } = await import('@tauri-apps/api/core');
         const items = await invoke<NativeJnlpDrainItem[]>('drain_launch_jnlps');
         for (const item of items) {
-          if ('Ok' in item) currentNativeHandler()?.(parseClassifiedJnlp(item.Ok));
-          else logJnlp(`jnlp: ${item.Err}`);
+          if ('Err' in item) {
+            logJnlp(`jnlp: ${item.Err}`);
+            reportNativeJnlpFailure();
+            continue;
+          }
+          let request: ClassifiedJnlpJoinRequest;
+          try {
+            request = parseClassifiedJnlp(item.Ok);
+          } catch {
+            // Astra 10-08 (P2): one unreadable file is that launch's end, not the batch's - the items behind it have
+            // already left the shell's queue and would otherwise be lost with it.
+            logJnlp('jnlp: the launch file could not be read');
+            reportNativeJnlpFailure();
+            continue;
+          }
+          currentNativeHandler()?.(request);
         }
       } catch {
         logJnlp('jnlp: native launch intake could not be drained');
+        reportNativeJnlpFailure();
       }
     }
   } finally {
@@ -935,6 +961,7 @@ async function setupNativeJnlpIntake(): Promise<void> {
     });
     await listen('jnlp-launch-failed', () => {
       logJnlp('a second launch could not be read');
+      reportNativeJnlpFailure();
     });
     await drainNativeJnlps();
   } catch {
@@ -946,10 +973,10 @@ async function setupNativeJnlpIntake(): Promise<void> {
  * App.vue owns this composable once for its entire lifetime. Keeping the Tauri listeners
  * module-global makes drain_launch_jnlps a single queue consumer even as shell views swap.
  */
-export function useNativeJnlpIntake(handler: NativeJnlpHandler): void {
+export function useNativeJnlpIntake(handler: NativeJnlpHandler, onFailure?: NativeJnlpFailureHandler): void {
   const token = Symbol('native-jnlp-handler');
   onMounted(() => {
-    nativeHandlers.push({ token, handler });
+    nativeHandlers.push({ token, handler, onFailure });
     const inTauri = typeof window !== 'undefined'
       && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
     if (!inTauri) return;

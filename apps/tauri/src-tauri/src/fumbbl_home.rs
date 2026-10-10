@@ -684,17 +684,27 @@ pub fn parse_tour_report(url: &Url, raw: &str) -> TourPageLoad {
 
 // --- Home pane zoom (owner 10-06: "Text can be a bit small") ---------------------------------------------------------
 
-/// The zoom range of the Home webview (the page's slider sends a factor; 1.0 = 100 %).
+/// The zoom range of the Home webview (the page's slider sends a factor; 1.0 = 100 %). The docked pane: 0.75-2.0.
+/// Owner 10-09: the floating window's own slider goes down to 0.5 (a small frame) - ONLY for a call that says it is
+/// the float's (`float: true`); every other call is clamped to the pane's range, so the docked page can never be left
+/// below 75 % (Astra 10-09). An older shell clamps a smaller factor up to its own 0.75 - never an error.
 pub const ZOOM_MIN: f64 = 0.75;
+pub const FLOAT_ZOOM_MIN: f64 = 0.5;
 pub const ZOOM_MAX: f64 = 2.0;
 
-/// A finite factor clamped to ZOOM_MIN..=ZOOM_MAX and rounded to 0.05; `None` for NaN/infinity.
+/// A finite factor clamped to the docked pane's ZOOM_MIN..=ZOOM_MAX and rounded to 0.05; `None` for NaN/infinity.
+#[cfg(test)]
 pub fn sanitize_zoom(factor: f64) -> Option<f64> {
+    sanitize_zoom_from(factor, ZOOM_MIN)
+}
+
+/// The same with the caller's low end (FLOAT_ZOOM_MIN for the floating window).
+pub fn sanitize_zoom_from(factor: f64, min: f64) -> Option<f64> {
     if !factor.is_finite() {
         return None;
     }
-    let clamped = factor.clamp(ZOOM_MIN, ZOOM_MAX);
-    Some(((clamped * 20.0).round() / 20.0).clamp(ZOOM_MIN, ZOOM_MAX))
+    let clamped = factor.clamp(min, ZOOM_MAX);
+    Some(((clamped * 20.0).round() / 20.0).clamp(min, ZOOM_MAX))
 }
 
 // --- colorblind correction (owner 10-06: "Colorblind mode isn't being applied to this page") --------------------------
@@ -738,6 +748,176 @@ pub fn filter_script(filter: Option<&HomeFilter>) -> String {
 /// What a finished page load re-applies: the remembered filter, if any (a fresh document has none to remove).
 pub fn page_load_filter_scripts(filter: Option<&HomeFilter>) -> Vec<String> {
     filter.map(|f| vec![filter_script(Some(f))]).unwrap_or_default()
+}
+
+// --- queue focus (owner 10-09: the floating window shows only the Gamefinder's queue panel) ----------------------------
+//
+// "Can we target this view specifically? I'd like this box to be the visible piece. Scaling the window should scale
+// this view larger/smaller but always target this." The main page cannot read or script the remote page, so the shell
+// evals the injected runtime's `focus()` (home_tour_runtime.js, the sf-focus section): presentation only - it finds the
+// "Blackbox" + "Match Offers" boxes by their heading text, hides the rest with CSS and anchors the region at the
+// webview's top-left with a translate. It scales nothing: how much shows is the frame's size, and how big it is drawn
+// is this webview's zoom (fumbbl_home_set_zoom - the floating window sends its own factor and the docked pane sends
+// its own back when the page returns to it). Same posture as the walkthrough: NO IPC for the site, nothing added to the navigation rule, and no
+// site -> host channel at all for this (the host reads the eval's return value). The caller picks one of two fixed
+// modes; no caller-supplied text ever reaches the eval.
+
+/// The eval for a mode (a constant per mode), guarded against a page without the runtime; `None` for anything else.
+/// "diagnose" (development builds: the frame's "Copy queue diagnostics") reads a structural description of the page
+/// around the panel - see the runtime's sf-diag section; it changes nothing on the page.
+pub fn focus_script(mode: &str) -> Option<&'static str> {
+    match mode {
+        "queue" => Some("(window.__sfTour&&window.__sfTour.focus)?window.__sfTour.focus({\"mode\":\"queue\"}):null"),
+        "off" => Some("(window.__sfTour&&window.__sfTour.focus)?window.__sfTour.focus({\"mode\":\"off\"}):null"),
+        "diagnose" => Some("(window.__sfTour&&window.__sfTour.diagnose)?window.__sfTour.diagnose():null"),
+        _ => None,
+    }
+}
+
+/// Why the queue panel is not what the webview shows (FocusReport::reason). "ok" = it is.
+pub const FOCUS_REASONS: [&str; 10] = ["ok", "off", "not-found", "frame", "shadow", "dialog", "clipped", "error", "no-answer", "loading"];
+
+/// What the runtime's focus() said: whether the queue panel is on the page and its natural size in CSS pixels, how
+/// much of it is the Blackbox box (`primary_*`, measured from the panel's top-left: the frame's default size), and
+/// when it is not found, why. Serialised in camelCase; a page that predates a field simply leaves it at its default.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusReport {
+    pub found: bool,
+    pub width: f64,
+    pub height: f64,
+    pub primary_width: f64,
+    pub primary_height: f64,
+    /// Match Offers has something in it (Astra R1): the frame shows the whole panel while it does.
+    pub offers: bool,
+    /// How much of the panel must be in view right now beyond the Blackbox box (0 = nothing more): the whole panel
+    /// while there are offers, and as far as a dialog inside the panel reaches.
+    pub need_width: f64,
+    pub need_height: f64,
+    /// The coach's place in the draw as the page POSITIVELY shows it (read, never pressed): "in" = its Blackbox box
+    /// shows a "Leave the Draw" control, "out" = it shows a "Join the Draw" control. Absent = it cannot be told
+    /// (neither is shown - the paused box, a render in progress, another page).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draw: Option<&'static str>,
+    /// The page load's own mark (the runtime's, as in JoinReport): what the page knows of the draw is keyed by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load: Option<String>,
+    /// One of FOCUS_REASONS.
+    pub reason: String,
+    /// The runtime's own error message when reason is "error" (printable ASCII, at most 160 characters).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Mode "diagnose" only: the structural description, as JSON text (at most 64 KiB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<String>,
+}
+
+impl FocusReport {
+    pub fn because(reason: &str) -> Self {
+        FocusReport { reason: reason.to_string(), ..FocusReport::default() }
+    }
+}
+
+fn printable(text: &str, max: usize) -> String {
+    text.chars().filter(|c| c.is_ascii_graphic() || *c == ' ').take(max).collect()
+}
+
+/// Parse focus()'s result (eval_with_callback hands it over JSON-serialised). Anything malformed reads as not found;
+/// `null` is a page without the runtime (not a fumbbl.com document, or one still loading).
+pub fn parse_focus_report(raw: &str) -> FocusReport {
+    let value: serde_json::Value = serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+    let Some(found) = value.get("found").and_then(|v| v.as_bool()) else {
+        return FocusReport::because(if value.is_null() { "loading" } else { "error" });
+    };
+    let edge = |key: &str| {
+        value.get(key).and_then(|v| v.as_f64()).filter(|n| n.is_finite() && *n >= 0.0 && *n <= MAX_EDGE).unwrap_or(0.0)
+    };
+    let said = value.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+    if !found {
+        let reason = if said != "ok" && FOCUS_REASONS.contains(&said) { said } else { "not-found" };
+        let error = value.get("error").and_then(|v| v.as_str()).map(|e| printable(e, 160)).filter(|e| !e.is_empty());
+        return FocusReport { reason: reason.to_string(), error: if reason == "error" { error } else { None }, draw: draw_place(&value), load: load_mark(&value), ..FocusReport::default() };
+    }
+    FocusReport {
+        found,
+        width: edge("width"),
+        height: edge("height"),
+        primary_width: edge("primaryWidth"),
+        primary_height: edge("primaryHeight"),
+        offers: value.get("offers").and_then(|v| v.as_bool()).unwrap_or(false),
+        need_width: edge("needWidth"),
+        need_height: edge("needHeight"),
+        draw: draw_place(&value),
+        load: load_mark(&value),
+        reason: "ok".to_string(),
+        error: None,
+        diagnostics: None,
+    }
+}
+
+/// The page's word on the coach's place in the draw: one of two constants, or nothing.
+fn draw_place(value: &serde_json::Value) -> Option<&'static str> {
+    match value.get("draw").and_then(|v| v.as_str()) {
+        Some("in") => Some("in"),
+        Some("out") => Some("out"),
+        _ => None,
+    }
+}
+
+/// A page load's mark: lowercase letters and digits, at most 16 - anything else is no mark.
+fn load_mark(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("load")
+        .and_then(|l| l.as_str())
+        .filter(|l| !l.is_empty() && l.len() <= 16 && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()))
+        .map(str::to_string)
+}
+
+/// The largest diagnostics text read from the page.
+pub const DIAGNOSTICS_MAX: usize = 64 * 1024;
+
+/// diagnose()'s result: a JSON object, re-serialised by us (nothing but one JSON value leaves the shell), or None.
+pub fn parse_diagnostics(raw: &str) -> Option<String> {
+    if raw.len() > DIAGNOSTICS_MAX {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    serde_json::to_string_pretty(&value).ok()
+}
+
+// --- "Join the Draw" (owner 10-09: floating turns on when the coach joins the queue) -----------------------------------
+//
+// The page never tells the host anything by itself. The denied-navigation channel the walkthrough uses was NOT reused
+// for this: a navigation attempt in the middle of the site's own click handling is the one thing that must never
+// disturb the join request (some engines abort in-flight requests when a navigation starts, even a refused one).
+// Instead the runtime only COUNTS presses locally (home_tour_runtime.js, the sf-join section: a passive capture-phase
+// listener that prevents and stops nothing) and the host ASKS for the count while the docked pane is on screen. The
+// eval is a constant; a number is all that comes back.
+
+pub const JOIN_WATCH_SCRIPT: &str = "(window.__sfTour&&window.__sfTour.joinWatch)?window.__sfTour.joinWatch():null";
+
+/// What joinWatch() said: how often "Join the Draw" was pressed in the document the webview shows, and that document's
+/// own random mark (made by the runtime when it starts counting; lowercase letters and digits, at most 16).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct JoinReport {
+    pub count: u32,
+    pub load: String,
+    /// This page has the Gamefinder on it (the caller asks other pages far less often).
+    pub queue: bool,
+}
+
+/// joinWatch()'s result: `{"count": n, "load": "<mark>"}`. Anything else - a page without the runtime, junk, a negative
+/// or absurd number, a mark that is not one - is NO ANSWER (None), never "0 presses": Astra 10-09 (R5), a failed
+/// question that read as 0 made the next good answer look like a new press.
+pub fn parse_join_report(raw: &str) -> Option<JoinReport> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let count = value.get("count").and_then(|c| c.as_u64()).filter(|n| *n <= 1_000_000)? as u32;
+    let load = load_mark(&value)?;
+    let queue = value.get("queue").and_then(|q| q.as_bool()).unwrap_or(false);
+    Some(JoinReport { count, load, queue })
 }
 
 // --- commands (registered in every build so shell-api.json is one list; the bodies are live only when AVAILABLE) -----
@@ -823,12 +1003,14 @@ pub async fn fumbbl_home_tour(app: tauri::AppHandle, webview: tauri::Webview, ca
     }
 }
 
-/// Zoom the Home webview's content (`factor` 0.75-2.0, 1.0 = 100 %). Remembered by the shell and re-applied after every
-/// page load and every show, so navigation keeps it.
+/// Zoom the Home webview's content (`factor` 0.75-2.0, 1.0 = 100 %; from 0.5 when `float` is true - the floating
+/// window's own slider). Remembered by the shell and re-applied after every page load and every show, so navigation
+/// keeps it.
 #[tauri::command]
-pub async fn fumbbl_home_set_zoom(app: tauri::AppHandle, webview: tauri::Webview, factor: f64) -> Result<(), String> {
+pub async fn fumbbl_home_set_zoom(app: tauri::AppHandle, webview: tauri::Webview, factor: f64, float: Option<bool>) -> Result<(), String> {
     caller_is_main(&webview)?;
-    let factor = sanitize_zoom(factor).ok_or("invalid zoom factor")?;
+    let min = if float == Some(true) { FLOAT_ZOOM_MIN } else { ZOOM_MIN };
+    let factor = sanitize_zoom_from(factor, min).ok_or("invalid zoom factor")?;
     #[cfg(feature = "fumbbl-home")]
     {
         live::set_zoom(&app, factor)
@@ -859,6 +1041,69 @@ pub async fn fumbbl_home_set_filter(app: tauri::AppHandle, webview: tauri::Webvi
         Err("the Home pane is not available in this build".into())
     }
 }
+
+/// Owner 10-09 ("After canceling the window in my current dev build, I heard the beep for the queue. ... when the
+/// floating pane is dismissed ... the page is then inactive and closed"): PARK the Home webview. A hidden webview is
+/// kept alive on purpose (fumbbl_home_hide), so a dismissed Gamefinder page kept running - timers, queue, sounds. Park
+/// hides it AND unloads the document (about:blank): nothing of the page runs or plays any more, and nothing is sent to
+/// FUMBBL - it is what closing a browser tab does, no more (nothing on the page is clicked or submitted). The webview
+/// and its own profile stay, so the coach is still logged in; the next show loads https://fumbbl.com/ afresh.
+/// A no-op before the webview exists. Astra 10-09 (F2): the answer is the REAL outcome - Ok only once the blank document
+/// has taken the page's place; if the engine refuses or does not confirm it, the parked state is dropped and this
+/// fails, so the caller's fallback (hide + an ordinary front-page load) still ends the page.
+#[tauri::command]
+pub async fn fumbbl_home_park(app: tauri::AppHandle, webview: tauri::Webview) -> Result<(), String> {
+    caller_is_main(&webview)?;
+    #[cfg(feature = "fumbbl-home")]
+    {
+        live::park(&app)
+    }
+    #[cfg(not(feature = "fumbbl-home"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+/// Queue focus for the Home webview: `mode` "queue" shows only the Gamefinder's queue panel fitted to the webview,
+/// "off" restores the page. Remembered by the shell and re-applied after every page load; reset when the main page
+/// reloads. Returns what the page said (found = the panel is on this page). A page without the panel, a webview that
+/// does not exist yet or a page that does not answer all read as "not found" - never an error.
+#[tauri::command]
+pub async fn fumbbl_home_focus_region(app: tauri::AppHandle, webview: tauri::Webview, mode: String) -> Result<FocusReport, String> {
+    caller_is_main(&webview)?;
+    let script = focus_script(&mode).ok_or("unknown focus mode")?;
+    #[cfg(feature = "fumbbl-home")]
+    {
+        Ok(live::focus(&app, &mode, script))
+    }
+    #[cfg(not(feature = "fumbbl-home"))]
+    {
+        let _ = (app, script);
+        Ok(FocusReport::because("loading"))
+    }
+}
+
+/// How often the coach pressed the Gamefinder's "Join the Draw" in the document the Home webview shows now, with that
+/// document's mark (the shell starts the count when a fumbbl.com page finishes loading). An ERROR - never a zero -
+/// before the webview exists, on a page without the runtime, or when the page does not answer: the caller skips that
+/// answer. Read-only: see JOIN_WATCH_SCRIPT.
+#[tauri::command]
+pub async fn fumbbl_home_queue_watch(app: tauri::AppHandle, webview: tauri::Webview) -> Result<JoinReport, String> {
+    caller_is_main(&webview)?;
+    #[cfg(feature = "fumbbl-home")]
+    {
+        live::join_report(&app).ok_or_else(|| JOIN_NO_ANSWER.to_string())
+    }
+    #[cfg(not(feature = "fumbbl-home"))]
+    {
+        let _ = app;
+        Err(JOIN_NO_ANSWER.to_string())
+    }
+}
+
+/// fumbbl_home_queue_watch's error when the page gave no usable answer this time (not "the command does not exist").
+pub const JOIN_NO_ANSWER: &str = "fumbbl-home-queue-no-answer";
 
 fn caller_is_main(webview: &tauri::Webview) -> Result<(), String> {
     if webview.label() == "main" {
@@ -945,6 +1190,129 @@ mod live {
         }
     }
 
+    /// Queue focus is wanted (fumbbl_home_focus_region): re-applied to every fumbbl.com document that finishes loading.
+    static FOCUS_QUEUE: AtomicBool = AtomicBool::new(false);
+    /// How long a focus call waits for the page's answer before reading it as "not found".
+    const FOCUS_ANSWER_TIMEOUT: Duration = Duration::from_millis(1500);
+
+    /// Eval a constant script in the Home webview and wait (briefly) for its JSON-serialised result.
+    fn eval_answer(app: &tauri::AppHandle, script: &'static str) -> Result<String, &'static str> {
+        let Some(webview) = app.get_webview(HOME_LABEL) else {
+            return Err("loading");
+        };
+        if BOOTING.load(Ordering::SeqCst) || guard_tripped() || PARKED.load(Ordering::SeqCst) {
+            return Err("loading");
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let tx = Mutex::new(tx);
+        let sent = webview.eval_with_callback(script, move |raw| {
+            if let Ok(tx) = tx.lock() {
+                let _ = tx.send(raw);
+            }
+        });
+        if sent.is_err() {
+            return Err("error");
+        }
+        rx.recv_timeout(FOCUS_ANSWER_TIMEOUT).map_err(|_| "no-answer")
+    }
+
+    pub fn focus(app: &tauri::AppHandle, mode: &str, script: &'static str) -> FocusReport {
+        if mode == "diagnose" {
+            // Reads only; what is wanted (FOCUS_QUEUE) stays as it is.
+            return match eval_answer(app, script) {
+                Ok(raw) => match parse_diagnostics(&raw) {
+                    Some(text) => FocusReport { diagnostics: Some(text), ..FocusReport::because("ok") },
+                    None => FocusReport::because("loading"),
+                },
+                Err(reason) => FocusReport::because(reason),
+            };
+        }
+        FOCUS_QUEUE.store(mode == "queue", Ordering::SeqCst); // also applied on the next page load
+        match eval_answer(app, script) {
+            Ok(raw) => parse_focus_report(&raw),
+            Err(reason) => FocusReport::because(reason),
+        }
+    }
+
+    pub fn join_report(app: &tauri::AppHandle) -> Option<JoinReport> {
+        eval_answer(app, JOIN_WATCH_SCRIPT).ok().and_then(|raw| parse_join_report(&raw))
+    }
+
+    /// The main page is (re)loading: whatever it asked for is gone with it, so the site goes back to normal.
+    fn reset_focus(app: &tauri::AppHandle) {
+        if !FOCUS_QUEUE.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if let (Some(webview), Some(script)) = (app.get_webview(HOME_LABEL), focus_script("off")) {
+            let _ = webview.eval(script);
+        }
+    }
+
+    /// The Home webview is parked (fumbbl_home_park): its document is unloaded (about:blank) and, like the stopped
+    /// state, the only navigation it may make is that blanking - until the next show loads the site again.
+    static PARKED: AtomicBool = AtomicBool::new(false);
+
+    pub fn park(app: &tauri::AppHandle) -> Result<(), String> {
+        FOCUS_QUEUE.store(false, Ordering::SeqCst);
+        hide(app);
+        // Booting: no site document is loaded yet. Stopped: already blanked (and only a retry may restart it). Parked
+        // already: nothing is loaded to unload.
+        if BOOTING.load(Ordering::SeqCst) || guard_tripped() || PARKED.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let Some(webview) = app.get_webview(HOME_LABEL) else {
+            return Ok(());
+        };
+        let blank = Url::parse("about:blank").map_err(|e| e.to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        if let Ok(mut waiting) = PARK_LOADED.lock() {
+            *waiting = Some(tx);
+        }
+        PARKED.store(true, Ordering::SeqCst);
+        // Astra 10-09 (F2): this used to be a detached task whose result nobody read. The navigation's own result and
+        // the blank document actually arriving are what "parked" means; anything else is reported, with the parked
+        // state dropped again, so the caller can end the page another way.
+        let unloaded = match webview.navigate(blank) {
+            Err(error) => Err(error.to_string()),
+            Ok(()) => match rx.recv_timeout(PARK_CONFIRM_TIMEOUT) {
+                Ok(()) => Ok(()),
+                // No page-load event in time: the document's own address is the last word.
+                Err(_) => match webview.url() {
+                    Ok(url) if url.as_str() == "about:blank" => Ok(()),
+                    _ => Err("the page did not unload".to_string()),
+                },
+            },
+        };
+        if let Ok(mut waiting) = PARK_LOADED.lock() {
+            *waiting = None;
+        }
+        if unloaded.is_err() {
+            PARKED.store(false, Ordering::SeqCst);
+        }
+        unloaded
+    }
+
+    /// park() waits here for the blank document to start loading in the Home webview (its page-load hook sends).
+    static PARK_LOADED: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+    const PARK_CONFIRM_TIMEOUT: Duration = Duration::from_millis(2000);
+
+    /// The Home webview is loading `url`: if that is the blank document a park is waiting for, tell it.
+    fn note_park_loaded(url: &Url) {
+        if url.as_str() != "about:blank" || !PARKED.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Ok(mut waiting) = PARK_LOADED.lock() {
+            if let Some(tx) = waiting.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    /// The site is wanted again (a show, or a walkthrough navigation): leave the parked state. True = it was parked.
+    fn unpark() -> bool {
+        PARKED.swap(false, Ordering::SeqCst)
+    }
+
     /// A walkthrough is running (fumbbl_home_tour armed it; `clear` disarms): page loads are then reported to the page.
     static TOUR_ARMED: AtomicBool = AtomicBool::new(false);
     /// The walkthrough overlay, injected into every main-frame document of the Home webview. Inert until called.
@@ -957,6 +1325,7 @@ mod live {
         if BOOTING.load(Ordering::SeqCst) || app.get_webview(HOME_LABEL).is_none() {
             return Err("Home webview unavailable".into());
         }
+        unpark(); // an explicit navigation is the site being wanted again
         navigate_home(app, url);
         Ok(())
     }
@@ -1033,6 +1402,12 @@ mod live {
                 }
             }
         }
+        // Parked (the coach dismissed the floating window): the site starts again from its front page.
+        if unpark() {
+            if let Ok(home) = Url::parse(HOME_URL) {
+                navigate_home(app, home);
+            }
+        }
         {
             let mut wanted = WANTED.lock().map_err(|_| "Home state unavailable")?;
             wanted.visible = true;
@@ -1102,6 +1477,7 @@ mod live {
     /// Home pane mounted yet, so nothing of ours would hide the site; hide it here.
     pub fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayload<'_>) {
         if webview.label() == "main" && matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+            reset_focus(webview.app_handle());
             hide(webview.app_handle());
         }
     }
@@ -1224,13 +1600,17 @@ mod live {
         CANCEL_HOOK_READY.store(false, Ordering::SeqCst); // a re-created webview needs its own hook first
         let boot = Url::parse("about:blank").map_err(|e| e.to_string())?;
         let mut builder = WebviewBuilder::new(HOME_LABEL, WebviewUrl::External(boot))
+            // Owner 10-10: the site's own drag and drop (team builder: reordering players) needs the browser's HTML5
+            // drag events. Tauri's file-drop handler swallows them on Windows (WebView2), and this pane takes no
+            // dropped files, so the handler is off for it.
+            .disable_drag_drop_handler()
             // Layer 1 (see the module comment): synchronous cancel at NavigationStarting, redirects included.
             .on_navigation(move |url| {
                 if BOOTING.load(Ordering::SeqCst) {
                     return tripped_navigation_allowed(url); // only the boot page
                 }
-                if guard_tripped() {
-                    return tripped_navigation_allowed(url);
+                if guard_tripped() || PARKED.load(Ordering::SeqCst) {
+                    return tripped_navigation_allowed(url); // stopped or parked: only our own blanking
                 }
                 // The walkthrough's site->host channel: always denied (false = cancel the navigation).
                 match tour_navigation(url) {
@@ -1310,6 +1690,7 @@ mod live {
             // Layer 2 (see the module comment): ContentLoading of a main-frame document that is not on fumbbl.com.
             // The earliest signal tauri gives after a commit; the request has already been sent by then.
             .on_page_load(move |webview, payload| {
+                note_park_loaded(payload.url());
                 if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
                     // Navigation keeps the coach's zoom and colorblind filter.
                     apply_zoom(&webview);
@@ -1317,6 +1698,17 @@ mod live {
                         let filter = FILTER.lock().ok().and_then(|f| f.clone());
                         for script in page_load_filter_scripts(filter.as_ref()) {
                             let _ = webview.eval(script);
+                        }
+                        // Start counting "Join the Draw" in this document now, so a press made before the page is next
+                        // asked is not missed (the runtime only counts; see JOIN_WATCH_SCRIPT).
+                        if !guard_tripped() {
+                            let _ = webview.eval(JOIN_WATCH_SCRIPT);
+                        }
+                        // A fresh document knows nothing of the queue focus: apply it again while it is wanted.
+                        if FOCUS_QUEUE.load(Ordering::SeqCst) && !guard_tripped() {
+                            if let Some(script) = focus_script("queue") {
+                                let _ = webview.eval(script);
+                            }
                         }
                     }
                     // The walkthrough: who is logged in on this page (only while a tour is armed).
@@ -1720,6 +2112,196 @@ mod tests {
     }
 
     #[test]
+    fn parking_hides_blanks_and_locks_the_webview_until_the_next_show() {
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        let body = |start: &str| {
+            let from = src.find(start).unwrap_or_else(|| panic!("{start}"));
+            let rest = &src[from..];
+            rest[..rest.find("\n    }\n").unwrap()].to_string()
+        };
+        let park = body("    pub fn park(app: &tauri::AppHandle) -> Result<(), String> {");
+        // Hidden first, then the document is unloaded - by our own about:blank, never by touching the page.
+        let hide_at = park.find("hide(app);").unwrap();
+        let blank_at = park.find("Url::parse(\"about:blank\")").unwrap();
+        assert!(hide_at < blank_at);
+        assert!(park.contains("PARKED.store(true, Ordering::SeqCst);"));
+        assert!(park.contains("FOCUS_QUEUE.store(false, Ordering::SeqCst);"));
+        assert!(!park.contains("eval") && !park.contains("close") && !park.contains("destroy"));
+        // Astra 10-09 (F2): the outcome is real. The navigation's own result is read (no detached task), the blank
+        // document arriving is waited for, and a park that is not confirmed drops the parked state and FAILS - which
+        // is what lets the page's fallback run.
+        assert!(park.starts_with("    pub fn park(app: &tauri::AppHandle) -> Result<(), String> {"));
+        assert!(!park.contains("navigate_home(") && !park.contains("spawn"));
+        assert!(park.contains("match webview.navigate(blank) {\n            Err(error) => Err(error.to_string()),"));
+        assert!(park.contains("rx.recv_timeout(PARK_CONFIRM_TIMEOUT)"));
+        assert!(park.contains("Ok(url) if url.as_str() == \"about:blank\" => Ok(()),"));
+        assert!(park.contains("if unloaded.is_err() {\n            PARKED.store(false, Ordering::SeqCst);\n        }\n        unloaded"));
+        assert!(src.contains("            .on_page_load(move |webview, payload| {\n                note_park_loaded(payload.url());"));
+        let noted = body("    fn note_park_loaded(url: &Url) {");
+        assert!(noted.contains("if url.as_str() != \"about:blank\" || !PARKED.load(Ordering::SeqCst) {"));
+        let command = &src[src.find("pub async fn fumbbl_home_park(").unwrap()..];
+        assert!(command[..command.find("\n}\n").unwrap()].contains("        live::park(&app)\n    }"));
+        // While parked the navigation rule allows nothing but that blanking (the same gate as the stopped state)...
+        assert!(src.contains("if guard_tripped() || PARKED.load(Ordering::SeqCst) {\n                    return tripped_navigation_allowed(url);"));
+        assert!(tripped_navigation_allowed(&u("about:blank")));
+        assert!(!tripped_navigation_allowed(&u("https://fumbbl.com/p/lfg2")));
+        // ...and about:blank is still refused everywhere else: the allow-list itself is unchanged.
+        assert_eq!(navigation_decision(&u("about:blank")), NavDecision::Block);
+        // The next show (and a walkthrough navigation) is what brings the site back, from its front page.
+        let show = body("    pub fn show(app: &tauri::AppHandle, bounds: HomeBounds, retry: bool) -> Result<(), String> {");
+        assert!(show.contains("if unpark() {\n            if let Ok(home) = Url::parse(HOME_URL) {\n                navigate_home(app, home);"));
+        assert!(body("    pub fn navigate(app: &tauri::AppHandle, url: Url) -> Result<(), String> {").contains("unpark();"));
+        // A plain hide still keeps the page alive (Return to FUMBBL, a dialog over the pane, a blade switch).
+        let hide = body("    pub fn hide(app: &tauri::AppHandle) {");
+        assert!(!hide.contains("PARKED") && !hide.contains("about:blank"));
+    }
+
+    #[test]
+    fn queue_focus_evals_one_of_two_constant_calls_and_reads_the_answer_defensively() {
+        // Nothing the caller sends reaches the eval: a mode picks one of two constants, anything else is refused.
+        for mode in ["queue", "off"] {
+            let script = focus_script(mode).unwrap();
+            assert!(script.starts_with("(window.__sfTour&&window.__sfTour.focus)?window.__sfTour.focus({\"mode\":\""));
+            assert!(script.contains(&format!("{{\"mode\":\"{mode}\"}}")));
+            assert!(script.ends_with("):null")); // a page without the runtime answers null
+        }
+        for bad in ["", "Queue", "queue ", "page", "queue\"});alert(1);({\"", "off;", "diagnose()", "join"] {
+            assert_eq!(focus_script(bad), None, "{bad}");
+        }
+        // The development build's read-only description: a third constant, no argument at all.
+        assert_eq!(focus_script("diagnose"), Some("(window.__sfTour&&window.__sfTour.diagnose)?window.__sfTour.diagnose():null"));
+        let found = |width: f64, height: f64, primary_width: f64, primary_height: f64| FocusReport {
+            found: true, width, height, primary_width, primary_height, offers: false, need_width: 0.0, need_height: 0.0,
+            draw: None, load: None, reason: "ok".into(), error: None, diagnostics: None,
+        };
+        // The page load's mark rides along (found or not), cleaned like the Join watch's.
+        assert_eq!(parse_focus_report(r#"{"found":true,"width":250,"height":280,"load":"k3j9x0a1bc"}"#).load.as_deref(), Some("k3j9x0a1bc"));
+        assert_eq!(parse_focus_report(r#"{"found":false,"reason":"dialog","load":"ab1"}"#).load.as_deref(), Some("ab1"));
+        for raw in [r#"{"found":true,"width":1,"height":1}"#, r#"{"found":true,"width":1,"height":1,"load":"Has Space"}"#, r#"{"found":true,"width":1,"height":1,"load":7}"#, r#"{"found":true,"width":1,"height":1,"load":""}"#] {
+            assert_eq!(parse_focus_report(raw).load, None, "{raw}");
+        }
+        // Owner 10-09: the coach's place in the draw comes through when the page says it EITHER way - found or not -
+        // and is nothing at all otherwise (Astra round 8: "not in" must be a positive reading, never an absence).
+        assert_eq!(parse_focus_report(r#"{"found":true,"width":250,"height":280,"draw":"in"}"#).draw, Some("in"));
+        assert_eq!(parse_focus_report(r#"{"found":true,"width":250,"height":280,"draw":"out"}"#).draw, Some("out"));
+        assert_eq!(parse_focus_report(r#"{"found":false,"reason":"dialog","draw":"in"}"#).draw, Some("in"));
+        for raw in [
+            r#"{"found":true,"width":250,"height":280}"#, r#"{"found":true,"width":250,"height":280,"draw":"unknown"}"#,
+            r#"{"found":true,"width":250,"height":280,"draw":true}"#, r#"{"found":true,"width":250,"height":280,"draw":"IN"}"#,
+            r#"{"found":true,"width":250,"height":280,"inDraw":true}"#, r#"{"found":false,"reason":"not-found"}"#, "null",
+        ] {
+            assert_eq!(parse_focus_report(raw).draw, None, "{raw}");
+        }
+        assert!(serde_json::to_string(&FocusReport { draw: Some("in"), ..FocusReport::because("ok") }).unwrap().contains("\"draw\":\"in\""));
+        assert!(!serde_json::to_string(&FocusReport::because("ok")).unwrap().contains("draw"));
+        // Read-only stands with NO exception: the shell has no script that activates anything on the site for the queue.
+        let shipped = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        let shipped = &shipped[..shipped.find("#[cfg(test)]\nmod tests").unwrap()];
+        assert!(!shipped.contains("leaveDraw") && !shipped.contains("leave_draw") && !shipped.contains(".click("));
+        assert_eq!(focus_script("leave"), None);
+        assert_eq!(focus_script("draw"), None);
+        // Astra R1: what must be in view beyond the Blackbox box comes through, bounded like every other size.
+        assert_eq!(
+            parse_focus_report(r#"{"found":true,"width":280,"height":330,"primaryWidth":280,"primaryHeight":190,"reason":"ok","offers":true,"needWidth":280,"needHeight":330}"#),
+            FocusReport { offers: true, need_width: 280.0, need_height: 330.0, ..found(280.0, 330.0, 280.0, 190.0) }
+        );
+        let odd = parse_focus_report(r#"{"found":true,"width":280,"height":330,"offers":"yes","needWidth":-5,"needHeight":1e12}"#);
+        assert_eq!((odd.offers, odd.need_width, odd.need_height), (false, 0.0, 0.0));
+        // A page that predates the Blackbox measurement: the new fields are simply 0.
+        assert_eq!(parse_focus_report(r#"{"found":true,"width":312,"height":274.5}"#), found(312.0, 274.5, 0.0, 0.0));
+        assert_eq!(
+            parse_focus_report(r#"{"found":true,"width":312,"height":274.5,"primaryWidth":312,"primaryHeight":180,"reason":"ok"}"#),
+            found(312.0, 274.5, 312.0, 180.0)
+        );
+        // Not found: never an error, never a size - and the reason is one of ours, whatever the page says.
+        for (raw, reason) in [
+            ("null", "loading"), // a page without the runtime
+            ("", "loading"),
+            ("{", "loading"),
+            (r#"{"found":"yes"}"#, "error"),
+            ("[1,2]", "error"),
+            (r#"{"found":false,"width":300,"height":200}"#, "not-found"),
+            (r#"{"found":false,"reason":"dialog","primaryWidth":50}"#, "dialog"),
+            (r#"{"found":false,"reason":"frame"}"#, "frame"),
+            (r#"{"found":false,"reason":"shadow"}"#, "shadow"),
+            (r#"{"found":false,"reason":"clipped"}"#, "clipped"),
+            (r#"{"found":false,"reason":"off"}"#, "off"),
+            (r#"{"found":false,"reason":"ok"}"#, "not-found"),
+            (r#"{"found":false,"reason":"<script>alert(1)</script>"}"#, "not-found"),
+        ] {
+            assert_eq!(parse_focus_report(raw), FocusReport::because(reason), "{raw}");
+        }
+        // The page's own error message comes through cleaned and short, and only with reason "error".
+        let failed = parse_focus_report(&format!(r#"{{"found":false,"reason":"error","error":"x is not a function\n\u0007{}"}}"#, "y".repeat(400)));
+        assert_eq!(failed.reason, "error");
+        let message = failed.error.unwrap();
+        assert!(message.starts_with("x is not a functiony") && message.len() == 160 && message.is_ascii());
+        assert_eq!(parse_focus_report(r#"{"found":false,"reason":"dialog","error":"nope"}"#).error, None);
+        assert_eq!(parse_focus_report(r#"{"found":true,"width":-4,"height":1e12,"primaryWidth":-1,"primaryHeight":1e12}"#), found(0.0, 0.0, 0.0, 0.0));
+        // Serialised in camelCase; the optional fields are left out when there is nothing in them.
+        assert_eq!(
+            serde_json::to_string(&found(300.0, 290.0, 300.0, 180.0)).unwrap(),
+            r#"{"found":true,"width":300.0,"height":290.0,"primaryWidth":300.0,"primaryHeight":180.0,"offers":false,"needWidth":0.0,"needHeight":0.0,"reason":"ok"}"#
+        );
+        // Diagnostics: one JSON object of bounded size, re-serialised by us; anything else is nothing.
+        assert!(parse_diagnostics(r#"{"v":1,"path":"/p/gamefinder"}"#).unwrap().contains("\"path\": \"/p/gamefinder\""));
+        for raw in ["null", "[1]", "\"text\"", "{", ""] {
+            assert_eq!(parse_diagnostics(raw), None, "{raw}");
+        }
+        assert_eq!(parse_diagnostics(&format!(r#"{{"a":"{}"}}"#, "x".repeat(DIAGNOSTICS_MAX))), None);
+        // The channel stays one-way: the queue focus adds no site -> host event and nothing to the navigation rule.
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        let body = &src[src.find("    fn eval_answer(app: &tauri::AppHandle").unwrap()..];
+        let body = &body[..body.find("    /// The main page is (re)loading").unwrap()];
+        assert!(body.contains("eval_with_callback(script"));
+        assert!(!body.contains("emit"));
+        // Reading the description changes nothing that is remembered.
+        let diagnose = &body[body.find("if mode == \"diagnose\" {").unwrap()..body.find("FOCUS_QUEUE.store(").unwrap()];
+        assert!(diagnose.contains("return match eval_answer(app, script)"));
+        // Remembered for the next page load, and dropped when the main page reloads.
+        assert!(src.contains("if FOCUS_QUEUE.load(Ordering::SeqCst) && !guard_tripped() {"));
+        assert!(src.contains("            reset_focus(webview.app_handle());\n            hide(webview.app_handle());"));
+    }
+
+    #[test]
+    fn join_the_draw_is_only_counted_and_the_count_is_read_defensively() {
+        // One constant eval, no argument; the page's answer is a number and nothing else.
+        assert_eq!(JOIN_WATCH_SCRIPT, "(window.__sfTour&&window.__sfTour.joinWatch)?window.__sfTour.joinWatch():null");
+        let said = |count: u32, load: &str| Some(JoinReport { count, load: load.to_string(), queue: false });
+        assert_eq!(parse_join_report(r#"{"count":1,"load":"ab","queue":true}"#), Some(JoinReport { count: 1, load: "ab".into(), queue: true }));
+        assert_eq!(parse_join_report(r#"{"count":1,"load":"ab","queue":"yes"}"#), said(1, "ab"));
+        assert_eq!(parse_join_report(r#"{"count":0,"load":"k3j9x0a1bc"}"#), said(0, "k3j9x0a1bc"));
+        assert_eq!(parse_join_report(r#"{"count":3,"load":"x"}"#), said(3, "x"));
+        assert_eq!(parse_join_report(r#"{"count":3,"load":"abc","coach":"someone"}"#), said(3, "abc"));
+        // Astra R5: no usable answer is NO ANSWER - never a count of 0 that the next good answer would "increase" from.
+        for raw in [
+            "null", "", "{", "7", r#"{"count":3}"#, r#"{"count":-1,"load":"a"}"#, r#"{"count":"3","load":"a"}"#, r#"{"count":1.5,"load":"a"}"#,
+            r#"{"count":99999999999,"load":"a"}"#, r#"{"joined":true}"#, r#"{"count":1,"load":""}"#, r#"{"count":1,"load":"Has Space"}"#,
+            r#"{"count":1,"load":"<script>"}"#, r#"{"count":1,"load":"aaaaaaaaaaaaaaaaa"}"#, r#"{"count":1,"load":7}"#,
+        ] {
+            assert_eq!(parse_join_report(raw), None, "{raw}");
+        }
+        assert_eq!(serde_json::to_string(&said(2, "ab1").unwrap()).unwrap(), r#"{"count":2,"load":"ab1","queue":false}"#);
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        // The command: main webview only, no argument from the caller, a number back.
+        let command = &src[src.find("pub async fn fumbbl_home_queue_watch(").unwrap()..];
+        let command = &command[..command.find("\n}\n").unwrap()];
+        assert!(command.starts_with("pub async fn fumbbl_home_queue_watch(app: tauri::AppHandle, webview: tauri::Webview) -> Result<JoinReport, String> {"));
+        assert!(command.contains("caller_is_main(&webview)?;"));
+        assert!(command.contains("live::join_report(&app).ok_or_else(|| JOIN_NO_ANSWER.to_string())"));
+        assert!(!command.contains("unwrap_or(0)") && !command.contains("Ok(0)"));
+        // The count starts when a fumbbl.com page has loaded (a constant eval whose answer nobody waits for).
+        assert!(src.contains("                        if !guard_tripped() {\n                            let _ = webview.eval(JOIN_WATCH_SCRIPT);\n                        }"));
+        // No site -> host channel was added for it, and the navigation rule knows nothing of the queue: the host asks.
+        let join = &src[src.find("    pub fn join_report(").unwrap()..];
+        let join = &join[..join.find("\n    }\n").unwrap()];
+        assert!(join.contains("eval_answer(app, JOIN_WATCH_SCRIPT)") && !join.contains("emit"));
+        let navigation = &src[src.find("pub fn tour_navigation(").unwrap()..];
+        let navigation = &navigation[..navigation.find("\n}\n").unwrap()];
+        assert!(!navigation.contains("queue") && !navigation.contains("join"));
+    }
+
+    #[test]
     fn tour_report_parses_logged_in_and_a_safe_coach_name() {
         let url = u("https://fumbbl.com/p/lfg2");
         assert_eq!(
@@ -1789,7 +2371,18 @@ mod tests {
     fn zoom_is_clamped_to_the_slider_range_in_five_percent_steps() {
         assert_eq!(sanitize_zoom(1.0), Some(1.0));
         assert_eq!(sanitize_zoom(1.26), Some(1.25));
+        // Owner 10-09: the floating window's slider goes down to 50 %.
+        // The docked pane's range ends at 75 %; only a call that says it is the floating window's goes down to 50 %.
         assert_eq!(sanitize_zoom(0.5), Some(0.75));
+        assert_eq!(sanitize_zoom(0.1), Some(0.75));
+        assert_eq!(sanitize_zoom(0.76), Some(0.75));
+        assert_eq!(sanitize_zoom_from(0.5, FLOAT_ZOOM_MIN), Some(0.5));
+        assert_eq!(sanitize_zoom_from(0.52, FLOAT_ZOOM_MIN), Some(0.5));
+        assert_eq!(sanitize_zoom_from(0.1, FLOAT_ZOOM_MIN), Some(0.5));
+        assert_eq!(sanitize_zoom_from(9.0, FLOAT_ZOOM_MIN), Some(2.0));
+        assert_eq!(sanitize_zoom_from(f64::NAN, FLOAT_ZOOM_MIN), None);
+        let src = include_str!("fumbbl_home.rs").replace("\r\n", "\n");
+        assert!(src.contains("let min = if float == Some(true) { FLOAT_ZOOM_MIN } else { ZOOM_MIN };\n    let factor = sanitize_zoom_from(factor, min).ok_or(\"invalid zoom factor\")?;"));
         assert_eq!(sanitize_zoom(9.0), Some(2.0));
         // Half steps round up, exactly as the page's clampHomeZoom (fumbblHome.ts) does.
         assert_eq!(sanitize_zoom(1.275), Some(1.3));

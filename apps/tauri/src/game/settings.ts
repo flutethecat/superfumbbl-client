@@ -1,6 +1,7 @@
 import { reactive, watch } from 'vue';
 import { FORK_EDITION } from './edition';
 import type { EdgePanelPosition } from './edgePanelLayout';
+import { FLOAT_QUEUE_MIN, sanitizeFloatPos, sanitizeFloatSize, sanitizeFloatZoom } from './fumbblFloatLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
@@ -438,6 +439,17 @@ export interface AppSettings extends ConfirmationSettings {
   clientTourSeenVersion: number;
   /** Owner 10-06: zoom of the docked FUMBBL site, 0.75-2 (game/fumbblHome.ts clampHomeZoom). */
   homePaneZoom: number;
+  /** Owner 10-08: the floating FUMBBL window's place and whole-frame size (game/fumbblFloatLayout.ts). Null = never
+   *  moved / resized (bottom-right corner, default size). Whether it is floating is session state (ui.fumbblFloating). */
+  fumbblFloatPos: EdgePanelPosition | null;
+  fumbblFloatSize: { w: number; h: number } | null;
+  /** Owner 10-09: the frame's size while it shows the QUEUE view (the page cropped to the Gamefinder's queue panel),
+   *  separate from fumbblFloatSize (the frame when it has to show the whole page: an older shell, a page without the
+   *  panel). Null = never resized by the coach: the frame fits the Blackbox box at the current zoom. */
+  fumbblFloatQueueSize: { w: number; h: number } | null;
+  /** Owner 10-09: the floating window's OWN zoom (its slider; 0.5-2, default 100 %). Independent of homePaneZoom:
+   *  the docked pane's zoom comes back when the page returns to the pane. */
+  fumbblFloatZoom: number;
   /** Skip the welcome splash on launch (Settings toggle). */
   hideWelcomeSplash: boolean;
   /** Owner 08-18: "Skip this next time" on the account-setup splash. RETIRED 10-06 — the first-launch setup wizard
@@ -688,6 +700,10 @@ const DEFAULTS: AppSettings = {
   homeTourSeenVersion: 0,
   clientTourSeenVersion: 0,
   homePaneZoom: 1,
+  fumbblFloatPos: null,
+  fumbblFloatSize: null,
+  fumbblFloatQueueSize: null,
+  fumbblFloatZoom: 1,
   hideCredsSplash: false, // owner 08-18: opt-out checkbox on the setup splash
   hideWelcomeSplash: true, // owner 2026-07-04: welcome splash deprecated at launch (still in the build; re-enable via Settings → Connection / "Replay the intro screens")
   hideTutorialSplash: true, // owner 2026-07-14: getting-started tour off by default too (needs revising; re-enable via Settings → Connection / "Replay the intro screens")
@@ -961,6 +977,11 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.homePaneZoom = typeof raw.homePaneZoom === 'number' && Number.isFinite(raw.homePaneZoom) && raw.homePaneZoom >= 0.75 && raw.homePaneZoom <= 2
       ? raw.homePaneZoom
       : DEFAULTS.homePaneZoom;
+    // Geometry of the floating FUMBBL window: anything malformed reads as "never moved / resized".
+    merged.fumbblFloatPos = sanitizeFloatPos(raw.fumbblFloatPos);
+    merged.fumbblFloatSize = sanitizeFloatSize(raw.fumbblFloatSize);
+    merged.fumbblFloatQueueSize = sanitizeFloatSize(raw.fumbblFloatQueueSize, FLOAT_QUEUE_MIN);
+    merged.fumbblFloatZoom = sanitizeFloatZoom(raw.fumbblFloatZoom);
     merged.tackleZoneMode = ['off', 'opposition', 'friendly', 'both'].includes(String(raw.tackleZoneMode))
       ? raw.tackleZoneMode as AppSettings['tackleZoneMode']
       : DEFAULTS.tackleZoneMode;

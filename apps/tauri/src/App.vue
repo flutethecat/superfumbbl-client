@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, watchEffect, defineAsyncComponent, type Component } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch, watchEffect, defineAsyncComponent, type Component, type ShallowRef } from 'vue';
 import SpectateView from './views/SpectateView.vue';
 import WaitingBoardView from './views/WaitingBoardView.vue';
 // Owner 09-12: FUMBBL Classic is a fork-edition feature. The public export omits ClassicView.vue entirely (see
@@ -14,6 +14,17 @@ const fumbblHomeModules = import.meta.glob('./views/FumbblHomePane.vue');
 const FumbblHomePane = fumbblHomeModules['./views/FumbblHomePane.vue']
   ? defineAsyncComponent(fumbblHomeModules['./views/FumbblHomePane.vue'] as () => Promise<{ default: Component }>)
   : null;
+// Owner 10-08: the floating FUMBBL window (the same site, small, over other blades / a game / a replay). Gated exactly
+// like the blade: it exists only where its module is in the bundle, and only the blade's own button can turn it on.
+// NOT an async component: it is loaded when the blade is opened and then mounts synchronously, so the pane's unmount
+// and this window's mount share one tick and the site is handed over without a hide (game/fumbblHome.ts homeSurface).
+const fumbblFloatModules = import.meta.glob('./components/FumbblFloat.vue');
+const FumbblFloat: ShallowRef<Component | null> = shallowRef(null);
+function loadFumbblFloat(): void {
+  const load = fumbblFloatModules['./components/FumbblFloat.vue'] as (() => Promise<{ default: Component }>) | undefined;
+  if (!load || FumbblFloat.value) return;
+  void load().then((module) => { FumbblFloat.value = module.default; }).catch(() => undefined);
+}
 import ProtocolConsole from './views/ProtocolConsole.vue';
 import DevPanel from './views/DevPanel.vue';
 import PlayView from './views/console/PlayView.vue';
@@ -62,6 +73,7 @@ import {
   type ChallengeState,
 } from './game/authChallenge';
 import { ui } from './game/ui';
+import { floatAfterLaunch, floatOnOwnMatch } from './game/fumbblFloatLayout';
 import { gameStore } from './game/store';
 import { gameStatRows, teamLogo } from './game/gameStatRows';
 import {
@@ -673,6 +685,71 @@ const view = ref<AppView>('play');
 /** The FUMBBL.COM blade exists wherever its pane module is in the bundle (every edition since 10-06). */
 const homeBladeEnabled = !!FumbblHomePane;
 if (!homeBladeEnabled) watch(view, (v) => { if (v === 'home') view.value = 'play'; }, { flush: 'sync' });
+// ---- Owner 10-08: the floating FUMBBL window (components/FumbblFloat.vue) ----
+/** The FUMBBL.COM pane itself is what the shell shows right now (mirrors the template's branch order below). */
+const homePaneCurrent = computed(() => view.value === 'home'
+  && !(!!gameStore.game.value && artPack.ready) && !gameStore.state.waitingForMatch);
+/** The coach is being taken into their OWN match (the waiting board / join progress is up): not in the game yet. */
+const ownMatchJoining = computed(() => !!gameStore.state.waitingForMatch);
+/** The coach is IN their own match, as a player. Never a game they watch, never a replay. */
+const ownMatchPlaying = computed(() => !!gameStore.game.value && gameStore.isPlaying.value && !gameStore.isReplay.value);
+/** Floating is on and the pane is not on screen: another blade, a game or a replay. Opening the FUMBBL.COM blade
+ *  docks the page (owner 10-09: there is no "Return" button; floating stays on, so the window is back when the coach
+ *  leaves the blade again). Never over the waiting board: the window steps aside while a join is in progress. */
+const fumbblFloatVisible = computed(() => homeBladeEnabled && ui.fumbblFloating && !homePaneCurrent.value && !ownMatchJoining.value);
+if (homeBladeEnabled) {
+  watch(() => view.value === 'home' || ui.fumbblFloating, (wanted) => { if (wanted) loadFumbblFloat(); }, { immediate: true });
+  // Owner 10-09: "When the queue pops and a game is joined, the queue view should be dismissed." Once the coach is IN
+  // their own match - found from the queue, or joined any other way - the floating window is closed, floating is
+  // turned off (it does not come back after the game) and the page is PARKED, exactly as Close does: a queue page
+  // left running behind the match could still beep. Only our own frame goes; nothing on the FUMBBL page is touched.
+  // Watching a game or a replay never ends it - that is what it is for. And a join that has not got there yet
+  // dismisses nothing: the window only steps aside for the waiting board (fumbblFloatVisible).
+  // Astra 10-09 (R3): NOTHING else touches the float state on the way into a match - not a launch that only stages the
+  // game, not the lobby, not the waiting board - so a staged game that is cancelled, cleared, or never connects leaves
+  // floating exactly as it was.
+  // Known to everything that could turn floating on, at once (sync): nothing does while the coach is in their match.
+  watch(ownMatchPlaying, (playing) => { ui.fumbblOwnMatchPlaying = playing; }, { immediate: true, flush: 'sync' });
+  watch(ownMatchPlaying, (playing) => {
+    if (floatOnOwnMatch({ playing, floating: ui.fumbblFloating, held: ui.fumbblFloatHeldAt > 0 }) !== 'dismiss') return;
+    parkFumbblSite();
+    ui.fumbblFloating = false;
+    ui.fumbblFloatHeldAt = 0;
+  });
+}
+/** The site's driver lives with the blade (a lazy chunk); it is loaded whenever a site exists to park. */
+function parkFumbblSite(): void {
+  void import('./game/fumbblHome').then(({ dismissHomeSite }) => dismissHomeSite('own-match')).catch(() => undefined);
+}
+/** The held launch is waiting on the "Replay or live?" question: the answer (or Cancel) settles it however long the
+ *  coach takes, so the hold window is restarted when it comes. */
+let fumbblFloatHeldForQuestion = false;
+/** A launch taken from the site ended the floating window (game/fumbblHome.ts); the launch has now been routed. A game
+ *  to watch or a replay brings the window back over it - and so does the coach's own match: the prior float state is
+ *  restored as it was, and the page is dismissed only once they are IN the game (the ownMatchPlaying watch above), not
+ *  here, where the game may only be staged and can still be cancelled or fail (Astra 10-09, R3). A hold that ran out
+ *  settles nothing either way (Astra 10-09, F5).
+ *  Astra 10-08 (P2): EVERY end of a launch comes through here - routed, answered, cancelled ('cancelled') or never
+ *  usable ('intake-failed') - so the hold never outlives its launch: an unsettled marker left the window off and let
+ *  the next, unrelated launch bring it back. */
+function settleFumbblFloatAfterLaunch(result: string): void {
+  if (!ui.fumbblFloatHeldAt) {
+    fumbblFloatHeldForQuestion = false;
+    return;
+  }
+  if (fumbblFloatHeldForQuestion && result !== 'ambiguous') ui.fumbblFloatHeldAt = Date.now();
+  const outcome = floatAfterLaunch(ui.fumbblFloatHeldAt, Date.now(), result);
+  if (outcome === 'keep-holding') {
+    fumbblFloatHeldForQuestion = true;
+    return;
+  }
+  fumbblFloatHeldForQuestion = false;
+  ui.fumbblFloatHeldAt = 0;
+  if (!homeBladeEnabled) return;
+  // Their own match and already in it (a rejoin): dismissed now. Every other end of a launch puts floating back.
+  if (outcome === 'own-match' && ownMatchPlaying.value) parkFumbblSite();
+  else if (outcome === 'restore' || outcome === 'own-match') ui.fumbblFloating = true;
+}
 /** Owner 10-06 (final): a fresh launch always lands on PLAY; FUMBBL.COM is one click away (the launch window size still
  *  remembers the last window, else fits the site - window_state.rs). */
 /** Owner 10-06: Settings > General re-runs the Home pane walkthrough - it starts as soon as the
@@ -777,6 +854,7 @@ function openTournamentTeamBuilder(rulesetPackName: string): void {
  *  replay route lands on it; the loaded game takes over. (Owner 09-25 had pulled it from the public edition.) */
 const replayHomeView: AppView = 'replay';
 function applyJnlpResultView(result: JnlpRouteResult): void {
+  settleFumbblFloatAfterLaunch(result);
   if (result === 'replay') view.value = replayHomeView;
   else if (result === 'spectate') view.value = 'spectate';
   else if (result === 'fork-player' || result === 'fumbbl-player' || result === 'fumbbl-staged') view.value = 'play';
@@ -797,9 +875,15 @@ useNativeJnlpIntake((request) => {
     return;
   }
   routeNativeJnlp(request);
-});
+}, () => settleFumbblFloatAfterLaunch('intake-failed')); // a launch that could not be read or parsed is over too
 function chooseAmbiguousJnlp(choice: 'replay' | 'live'): void {
   applyJnlpResultView(resolveAmbiguousJnlpEntry(choice));
+}
+/** Cancel on "Replay or live?": the launch came to nothing. The view stays where it is; a floating window the launch
+ *  ended comes back (it was a non-player outcome) and the hold is cleared. */
+function cancelAmbiguousJnlp(): void {
+  cancelAmbiguousJnlpEntry();
+  settleFumbblFloatAfterLaunch('cancelled');
 }
 // Connect bar removed (owner 2026-07-03 r6f Option A): the header hosts the primary
 // Owner 08-18: the header session chip + Disconnect (Option-A connect-bar leftovers)
@@ -1624,7 +1708,7 @@ function captureKey(event: KeyboardEvent) {
         <div class="splash-actions">
           <button type="button" @click="chooseAmbiguousJnlp('replay')">Replay</button>
           <button type="button" @click="chooseAmbiguousJnlp('live')">Live</button>
-          <button type="button" @click="cancelAmbiguousJnlpEntry()">Cancel</button>
+          <button type="button" data-testid="jnlp-choice-cancel" @click="cancelAmbiguousJnlp()">Cancel</button>
         </div>
       </div>
     </div>
@@ -1703,6 +1787,13 @@ function captureKey(event: KeyboardEvent) {
          a game arrives). App-shell mount so the Play-blade rejoin is visible end-to-end; renders
          nothing unless a tracked rejoin attempt is live (rejoinFlow.ts). -->
     <RejoinProgressModal />
+
+    <!-- Owner 10-08: the floating FUMBBL window - the docked site kept open (small, movable) while another blade, a
+         game or a replay is on screen. Shell level, so it survives every view change. Astra 10-08 (P2): it stays IN
+         the shell (no Teleport) - the colourblind filter makes the shell one stacking context, and only inside it is
+         the frame's z-index (75) below the shell's dialogs, menus and alerts (z >= 80) in every colour mode. The
+         opposite of the match-ready popup below, which must be ABOVE the layers on <body> and so lives there. -->
+    <component :is="FumbblFloat" v-if="FumbblFloat && fumbblFloatVisible" />
 
     <!-- owner 2026-07-10: Developer log panel (unlocked by `-dev`, toggled in Settings → Developer). -->
     <DevPanel v-if="settings.devPanelOpen" />

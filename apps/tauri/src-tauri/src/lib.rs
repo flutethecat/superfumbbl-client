@@ -787,7 +787,10 @@ pub fn run() {
             fumbbl_home::fumbbl_home_navigate,
             fumbbl_home::fumbbl_home_tour,
             fumbbl_home::fumbbl_home_set_zoom,
-            fumbbl_home::fumbbl_home_set_filter
+            fumbbl_home::fumbbl_home_set_filter,
+            fumbbl_home::fumbbl_home_focus_region,
+            fumbbl_home::fumbbl_home_park,
+            fumbbl_home::fumbbl_home_queue_watch
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

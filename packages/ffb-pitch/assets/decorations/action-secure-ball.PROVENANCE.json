@@ -1,0 +1,10 @@
+{
+  "file": "action-secure-ball.png",
+  "purpose": "Secure the Ball action decoration over the acting player's head (Move / Pass / Foul / Hand-off family) while the server-declared secureTheBall action is live.",
+  "license": "Super FUMBBL Media License (original art)",
+  "source": "C:/Users/Jay/.codex/generated_images/01a07978-92fd-7f03-ae12-07f78a6b8772/exec-e104186e-e11e-459f-a9b7-f5673b9d52ce.png",
+  "sha256": "88c9ed7eacc4e79e4367ae2201b23388af8b999c500fd429a029d984841b3742",
+  "tool": "Built-in ImageGen (art lane, owner-approved 10-10: gold SECURE over ivory THE beside gold BALL, two ivory gloves on a spiked football)",
+  "processing": "Pixels unchanged. The source already carries a real alpha channel (the dark backdrop and warm haze live only in the RGB of fully transparent pixels); that hidden RGB was zeroed and the canvas trimmed to the alpha bounding box (1536x1024 -> 1510x998). No keying, no resampling.",
+  "note": "No FUMBBL or Games Workshop material."
+}
