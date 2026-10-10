@@ -640,8 +640,11 @@ const handlers: Record<string, Handler> = {
     game.sketchState = change.modelChangeValue;
   },
   [ModelChangeId.TARGET_SELECTION_COMMITTED]: (game) => {
+    // Owner 10-10 (live log: "Cannot assign to read only property 'targetSelectionStatusIsCommitted'"): the state object
+    // is the server frame's own value (fieldModelSetter stores it by reference) and a recorded frame is frozen, so it is
+    // replaced, never edited in place. A throw here dropped the rest of the frame.
     const state = game.fieldModel.targetSelectionState as Record<string, unknown> | undefined;
-    if (state) state.targetSelectionStatusIsCommitted = true;
+    if (state) (game.fieldModel as Record<string, unknown>).targetSelectionState = { ...state, targetSelectionStatusIsCommitted: true };
   },
 
   [ModelChangeId.TEAM_RESULT_SET_CONCEDED]: teamResultSetter('conceded'),
