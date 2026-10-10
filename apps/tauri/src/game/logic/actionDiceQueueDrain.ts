@@ -34,6 +34,16 @@ export interface ActionDiceQueueDrainDeps {
   arrivalCapMs: number;
   /** Poll interval for the pickup-on-arrival wait. */
   pollMs?: number;
+  /** Owner 10-09 (a Dodge / Rush / Leap die waits for its mover as well): is that player's token still on its way -
+   *  a confirmed step queued or on screen, or a tween in flight? While it is, the die keeps waiting (up to
+   *  arrivalCapMs). Absent = never moving. */
+  moverMoving?: (playerId: string) => boolean;
+  /** Owner 10-09: batch `seq` is being shown, on screen in `msUntilShown` ms (camera pan / order floor). The store
+   *  starts the die's read beat from this, not from an estimate. Not called for a batch that is dropped. */
+  onShown?: (seq: number, msUntilShown: number) => void;
+  /** The bounded fail-open of that wait once nothing is moving the token any more (one step + a margin): a token the
+   *  renderer never brings onto the square cannot hold the die longer than this. */
+  arrivalGraceMs?: () => number;
 }
 
 export interface ActionDiceQueueDrain {
@@ -52,14 +62,15 @@ export function createActionDiceQueueDrain(deps: ActionDiceQueueDrainDeps): Acti
   // at the previous show's time: effective wait = max(own wait, previous show - now). Equal waits keep order because
   // the lifecycle's timers fire in scheduling order. Reset with the pending waits (seek / teardown).
   let lastShowAt = Number.NEGATIVE_INFINITY;
-  const cue = (rolls: readonly ActionDieRoll[], ownWait: number) => {
+  const cue = (batch: ActionDiceBatch, ownWait: number) => {
     const now = deps.now();
     const wait = Math.max(0, ownWait, lastShowAt - now);
     lastShowAt = now + wait;
-    deps.lifecycle.onDiceCue(rolls, wait);
+    deps.lifecycle.onDiceCue(batch.rolls, wait);
+    deps.onShown?.(batch.seq, wait);
   };
   // seq -> pending pickup wait: with a queue, two pickup waits can overlap (one per batch). `showNow` flushes it.
-  const pickupWaits = new Map<number, { timer: number; showNow: () => void }>();
+  const pickupWaits = new Map<number, { timer: number; showNow: () => void; superseded?: (by: ActionDiceBatch) => void }>();
 
   let lastSeq = Number.NEGATIVE_INFINITY;
   const runBatch = (batch: ActionDiceBatch) => {
@@ -73,8 +84,13 @@ export function createActionDiceQueueDrain(deps: ActionDiceQueueDrainDeps): Acti
     }
     // Owner 10-06: an OLDER pickup wait superseded by this batch shows NOW (at its ball square), before this batch, so
     // the dice keep their order and the pickup die is never lost. Only an epoch change / null teardown drops one.
+    // Astra review of ccc6bf1c5 (P2-2): a MOVEMENT die is not flushed like that - it is never shown on a square its
+    // token has not reached. Superseded, it shows now only if the token is already there; a newer roll on the SAME
+    // square (its reroll) replaces it; otherwise it keeps waiting for its own arrival (see `superseded` below).
     for (const [pendingSeq, wait] of [...pickupWaits]) {
-      if (pendingSeq < batch.seq) { deps.scheduler.clear(wait.timer); wait.showNow(); }
+      if (pendingSeq >= batch.seq) continue;
+      if (wait.superseded) wait.superseded(batch);
+      else { deps.scheduler.clear(wait.timer); wait.showNow(); }
     }
     const renderer = deps.renderer();
     if (!renderer) return;
@@ -83,31 +99,55 @@ export function createActionDiceQueueDrain(deps: ActionDiceQueueDrainDeps): Acti
     // Owner 10-05: a PICKUP die waits until the mover's token is drawn on the ball square (polled, fail-open cap).
     // Owner 10-06: superseded by a newer cue it shows at once instead of dropping; a seek / teardown still drops it.
     // Every other cause keeps its timing.
-    const pickup = batch.rolls.find((r) => r.cause === 'pickup');
+    // Owner 10-09: a movement roll's die (awaitsArrival: Dodge / Rush / Leap, FAILED or passed) waits the same way, so
+    // the result is never announced on a square the figure has not reached. Its wait is bounded tighter than the
+    // pickup's: it lasts only while the token is actually being moved (moverMoving), plus arrivalGraceMs.
+    const ballPickup = batch.rolls.find((r) => r.cause === 'pickup');
+    const pickup = ballPickup ?? batch.rolls.find((r) => r.awaitsArrival);
     const moverId = pickup ? deps.pickupMoverAt(pickup.square) : null;
     if (!pickup || !moverId) {
-      const pickupBeat = pickup ? deps.pickupBeatMs() : 0; // mover unknown: the old fixed beat
-      cue(batch.rolls, delay + pickupBeat);
+      const pickupBeat = ballPickup ? deps.pickupBeatMs() : 0; // mover unknown: the old fixed beat
+      cue(batch, delay + pickupBeat);
       return;
     }
+    // A ball pickup keeps its plain cap. A movement die waits only while its token is still coming.
+    const moverStillComing = (elapsed: number) => !!ballPickup || !!deps.moverMoving?.(moverId) || elapsed < (deps.arrivalGraceMs?.() ?? 0);
     const seq = batch.seq;
     const epoch = deps.lifecycle.epoch; // a seek / teardown advances it: the wait dies with its presentation
     const started = deps.now();
     const showNow = () => {
       pickupWaits.delete(seq);
       if (!deps.renderer() || deps.lifecycle.epoch !== epoch) return; // torn down
-      cue(batch.rolls, 0); // still floored: never before the previous show
+      cue(batch, 0); // still floored: never before the previous show
+    };
+    // A movement die that a newer batch overtakes (only a ball pickup is flushed at once).
+    const superseded = ballPickup ? undefined : (by: ActionDiceBatch) => {
+      const pending = pickupWaits.get(seq);
+      const live = deps.renderer();
+      if (!pending || !live || deps.lifecycle.epoch !== epoch) return;
+      if (live.playerDrawnAt(moverId, pickup.square)) { deps.scheduler.clear(pending.timer); showNow(); return; } // arrived: in order, now
+      if (by.rolls.some((r) => r.square[0] === pickup.square[0] && r.square[1] === pickup.square[1])) {
+        deps.scheduler.clear(pending.timer); pickupWaits.delete(seq); // its own reroll is being shown there: that replaces it
+      }
+      // else: keep polling - it appears when (and only if) its token reaches the square
     };
     const showOnArrival = () => {
       pickupWaits.delete(seq);
       const live = deps.renderer();
       if (!live || deps.lifecycle.epoch !== epoch) return; // torn down
-      if (deps.newestSeq() !== seq) { showNow(); return; } // superseded: show now, never drop
-      if (!live.playerDrawnAt(moverId, pickup.square) && deps.now() - started < deps.arrivalCapMs) {
-        pickupWaits.set(seq, { timer: deps.scheduler.set(showOnArrival, pollMs), showNow });
-        return;
+      if (ballPickup) {
+        if (deps.newestSeq() !== seq) { showNow(); return; } // superseded: show now, never drop
       }
-      cue(batch.rolls, Math.max(0, delay - (deps.now() - started)));
+      if (!live.playerDrawnAt(moverId, pickup.square) && deps.now() - started < deps.arrivalCapMs) {
+        if (moverStillComing(deps.now() - started)) {
+          pickupWaits.set(seq, { timer: deps.scheduler.set(showOnArrival, pollMs), showNow, superseded });
+          return;
+        }
+      }
+      // A superseded movement die whose token never reached the square is dropped: late, on a square the figure is
+      // not on, it would say nothing true. (Still the newest one, the bounded fail-open shows it as before.)
+      if (!ballPickup && deps.newestSeq() !== seq && !live.playerDrawnAt(moverId, pickup.square)) return;
+      cue(batch, Math.max(0, delay - (deps.now() - started)));
     };
     showOnArrival();
   };

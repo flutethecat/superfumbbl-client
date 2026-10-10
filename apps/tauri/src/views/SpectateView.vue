@@ -3141,6 +3141,8 @@ decisionSurfaceReplays.push(() => {
   myRerollOfferSquare = at && at[0] >= 0 && at[0] <= 25 && at[1] >= 0 && at[1] <= 14 ? [at[0], at[1]] : null;
 });
 const PICKUP_DIE_ARRIVAL_CAP_MS = 4000;
+/** Fail-open margin of a movement die's arrival wait once nothing is moving its token (one step + this). */
+const MOVE_DIE_ARRIVAL_MARGIN_MS = 100;
 /** The player the model has standing on that square (the mover a pickup roll belongs to), or null. */
 function pickupMoverAt(square: readonly [number, number]): string | null {
   const data = gameStore.game.value?.fieldModel?.playerDataArray?.find((d) => d.playerCoordinate
@@ -3160,6 +3162,11 @@ const actionDiceDrain = createActionDiceQueueDrain({
   pickupMoverAt,
   pickupBeatMs: () => presentationMs(settings.moveSpeedMs),
   arrivalCapMs: PICKUP_DIE_ARRIVAL_CAP_MS,
+  // Owner 10-09: a Dodge / Rush / Leap die (and its FAILED plate) waits for its mover's token to reach the square.
+  moverMoving: (playerId) => gameStore.movementStepPendingFor(playerId) || !!renderer?.movementOnScreen(playerId).inFlight,
+  arrivalGraceMs: () => presentationMs(settings.moveSpeedMs) + MOVE_DIE_ARRIVAL_MARGIN_MS,
+  // Owner 10-09: tell the store when each batch is really shown - its read beats start there, not at an estimate.
+  onShown: (seq, msUntilShown) => gameStore.actionDiceShown(seq, msUntilShown),
 });
 onBeforeUnmount(() => actionDiceDrain.cancelPickupWaits());
 // Batches published before this view mounted are history, not cues: drop them so the first live cue does not replay them.
@@ -9429,7 +9436,10 @@ onMounted(async () => {
     renderer?.clearUnactivatedCues(); // owner 09-08: any player click ends the End-Turn idle-player cue
     if (deferredFriendlySwitch.value && deferredFriendlySwitch.value.playerId !== playerId) deferredFriendlySwitch.value = null; // owner 10-05
     if (wideRailActivationPrompt.value) return;
-    if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
+    // owner 09-06: hold clicks while a failed roll drains. Astra 10-09: or while frames wait behind its hold - except a
+    // click that answers a player pick the SERVER asked this seat for (it is waiting on that answer).
+    // Astra round 3 (R3): the failed-walk hold does not swallow that answer either.
+    if (gameStore.isPlaying.value && !gameStore.state.playerPick && (gameStore.state.failedActionHold || gameStore.moveRollHoldQueued())) return;
     if (o66PendingLeftClickBlitzPlan.value
         && !(settings.friendlyPlayerSwitch && gameStore.iControl(playerId))) return;
     if (gameStore.state.yesNo?.key.startsWith('maximumCarnage:')) return;
@@ -10037,7 +10047,10 @@ onMounted(async () => {
     if (pitchHeldByConfirmation() && !gameStore.state.squarePick && !unknownPickingTile.value) return;
     deferredFriendlySwitch.value = null; // owner 10-05: a square click means the acting player carries on
     if (wideRailActivationPrompt.value) return;
-    if (gameStore.state.failedActionHold && gameStore.isPlaying.value) return; // owner 09-06: hold clicks while a failed roll drains
+    // owner 09-06: hold clicks while a failed roll drains. Astra 10-09: or while frames wait behind its hold - never a
+    // SERVER-requested square pick (the check above lets it through for the same reason).
+    // Astra round 3 (R3): the failed-walk hold does not swallow that answer either.
+    if (gameStore.isPlaying.value && !gameStore.state.squarePick && !unknownPickingTile.value && (gameStore.state.failedActionHold || gameStore.moveRollHoldQueued())) return;
     if (o66PendingLeftClickBlitzPlan.value) return;
     if (settings.order66 && gameStore.isPlaying.value && o66InspectedOpponent.value) {
       const inspectingGame = gameStore.game.value;
@@ -11802,8 +11815,10 @@ const turnClock = computed(() => {
 // End-turn warning counts owned on-pitch players lacking the server acted flag, not locally derived eligibility.
 const endTurnWarnCount = ref<number | null>(null);
 watch(endTurnWarnCount, () => { reactivePromptDragPos.endTurnWarn = null; });
+// Astra confirmation (iv): also while server frames are still held behind a movement-roll presentation (<= ~1.5 s) -
+// End Turn is withheld then, so the button shows itself disabled (the existing style) instead of swallowing the press.
 const endTurnUnavailableDuringReaction = computed(() =>
-  gameStore.isPlaying.value && !gameStore.canPlayerEndTurn(gameStore.game.value?.turnMode),
+  gameStore.isPlaying.value && (!gameStore.canPlayerEndTurn(gameStore.game.value?.turnMode) || gameStore.state.moveRollHoldBusy),
 );
 /** Owner 09-08: the idle own players behind the End-Turn guard, as ids (the cue arrows + count both read this). */
 function unactivatedOwnIds(): string[] {

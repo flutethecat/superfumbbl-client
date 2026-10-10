@@ -582,6 +582,10 @@ const legacyState = reactive({
     | null,
   /** Owner 09-06: a FAILED movement roll still drains its walk; clicks and the planner hold until the fence publishes. */
   failedActionHold: null as { playerId: string; occurrenceId: number; seq: number } | null,
+  /** Astra confirmation (iv): server frames are still queued behind a movement-roll presentation hold (<= ~1.5 s) -
+   *  action commands are withheld; the End Turn button shows itself disabled for that time (reactive mirror of
+   *  moveRollHoldQueued). */
+  moveRollHoldBusy: false,
   /** A lost 750ms walk acknowledgement must recover even when the ordinary presentation cursor was already
    * retired. Modern consumes this occurrence after its latest model redraw and asks Pixi to reconcile to truth. */
   movementPresentationRecovery: null as
@@ -1419,8 +1423,20 @@ function clearFallOver(): void {
 /** Owner 10-06 (spec-dice-queue): publish a NEW action-dice batch to the newest-batch slot AND the in-order queue the
  *  view drains. Assigns a fresh array (never mutates in place): in a spectator publication an empty queue reads the
  *  frozen neutral default, and the assignment lands in the reactive transient state like `actionDice` does. */
+/** Astra confirmation of e986add18 (B3): batch ids are unique for the life of the session - a clear (catch-up cleanup,
+ *  reset, seek, game change) never restarts the numbering, so a "shown" report can only ever name the batch it is for. */
+let actionDiceBatchSeq = 0;
+/** Bumped by every dice clear: show waiters registered before it are discarded (never run), not just unreachable. */
+let actionDiceClearEpoch = 0;
+/** Astra round 3 (R1): whoever needs to know when a batch it is ABOUT to publish is shown registers here, keyed by
+ *  the rolls array it will hand to publishActionDice. The hook runs inside publishActionDice after the id is allocated
+ *  and BEFORE the batch reaches reactive state - so its show waiter exists before any watcher (the view's dice drain,
+ *  which reports the show synchronously) can possibly run. Allocate id -> register waiter -> publish, one step. */
+const actionDicePublicationHooks = new WeakMap<object, (batch: ActionDiceBatchState) => void>();
 function publishActionDice(rolls: ActionDiceBatchState['rolls']): void {
-  const batch: ActionDiceBatchState = { rolls, seq: (state.actionDice?.seq ?? 0) + 1 };
+  const batch: ActionDiceBatchState = { rolls, seq: ++actionDiceBatchSeq };
+  const hook = actionDicePublicationHooks.get(rolls);
+  if (hook) { actionDicePublicationHooks.delete(rolls); hook(batch); }
   state.actionDice = batch;
   const queue = state.actionDiceQueue;
   state.actionDiceQueue = [...queue.slice(Math.max(0, queue.length - (ACTION_DICE_QUEUE_CAP - 1))), batch];
@@ -1429,6 +1445,9 @@ function publishActionDice(rolls: ActionDiceBatchState['rolls']): void {
 function clearActionDice(): void {
   state.actionDice = null;
   state.actionDiceQueue = [];
+  actionDiceClearEpoch += 1;
+  actionDiceShownWaiters.clear();
+  actionDiceShownReports.clear();
 }
 
 watch(
@@ -1958,6 +1977,232 @@ const PICKUP_BEAT_MS = 950;
 const REROLL_BEAT_MS = 1100; // the reroll splash reads before the re-rolled result (spectate drain hold)
 // Owner 2026-07-08 (rev 7): when the SPECTATOR watched the coach's reroll dialog, the coach's pick GLOWS activation-gold for this long before the rest of the events (splash, re-rolled result, downstream) render.
 let rerollStageTimers: ReturnType<typeof setTimeout>[] = [];
+/** Owner 10-09 ("A pathed move that includes a failed dodge should render the reroll then continue the pathing. The
+ *  wait on this shouldn't be tremendously long but the token's rendered walk should be held until the dodge reroll
+ *  resolves."): the beats of a movement roll (Dodge / Rush / Pick Up) that FAILED and was RESCUED by a reroll, so the
+ *  move goes on. The server's frames that follow (the next squares of the path, their rolls, a skill dialog at the
+ *  square) wait in the receive queue for both beats, on every seat (rescuedMoveHoldUntil).
+ *   - failReadMs: the failed die reads this long before the reroll use + the rerolled result replace it. It is the
+ *     existing successful-roll beat (SUCCESS_ROLL_BEAT_MS), not the 1220 ms FAIL beat: that one lets a failure that
+ *     ends the activation read, and this failure does not stand. 0 when the failed die was shown by an earlier frame
+ *     (a team reroll / Pro: the offer was open and the coach answered).
+ *   - resultReadMs: the rerolled result reads this long before the walk carries on: the die's re-tumble in place
+ *     (ACTION_DIE_TUMBLE_MS, 200) plus the viewer-visible 450 ms.
+ *  So a Dodge-skill rescue costs 1210 ms from the roll, an answered team reroll 650 ms from its result (x1.1 for a
+ *  spectator, like every beat). A reroll that fails again, a declined offer and a first-time pass are untouched. */
+export const RESCUED_MOVE_ROLL_HOLD = { failReadMs: 560, resultReadMs: 650 } as const;
+/** Wall-clock end of the rescued-movement-roll hold (0 = none). Order 66 play applies a frame the moment it arrives
+ *  and ignores playback.holdUntil, so this hold has its own clock, read by enqueueSync and pumpPlayback like the bomb
+ *  flight's. WAKE: pumpPlayback re-arms its timer for exactly the time left, so the held frames apply when the beats
+ *  are over with no further frame, click or renderer acknowledgement; nothing can extend it but another rescued roll.
+ *  It delays the APPLICATION of later frames only: the rescued roll's own frame is already applied (the model, the
+ *  planner's resolved-roll bookkeeping and the dodge tallies are untouched), and nothing the client sends waits on it.
+ *  A join / reconnect backlog fast-forwards past it (catch-up), a reset clears it. */
+let rescuedMoveHoldUntil = 0;
+/** The rescued result has been on screen for the viewer-visible 450 ms at this time (see queuedPromptSince). */
+let rescuedMoveFloorUntil = 0;
+/** Astra review of 1aa7b3b14 (P2): these two holds keep frames in the receive queue, so the applied model is OLDER
+ *  than what the server has told this client - and a queued frame may carry a server prompt (Diving Tackle, Shadowing
+ *  and the pick-up follow the dodge in the same upstream step sequence, bb2025 Move.java:51-61, with no client input
+ *  in between; a fall is followed by the apothecary offer).
+ *   1. While a frame is queued behind one of them the planner does not send, End Turn and pitch clicks are ignored
+ *      (moveRollHoldQueued). The WAKE is the application of the last queued frame: pumpPlayback shifts it before
+ *      applyFrame, whose planner hook then finds the queue empty. Catch-up drains the same way; a reset drops the plan.
+ *   2. A queued frame that SETS a dialog shortens the hold to the viewer-visible floor (450 ms from when the die it
+ *      protects appeared), and no dialog frame sits in the queue longer than MOVE_ROLL_PROMPT_QUEUE_CAP_MS in total,
+ *      however many of these holds follow one another: past it both holds stand down until that frame is applied.
+ *
+ *  SCOPE of the 1500 ms cap (Astra B4): it bounds THESE two holds. A passive spectator's receive queue is additionally
+ *  paced by playback.holdUntil (owner-tuned read beats, x1.1) and by the recorded inter-frame gaps, both checked in
+ *  pumpPlayback before these holds and both older than this work; a dialog can therefore reach a spectator's screen
+ *  later than 1500 ms after receipt. That is deliberate: a spectator answers nothing, sends nothing and has no planner
+ *  (sendCommand refuses outside play), so nothing can act on its stale board. The cap is a play-seat guarantee. */
+const MOVE_ROLL_VIEW_FLOOR_MS = 450;
+const MOVE_ROLL_PROMPT_QUEUE_CAP_MS = 1500;
+/** Wall-clock receipt of the oldest queued frame that sets a dialog, or null. */
+function queuedPromptSince(): number | null {
+  let since: number | null = null;
+  for (const frame of playback.queue) if (frameSetsDialog(frame) && (since === null || frame.receivedAt < since)) since = frame.receivedAt;
+  return since;
+}
+function moveRollHoldActive(): boolean {
+  return rescuedMoveHoldUntil !== 0 || failedMoveHold !== null;
+}
+/** Astra review of ccc6bf1c5 (P2-1): a frame was queued behind one of these holds and the queue has not fully
+ *  drained since. The hold's own timer is NOT the end of it: pumpPlayback applies one frame per timeout, so after the
+ *  hold expires an ordinary frame applies (and wakes the planner) while a prompt frame may still sit behind it. */
+let moveRollHeldBacklog = false;
+/** Server frames are still waiting from a rescued-roll hold / failed-move drain: the applied model is stale. Every
+ *  command producer stands down (planner, End Turn, pitch clicks, and every declare-class command at the transport
+ *  lock). True until the queue is EMPTY - the application of the last queued frame is the planner's wake. */
+function moveRollHoldQueued(): boolean {
+  // Astra B1: catch-up (a backlog past CATCHUP_FRAMES) skips the PRESENTATION waits and drains fast, but the board is
+  // just as stale until the last queued frame is applied - the gate does not open for it.
+  return moveRollHeldBacklog && playback.queue.length > 0;
+}
+/** Astra round 3 (R2): the held-backlog flag and its reactive mirror (state.moveRollHoldBusy: the End Turn button) are
+ *  maintained HERE and only here, at the two moments the fact changes - a frame is queued while a hold is armed
+ *  (enqueueSync), and the receive queue is found empty (pumpPlayback, in the same step that applied the last frame;
+ *  resetPlayback). No accessor mutates them and no planner has to be running. */
+function syncMoveRollHeldBacklog(): void {
+  if (playback.queue.length === 0) moveRollHeldBacklog = false;
+  else if (moveRollHoldActive()) moveRollHeldBacklog = true;
+  if (state.moveRollHoldBusy !== moveRollHeldBacklog) state.moveRollHoldBusy = moveRollHeldBacklog;
+}
+function rescuedMoveHoldWaitMs(): number {
+  if (rescuedMoveHoldUntil === 0) return 0;
+  const now = Date.now();
+  let until = playback.catchingUp ? 0 : rescuedMoveHoldUntil;
+  const promptSince = until > now ? queuedPromptSince() : null;
+  // the timer sleeps to the EARLIEST of: the full beats, the floor (a prompt is queued), that prompt's total cap
+  if (promptSince !== null) until = Math.min(until, rescuedMoveFloorUntil, promptSince + MOVE_ROLL_PROMPT_QUEUE_CAP_MS);
+  if (until > now) return until - now;
+  rescuedMoveHoldUntil = 0;
+  rescuedMoveFloorUntil = 0;
+  return 0;
+}
+/** Astra review of ccc6bf1c5 (P2-3): ONE predicate for every roll a move can owe - Dodge, Rush, Pick Up and Leap
+ *  (the bb2025 jump reports as `leapRoll`; there is no separate jump report id) - used by all three hold paths: the
+ *  first failure, the rescued reroll and the reroll that fails again. Wider than movementRollReport, which also
+ *  drives the per-square walk fences and must stay step-only. */
+function heldMovementRollReport(report: Readonly<Record<string, unknown>>): boolean {
+  return movementRollReport(report) || String(report.reportId ?? '') === 'leapRoll';
+}
+/** This frame reports a REROLLED movement roll of `playerId`, the player who is moving: did the reroll pass
+ *  ('passed': the move goes on) or fail again ('failed': the fall follows)? null = no such roll in the frame. */
+function movementRollRerollOutcome(reports: readonly Record<string, unknown>[], playerId: string): 'passed' | 'failed' | null {
+  if (!playerId || String((game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') !== playerId) return null;
+  const rerolled = reports.filter((report) => heldMovementRollReport(report) && String(report.playerId ?? '') === playerId && report.reRolled === true);
+  if (rerolled.length === 0) return null;
+  return rerolled.every((report) => report.successful === true) ? 'passed' : 'failed';
+}
+/** Confirmed steps of `playerId` that are still to be shown (queued, or the one on screen). */
+function movementStepsPendingFor(playerId: string): number {
+  const presenting = presentation.presenting;
+  const onScreen = presenting && (presenting.kind === 'walk' || presenting.kind === 'rollBeat') && presenting.id === playerId ? 1 : 0;
+  return onScreen + presentation.queue.reduce((n, event) => n + (event.kind === 'step' && event.playerId === playerId ? 1 : 0), 0);
+}
+/** Owner 10-09: a movement roll's die is shown when the token ARRIVES on its square (the view's action-dice drain
+ *  waits for the renderer), so the beats that read that die start then, not at the frame. This is how long the token
+ *  still needs: its pending confirmed steps at the configured tile speed. 0 for a player who is not being walked. */
+function moverArrivalLeadMs(playerId: string): number {
+  return playback.catchingUp ? 0 : movementStepsPendingFor(playerId) * presentationMs(settings.moveSpeedMs);
+}
+/** Owner 10-09 ("Planned movements that fail are skipping their presentation drain and immediately rendering the
+ *  fail state"): the server sends the fall ~15 ms after a failed Dodge / Rush / Pick Up / Leap and the turn end
+ *  ~150 ms after it. Order 66 play applied each on arrival (it never reads playback.holdUntil, so the forced
+ *  FAIL_BEAT_MS below paced nothing there): the prone token, the armour dice and the turn-end snap of every token
+ *  landed while the mover was still walking onto the square and before the failed die had been read.
+ *  The frames behind a FINAL failed movement roll of the moving player now wait in the receive queue until
+ *   1. the confirmed steps of that player have been shown (the token is on the square the server put it on), and
+ *   2. the failed die has read: resultReadMs from the arrival for a first roll (pop-in 180 + tumble 200 + the
+ *      viewer-visible 450), rerolledReadMs from a rerolled die landing in place (tumble 200 + 450).
+ *  Then the fall, the armour / injury presentation and the turnover splash follow exactly as before.
+ *  A failed roll with a reroll offer open is not "final" yet, but takes the same hold: nothing follows it until the
+ *  coach answers anyway, and an instant answer still leaves the die its beat. The offer itself is in the roll's own
+ *  frame and is never held by this.
+ *  WAKE / BOUND: pumpPlayback polls while the walk is pending and then sleeps exactly the time left. The walk gate has
+ *  its own fail-open (STEP_GATE_CAP_MS); on top of that this hold gives up after FAILED_DRAIN_CAP_MS without progress.
+ *  Catch-up skips it, a reset clears it. It gates the APPLICATION of later frames only; nothing the client sends. */
+export const FAILED_MOVE_ROLL_HOLD = { resultReadMs: 830, rerolledReadMs: 650 } as const;
+const FAILED_MOVE_HOLD_POLL_MS = 25;
+let failedMoveHold: {
+  playerId: string; readMs: number;
+  /** When the die is expected / known to be up: the frame, pushed back to the token's arrival. */
+  readFrom: number;
+  pending: number; progressAt: number;
+  /** The view has reported when the die is really on screen: readFrom is exact, the walk gate no longer moves it. */
+  shownReported: boolean;
+} | null = null;
+function armFailedMoveHold(playerId: string, readMs: number, dieDelayMs = 0): void {
+  if (playback.catchingUp) return;
+  const now = Date.now();
+  failedMoveHold = {
+    playerId, readMs, pending: movementStepsPendingFor(playerId), progressAt: now, shownReported: false,
+    readFrom: now + Math.max(dieDelayMs, moverArrivalLeadMs(playerId)),
+  };
+}
+/** Owner 10-09 (rig finding: the FAILED plate was up ~350 ms, not 560, before the reroll replaced it): the beats that
+ *  read a movement die used to start at an ESTIMATE of the token's arrival. The view now reports when it really shows
+ *  each published batch (actionDiceQueueDrain -> gameStore.actionDiceShown: the batch's seq and in how many ms it will
+ *  be on screen - camera pan, arrival wait and render-order floor included), and the beats start there.
+ *  `whenActionDiceShown` runs `then(msUntilShown)` exactly once: on that report, or - every hold needs a wake - when
+ *  `failOpenMs` passes without one (no view mounted, the die was dropped). A reset forgets every waiter. */
+const actionDiceShownWaiters = new Map<number, (msUntilShown: number) => void>();
+/** R1, belt and braces: a show report that finds no waiter is remembered (its absolute on-screen time, by the
+ *  session-unique batch id) and handed to a waiter that registers afterwards. Bounded; cleared with the dice. */
+const actionDiceShownReports = new Map<number, number>();
+const ACTION_DICE_SHOWN_REPORTS_KEPT = 16;
+function noteActionDiceShown(seq: number, msUntilShown: number): void {
+  const waiter = actionDiceShownWaiters.get(seq);
+  if (waiter) { waiter(msUntilShown); return; }
+  actionDiceShownReports.set(seq, Date.now() + Math.max(0, msUntilShown));
+  while (actionDiceShownReports.size > ACTION_DICE_SHOWN_REPORTS_KEPT) actionDiceShownReports.delete(actionDiceShownReports.keys().next().value as number);
+}
+/** `then(msUntilShown, reported)`: `reported` is false on the fail-open path (the view never said when). A waiter whose
+ *  dice were cleared since (clearActionDice: catch-up cleanup, reset, seek, game change) is DISCARDED - `then` never
+ *  runs, not even from its fail-open timer; the provisional deadline it was holding simply expires. */
+function whenActionDiceShown(batch: ActionDiceBatchState | null, failOpenMs: number | null, then: (msUntilShown: number, reported: boolean) => void): void {
+  if (!batch) { then(0, false); return; }
+  const seq = batch.seq;
+  const epoch = actionDiceClearEpoch;
+  let done = false;
+  const fire = (msUntilShown: number, reported: boolean) => {
+    if (done) return;
+    done = true;
+    if (actionDiceShownWaiters.get(seq) === report) actionDiceShownWaiters.delete(seq);
+    if (epoch !== actionDiceClearEpoch) return; // its dice are gone
+    then(Math.max(0, msUntilShown), reported);
+  };
+  const report = (msUntilShown: number) => fire(msUntilShown, true);
+  const alreadyShownAt = actionDiceShownReports.get(seq);
+  if (alreadyShownAt !== undefined) { actionDiceShownReports.delete(seq); fire(alreadyShownAt - Date.now(), true); return; }
+  actionDiceShownWaiters.set(seq, report);
+  if (failOpenMs !== null) rerollStageTimers.push(scheduleGameTimeout(() => fire(0, false), failOpenMs));
+}
+/** B2: how long a staged result die (shown in place, token already there) may go unreported before its read beat is
+ *  taken to have started when it was published. Shorter than the read itself, so the fail-open never adds time. */
+const RESULT_DIE_SHOWN_FAILOPEN_MS = 600;
+/** How long past the estimated arrival the staging waits for the view's report before going on without it. */
+function actionDiceShownFailOpenMs(playerId: string): number {
+  return moverArrivalLeadMs(playerId) + presentationMs(settings.moveSpeedMs) + 200;
+}
+/** The frames behind a hold were waiting on a deadline that has just moved: let the receive queue re-evaluate now. */
+function repumpPlaybackAfterHoldChange(): void {
+  if (!playback.timer || playback.queue.length === 0) return;
+  if (ballChainTimer === playback.timer) ballChainTimer = null;
+  cancelGameTimeout(playback.timer);
+  playback.timer = null;
+  pumpPlayback();
+}
+/** The walk gate of `playerId`'s last pending step has just released: the token is on the square and the die goes up
+ *  now, so the read beat starts here (never earlier than the estimate taken at the roll). */
+function noteFailedMoveArrival(playerId: string): void {
+  const hold = failedMoveHold;
+  if (!hold || hold.shownReported || hold.playerId !== playerId || movementStepsPendingFor(playerId) > 0) return;
+  hold.readFrom = Math.max(hold.readFrom, Date.now());
+}
+function failedMoveHoldWaitMs(): number {
+  const hold = failedMoveHold;
+  if (!hold) return 0;
+  if (playback.catchingUp) { failedMoveHold = null; return 0; }
+  const now = Date.now();
+  const pending = movementStepsPendingFor(hold.playerId);
+  if (pending !== hold.pending) { hold.pending = pending; hold.progressAt = now; }
+  if (pending > 0) {
+    if (now - hold.progressAt >= presentationMs(FAILED_DRAIN_CAP_MS)) { failedMoveHold = null; return 0; } // fail-open: late, never never
+    const waitingPrompt = queuedPromptSince();
+    if (waitingPrompt !== null && now - waitingPrompt >= MOVE_ROLL_PROMPT_QUEUE_CAP_MS) { failedMoveHold = null; return 0; }
+    return FAILED_MOVE_HOLD_POLL_MS;
+  }
+  // a server prompt is queued behind this hold: the die keeps the viewer-visible floor only (and the total cap applies)
+  const promptSince = queuedPromptSince();
+  const readMs = promptSince === null ? hold.readMs : Math.min(hold.readMs, presentationMs(MOVE_ROLL_VIEW_FLOOR_MS));
+  const remaining = Math.min(hold.readFrom + readMs, promptSince === null ? Infinity : promptSince + MOVE_ROLL_PROMPT_QUEUE_CAP_MS) - now;
+  if (remaining > 0) return remaining;
+  failedMoveHold = null;
+  return 0;
+}
 /** After the staged reroll result is surfaced, how long the pin outlives it: the view may still defer the die's
  *  show for a camera pan, and the result must find the held die before the pin lets it fade. */
 const REROLL_RESULT_PIN_TAIL_MS = 900;
@@ -4840,6 +5085,12 @@ let blastinNoticeKey: string | null = null; // S46: the beat instance the picker
 function clearCatchupTransients(): void {
   state.blockTargetCue = null; state.foulTargetCue = null; state.pushArrows = null;
   clearActionDice(); state.rollModal = null; state.injurySplash = null; state.turnover = null;
+  // Astra confirmation (B3): a fail -> reroll staging still pending belongs to the history that was just fast-forwarded.
+  // Its timers would publish the reroll use / the rerolled die onto the live board after this cleanup: drop them, and
+  // the result pin with them (its release timer is one of them).
+  for (const t of rerollStageTimers) cancelGameTimeout(t);
+  rerollStageTimers = [];
+  if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
   clearRerollSplash(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
@@ -5307,6 +5558,7 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
         if (settings.debugLog) log('system', `⚠ movement presentation recovered at ${ev.to[0]},${ev.to[1]} (renderer timeout)`);
       }
       presentation.presenting = null;
+      noteFailedMoveArrival(ev.playerId); // owner 10-09: a failed roll's read beat starts when its token has arrived
       resolve();
       if (!watchdog && state.presentationStep?.seq === presentedStep.seq) state.presentationStep = null;
       // owner 09-06: the failed walk drained. Owner 10-06 (g1950459): only once every step the held fence owns has walked -
@@ -8327,28 +8579,95 @@ function applyFrameContents(frame: QueuedFrame) {
     const hasPickup = reports.some((r) => String(r.reportId) === 'pickUpRoll');
     // Present rerolls as failed roll -> chosen source -> rerolled result.
     if (pendingActionReroll && (hasFail || reRolledRolls.length > 0)) {
+      const diceBeforeFirst = state.actionDice;
       pushDice(firstRolls);
+      const firstBatch = state.actionDice !== diceBeforeFirst ? state.actionDice : null;
       const rr = pendingActionReroll;
-      const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
-      // TRR use splashes (owner 08-19); skill rerolls ride the glow with a short breath, not a splash beat.
-      const resultBeat = presentationMs(rerollSplashWanted(rr.isTeam, rr.raw) ? REROLL_BEAT_MS : 300);
-      holdPlayback(failBeat + resultBeat);
-      if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw), failBeat));
-      rerollStageTimers.push(scheduleGameTimeout(() => pushDice(reRolledRolls), failBeat + resultBeat));
-      // Owner 10-05: pin the held failed die until that result has landed on it (then release anything left).
-      if (reRolledRolls.length > 0 && !playback.catchingUp) {
-        const pin = { seq: (state.rerollResultPending?.seq ?? 0) + 1 };
-        state.rerollResultPending = pin;
-        rerollStageTimers.push(scheduleGameTimeout(() => releaseRerollResultPin(pin.seq),
-          failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
+      // Owner 10-09: a movement roll rescued by the reroll - the path goes on, so the frames behind this one (the next
+      // squares) are held on EVERY seat until the reroll has been shown, with short beats (RESCUED_MOVE_ROLL_HOLD).
+      // The hold is the receive queue's own (rescuedMoveHoldUntil): its timer is the wake, it cannot outlive its beats.
+      // Owner 10-09 (second report): a movement reroll that FAILS AGAIN takes the same short staging, and the fall
+      // behind it waits for the rerolled die to read (failedMoveHold). The failed first die of this frame is shown on
+      // the token's arrival, so its beat starts then (moverArrivalLeadMs).
+      const moveReroll = rr.lonerFailed || playback.catchingUp ? null : movementRollRerollOutcome(reports, rr.pid);
+      const rescuedMove = moveReroll === 'passed';
+      // Owner 10-09: the failed first die of a movement reroll frame reads from when it is REALLY on screen. Until the
+      // view reports that (or the bounded fail-open passes) the frames behind are held by a provisional deadline; the
+      // stage below then sets the exact one.
+      const anchored = !!moveReroll && hasFail && !!firstBatch;
+      const failOpenMs = anchored ? actionDiceShownFailOpenMs(rr.pid) : null;
+      if (anchored && failOpenMs !== null) {
+        const provisional = Date.now() + failOpenMs + presentationMs(RESCUED_MOVE_ROLL_HOLD.failReadMs + RESCUED_MOVE_ROLL_HOLD.resultReadMs);
+        if (rescuedMove) { rescuedMoveHoldUntil = Math.max(rescuedMoveHoldUntil, provisional); rescuedMoveFloorUntil = Math.max(rescuedMoveFloorUntil, provisional); }
+        else armFailedMoveHold(rr.pid, presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs), failOpenMs + presentationMs(RESCUED_MOVE_ROLL_HOLD.failReadMs));
       }
-      // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
-      // reroll splash clears (splash deprecated → after the fail beat + breath) and holds its own read beat.
-      if (rr.lonerFailed) {
-        const lonerAt = failBeat + (rerollSplashWanted(rr.isTeam, rr.raw) ? presentationMs(REROLL_SPLASH_HOLD_MS) : resultBeat);
-        rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rr.pid), lonerAt));
-        holdPlayback(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS));
-      }
+      const stage = (dieShownInMs: number) => {
+        const failBeat = hasFail ? dieShownInMs + presentationMs(moveReroll ? RESCUED_MOVE_ROLL_HOLD.failReadMs : FAIL_BEAT_MS) : 0;
+        // TRR use splashes (owner 08-19); skill rerolls ride the glow with a short breath, not a splash beat.
+        const resultBeat = moveReroll ? 0 : presentationMs(rerollSplashWanted(rr.isTeam, rr.raw) ? REROLL_BEAT_MS : 300);
+        const rescuedHold = rescuedMove ? failBeat + presentationMs(RESCUED_MOVE_ROLL_HOLD.resultReadMs) : 0;
+        // Astra B2: the REROLLED die gets its own show anchor (resultShown below). Until the view reports it, these
+        // deadlines are provisional: they allow for a late show (camera pan, render-order floor) up to the fail-open.
+        const resultFailOpen = moveReroll ? presentationMs(RESULT_DIE_SHOWN_FAILOPEN_MS) : 0;
+        if (rescuedMove) {
+          const until = Date.now() + rescuedHold + resultFailOpen;
+          const floor = Date.now() + failBeat + resultFailOpen + presentationMs(MOVE_ROLL_VIEW_FLOOR_MS);
+          // anchored: the provisional deadline is replaced by the exact one; otherwise an earlier hold is never shortened
+          rescuedMoveHoldUntil = anchored ? until : Math.max(rescuedMoveHoldUntil, until);
+          rescuedMoveFloorUntil = anchored ? floor : Math.max(rescuedMoveFloorUntil, floor);
+        }
+        if (moveReroll === 'failed') armFailedMoveHold(rr.pid, presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs), failBeat + resultFailOpen);
+        const failedAgainHold = moveReroll === 'failed' ? failedMoveHold : null;
+        const resultShown = (msUntilShown: number, reported: boolean, publishedAt: number) => {
+          // reported: on screen in msUntilShown; not reported (fail-open): taken as shown when it was published
+          const shownAt = reported ? Date.now() + msUntilShown : publishedAt;
+          if (rescuedMove) {
+            rescuedMoveHoldUntil = shownAt + presentationMs(RESCUED_MOVE_ROLL_HOLD.resultReadMs);
+            rescuedMoveFloorUntil = shownAt + presentationMs(MOVE_ROLL_VIEW_FLOOR_MS);
+          } else if (failedAgainHold && failedMoveHold === failedAgainHold) {
+            failedAgainHold.readFrom = shownAt;
+            failedAgainHold.shownReported = true;
+          }
+          repumpPlaybackAfterHoldChange();
+        };
+        holdPlayback(rescuedMove ? rescuedHold : moveReroll ? failBeat + presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs) : failBeat + resultBeat);
+        if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw), failBeat));
+        // B2 / R1: the rerolled die's read is anchored on ITS show. The waiter is registered by the publication hook,
+        // inside publishActionDice and before the batch reaches reactive state, so the view's report cannot precede it.
+        if (moveReroll && reRolledRolls.length > 0) {
+          let resolved = false;
+          const stagedAt = Date.now();
+          actionDicePublicationHooks.set(reRolledRolls, (resultBatch) => {
+            const publishedAt = Date.now();
+            whenActionDiceShown(resultBatch, resultFailOpen, (msUntilShown, reported) => { resolved = true; resultShown(msUntilShown, reported, publishedAt); });
+          });
+          // never published (deferred behind another surface, or nothing to publish): the same fail-open, from the stage
+          rerollStageTimers.push(scheduleGameTimeout(() => {
+            if (resolved || !actionDicePublicationHooks.has(reRolledRolls)) return;
+            actionDicePublicationHooks.delete(reRolledRolls);
+            resultShown(0, false, stagedAt + failBeat + resultBeat);
+          }, failBeat + resultBeat + resultFailOpen));
+        }
+        rerollStageTimers.push(scheduleGameTimeout(() => pushDice(reRolledRolls), failBeat + resultBeat));
+        // Owner 10-05: pin the held failed die until that result has landed on it (then release anything left). An
+        // answered offer stages at once (not anchored), so the pin is still raised inside the frame that closes the dialog.
+        if (reRolledRolls.length > 0 && !playback.catchingUp) {
+          const pin = { seq: (state.rerollResultPending?.seq ?? 0) + 1 };
+          state.rerollResultPending = pin;
+          rerollStageTimers.push(scheduleGameTimeout(() => releaseRerollResultPin(pin.seq),
+            failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS)));
+        }
+        // Owner 08-19: FAILED LONER — no re-rolled result follows; the loner pill pops after the
+        // reroll splash clears (splash deprecated → after the fail beat + breath) and holds its own read beat.
+        if (rr.lonerFailed) {
+          const lonerAt = failBeat + (rerollSplashWanted(rr.isTeam, rr.raw) ? presentationMs(REROLL_SPLASH_HOLD_MS) : resultBeat);
+          rerollStageTimers.push(scheduleGameTimeout(() => showLonerFailedSplash(rr.pid), lonerAt));
+          holdPlayback(lonerAt + presentationMs(REROLL_SPLASH_HOLD_MS));
+        }
+        if (anchored) repumpPlaybackAfterHoldChange();
+      };
+      if (anchored) whenActionDiceShown(firstBatch, failOpenMs, stage);
+      else stage(0);
     } else {
       const rerollUse = pendingActionReroll;
       const presentRerollUse = () => {
@@ -8374,7 +8693,9 @@ function applyFrameContents(frame: QueuedFrame) {
       if (rerolledCatch) addKickoffCatchArm(rerolledCatch, presentRerollUse);
       else if (queuedCatch) enqueuePromptBehind(`kickoffCatchRerollUse:${String((cmd as { commandNr?: unknown }).commandNr)}`, presentRerollUse);
       else presentRerollUse();
+      const diceBeforeRolls = state.actionDice;
       pushDice([...firstRolls, ...reRolledRolls]);
+      const firstRollsBatch = state.actionDice !== diceBeforeRolls ? state.actionDice : null;
       // Hold downstream presentation for action-roll readability; force the beat in play mode.
       // U8 (owner: NO drain before movement step 1 — drains at step 2+): a SUCCESS action-roll (the classic
       // dodge-off-step-1) often lands in an EARLIER frame than the move it precedes; its force-beat then holds the
@@ -8388,7 +8709,24 @@ function applyFrameContents(frame: QueuedFrame) {
       const o66Play = settings.order66;
       const actingMoverId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       const actingHasStepped = actingMoverId !== '' && presentation.activation === actingMoverId;
-      if (hasFail) holdPlayback(presentationMs(FAIL_BEAT_MS), true);
+      // Owner 10-09: a failed movement roll of the moving player - the frames behind it (the fall, the turn end) wait
+      // for the walk onto the square and for the die to read (failedMoveHold), on every seat.
+      const failedMover = reports.find((r) => heldMovementRollReport(r) && r.successful === false
+        && !!r.playerId && String(r.playerId) === actingMoverId);
+      // That hold owns the beat (arrival + read): the fixed FAIL beat would only stretch it now that the frames queue.
+      if (failedMover) {
+        armFailedMoveHold(actingMoverId, presentationMs(FAILED_MOVE_ROLL_HOLD.resultReadMs));
+        // the read beat starts when the view really shows the die (no timer of its own: the hold keeps its estimate,
+        // the walk-gate anchor and its fail-open cap if no report ever comes)
+        const armedHold = failedMoveHold;
+        whenActionDiceShown(firstRollsBatch, null, (msUntilShown) => {
+          if (!armedHold || failedMoveHold !== armedHold) return;
+          armedHold.readFrom = Date.now() + msUntilShown;
+          armedHold.shownReported = true;
+          repumpPlaybackAfterHoldChange();
+        });
+        holdPlayback(moverArrivalLeadMs(actingMoverId) + presentationMs(FAILED_MOVE_ROLL_HOLD.resultReadMs));
+      } else if (hasFail) holdPlayback(presentationMs(FAIL_BEAT_MS), true);
       else if (hasPickup) holdPlayback(presentationMs(PICKUP_BEAT_MS), true);
       else if (firstRolls.length > 0 && (actingHasStepped || !o66Play)) holdPlayback(presentationMs(SUCCESS_ROLL_BEAT_MS), true);
     }
@@ -9623,7 +9961,29 @@ function maybeAutoEndOnTimeout() {
   log('system', `play: timeout enforced — auto-ending turn (${g.turnMode})`);
 }
 
+/** Astra confirmation (i): a frame whose application throws must not leave the receive queue stuck behind it with no
+ *  timer (the movement-roll gate would then stay closed: End Turn and every action command withheld for good). The
+ *  frame is consumed exactly as before (it was already shifted off the queue); the error is logged and the pump goes
+ *  on to the next frame. */
+let queuedFrameFaultForTests: ((frame: QueuedFrame) => boolean) | null = null;
+/** @internal test seam for applyQueuedFrame: make the application of matching queued frames throw. Returns its dispose. */
+export function installQueuedFrameFaultTestHook(shouldThrow: (cmd: Record<string, unknown>) => boolean): () => void {
+  queuedFrameFaultForTests = (frame) => shouldThrow(frame.cmd);
+  return () => { queuedFrameFaultForTests = null; };
+}
+function applyQueuedFrame(frame: QueuedFrame): void {
+  try {
+    if (queuedFrameFaultForTests?.(frame)) throw new Error('queued frame fault (test)');
+    applyFrame(frame);
+  } catch (error) {
+    console.error('[play] queued frame failed to apply; continuing with the next one:', error);
+    try { log('system', `⚠ a server frame (#${String((frame.cmd as { commandNr?: unknown }).commandNr ?? '?')}) failed to apply: ${String(error)}`); } catch { /* logging must never stop the pump */ }
+  }
+}
 function pumpPlayback() {
+  // R2: every pump step re-derives the held-backlog flag - set while a hold is armed over a non-empty queue, cleared
+  // in the very step that finds the queue empty (this runs right after the last frame's apply).
+  syncMoveRollHeldBacklog();
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
@@ -9631,7 +9991,7 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => {
       playback.timer = null;
       const frame = playback.queue.shift();
-      if (frame) applyFrame(frame);
+      if (frame) applyQueuedFrame(frame);
       pumpPlayback();
     }, CATCHUP_GAP_MS);
     return;
@@ -9677,6 +10037,18 @@ function pumpPlayback() {
     playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, bombFlightWait);
     return;
   }
+  // Owner 10-09: a movement roll rescued by a reroll is shown before the rest of the path is applied (every seat).
+  const rescuedMoveWait = rescuedMoveHoldWaitMs();
+  if (rescuedMoveWait > 0) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, rescuedMoveWait);
+    return;
+  }
+  // Owner 10-09: a failed movement roll - the walk onto the square and the failed die are shown before the fall is applied.
+  const failedMoveWait = failedMoveHoldWaitMs();
+  if (failedMoveWait > 0) {
+    playback.timer = scheduleGameTimeout(() => { playback.timer = null; pumpPlayback(); }, failedMoveWait);
+    return;
+  }
   // Owner 10-02 (g1949371): a loose-ball bounce chain presents one hop / one catch roll at a time (play + spectate).
   const ballChainWait = ballChainWaitMs(playback.queue[0]);
   if (ballChainWait > 0) {
@@ -9704,7 +10076,7 @@ function pumpPlayback() {
   playback.timer = scheduleGameTimeout(() => {
     playback.timer = null;
     const frame = playback.queue.shift();
-    if (frame) applyFrame(frame);
+    if (frame) applyQueuedFrame(frame);
     pumpPlayback();
   }, gap);
 }
@@ -10158,11 +10530,19 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
   // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
   if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
-      && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0) {
+      && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
+      && failedMoveHoldWaitMs() === 0) {
     applyFrame(frame);
     return;
   }
   playback.queue.push(frame);
+  syncMoveRollHeldBacklog(); // Astra P2-1 / R2: held from here until the whole queue has drained
+  // Astra 10-09: a server prompt queued behind a movement-roll hold shortens it (queuedPromptSince) - re-evaluate now.
+  if (playback.timer && moveRollHoldActive() && frameSetsDialog(frame)) {
+    if (ballChainTimer === playback.timer) ballChainTimer = null;
+    cancelGameTimeout(playback.timer);
+    playback.timer = null;
+  }
   // Owner 10-07 (Astra): the loose-ball / ball-out hold is presentation only and never a gate on a server prompt. A
   // dialog (catch / reroll / touchback chooser, ...) that arrives while the chain's wait timer is pending cancels it,
   // so the drain re-evaluates now (ballChainWaitMs ends the pacing for a queued dialog).
@@ -10192,6 +10572,13 @@ function forceSnapshotTick() {
 function resetPlayback() {
   rockThrowResolveStartedAt = null;
   bombFlightHoldUntil = 0;
+  rescuedMoveHoldUntil = 0;
+  rescuedMoveFloorUntil = 0;
+  failedMoveHold = null;
+  moveRollHeldBacklog = false;
+  state.moveRollHoldBusy = false;
+  actionDiceShownWaiters.clear();
+  actionDiceShownReports.clear();
   if (opponentBlockChoiceRevealTimer) cancelGameTimeout(opponentBlockChoiceRevealTimer);
   opponentBlockChoiceRevealTimer = null;
   opponentBlockChoiceRevealUntil = 0;
@@ -10370,6 +10757,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
   state.turnStart = null; clearRerollSplash(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
+  actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
   state.solidDefenceError = null; solidDefenceSelection = null; solidDefenceErrorNr = -1;
@@ -11613,6 +12001,11 @@ function plannerArmAbort(silenceRearm = false) {
     // promised it a target. It is retired with a notice instead of waiting, silently, for as long as the dialog is up.
     // The client-prompt hold comes first: time the coach spends on OUR prompt is never server silence, whatever the plan waits on.
     if (plannerPlan && plannerClientPromptHold) { plannerArmAbort(); return; }
+    // Likewise the time server frames spend queued behind a movement-roll presentation hold (owner 10-09): the server
+    // HAS answered, this client is still showing it. The last queued frame's apply restarts the silence window.
+    // Confirmation (ii): it pauses the SILENCE window only (silenceRearm keeps the 30 s origin of the plan's last own
+    // send): a backlog that never empties cannot keep a dead plan alive past the absolute cap.
+    if (plannerPlan && moveRollHoldQueued() && Date.now() < plannerAbortSince + PLANNER_ABORT_CAP_MS) { plannerArmAbort(true); return; }
     if (plannerPlan && plannerBlitzAwaitingTarget(plannerPlan, game.value)) { plannerFlush('no blitz target was selected'); return; }
     if (plannerPlan && plannerPromptPending()) { plannerArmAbort(); return; }
     if (plannerPlan?.failedGate) { plannerRetireQuietly(`the ${plannerPlan.failedGate} roll failed`); return; }
@@ -11943,6 +12336,9 @@ function plannerAdvance() {
   // ---- PAUSE (a decision surface is up) ----
   if (plannerClientPromptHold) return; // Astra 10-10: the coach is being asked whether to end; the wake is the prompt closing
   if (plannerPromptPending()) return;
+  // Astra 10-09 (P2): frames are queued behind a movement-roll presentation hold - the applied model is older than
+  // the server's, and one of those frames may be a prompt. Nothing is sent from it; the last queued frame's apply wakes us.
+  if (moveRollHoldQueued()) return;
   const actingId = plannerActingId();
   switch (p.phase) {
     case 'declaring': {
@@ -16589,6 +16985,33 @@ function ownedDeclarationInsideLiveDialogPermitted(g: GameJson, command: Record<
     || ownedSetupPhaseDialogCommandPermitted(g, command);
 }
 /** #173 boundary gate. Returns true when the command may go out. */
+/** Astra round 3 (R3): the held-backlog veto exists to stop this client ACTING on a model older than what the server
+ *  has already sent. It must never refuse an answer the server is, per the APPLIED state, currently waiting on from
+ *  this seat. One predicate, consulted before the veto:
+ *   - a live applied dialog (not stale, not already answered): any answer to it, whatever its command class;
+ *   - a server-requested pick surface armed from applied state: state.squarePick (Safe Pair of Hands, Trickster, the
+ *     Raiding Party coordinate after its player answer, Dump-Off, wizard, Place Carried Player), state.playerPick,
+ *     an unknown-call pick (state.unknownCall);
+ *   - an applied turn mode other than the two free-action modes: setup and the kick (CLIENT_SETUP_PLAYER,
+ *     CLIENT_KICKOFF), kickoffReturn / passBlock, hitAndRun and the other reaction moves, dumpOff (the pass path),
+ *     selectBlitzTarget and the other target-selection modes, punt targeting, quickSnap, highKick, swarming ... - in
+ *     each of them the server is waiting for exactly that mode's answer from the acting seat.
+ *  What is left - turn mode `regular` or `blitz`, no live dialog, no requested pick - is the coach (or the planner)
+ *  starting something NEW from the board: that is what the veto refuses while frames are still queued.
+ *  Whether the command is otherwise legal is still decided by actionAllowed below; this only lifts the veto. */
+const FREE_ACTION_TURN_MODES = new Set(['regular', 'blitz']);
+export function heldBacklogVetoLifted(applied: { turnMode: string; liveDialog: boolean; squarePick: boolean; playerPick: boolean; unknownPick: boolean }): boolean {
+  return applied.liveDialog || applied.squarePick || applied.playerPick || applied.unknownPick || !FREE_ACTION_TURN_MODES.has(applied.turnMode);
+}
+function serverAwaitsThisSeatPerAppliedState(g: GameJson): boolean {
+  const dialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
+  const liveDialog = !!g.dialogParameter && !dialogAlreadyAnswered()
+    && !(staleDialogOutlivedPhase(dialogId, g.turnMode) || blastinStaleRerollDialog(g));
+  return heldBacklogVetoLifted({
+    turnMode: String(g.turnMode ?? ''), liveDialog,
+    squarePick: !!state.squarePick, playerPick: !!state.playerPick, unknownPick: !!state.unknownCall,
+  });
+}
 function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
   const g = game.value;
   if (!g || !play.active) return true; // not in play → the lock has no opinion (spectate/replay/pregame paths)
@@ -16617,6 +17040,17 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
     if (unknownDialogLiftPermits(g, cmd)) return true; // S43: the coach's explicit End Turn / End Activation past an UNKNOWN dialog
     return ownedDeclarationInsideLiveDialogPermitted(g, cmd);
   }
+  // Astra 10-09 / confirmation (iii): server frames are still queued behind a movement-roll presentation hold (at most
+  // ~1.5 s) - the board this command was issued from is older than the server's. No ACTION leaves from it, whatever
+  // surface asked (pitch, keyboard, quick bar, right-click menu, rail). It covers exactly DECLARE_COMMANDS, and it sits
+  // AFTER every dialog branch above: an answer to a dialog that is applied and ours - any answer-class command, the
+  // Blastin' second-beat pick, Shot to Nothing, and a declare-class command that IS such an answer (Swoop square,
+  // Gored by the Bull, an unknown-dialog End) - has already returned and is never vetoed: the server is waiting on it.
+  // Round 7: CLIENT_END_TURN is lifted by the turn mode alone (ending a phase the server waits on); a requested pick
+  // surface makes its own answer command exempt, never an End Turn in the regular / blitz turn.
+  const heldVetoLifted = id === NetCommandId.CLIENT_END_TURN
+    ? !FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? '')) : serverAwaitsThisSeatPerAppliedState(g);
+  if (commandActionClass(id) === 'declare' && moveRollHoldQueued() && !heldVetoLifted) return false;
   const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
   return actionAllowed(g, ctx, commandActionClass(id));
 }
@@ -21967,6 +22401,12 @@ export const gameStore = {
   },
   /** FIX 15: one shared predicate covers every store/model decision surface. */
   interactiveDecisionSurfaceOpen: () => plannerPromptPending(),
+  /** Owner 10-09: a confirmed step of this player is still queued or on screen (the action-dice arrival wait). */
+  movementStepPendingFor: (playerId: string): boolean => movementStepsPendingFor(playerId) > 0,
+  /** Owner 10-09: the view reports that it is showing published action-dice batch `seq` in `msUntilShown` ms. */
+  actionDiceShown(seq: number, msUntilShown: number): void { noteActionDiceShown(seq, msUntilShown); },
+  /** Astra 10-09: server frames wait behind a rescued / failed movement roll's presentation - the board is stale. */
+  moveRollHoldQueued: (): boolean => moveRollHoldQueued(),
   /** Owner 09-28 (Spec S3 v2 #3a): the SAME predicate, except the Kick 'em Blitz candidate picker never counts
    *  as blocking — consumed ONLY by the Kick 'em right-click gate; every other caller keeps the default above. */
   interactiveDecisionSurfaceOpenExceptKickEmPicker: () => plannerPromptPending({ ignoreKickEmPicker: true }),
@@ -23168,6 +23608,11 @@ export const gameStore = {
     if (touchdownResolutionQueued()) return;
     // Astra review: likewise while a loose-ball chain still holds frames (the server may already be past this state).
     if (ballChainHolding()) return;
+    // Astra 10-09: frames wait behind a rescued / failed movement roll. Round 6: the same exemption as the transport
+    // lock's - a phase the server is waiting on this seat to end (kick-off return, pass block, setup, ...) is not held.
+    // Round 7: End Turn itself is never an awaited ANSWER - a live dialog or a requested pick does not let it out
+    // mid-hold. Only a phase end in a non-free turn mode (the server is waiting for exactly that) passes.
+    if (moveRollHoldQueued() && FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? ''))) return;
     if (playback.queue.length > 0 && bombFlightWaitMs() > 0) return; // owner 10-03: the bomb's resolution is still queued
     if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);

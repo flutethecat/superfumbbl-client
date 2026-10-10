@@ -18,6 +18,9 @@ export interface ActionDieRoll {
   opponentRerollPending?: boolean;
   /** Owner 10-05: the ROLLING coach's own failed roll while their reroll offer is open (same hold, own seat). */
   rerollOfferPending?: boolean;
+  /** Owner 10-09: a movement roll's die (Dodge / Rush / Leap, first roll) belongs to the square the mover is entering:
+   *  it is shown when the mover's token has arrived there (actionDiceQueueDrain), not while it is still walking in. */
+  awaitsArrival?: boolean;
 }
 
 /** The turnover splash object the store publishes (subset of `state.turnover`). */

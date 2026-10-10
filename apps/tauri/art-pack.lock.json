@@ -220,5 +220,10 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-lizardmen-82e41cff.zip",
     "size": 4183953,
     "sha256": "91502a4d26273a40641ee0b330683c39e2313545fa21a15279612790d09e7a1b"
+  },
+  "walk/dwarf@29395f090419ccc0": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-dwarf-29395f09.zip",
+    "size": 4131661,
+    "sha256": "fef59fadab61175d1fba6be3eca070e0551400cd84b6df7d3b9384d76667ee3b"
   }
 }

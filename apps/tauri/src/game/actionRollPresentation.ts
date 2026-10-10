@@ -44,7 +44,7 @@ export function dodgeUsedBreakTackle(report: Readonly<Record<string, unknown>>):
     && dieCauseFromRollModifiers(report.rollModifiers) === 'breakTackle';
 }
 
-export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean }
+export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; awaitsArrival?: boolean }
 export interface ActionRollCue {
   reRolled: boolean;
   die: ActionDieCue | null;
@@ -83,6 +83,10 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
   const dialogId = String(dialog?.dialogId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   result.die = { square, value: roll, cause, failed, needed,
     rerollSkill: reRolled && reroll ? reroll.raw : undefined, rerollTeam: reRolled && reroll ? reroll.isTeam : undefined };
+  // Owner 10-09 ("The FAILED toast is appearing at the square where the player fails their dodge before the player
+  // token enters that square"): the first roll of a move into a square is shown on the token's arrival there. A
+  // rerolled result replaces a die that is already up; a roller that is not moving is "arrived" at once.
+  if (!reRolled && (id === 'dodgeRoll' || id === 'goForItRoll' || id === 'leapRoll')) result.die.awaitsArrival = true;
   // Owner 10-05: "The marker that says GFI, Dodge, etc, should persist on a failed roll until the roll is either
   // accepted or cleared. Teardown should occur at the same time as the die." The failed die (with its cause marker)
   // was held through the reroll offer only on the WATCHING client; the rolling coach's own die faded after its
