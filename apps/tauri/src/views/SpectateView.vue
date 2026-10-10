@@ -750,8 +750,72 @@ watch(() => gameStore.state.livePulse, (n, old) => {
   liveFlashTimer = window.setTimeout(() => (liveFlashing.value = false), 1400);
 });
 watch(() => gameStore.state.spectatorCount, (count) => {
-  if (count <= 0) liveSpectatorsExpanded.value = false;
+  if (count <= 0) closeLiveSpectators();
+  else if (liveSpectatorsExpanded.value) void positionLiveList();
 });
+watch(() => gameStore.state.spectatorNames.length, () => {
+  if (liveSpectatorsExpanded.value) void positionLiveList();
+});
+
+// Owner 10-10: spectator list popup. Opens on the chip click (as before); closes on a second click, Escape, a press
+// outside, or the pointer leaving BOTH the chip and the list (short grace so it can cross the gap).
+const liveChip = ref<HTMLElement | null>(null);
+const liveList = ref<HTMLElement | null>(null);
+const liveListStyle = ref<Record<string, string>>({ visibility: 'hidden' });
+let liveCloseTimer = 0;
+const LIVE_LIST_GAP_PX = 6;
+const LIVE_LIST_EDGE_PX = 8;
+async function positionLiveList(): Promise<void> {
+  await nextTick();
+  const chip = liveChip.value;
+  const list = liveList.value;
+  if (!chip || !list) return;
+  const c = chip.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const w = Math.min(list.offsetWidth, vw - 2 * LIVE_LIST_EDGE_PX);
+  const h = list.offsetHeight;
+  const left = Math.max(LIVE_LIST_EDGE_PX, Math.min(c.right - w, vw - w - LIVE_LIST_EDGE_PX));
+  const roomAbove = c.top - LIVE_LIST_GAP_PX - LIVE_LIST_EDGE_PX;
+  const roomBelow = vh - c.bottom - LIVE_LIST_GAP_PX - LIVE_LIST_EDGE_PX;
+  const up = roomAbove >= h || roomAbove >= roomBelow;
+  const room = Math.max(60, up ? roomAbove : roomBelow);
+  const style: Record<string, string> = { left: `${Math.round(left)}px`, maxHeight: `${Math.floor(room)}px` };
+  if (up) style.bottom = `${Math.round(vh - c.top + LIVE_LIST_GAP_PX)}px`;
+  else style.top = `${Math.round(c.bottom + LIVE_LIST_GAP_PX)}px`;
+  liveListStyle.value = style;
+}
+function openLiveSpectators(): void {
+  liveSpectatorsExpanded.value = true;
+  liveListStyle.value = { visibility: 'hidden' };
+  void positionLiveList();
+  document.addEventListener('pointerdown', onLiveOutsidePointer, true);
+  document.addEventListener('keydown', onLiveKey, true);
+  window.addEventListener('resize', positionLiveList);
+}
+function closeLiveSpectators(): void {
+  clearTimeout(liveCloseTimer);
+  liveSpectatorsExpanded.value = false;
+  document.removeEventListener('pointerdown', onLiveOutsidePointer, true);
+  document.removeEventListener('keydown', onLiveKey, true);
+  window.removeEventListener('resize', positionLiveList);
+}
+function toggleLiveSpectators(): void {
+  if (liveSpectatorsExpanded.value) closeLiveSpectators(); else openLiveSpectators();
+}
+function onLiveOutsidePointer(e: PointerEvent): void {
+  const t = e.target as Node | null;
+  if (t && (liveChip.value?.contains(t) || liveList.value?.contains(t))) return;
+  closeLiveSpectators();
+}
+function onLiveKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') closeLiveSpectators();
+}
+function liveListPointer(inside: boolean): void {
+  clearTimeout(liveCloseTimer);
+  if (!inside && liveSpectatorsExpanded.value) liveCloseTimer = window.setTimeout(closeLiveSpectators, 220);
+}
+onBeforeUnmount(closeLiveSpectators);
 
 const hudAccessibilityStyle = computed<Record<string, string>>(() => ({
   '--hud-coach-opacity': String(settings.hudCoachOpacity),
@@ -12737,22 +12801,33 @@ function sendChat() {
               @click.stop="gameStore.spectatorReview.value.active ? gameStore.goToLiveSpectatorView() : gameStore.pauseSpectatorView()"
             ><template v-if="gameStore.spectatorReview.value.active"><span class="go-live-arrow" aria-hidden="true">↩</span><span>LIVE</span><span class="go-live-dot" aria-hidden="true"></span></template><span v-else class="quick-pause-icon" aria-hidden="true">Ⅱ</span></button>
             <button v-if="!gameStore.state.demoMode && gameStore.state.spectatorCount > 0"
-              class="quick-live" :class="{ expanded: liveSpectatorsExpanded }"
+              ref="liveChip" class="quick-live" :class="{ expanded: liveSpectatorsExpanded }"
               :data-flash="liveFlashing"
               :aria-expanded="liveSpectatorsExpanded"
               :aria-label="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
               :title="`${gameStore.state.spectatorCount} spectator${gameStore.state.spectatorCount === 1 ? '' : 's'} connected`"
-              @click="liveSpectatorsExpanded = !liveSpectatorsExpanded">
-              <!-- Owner 09-09: expanded, the spectating coaches list ABOVE the "N watching live" line (upstream
-                   spectatorNames on serverJoin / serverLeave). -->
-              <span v-if="liveSpectatorsExpanded && gameStore.state.spectatorNames.length" class="quick-live-names">
-                <span v-for="name in gameStore.state.spectatorNames" :key="name">{{ name }}</span>
-              </span>
+              @click="toggleLiveSpectators"
+              @pointerenter="liveListPointer(true)" @pointerleave="liveListPointer(false)">
               <span class="quick-live-row">
                 <span class="quick-live-dot" aria-hidden="true">●</span><b>{{ gameStore.state.spectatorCount }}</b>
-                <span v-if="liveSpectatorsExpanded" class="quick-live-detail">watching live</span>
               </span>
             </button>
+            <!-- Owner 10-10: the spectator list is a scrollable popup anchored to the chip, the "N watching live" line as its
+                 header, names below (upstream spectatorNames on serverJoin / serverLeave). Teleported to body so no parent
+                 overflow can clip it; fixed-positioned in the direction that has room. -->
+            <Teleport to="body">
+              <div v-if="liveSpectatorsExpanded && gameStore.state.spectatorCount > 0" ref="liveList" class="quick-live-list"
+                   role="dialog" aria-label="Spectators" :style="liveListStyle"
+                   @pointerenter="liveListPointer(true)" @pointerleave="liveListPointer(false)" @keydown.esc.stop="closeLiveSpectators">
+                <div class="quick-live-header">
+                  <span class="quick-live-dot" aria-hidden="true">●</span><b>{{ gameStore.state.spectatorCount }}</b>
+                  <span class="quick-live-detail">watching live</span>
+                </div>
+                <div v-if="gameStore.state.spectatorNames.length" class="quick-live-names" tabindex="0">
+                  <span v-for="name in gameStore.state.spectatorNames" :key="name" class="quick-live-name" :title="name">{{ name }}</span>
+                </div>
+              </div>
+            </Teleport>
             <img class="quick-super-logo" :src="superFumbblLogoUrl" alt="Super FUMBBL" />
             </div>
 
@@ -18441,8 +18516,14 @@ function sendChat() {
 .config-bar .quick-live .quick-live-dot { font-size: max(var(--ui-min-primary-text-size, 16px), 0.864rem); animation: live-text-pulse 1.6s ease-in-out infinite; }
 .quick-live-row { display: flex; align-items: center; gap: 6px; }
 /* Owner 09-09: expanded badge stacks the spectator names over the count line. */
-.config-bar .quick-live.expanded { flex-direction: column; gap: 4px; padding: 6px 10.8px; }
-.quick-live-names { display: flex; flex-direction: column; align-items: center; gap: 2px; color: #d3d6db; font-size: max(var(--ui-min-text-size, 12px), 0.72rem); letter-spacing: 0.03em; }
+.config-bar .quick-live.expanded { border-color: #ff5454; }
+/* Owner 10-10: popup list (teleported to body, fixed). Header = the "N watching live" line; names scroll below it. */
+.quick-live-list { position: fixed; z-index: 2600; box-sizing: border-box; min-width: 150px; max-width: min(320px, calc(100vw - 16px)); display: flex; flex-direction: column; overflow: hidden; color: #ff5454; background: linear-gradient(180deg, #38161a, #0c090b); border: 2.4px solid #84282d; border-radius: 4.8px; box-shadow: 0 4px 14px #000c, 0 0 9px #d2313866; }
+.quick-live-header { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 6px 10.8px; border-bottom: 1px solid #84282d; white-space: nowrap; }
+.quick-live-header b { color: #fff; font-size: max(var(--ui-min-primary-text-size, 16px), 0.864rem); }
+.quick-live-header .quick-live-dot { font-size: max(var(--ui-min-primary-text-size, 16px), 0.864rem); animation: live-text-pulse 1.6s ease-in-out infinite; }
+.quick-live-names { display: flex; flex-direction: column; gap: 2px; min-height: 0; max-height: calc(8 * 1.5em + 7 * 2px + 12px); overflow-y: auto; overscroll-behavior: contain; padding: 6px 10.8px; color: #d3d6db; font-size: max(var(--ui-min-text-size, 12px), 0.72rem); line-height: 1.5; letter-spacing: 0.03em; scrollbar-width: thin; scrollbar-color: var(--ui-primary, #a10005) var(--ui-surface-2, #171c18); }
+.quick-live-name { flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .config-bar .quick-live b { color: #fff; font-size: max(var(--ui-min-primary-text-size, 16px), 0.864rem); }
 .quick-live-detail { color: #d3d6db; font-size: max(var(--ui-min-text-size, 12px), 0.684rem); letter-spacing: 0.048em; }
 .config-bar .quick-live[data-flash='true'] { animation: live-flash 0.4s ease-in-out 3; }

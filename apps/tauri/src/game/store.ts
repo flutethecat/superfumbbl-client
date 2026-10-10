@@ -4853,6 +4853,8 @@ function commitSpectatorDisplayedFrame(frame: QueuedFrame): void {
     && (cursor.sequence === previous.cursor.sequence + 1
       || (cursor.sequence === previous.cursor.sequence && frame.cmd.netCommandId === NetCommandId.SERVER_GAME_TIME))) {
     // Exactly one step behind the head (or a clock sample on the displayed step): one cheap reduce from the previous position.
+    // frame.cmd is the command the live model was just reduced from and still shares objects with; the reducer copies a
+    // command that is not already frozen, so the frozen checkpoint never reaches into the live model (owner 10-10).
     try {
       next = reduceSpectatorCheckpoint(previous, { cursor, command: frame.cmd as never,
         ingressOrder: frame.receipt!.order, receivedWallAt: frame.receipt!.receivedWallAt,
@@ -6611,6 +6613,16 @@ let endGameSettlePoll: ReturnType<typeof setInterval> | null = null;
 let endGameSettleBeat: ReturnType<typeof setTimeout> | null = null;
 const END_GAME_SETTLE_BEAT_MS = 800; // beat after the last animation before the panel
 const END_GAME_SETTLE_CAP_MS = 20000;
+/** Owner 10-10 (spectating FUMBBL g1951999: "KrisB and Diomed left the game and we did not receive MVPs"): the server
+ *  pushes a serverGameTime sample to every open session once a second, finished game or not (upstream
+ *  ServerGameTimeTask), and a spectator queues each one in the playback queue for its own ~1 s inter-arrival gap - so
+ *  that queue is refilled the moment it drains. The settle waited for an EMPTY queue and practically never saw one:
+ *  the awards were applied seconds after they arrived, but the Statistics & MVP window only opened at the 20 s cap,
+ *  with "Players are selecting MVP" standing until then. A clock sample has nothing to present; only a queued frame
+ *  that still has something to show (a model sync, a player add / remove / zap) holds the settle. */
+export function frameHoldsEndGameSettle(frame: { cmd: Record<string, unknown>; serverPush?: boolean }): boolean {
+  return !(frame.serverPush && String(frame.cmd.netCommandId ?? '') === NetCommandId.SERVER_GAME_TIME);
+}
 function startEndGameSettle(): void {
   if (!state.endGame.finalPresentationReady || state.endGameSettled || endGameSettlePoll || endGameSettleBeat) return;
   const cap = Date.now() + END_GAME_SETTLE_CAP_MS;
@@ -6625,7 +6637,7 @@ function startEndGameSettle(): void {
   const idle = () =>
     injuryQueue.length === 0 && !injuryPlaying &&
     Date.now() >= blockCineUntil && Date.now() >= playback.holdUntil &&
-    playback.queue.length === 0 &&
+    !playback.queue.some(frameHoldsEndGameSettle) &&
     !injuryDecisionPending() && // Phase 3c: a pending KO/injury decision holds the pipeline
     blockPipeline.idle(); // Phase 1 (§6a rule 2): the pipeline is idle before F1 settles
   if (idle()) { settle(); return; }

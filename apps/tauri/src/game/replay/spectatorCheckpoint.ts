@@ -219,7 +219,14 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   }
   // Inputs are trusted: every `previous` is a validated OUTPUT (seed, reduce, or a clock-only spread of one), so the
   // input check was pure cost — a 255-event seek paid 541 ms with both checks vs 397 ms with one (09-13 bench).
-  const command = event.command;
+  // Owner 10-10 (g1951996 cmd 567, "Cannot assign to read only property 'targetSelectionStatusIsCommitted'"): the model
+  // reducer stores object change values BY REFERENCE, so the checkpoint built below ends up holding the command's own
+  // objects, and trust() deep-freezes them. A caller's mutable command (the store hands over the very frame command the
+  // live game model was just reduced from) must therefore never be reduced directly: it would freeze objects the live
+  // model still edits in place, and that frame is then dropped. The checkpoint owns what it freezes - an event that is
+  // not already deep-frozen (history events are, and are shared with their checkpoints on purpose) is copied first.
+  // (A clock sample is read for two numbers and never stored.)
+  const command = clockOnly || deepFrozen(event.command) ? event.command : structuredClone(event.command) as ReplayCommand;
   if (clockOnly) {
     const gameTime = Number(command.gameTime);
     const turnTime = Number(command.turnTime);

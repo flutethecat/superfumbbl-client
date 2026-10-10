@@ -1180,6 +1180,47 @@ export function moveTweenReachedPoint(
   const index = tween.waypoints.findIndex((w) => Math.hypot(w.x - point.x, w.y - point.y) <= PLAYER_ARRIVED_PX);
   return index >= 0 && now - tween.start >= index * tween.segmentMs;
 }
+/** Owner 10-10 ("the ball token disappears as soon as the player starts moving... stays on the ground until the player
+ *  token enters the square"): the server resolves a pick-up within a few ms of the step onto the ball (the wire sets
+ *  ballMoving=false right behind the coordinate, and the next squares follow ~40 ms later), while the token is still
+ *  walking its confirmed tiles. The model then says "carried", and the carried ball is glued to the token wherever it
+ *  is on screen - so the ground ball vanished squares before the figure reached it. The ball now stays drawn LOOSE on
+ *  the last server-confirmed ground square until that player's token is drawn on it (presentation pacing only).
+ *  Returns the square to hold, or null. It arms only on a fresh possession of a ball that was drawn loose on the
+ *  ground on the previous refresh, by a player whose token is still on its way:
+ *   - the carrier's model square IS that ground square (the pick-up frame), or
+ *   - the frames coalesced and the model has already walked him on: the server's own track numbers put the acting
+ *     player through that square, and the walk is step-paced (each tile is a waypoint, so the token does cross it). */
+export function groundBallPickupHoldSquare(input: {
+  /** Where the ball was drawn on the previous refresh, when it was on the pitch. */
+  lastGround: readonly [number, number] | null;
+  /** Who carried it on the previous refresh (null = it was loose). */
+  lastCarrierId: string | null;
+  carrierId: string;
+  carrierSquare: readonly [number, number];
+  actingPlayerId: string | null;
+  /** The server's track-number squares (the squares the acting player has left this activation). */
+  track: readonly (readonly [number, number])[];
+  /** The carrier's token is already drawn on `lastGround`. */
+  tokenArrived: boolean;
+  /** Something is still moving that token (a tween, a confirmed step queued or on screen, an accepted intent). */
+  moving: boolean;
+  /** The store paces this player's walk one confirmed tile at a time. */
+  stepPaced: boolean;
+}): [number, number] | null {
+  const ground = input.lastGround;
+  if (!ground || input.lastCarrierId != null || input.tokenArrived || !input.moving) return null;
+  const same = (a: readonly [number, number], b: readonly [number, number]) => a[0] === b[0] && a[1] === b[1];
+  if (same(ground, input.carrierSquare)) return [ground[0], ground[1]];
+  if (input.stepPaced && input.actingPlayerId === input.carrierId && input.track.some((square) => same(square, ground))) return [ground[0], ground[1]];
+  return null;
+}
+/** Every hold needs a wake: the held ground ball is handed over when its token arrives, and also once nothing has
+ *  moved that token for a step (+ margin), after this long without the token making progress, and at the latest after
+ *  the absolute cap (a timer, so it fires with the ticker asleep). */
+export const GROUND_BALL_HOLD_IDLE_MARGIN_MS = 100;
+export const GROUND_BALL_HOLD_STALL_MS = 4000;
+export const GROUND_BALL_HOLD_CAP_MS = 6000;
 /** A failed die shown this recently is taken to be the roll a just-opened reroll prompt is about. */
 export const PROMPT_DIE_FRESH_MS = 4000;
 export const ACTION_MARKER_OCCLUDING_ALPHA = 0.5; // owner 10-04: 0.2 -> 0.3 -> 0.5 ("30% is still too low. Go to 50%")
@@ -2895,6 +2936,30 @@ export class PitchRenderer {
     }
     this.kickFollow = { track, until, savedX: this.world.position.x, savedY: this.world.position.y, returnStart: null, fromX: 0, fromY: 0 };
   }
+  /** The per-frame carried-ball glue (owner 09-15 / 09-19), run from the decoration listener that initRenderer registers
+   *  AFTER addMovementTickers. A method (10-10) only so a test can run the frame a viewer gets: it resets the carried
+   *  ball / aura / BALL marker onto the carrier's token every frame, so a '__ball__' tween that ends on a carrier is
+   *  never seen (the ball is on the carrier at once). Body unchanged. */
+  private tickCarriedBallGlue(): void {
+    const cf = this.carrierFollow;
+    if (cf) {
+      const carrierToken = this.tokensById.get(cf.carrierId);
+      const carrierTween = this.moveTweens.get(cf.carrierId);
+      // Owner 09-19: glue unless the tween is the one driving the VISIBLE token — a tween bound to a rebuilt-away
+      // token would otherwise carry the ball to the destination while the token the viewer sees stays behind.
+      if (carrierToken && !carrierToken.destroyed && (!carrierTween || carrierTween.token !== carrierToken)) {
+        this.followTokenDecorations(cf.carrierId, carrierToken.position.x, carrierToken.position.y);
+      }
+    }
+  }
+
+  /** The movement listeners, in order: the tokens move, then (owner 10-10) a ground ball held for a walking mover
+   *  hands over if its token has arrived this frame. A method so a test runs the SAME registration as initRenderer. */
+  private addMovementTickers(app: Application): void {
+    app.ticker.add(() => this.tickMovement(app));
+    app.ticker.add(() => this.tickGroundBallHold());
+  }
+
   /** The movement ticker (item 12 + B3-3 styles): waypoint-driven travel. A method (10-08) only so a test can run
    *  real frames; the body is the former inline ticker closure, unchanged. */
   private tickMovement(app: Application): void {
@@ -3233,6 +3298,14 @@ export class PitchRenderer {
    *  but never on the first render (initial spectate mid-game). */
   private lastBallOnPitch = false;
   private ballEverRendered = false;
+  /** Owner 10-10: the ground ball a walking player has picked up in the MODEL but not yet reached on screen
+   *  (groundBallPickupHoldSquare). While set, refresh() draws the ball loose on `square`; it is released by the
+   *  token's arrival and by every escape in groundBallHoldOver / clearGroundBallHold. */
+  private groundBallHold: {
+    playerId: string; square: [number, number]; armedAt: number;
+    progress: string; progressAt: number; idleSince: number | null;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null = null;
   /** Explicit receive occurrence for the report-only kickoffScatter coordinate transition. */
   private pendingServerKickoffScatter: ServerKickoffScatterOccurrence | null = null;
   /** While present, the server model ball is intentionally masked: kickoffScatter revealed a destination, not flight. */
@@ -4689,7 +4762,7 @@ export class PitchRenderer {
       }
     });
     // move interpolation (item 12 + B3-3 styles): waypoint-driven travel
-    app.ticker.add(() => this.tickMovement(app));
+    this.addMovementTickers(app);
     // Unified Auto Director runs after visual movement advances, so it follows the
     // presented token/ball rather than an immediate-apply model endpoint.
     app.ticker.add(() => {
@@ -4936,16 +5009,7 @@ export class PitchRenderer {
       // Owner 09-15: on a planned walk the token is HELD at the presentation cursor between FIFO steps while the
       // ball is drawn at the model (already-applied) square — the ball ran ahead of the carrier. The tween ticker
       // only follows a token while it tweens; glue the carried-ball group to the carrier's live position every frame.
-      const cf = this.carrierFollow;
-      if (cf) {
-        const carrierToken = this.tokensById.get(cf.carrierId);
-        const carrierTween = this.moveTweens.get(cf.carrierId);
-        // Owner 09-19: glue unless the tween is the one driving the VISIBLE token — a tween bound to a rebuilt-away
-        // token would otherwise carry the ball to the destination while the token the viewer sees stays behind.
-        if (carrierToken && !carrierToken.destroyed && (!carrierTween || carrierTween.token !== carrierToken)) {
-          this.followTokenDecorations(cf.carrierId, carrierToken.position.x, carrierToken.position.y);
-        }
-      }
+      this.tickCarriedBallGlue();
       this.updateOffscreenBallIndicator();
       this.updateOffscreenActivePlayerIndicator();
       if (this.ballGlow) {
@@ -5516,6 +5580,7 @@ export class PitchRenderer {
   clearEffects(): void {
     this.resetAutoDirectorCamera(true);
     this.kickFollow = null;
+    this.clearGroundBallHold(); // owner 10-10: a game change / presentation teardown never leaves a ball held
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
     this.movementIntentTimer = null;
@@ -5554,6 +5619,7 @@ export class PitchRenderer {
     // reset movement/ball baselines so the new game doesn't tween from stale squares
     this.lastSquares.clear();
     this.lastBallSquare = null; this.lastBallOnPitch = false; this.ballEverRendered = false;
+    this.clearGroundBallHold();
     this.lastBallResolved = false; // owner 2026-07-12: fresh game re-arms the kick-trail settle detector
     this.kickApexAim = null; this.pendingKickAim = null; this.kickInHoldUntil = 0; this.kickInVisualUntil = 0; this.kickInFlyStart = null;
     this.kickDescendSnapshot = null; this.kickDescendSeqSeen = -1; // #124: a stale kickoff-descend snapshot must not leak games
@@ -5634,6 +5700,7 @@ export class PitchRenderer {
     this.lastBallSquare = null;
     this.lastBallOnPitch = false;
     this.ballEverRendered = false;
+    this.clearGroundBallHold(); // owner 10-10: a seek / snap draws the model as it is
     this.o66MovePath.clear();
     this.pendingLeaps.clear();
     this.pendingLeapInPlace.clear();
@@ -6299,9 +6366,12 @@ export class PitchRenderer {
     const modelBall = this.game.fieldModel.ballCoordinate as [number, number] | null | undefined;
     // During final KICK presentation draw one dedicated flight ball at the authoritative landing identity;
     // the already-applied model ball (caught, touchback, loose, or off pitch) stays hidden until reconcile.
-    const ball = this.passBallHold ?? (this.serverKickoffScatterReveal || this.ballHiddenByBallOut()
+    const presentedBall = this.passBallHold ?? (this.serverKickoffScatterReveal || this.ballHiddenByBallOut()
       ? null
       : presentedBallCoordinate(modelBall, this.kickDescendSnapshot, arcActive));
+    // Owner 10-10: a ball picked up by a player whose token has not walked onto it yet stays on the ground there.
+    const groundHold = this.resolveGroundBallHold(presentedBall, modelBall, arcActive);
+    const ball = groundHold ? groundHold.square : presentedBall;
     this.ballMarker = null;
     this.ballGlow = null;
     this.ballHalo = null;
@@ -6326,7 +6396,7 @@ export class PitchRenderer {
       // Owner 2026-07-03: a LOOSE ball sits CENTRED in its square; only a
       // carried ball keeps the corner offset so it reads beside the carrier.
       const carrier =
-        !this.kickDescendSnapshot && this.game.fieldModel.ballInPlay && !this.game.fieldModel.ballMoving
+        !groundHold && !this.kickDescendSnapshot && this.game.fieldModel.ballInPlay && !this.game.fieldModel.ballMoving
           ? this.game.fieldModel.playerDataArray.find(
               (d) => d.playerCoordinate?.[0] === ball[0] && d.playerCoordinate?.[1] === ball[1],
             )
@@ -6535,7 +6605,10 @@ export class PitchRenderer {
       if (!heldBounce && !arcActive) this.lastBallSquare = [ball[0], ball[1]];
       if (!heldKickIn && !arcActive) this.lastBallOnPitch = true;
       this.ballEverRendered = true;
+      // A held ground ball already belongs to its mover: the hand-over on arrival is the same-carrier branch above
+      // (the glue places the ball on the token), never a second slide from the ground square.
       this.lastCarrierId = carrier?.playerId ?? null;
+      if (groundHold) this.lastCarrierId = groundHold.playerId;
       if (carryKickFlightInRefresh) {
         this.carryKickFlight(priorKickBall, priorKickTween?.kickPath && priorKickTween.token === priorKickBall ? priorKickTween : null, g);
       }
@@ -7543,6 +7616,100 @@ export class PitchRenderer {
    * shortest route), truncate it when clicking an existing step or the player's
    * own square, or clear the selection when clicking out of range.
    */
+  /** Owner 10-10: keep / arm / release the held ground ball for this refresh (tokens are already rebuilt). */
+  private resolveGroundBallHold(
+    presentedBall: [number, number] | null | undefined,
+    modelBall: [number, number] | null | undefined,
+    arcActive: boolean,
+  ): { playerId: string; square: [number, number] } | null {
+    const fm = this.game?.fieldModel;
+    // Only the plain model ball is ever held: a kick-off flight, a pass hold, a throw, a scatter path, the injury
+    // freeze and a cleared board own the ball themselves.
+    const plain = !!fm && !this.boardCleared && presentedBall != null && presentedBall === modelBall && !arcActive
+      && !this.kickDescendSnapshot && !this.pendingBallThrow && !this.pendingScatter.has('__ball__') && !this.holdBallDuringInjury;
+    const carrier = plain && fm!.ballInPlay && !fm!.ballMoving && isOnPitch(modelBall)
+      ? fm!.playerDataArray.find((d) => d.playerCoordinate?.[0] === modelBall![0] && d.playerCoordinate?.[1] === modelBall![1])
+      : undefined;
+    const held = this.groundBallHold;
+    if (held) {
+      // The model moved on (the ball is loose / gone / someone else's) or the token is there: hand over now.
+      if (!carrier || carrier.playerId !== held.playerId || this.groundBallHoldOver(held)) this.clearGroundBallHold();
+      return this.groundBallHold;
+    }
+    if (!carrier || !this.lastBallOnPitch || this.moveTweens.has('__ball__')) return null;
+    const id = carrier.playerId;
+    const token = this.tokensById.get(id);
+    if (!token || token.destroyed) return null;
+    const ground = this.lastBallSquare;
+    const square = groundBallPickupHoldSquare({
+      lastGround: ground,
+      lastCarrierId: this.lastCarrierId,
+      carrierId: id,
+      carrierSquare: modelBall!,
+      actingPlayerId: String((this.game?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') || null,
+      track: ((fm!.trackNumberArray ?? []) as { coordinate?: [number, number] }[])
+        .map((entry) => entry?.coordinate).filter((c): c is [number, number] => Array.isArray(c)),
+      tokenArrived: !!ground && this.playerDrawnAt(id, ground),
+      moving: this.movementInFlight(id),
+      stepPaced: this.presentationStep?.playerId === id || this.movementPresentationCursor?.playerId === id
+        || !!this.movementPendingProbe?.(id),
+    });
+    if (!square) return null;
+    const now = performance.now();
+    const hold: NonNullable<PitchRenderer['groundBallHold']> = {
+      playerId: id, square, armedAt: now, progress: `${Math.round(token.position.x)},${Math.round(token.position.y)}`,
+      progressAt: now, idleSince: null, timer: null,
+    };
+    // The absolute backstop is a timer of its own: it releases with the ticker asleep (hidden tab) and no frame coming.
+    hold.timer = this.scheduleTimer(() => {
+      hold.timer = null;
+      if (this.groundBallHold !== hold) return;
+      this.clearGroundBallHold();
+      this.refresh();
+    }, GROUND_BALL_HOLD_CAP_MS);
+    this.groundBallHold = hold;
+    return hold;
+  }
+
+  /** Owner 10-10: has the held ground ball's wait ended? Arrival, or a fail-open: nothing moving the token for a step
+   *  (walk cancelled, activation over, the token settled elsewhere), no progress for GROUND_BALL_HOLD_STALL_MS, or the
+   *  absolute cap. A token that no longer exists counts as arrived (playerDrawnAt). */
+  private groundBallHoldOver(hold: NonNullable<PitchRenderer['groundBallHold']>): boolean {
+    if (this.playerDrawnAt(hold.playerId, hold.square)) return true;
+    const now = performance.now();
+    if (now - hold.armedAt >= GROUND_BALL_HOLD_CAP_MS) return true;
+    const token = this.tokensById.get(hold.playerId);
+    const progress = token && !token.destroyed ? `${Math.round(token.position.x)},${Math.round(token.position.y)}` : '';
+    if (progress !== hold.progress) { hold.progress = progress; hold.progressAt = now; }
+    if (now - hold.progressAt >= GROUND_BALL_HOLD_STALL_MS) return true;
+    if (this.movementInFlight(hold.playerId)) { hold.idleSince = null; return false; }
+    hold.idleSince ??= now;
+    return now - hold.idleSince >= this.moveStepMs + GROUND_BALL_HOLD_IDLE_MARGIN_MS;
+  }
+
+  private clearGroundBallHold(): void {
+    const hold = this.groundBallHold;
+    if (!hold) return;
+    this.cancelTimer(hold.timer);
+    hold.timer = null;
+    this.groundBallHold = null;
+  }
+
+  /** Owner 10-10: the per-frame wake of the held ground ball. A confirmed step is armed on the live token without a
+   *  refresh (setPresentationStep), so nothing else would redraw the ball when the token walks onto it. */
+  private tickGroundBallHold(): void {
+    const hold = this.groundBallHold;
+    if (!hold || !this.groundBallHoldOver(hold)) return;
+    this.clearGroundBallHold();
+    this.refresh();
+  }
+
+  /** Test / rig inspection: the square a picked-up ball is being held on the ground at, or null. */
+  groundBallHoldProbe(): { playerId: string; square: [number, number] } | null {
+    const hold = this.groundBallHold;
+    return hold ? { playerId: hold.playerId, square: [hold.square[0], hold.square[1]] } : null;
+  }
+
   /** Owner 09-23: is THIS player's confirmed movement still being presented (walk tween, o66 full-path walk,
    *  a store-paced step / cursor, or an accepted local intent)? While it is, the model square is already the
    *  destination but the token is not there yet — a plan started now anchors on the wrong square and the next
@@ -13226,7 +13393,9 @@ export class PitchRenderer {
   /** Keep the BALL label attached to a blue edge arrow while the ball's authoritative square is off camera. */
   private updateOffscreenBallIndicator(): void {
     const marker = this.ballEdgeMarker;
-    const coordinate = this.game?.fieldModel.ballCoordinate as [number, number] | null | undefined;
+    // Owner 10-10: while a picked-up ball is still held on its ground square, that square is where the ball is drawn.
+    const coordinate = this.groundBallHold?.square
+      ?? this.game?.fieldModel.ballCoordinate as [number, number] | null | undefined;
     if (!marker || !this.app || !this.game?.fieldModel.ballInPlay || !isOnPitch(coordinate ?? null)
       || this.moveTweens.has('__ball__') || this.passBallFlight != null || this.kickDescendSnapshot != null) {
       if (marker) marker.node.visible = false;
@@ -17965,6 +18134,7 @@ export class PitchRenderer {
     }
 
     // A turn boundary ends the prior activation even if a walk gate missed its renderer completion callback.
+    this.clearGroundBallHold(); // owner 10-10: so does the ground ball a walking mover was still coming for
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
     this.movementIntentTimer = null;

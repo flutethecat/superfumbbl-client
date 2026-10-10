@@ -589,8 +589,11 @@ const handlers: Record<string, Handler> = {
   },
   [ModelChangeId.INDUCEMENT_SET_ADD_PRAYER]: inducementArrayAdd('prayers'),
   [ModelChangeId.INDUCEMENT_SET_CARD_CHOICES]: (game, change) => {
+    // Astra 10-10: the dialog object is the earlier command's own value (gameSetter stores it by reference), so it is
+    // replaced, never edited in place: an in-place write corrupted the retained replay command (choices from a later
+    // command showed when seeking to just after the dialog) and threw on a frozen history copy.
     if (game.dialogParameter && typeof game.dialogParameter === 'object') {
-      (game.dialogParameter as Record<string, unknown>).cardChoices = change.modelChangeValue;
+      game.dialogParameter = { ...(game.dialogParameter as Record<string, unknown>), cardChoices: change.modelChangeValue } as unknown as typeof game.dialogParameter;
     }
   },
   [ModelChangeId.INDUCEMENT_SET_DEACTIVATE_CARD]: (game, change) => {
