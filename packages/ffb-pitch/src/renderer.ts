@@ -2226,6 +2226,9 @@ export class PitchRenderer {
   private catchDieTagTexture: Texture | null = null;
   /** Owner 09-23: PICK ME UP roll badge (1254 px master, transparent, silver rim) — action-badge family like catch. */
   private pickMeUpDieTagTexture: Texture | null = null;
+  /** Owner 10-10: SECURE THE BALL roll badge (the approved round, silver-rimmed badge; 256 px, linear + mipmaps like
+   *  catch). Null = the roll keeps the PICK UP badge, exactly as before. */
+  private secureBallDieTagTexture: Texture | null = null;
   /** Owner 09-06: block decorations — the block TARGET (front fist + red Pow burst, replaces the 💥 glyph) and the
    *  ATTACKER (fist only). Null until loaded / when missing: the 💥 glyph stays as the fallback. */
   private blockTargetDecoTexture: Texture | null = null;
@@ -4461,6 +4464,16 @@ export class PitchRenderer {
       this.pickMeUpDieTagTexture = texture;
     } catch {
       this.pickMeUpDieTagTexture = null;
+    }
+    if (!this.initActive(generation, app)) return;
+    try {
+      // owner 10-10: SECURE THE BALL badge - illustrated like catch / pick me up, so linear + mipmaps (never nearest).
+      const texture = await Assets.load<Texture>(new URL('../assets/status/secure-the-ball.png', import.meta.url).href);
+      if (!this.initActive(generation, app)) return;
+      texture.source.autoGenerateMipmaps = true;
+      this.secureBallDieTagTexture = texture;
+    } catch {
+      this.secureBallDieTagTexture = null;
     }
     if (!this.initActive(generation, app)) return;
     // Owner 09-06: block decorations (transparent PNGs, drawn ~20 token units tall — linear sampling on purpose).
@@ -13678,6 +13691,25 @@ export class PitchRenderer {
       this.startActionDieTumble(persisted, now, tumbleMs);
       return;
     }
+    // Owner 10-10 (Astra P3): a skill roll that used to carry no cause (Foul Appearance, Jump Up, ...) ADOPTED the
+    // prompt's unlabelled copy when the prompt came first (round 7 below). Now that it has a `skill:` marker it must
+    // not fall into round 6, which destroys the copy and pops a fresh die (pop-in, tumble and read clock restart):
+    // the copy stays as it is - same node, same clock - and the marker is attached to it.
+    if (failed && cause?.startsWith('skill:') && !rerollSkill) {
+      const copy = this.actionDice.find((d) => d.failed && d.cause === undefined && d.value === value && !d.node.destroyed
+        && now - d.start <= presentationMs(PROMPT_DIE_FRESH_MS) && d.square && d.square[0] === x && d.square[1] === y);
+      if (copy) {
+        copy.cause = cause;
+        const tag = this.buildPlacedDieCauseTag(cause);
+        if (tag) {
+          copy.node.addChild(tag);
+          copy.causeTag = tag;
+          copy.causeTagHome = { x: tag.position.x, y: tag.position.y };
+        }
+        copy.holdForOpponentReroll = copy.holdForOpponentReroll || holdForRerollOffer;
+        return;
+      }
+    }
     // Astra round 6: the reroll prompt may already have put up its own UNLABELLED copy of this failed roll (shown
     // when the roll's die had not arrived yet). The roll's own die - the one with the cause marker - replaces it.
     if (failed && cause && !rerollSkill) {
@@ -13687,7 +13719,7 @@ export class PitchRenderer {
         return !promptCopy;
       });
     }
-    // Round 7: a roll with NO cause marker (Foul Appearance, Steady Footing...) arriving after the prompt's identical
+    // Round 7: a roll with NO cause marker (any roll actionRollPresentation maps no cause for) arriving after the prompt's identical
     // unlabelled copy is the same die - adopt the copy (it takes this roll's hold) instead of adding a second one.
     if (failed && !cause && !rerollSkill) {
       const copy = this.actionDice.find((d) => d.failed && d.cause === undefined && d.value === value && !d.node.destroyed
@@ -14731,17 +14763,23 @@ export class PitchRenderer {
     // Owner 2026-07-04: the ROLL-CAUSE tag (dodge D, pickup ball, reroll ↻…).
     // Drawn AFTER the pips so its opaque badge occludes any pip it overlaps
     // ("no pip renders there"). Placement per settings; 'off' hides it.
-    if (cause && this.dieTagPosition !== 'off') {
-      const tag = this.buildDieCauseTag(cause, S);
-      // Owner 2026-07-05: nudged further RIGHT (was S*0.5) so the badge clears the
-      // top-right pip instead of sitting on it.
-      if (this.dieTagPosition === 'corner') tag.position.set(S * 0.72, -S * 0.5); // top-right, clear of the pip
-      else if (this.dieTagPosition === 'top') tag.position.set(0, -S / 2);
-      else if (this.dieTagPosition === 'side') tag.position.set(S / 2 + S * 0.22, 0);
-      else tag.position.set(0, S / 2); // bottom: half-on/half-off the die
-      c.addChild(tag);
-    }
+    const tag = cause ? this.buildPlacedDieCauseTag(cause, S) : null;
+    if (tag) c.addChild(tag);
     return c;
+  }
+
+  /** The cause tag at its configured place on a die of size `S` (null when the setting hides tags). Shared by a
+   *  freshly built die and by a die that gains its marker after it was shown (an adopted reroll-prompt copy). */
+  private buildPlacedDieCauseTag(cause: string, S = 28): Container | null {
+    if (this.dieTagPosition === 'off') return null;
+    const tag = this.buildDieCauseTag(cause, S);
+    // Owner 2026-07-05: nudged further RIGHT (was S*0.5) so the badge clears the
+    // top-right pip instead of sitting on it.
+    if (this.dieTagPosition === 'corner') tag.position.set(S * 0.72, -S * 0.5); // top-right, clear of the pip
+    else if (this.dieTagPosition === 'top') tag.position.set(0, -S / 2);
+    else if (this.dieTagPosition === 'side') tag.position.set(S / 2 + S * 0.22, 0);
+    else tag.position.set(0, S / 2); // bottom: half-on/half-off the die
+    return tag;
   }
 
   /** Owner 2026-07-04: a small round badge naming what CAUSED the die roll —
@@ -14757,7 +14795,7 @@ export class PitchRenderer {
     // the wide view. Enrol the complete cause tag (disc + installed/bundled/fallback art) in the exact same
     // 1×..2× inverse-zoom policy as player skill icons. The parent action die, pips, FAILED/needed readout,
     // and reroll label deliberately keep their existing geometry.
-    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp') { // owner 09-08: + catch; 09-23: + pickMeUp
+    if (cause === 'gfi' || cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall') { // owner 09-08: + catch; 09-23: + pickMeUp; 10-10: + secureTheBall
       this.overlayScaleGroups.push(c);
       c.scale.set(this.overlayZoomFactor());
     }
@@ -14766,6 +14804,9 @@ export class PitchRenderer {
 
   private drawDieCauseTag(c: Container, cause: string, S: number): Container {
     const R = S * 0.32; // readable, clearly smaller than the die
+    // Owner 10-10: a Secure the Ball roll IS a pick-up roll (the server's pickUpRoll report with secureTheBallUsed).
+    // It wears its own badge; without that art it is drawn exactly as the pick-up tag always was.
+    if (cause === 'secureTheBall' && !this.secureBallDieTagTexture) cause = 'pickup';
     // Owner 2026-07-04: reuse the EXISTING skill-icon art where the cause maps to
     // a skill/cause target we have an icon for (pickup→PickUp, catch→Catch,
     // gaze→Hypnotic Gaze, …), on a neutral dark disc. Installed packs may
@@ -14773,7 +14814,10 @@ export class PitchRenderer {
     // Dodge and Pass are deliberately not DIE_CAUSE_SKILL entries: rolls keep bundled
     // cause badges, while buildRerollLabel('Dodge') and buildRerollLabel('Pass') resolve active pack icons.
     const traitSkill = cause.startsWith('trait:') ? cause.slice('trait:'.length) : undefined;
-    const skillName = traitSkill || DIE_CAUSE_SKILL[cause];
+    // Owner 10-10: `skill:<name>` - a skill roll with no cause of its own (Foul Appearance, Jump Up, ...) wears that
+    // skill's icon, so a die held through a reroll offer still says what it is.
+    const rolledSkill = cause.startsWith('skill:') ? cause.slice('skill:'.length) : undefined;
+    const skillName = traitSkill || rolledSkill || DIE_CAUSE_SKILL[cause];
     const bundledCauseIcon = cause === 'gfi'
       ? this.gfiDieTagTexture ?? undefined
       : cause === 'pickup'
@@ -14786,7 +14830,9 @@ export class PitchRenderer {
               ? this.catchDieTagTexture ?? undefined
               : cause === 'pickMeUp'
                 ? this.pickMeUpDieTagTexture ?? undefined
-                : undefined;
+                : cause === 'secureTheBall'
+                  ? this.secureBallDieTagTexture ?? undefined
+                  : undefined;
     // Owner 09-05: a re-roll cause wears the TRR (team re-roll) token icon instead of the old ↻ arrow glyph.
     const rerollIcon = cause === 'reroll' ? this.tokenRerollIcon ?? undefined : undefined;
     const icon = rerollIcon ?? (skillName
@@ -14806,13 +14852,16 @@ export class PitchRenderer {
       // the former generic badge footprint even after inverse-zoom scaling.
       // Give that canonical target a larger intrinsic face while leaving the
       // shared tag disc, GFI sizing, override precedence, and fallbacks alone.
-      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' ? 2.15 : 1.7;
+      const iconScale = cause === 'pickup' || cause === 'dodge' || cause === 'pass' || cause === 'catch' || cause === 'pickMeUp' || cause === 'secureTheBall' ? 2.15 : 1.7;
       s.width = R * iconScale;
       s.height = R * iconScale;
       c.addChild(s);
       return c;
     }
-    const [color, glyph] = DIE_CAUSE_TAG[traitSkill ? 'trait' : cause] ?? [0x777777, '?'];
+    // no icon art for a `skill:` cause: its initials ("FA") on a slate disc, never a bare '?'
+    const [color, glyph] = rolledSkill
+      ? [0x4a5a6a, rolledSkill.split(/\s+/).map((word) => word.charAt(0).toUpperCase()).join('').slice(0, 2) || '?'] as [number, string]
+      : DIE_CAUSE_TAG[traitSkill ? 'trait' : cause] ?? [0x777777, '?'];
     if (cause === 'breakTackle' || cause === 'timmber') {
       const t = new Text({ text: glyph, style: DIE_TAG_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
       const width = t.width + S * 0.28;

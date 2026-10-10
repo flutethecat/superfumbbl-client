@@ -5009,6 +5009,9 @@ function handleServerJoin(cmd: { spectators?: number; spectatorNames?: unknown; 
   // the game.") — the socket's own "connection: joined" state line is no longer logged.
   const line = joinLogLine(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
   if (line) log('system', line);
+  // Owner 10-10: the opponent-left notice stays until THAT coach joins again as a player (never cleared by a spectator).
+  if (state.opponentLeft && /player/i.test(String(cmd.clientMode ?? ''))
+    && String(cmd.coach ?? '').trim().toLowerCase() === state.opponentLeft.coach.trim().toLowerCase()) state.opponentLeft = null;
   if (Array.isArray(cmd.spectatorNames)) state.spectatorNames = cmd.spectatorNames.map(String);
   if (typeof cmd.spectators !== 'number') return;
   const prev = state.spectatorCount;

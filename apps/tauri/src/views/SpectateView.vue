@@ -166,7 +166,7 @@ import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } 
 import { deriveClientState, type ClientStateContext } from '../game/logic/clientStateMachine';
 import { prettySkillName } from '../game/logic/prettySkillName';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
-import { decidingCoachSide, reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
+import { reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
@@ -2955,19 +2955,11 @@ watch(() => gameStore.state.riotousRookiesSplash?.seq, () => {
 });
 onBeforeUnmount(() => clearTimeout(riotousRookiesSplashTimer));
 
-// #136 (owner, GAP-WAVE-2): opponent-left connection toast. Tarkin's store surfaces state.opponentLeft = {coach,
-// seq} (deba6a7c) when a player leaves the game. A view-timed toast (the store clears the snapshot only on a game
-// change, so the view bounds the notice); a fresh leave re-fires the seq. Connection-awareness during live play —
-// slightly longer than a splash. Same seq-triggered idea as the masterChef splash / #131 view-watch.
-const opponentLeftVisible = ref(false);
-let opponentLeftTimer = 0;
-watch(() => gameStore.state.opponentLeft?.seq, () => {
-  if (!gameStore.state.opponentLeft) return;
-  opponentLeftVisible.value = true;
-  clearTimeout(opponentLeftTimer);
-  opponentLeftTimer = window.setTimeout(() => (opponentLeftVisible.value = false), 6500);
-});
-onBeforeUnmount(() => clearTimeout(opponentLeftTimer));
+// #136 (owner, GAP-WAVE-2): opponent-left connection notice. The store surfaces state.opponentLeft = {coach, seq}
+// when a player leaves the game and clears it when that coach joins again (or on a fresh game / disconnect).
+// Owner 10-10: '"Opponent has disconnected" popup should persist until the opponent reconnects': no view timer.
+// Once the game is over nobody is coming back, so the notice is not shown on the end-of-game screens.
+const opponentLeftVisible = computed(() => !!gameStore.state.opponentLeft && gameStore.state.endGame.phase === 'idle');
 
 // Feed keg target crosshairs and click gating from one upstream-equivalent legal-target set; the server still validates.
 watch(
@@ -11359,7 +11351,6 @@ const awayPanel = computed(() => panelFor('away'));
 // Owner 10-06: the coach-corner "N RES / N OUT" tabs — the dugout box membership rules (game/dugoutCounts.ts).
 const homeBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'home'));
 const awayBoxCounts = computed(() => teamBoxCounts(gameStore.game.value, 'away'));
-const coachDecisionSide = computed(() => decidingCoachSide(gameStore.game.value));
 const passiveSkillDecisionText = computed(() => {
   const choice = gameStore.state.skillChoice;
   if (!choice) return '';
@@ -12605,7 +12596,6 @@ function sendChat() {
               <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ pr.label }}</span>
             </div>
           </div>
-          <div v-if="coachDecisionSide === 'home'" class="coach-decision-status" role="status" aria-live="polite">is deciding...</div>
           <CoachCornerCounts side="home" :reserves="homeBoxCounts.reserves" :out="homeBoxCounts.out" :notify="pushReportToast" />
           <!-- owner 2026-07-04e: the per-coach turn number moved to the central
                scoreboard's bottom row (was a corner badge here) -->
@@ -12640,7 +12630,6 @@ function sendChat() {
               <span class="prayer-tag-icon">{{ pr.icon }}</span><span class="prayer-tag-name">{{ pr.label }}</span>
             </div>
           </div>
-          <div v-if="coachDecisionSide === 'away'" class="coach-decision-status" role="status" aria-live="polite">is deciding...</div>
           <CoachCornerCounts side="away" :reserves="awayBoxCounts.reserves" :out="awayBoxCounts.out" :notify="pushReportToast" />
         </div>
 
@@ -14418,11 +14407,11 @@ function sendChat() {
         <!-- Prayer lifetime belongs to the store FIFO: one banner at a time, then any interactive prayer dialog. -->
         <PrayerPresentation :announcement="gameStore.state.prayerAnnounce" :wait="null" :portrait="prayerRecipientPortrait" />
 
-        <!-- #136 (owner): opponent-left connection toast — a player left the game (view-timed, ~6.5s). -->
+        <!-- #136 (owner): opponent-left connection notice — a player left the game; stays until that coach rejoins (owner 10-10). -->
         <div v-if="opponentLeftVisible && gameStore.state.opponentLeft" :key="'ol-' + gameStore.state.opponentLeft.seq"
           class="opponent-left-toast">
           <span class="opponent-left-icon">⚠</span>
-          <span class="opponent-left-text"><b>{{ gameStore.state.opponentLeft.coach }}</b> has left the game — waiting to reconnect…</span>
+          <span class="opponent-left-text"><span><b>{{ gameStore.state.opponentLeft.coach }}</b> has left the game.</span><span>Waiting for <b>{{ gameStore.state.opponentLeft.coach }}</b> to reconnect.</span></span>
         </div>
 
         <!-- g314/g315 (owner, de-escalated to icon-scale — this was firing as a full P1-style
@@ -15041,32 +15030,6 @@ function sendChat() {
 }
 .prayer-tag-row + .prayer-tag-row { border-top: 1px solid #e0b04055; border-radius: 3.75px; }
 .prayer-tag-icon { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; font-size: 1.05em; line-height: 1; filter: drop-shadow(0 1px 2px #000c); }
-.coach-decision-status {
-  position: absolute;
-  z-index: 3;
-  top: calc(100% + 5px);
-  min-width: 105px;
-  box-sizing: border-box;
-  padding: 4px 9px;
-  border: 1px solid color-mix(in srgb, var(--active-badge-color, var(--ui-accent)) 72%, #fff 12%);
-  border-radius: 4px;
-  background: rgba(11, 14, 19, 0.94);
-  box-shadow: 0 3px 10px #000a;
-  color: #f2ede0;
-  font-family: 'Nuffle', system-ui, sans-serif;
-  font-size: max(var(--ui-min-text-size, 12px), 10px);
-  font-weight: 800;
-  letter-spacing: 0.025em;
-  line-height: 1;
-  text-align: center;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.coach-panel[data-playing='true'] .coach-decision-status {
-  top: calc(100% + max(20.25px, calc(var(--ui-min-text-size, 12px) + 5.25px)) + 5px);
-}
-.coach-panel.home .coach-decision-status { right: 12px; }
-.coach-panel.away .coach-decision-status { left: 12px; }
 .active-label {
   font-family: 'Nuffle', system-ui, sans-serif;
   /* Owner 10-08: larger label; the tag hugs its text (the old scaleX(0.8) squeeze left the box 25% wider than the
@@ -18607,7 +18570,7 @@ function sendChat() {
   animation: injury-in var(--p-280) ease-out;
 }
 .opponent-left-icon { font-size: max(var(--ui-min-primary-text-size, 16px), 1.15rem); color: #ffcf5a; line-height: 1; }
-.opponent-left-text { font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem); color: #ffe8b0; }
+.opponent-left-text { display: flex; flex-direction: column; gap: 2px; font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem); color: #ffe8b0; }
 /* Team-reroll cue — de-escalated from a full splash to an icon-scale toast (g314/g315,
    event-priority.md P2 tier: a routine in-turn event, not a match-level one). Owner 2026-08-05:
    surfaces CENTERED directly under the scoreboard (was right:9%/top:62% off to the side) —
@@ -20082,7 +20045,6 @@ function sendChat() {
 .pitch-host.hud-chrome .coach-panel > * { position: relative; z-index: 1; }
 .pitch-host.hud-chrome .coach-panel > .active-indicator { position: absolute; z-index: 1; } /* owner 09-14: the hud-chrome reset had undone the one-level lift over the prayer tag */
 .pitch-host.hud-chrome .coach-panel > .prayer-tag { position: absolute; z-index: 0; } /* owner 09-06: docks like the Current Player drawer, takes no panel space */
-.pitch-host.hud-chrome .coach-panel > .coach-decision-status { position: absolute; z-index: 3; }
 .pitch-host.hud-chrome .coach-panel > .coach-corner-counts { position: absolute; z-index: 0; } /* owner 10-06: the RES/OUT tab hangs off the panel edge */
 .pitch-host.hud-chrome .coach-panel::before {
   content: '';

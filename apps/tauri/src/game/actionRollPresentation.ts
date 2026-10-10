@@ -23,6 +23,24 @@ const DIE_CAUSE_BY_REPORT: Record<string, string> = {
   blockReRoll: 'reroll',
   extraReRoll: 'reroll',
 };
+/** Owner 10-10: a skill roll that had no cause of its own drew a BARE die. Held through a reroll offer (a failed Foul
+ *  Appearance roll while the coach decides) nothing on the pitch said what it was once the 3 s skill toast had gone.
+ *  These rolls wear their skill's icon on the die (`skill:<name>`), so the marker lives exactly as long as the die. */
+export const DIE_CAUSE_SKILL_BY_REPORT: Readonly<Record<string, string>> = {
+  foulAppearanceRoll: 'Foul Appearance',
+  alwaysHungryRoll: 'Always Hungry',
+  escapeRoll: 'Always Hungry',
+  animosityRoll: 'Animosity',
+  jumpUpRoll: 'Jump Up',
+  chainsawRoll: 'Chainsaw',
+  steadyFootingRoll: 'Steady Footing',
+  safeThrowRoll: 'Safe Throw',
+  regenerationRoll: 'Regeneration',
+  weepingDaggerRoll: 'Weeping Dagger',
+  projectileVomit: 'Projectile Vomit',
+  chompRoll: 'Chomp',
+};
+export const SECURE_THE_BALL_DIE_CAUSE = 'secureTheBall';
 const DIE_CAUSE_BY_ROLL_MODIFIER: readonly [prefix: string, cause: string][] = [
   ['Break Tackle', 'breakTackle'],
 ];
@@ -64,7 +82,14 @@ export function actionRollPresentation(report: Record<string, unknown>, reports:
     : id === 'standUpRoll' && typeof report.modifier === 'number' && report.modifier > 0 ? 'timmber' : undefined;
   // Owner 09-09: a confusion roll's die tag wears ITS negatrait's icon (`trait:<skill>`) instead of one shared icon.
   const confusionSkill = id === 'confusionRoll' ? String(report.confusionSkill ?? '').trim() : '';
-  const cause = reRolled ? 'reroll' : modifierCause ?? (confusionSkill ? `trait:${confusionSkill}` : DIE_CAUSE_BY_REPORT[id]);
+  // Owner 10-10: bb2025 ReportPickupRoll carries `secureTheBallUsed` (StepPickUp: the acting player's action was
+  // SECURE_THE_BALL when it rolled). That server field alone picks the Secure the Ball badge; the roll stays a
+  // pickUpRoll for every other reader, and `isPickupDieCause` keeps the pick-up die timing for it.
+  const secureTheBall = id === 'pickUpRoll' && report.secureTheBallUsed === true;
+  const skillCause = DIE_CAUSE_SKILL_BY_REPORT[id];
+  // precedence: reroll, roll modifier, confusion trait, Secure the Ball, the report map, then the skill fallback
+  const cause = reRolled ? 'reroll' : modifierCause ?? (confusionSkill ? `trait:${confusionSkill}`
+    : secureTheBall ? SECURE_THE_BALL_DIE_CAUSE : DIE_CAUSE_BY_REPORT[id] ?? (skillCause ? `skill:${skillCause}` : undefined));
   const result: ActionRollCue = { reRolled, die: null, modal: null, trait: null };
   if (id === 'confusionRoll') {
     const trait = String(report.confusionSkill ?? '');

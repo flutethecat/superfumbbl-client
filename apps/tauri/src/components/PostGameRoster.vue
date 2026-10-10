@@ -206,7 +206,8 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
 /* Moved verbatim from PostGamePanel.vue (owner 10-02) — edit the end-game roster here. */
 /* Owner 10-02: every px size multiplies by --roster-scale. Pinned to 1 here (the post-game tab looks exactly as it did);
    the pop-out's scalable mode inherits RosterPopout's value instead. */
-.pg-roster { --roster-scale: 1; }
+.pg-roster { --roster-scale: 1; user-select: none; -webkit-user-select: none; } /* owner 10-10: roster text and art are not selectable (a drag across rows highlighted them) */
+.pg-roster img { -webkit-user-drag: none; }
 .pg-roster--scalable { --roster-scale: inherit; font-size: calc(1em * var(--roster-scale, 1)); display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; box-sizing: border-box; }
 .pg-roster--scalable .pg-roster-team { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 /* Pop-out: the list fills the window and scrolls past what fits (RosterPopout keeps 11 rows in view once it scales). */
@@ -256,7 +257,7 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
 .pg-roster-list { list-style: none; margin: calc(6px * var(--roster-scale)) 0 0; padding: 0; max-height: calc(24.8em + 50px); overflow-y: auto; } /* exactly 12 rows of 2.4em-slot portraits (46px/row at 1080p) */
 .pg-roster-list li { display: flex; align-items: center; gap: calc(8px * var(--roster-scale)); padding: calc(1.5px * var(--roster-scale)) 0; border-top: 1px solid var(--ui-border); font-size: 0.86em; line-height: 1.25; }
 /* Owner 10-02: the LVL badge slot — fixed width (rookies leave it empty), badge about the name's height. */
-.pg-roster-lvl { flex: 0 0 auto; width: 3.6em; display: inline-flex; align-items: center; justify-content: flex-start; }
+.pg-roster-lvl { flex: 0 0 auto; width: 3.6em; margin-left: 2px; display: inline-flex; align-items: center; justify-content: flex-start; } /* owner 10-10: 2px clear of the list's clip edge, so an injury badge's border / gold "this game" outline is not cut on the left */
 /* The art is 46 x 14 at 1x (3.29:1): 1em tall = about the name's cap-to-descender height, 3.29em wide. */
 .pg-roster-lvl-img { height: 1em; width: auto; max-width: 3.6em; object-fit: contain; image-rendering: auto; } /* smooth down from the 4x / 8x masters */
 /* Owner 10-02: injuries / KO are plate-less retro TEXT (not a badge, so they never read as LVL), drawn larger:

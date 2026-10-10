@@ -221,6 +221,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* Frame = the popped-out ChatDock (.chat-dock--float): one positioned box, no full-viewport layer. */
 .roster-popout {
+  user-select: none; -webkit-user-select: none; /* owner 10-10: the roster is not highlightable */
   position: fixed;
   /* Astra review: above the end-game Dice overlay (.pg-dice-modal 210) - H opens it on every in-game screen. Settings
      (z 100) would sit under it, so the pop-out is hidden (suppressed) while Settings is open. */

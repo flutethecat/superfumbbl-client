@@ -6,6 +6,12 @@
 // testable without mounting SpectateView.
 import type { ActionDieRoll, LifecycleScheduler } from './actionDiceLifecycle';
 
+/** Owner 10-10: the die causes of the server's pickUpRoll report: the ordinary pick-up and Secure the Ball (the same
+ *  report with `secureTheBallUsed`, only the badge differs). Every pick-up rule keyed on the cause goes through here. */
+export function isPickupDieCause(cause: string | undefined): boolean {
+  return cause === 'pickup' || cause === 'secureTheBall';
+}
+
 /** One published batch (the store's `state.actionDice` / `state.actionDiceQueue` element). */
 export interface ActionDiceBatch { rolls: readonly ActionDieRoll[]; seq: number }
 
@@ -102,7 +108,8 @@ export function createActionDiceQueueDrain(deps: ActionDiceQueueDrainDeps): Acti
     // Owner 10-09: a movement roll's die (awaitsArrival: Dodge / Rush / Leap, FAILED or passed) waits the same way, so
     // the result is never announced on a square the figure has not reached. Its wait is bounded tighter than the
     // pickup's: it lasts only while the token is actually being moved (moverMoving), plus arrivalGraceMs.
-    const ballPickup = batch.rolls.find((r) => r.cause === 'pickup');
+    // Owner 10-10: a Secure the Ball roll is a pickUpRoll wearing its own badge cause - same wait, same beat.
+    const ballPickup = batch.rolls.find((r) => isPickupDieCause(r.cause));
     const pickup = ballPickup ?? batch.rolls.find((r) => r.awaitsArrival);
     const moverId = pickup ? deps.pickupMoverAt(pickup.square) : null;
     if (!pickup || !moverId) {
