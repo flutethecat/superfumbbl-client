@@ -1787,7 +1787,8 @@ function blitzableEnemyExists(game: GameJson, playerId: string, p: PlayerDataLik
   const acting = game.actingPlayer as { playerId?: string; currentMove?: number } | undefined;
   const used = acting?.playerId === playerId ? Math.max(0, Number(acting.currentMove) || 0) : 0;
   ma = Math.max(0, ma - used);
-  if (baseState(p.playerState) === BASE_PRONE) ma = Math.max(0, ma - 3); // stand-up costs 3
+  // Owner 10-09: a player who stands up for free (Jump Up) keeps their whole movement: no 3 off the reach.
+  if (baseState(p.playerState) === BASE_PRONE && !canStandUpForFree(game, playerId)) ma = Math.max(0, ma - 3); // stand-up costs 3
   const budget = ma + (hasSkill(game, playerId, 'sprint') ? 3 : 2);
   for (const q of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
     if (q.playerId === playerId || baseState(q.playerState) !== BASE_STANDING) continue;

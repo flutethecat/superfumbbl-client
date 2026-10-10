@@ -11251,6 +11251,12 @@ interface PlannerPlan {
    *  not a cancelled plan — so it retires quietly instead of the "lost the activation" warning. A later successful
    *  re-roll clears it. */
   failedRoll: PlanResolution | null;
+  /** Owner 10-09: "Really stupid rolls are surfacing the plan canceled notice, it shouldn't need to". The negatrait
+   *  (Bone Head, Really Stupid, Unchannelled Fury, Take Root, Animal Savagery...) whose `confusionRoll` the server last
+   *  reported FAILED for the plan's player. When the plan then cannot go on (the server drops the activation or the
+   *  move), it ended on that roll - an expected outcome the roll's own toast already shows - so it retires quietly.
+   *  A later successful roll (a reroll) clears it. */
+  failedGate: string | null;
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
    *  server republish of that target, never the surviving entry from the prior roll generation. */
   sentOfferRevisions: number[];
@@ -11555,12 +11561,17 @@ function plannerArmAbort(silenceRearm = false) {
     plannerAbortTimer = null;
     // An owned decision prompt re-arms the planner watchdog; it is not a server timeout.
     if (plannerPlan && plannerPromptPending()) { plannerArmAbort(); return; }
+    if (plannerPlan?.failedGate) { plannerRetireQuietly(`the ${plannerPlan.failedGate} roll failed`); return; }
     plannerFlush('the server did not respond');
   }, delay);
 }
 /** An applied server frame proves the link is alive: restart the silence window of an ALREADY armed watchdog. */
 function plannerOnServerFrameApplied() { if (plannerPlan && plannerAbortTimer) plannerArmAbort(true); }
 function plannerClearAbort() { if (plannerAbortTimer) { cancelGameTimeout(plannerAbortTimer); plannerAbortTimer = null; } }
+/** The planner just sent a command for its plan: arm the watchdog. Astra 10-09: the server answering a failed negatrait
+ *  roll by letting the activation go on (an Animal Savagery lash-out that does not end it) means that roll did not end
+ *  this plan - so a send drops `failedGate`, and a LATER lost activation or timeout warns as usual. */
+function plannerSentCommand(p: { failedGate: string | null }) { p.failedGate = null; plannerArmAbort(); }
 const PLAN_RESOLUTION_LABEL: Record<PlanResolution, string> = { gfi: 'rush', dodge: 'dodge', pickup: 'pick-up' };
 /** Owner 09-15: the plan ended on a server-resolved outcome (a failed roll → fall / turnover). No ⚠, no notice —
  *  the roll's own presentation and the turnover splash already say what happened. */
@@ -11759,7 +11770,7 @@ function plannerStart(input: {
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
-    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, failedRoll: null, sentOfferRevisions: [],
+    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, failedRoll: null, failedGate: null, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
@@ -11884,9 +11895,11 @@ function plannerAdvance() {
           p.phase = 'moving';
           p.sentIdx = 0;
           p.sentOfferRevisions[0] = firstOffer.revision;
-          plannerArmAbort();
+          plannerSentCommand(p);
         }
-        else { p.phase = 'acting'; plannerArmAbort(); plannerFireAct(); }
+        else { p.phase = 'acting'; plannerSentCommand(p); plannerFireAct(); }
+      } else if (p.failedGate && actingId !== p.playerId) {
+        plannerRetireQuietly(`the ${p.failedGate} roll failed`); // the activation was lost to the negatrait roll
       } else if (actingId && actingId !== p.playerId) {
         plannerFlush('the server activated a different player');
       }
@@ -11895,10 +11908,15 @@ function plannerAdvance() {
     case 'moving': {
       if (actingId !== p.playerId) {
         if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`); // the fall/turnover tells the story
+        else if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
         else plannerFlush('lost the activation during the walk');
         return;
       }
-      if (plannerActingAction() !== p.declare) { plannerFlush('the move action ended'); return; }
+      if (plannerActingAction() !== p.declare) {
+        if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
+        else plannerFlush('the move action ended');
+        return;
+      }
       const coord = plannerCoord(p.playerId);
       // Advance after the coordinate echo and successful required rolls; MOVING can persist for the activation.
       const atSent = !!coord && !!p.route[p.sentIdx] && coord[0] === p.route[p.sentIdx]![0] && coord[1] === p.route[p.sentIdx]![1];
@@ -11967,7 +11985,7 @@ function plannerAdvance() {
             return;
           }
           p.sentOfferRevisions[p.sentIdx] = retryOffer.revision;
-          plannerArmAbort();
+          plannerSentCommand(p);
         }
         return; // still walking to the last-sent square
       }
@@ -11997,11 +12015,11 @@ function plannerAdvance() {
         if (!accepted) { plannerClearAbort(); return; }
         p.sentIdx = nextIdx;
         p.sentOfferRevisions[nextIdx] = nextOffer.revision;
-        plannerArmAbort();
+        plannerSentCommand(p);
         return;
       }
       // reached the FINAL square + its rolls resolved (the gate above) → fire the act (walk-only plans retire in plannerFireAct; a trailing block/act is thus ack-gated behind the final walk-square's resolution).
-      p.phase = 'acting'; plannerArmAbort(); plannerFireAct();
+      p.phase = 'acting'; plannerSentCommand(p); plannerFireAct();
       return;
     }
     case 'acting':
@@ -15899,6 +15917,12 @@ export function installSendOffTestHarness(
 function plannerOnModelApplied(cmd?: Record<string, unknown>) {
   const p = plannerPlan;
   if (!p) return;
+  // Owner 10-09: remember a FAILED negatrait roll for the plan's player in any phase (see failedGate).
+  for (const r of ((cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; confusionSkill?: unknown }[] } | undefined)?.reports ?? [])) {
+    if (String(r.reportId ?? '') !== 'confusionRoll' || String(r.playerId ?? '') !== p.playerId) continue;
+    if (r.successful === false) p.failedGate = String(r.confusionSkill ?? '').trim() || 'negatrait';
+    else if (r.successful === true) p.failedGate = null;
+  }
   // Resolve a square's rolls only after arrival and only on success; failures remain pending for reroll/fall.
   if (p.phase === 'moving' && p.sentIdx >= 0) {
     const cur = p.squareResolutions[p.sentIdx];
