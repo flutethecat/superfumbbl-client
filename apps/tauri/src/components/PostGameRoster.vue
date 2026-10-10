@@ -13,8 +13,9 @@ import { computed, nextTick } from 'vue';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { playerSkillCategoryClass } from '../game/skillCategory';
 import { reactiveSkillIconUrl } from '../game/assetModUi';
-import { rosterTeamSubtext, type PostGameSide, type RosterPick, type RosterRowExtra, type Side } from '../game/postGameProjection';
+import { rosterTeamSubtext, type PostGamePlayer, type PostGameSide, type RosterPick, type RosterRowExtra, type Side } from '../game/postGameProjection';
 import { formatPlayerValue } from '../game/playerValue';
+import { settings } from '../game/settings';
 import { ROSTER_INJURY_TEXT, ROSTER_INJURY_TITLE, ROSTER_RIP_SKULL_URL, rosterInjuryArt, rosterLevelArt } from '../game/rosterLevelArt';
 
 const props = withDefaults(defineProps<{
@@ -48,7 +49,12 @@ const props = withDefaults(defineProps<{
    * position on the first line; skills, value, SPP on the second - so the columns line up and nothing scrolls sideways.
    */
   twoLine?: boolean;
-}>(), { localSide: null, scalable: false, skillMode: 'markings', iconStyle: 'bb3', switcher: true, pick: null, onlyIds: null, extras: null, fill: false, twoLine: false });
+  /**
+   * Owner 10-10: the "Hide innate skills" box in the pane's bottom-right corner. On by default; a host that mounts two
+   * rosters side by side (the post-game MVP tab) shows it on one of them. The FILTER follows the setting either way.
+   */
+  innateToggle?: boolean;
+}>(), { localSide: null, scalable: false, skillMode: 'markings', iconStyle: 'bb3', switcher: true, pick: null, onlyIds: null, extras: null, fill: false, twoLine: false, innateToggle: true });
 const emit = defineEmits<{ (e: 'pick', playerId: string): void }>();
 function skillIcon(skill: string, positionId: string | null | undefined): string | null {
   return reactiveSkillIconUrl(skill, props.iconStyle, { positionId: positionId ?? null, side: side.value }) || null;
@@ -61,6 +67,22 @@ const rows = computed(() => {
   const only = new Set(props.onlyIds);
   return all.filter((pl) => only.has(pl.playerId));
 });
+/**
+ * Owner 10-10 ("Hide innate skills", default on): the row drops the position's OWN skills and keeps everything else.
+ * Innate = the roster projection's `innate` flag (skillDisplay playerRosterSkills: the position lists it with the same
+ * keyword / value and nothing granted or learned carries it), so an advancement, a same-name grant (Hatred (Orc) beside
+ * an innate Hatred (Troll)) and anything granted this game stay. No classification lives here; a row without the flag
+ * (a hand-built list) falls back to `added`.
+ */
+type RosterSkill = { name: string; label: string; added: boolean; innate?: boolean };
+function rowSkills(pl: PostGamePlayer): RosterSkill[] {
+  const all: RosterSkill[] = pl.skillList ?? pl.addedSkillList.map((s) => ({ ...s, added: true }));
+  return settings.rosterHideInnateSkills ? all.filter((skill) => !(skill.innate ?? !skill.added)) : all;
+}
+/** Space / Enter stay with the box (the view's hotkeys would otherwise take them). */
+function onInnateKeydown(event: KeyboardEvent) {
+  if (event.key === ' ' || event.key === 'Enter') event.stopPropagation();
+}
 const isEligible = (playerId: string) => !!props.pick && props.pick.eligibleIds.includes(playerId);
 const isPicked = (playerId: string) => !!props.pick && props.pick.selectedIds.includes(playerId);
 /** The ONE selection path: a mouse click anywhere on the row, and the row's own box (mouse or keyboard). */
@@ -147,8 +169,11 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
           <span class="pg-roster-pos">{{ pl.position }}</span>
           <!-- Owner 09-15: added skills in their category colour, no "+" prefix, a step under the name size. -->
           <!-- Owner 10-02: every skill, sorted like the player portrait - base first, added last (added icons ringed gold). -->
-          <span v-if="(pl.skillList ?? pl.addedSkillList).length" class="pg-roster-skills" :data-mode="skillMode">
-            <template v-for="skill in (pl.skillList ?? pl.addedSkillList.map((s) => ({ ...s, added: true })))" :key="skill.name">
+          <!-- Owner 10-10: "Hide innate skills" (default on) leaves only the gained ones; a player with none has no
+               skill cell, exactly like a skill-less player before (the value column keeps the row's right edge). -->
+          <span v-if="rowSkills(pl).length" class="pg-roster-skills" :data-mode="skillMode">
+            <!-- Astra review: two Hatred keywords share a name - the key carries the label and the index. -->
+            <template v-for="(skill, i) in rowSkills(pl)" :key="`${skill.name}:${skill.label}:${i}`">
               <!-- Owner 10-02: with skill icons enabled, the icon replaces the name (name on hover). -->
               <img v-if="skillMode === 'icons' && skillIcon(skill.name, pl.positionId)" class="pg-roster-skill-icon" :data-added="skill.added" tabindex="0"
                 :src="skillIcon(skill.name, pl.positionId)!" :alt="skill.label" :title="skill.label" />
@@ -168,6 +193,12 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
       <p v-else-if="!onlyIds" class="pg-mvp-none">No player records</p>
     </div>
     <slot name="footer" />
+    <!-- Owner 10-10: one box for every roster pane (settings.rosterHideInnateSkills), bottom-right, inside the pane's own
+         padding (clear of the pop-out's resize grip; the pick panes' confirm button sits in the footer under it). -->
+    <label v-if="innateToggle" class="pg-roster-innate" data-testid="roster-hide-innate" title="List only the skills a player has gained; position skills are left out">
+      <input v-model="settings.rosterHideInnateSkills" type="checkbox" @keydown="onInnateKeydown" />
+      <span>Hide innate skills</span>
+    </label>
   </section>
 </template>
 
@@ -297,6 +328,13 @@ function onBoxKeydown(event: KeyboardEvent, playerId: string) {
 .pg-roster-spp { flex: 0 0 auto; min-width: 4.4em; text-align: right; color: var(--ui-accent); font-variant-numeric: tabular-nums; font-weight: 700; }
 .pg-roster-spp[data-zero='true'] { color: var(--ui-text-dim); font-weight: 400; }
 .pg-mvp-none { color: var(--ui-text-dim); font-style: italic; }
+/* Owner 10-10: the "Hide innate skills" box - the team count's small muted text, in the pane's bottom-right corner
+   (margin-left: auto works in the plain block pane and in the fill / pop-out flex columns alike). It never shrinks (the
+   LIST gives way) and scales with the pop-out through its em sizes. */
+.pg-roster-innate { flex: 0 0 auto; width: fit-content; margin-left: auto; display: flex; align-items: center; gap: 0.45em; margin-top: calc(6px * var(--roster-scale)); font-size: max(var(--ui-min-text-size, 12px), 0.8em); font-weight: 700; line-height: 1.2; color: var(--ui-muted); cursor: pointer; user-select: none; white-space: nowrap; }
+.pg-roster-innate:hover { color: var(--ui-text); }
+.pg-roster-innate input { flex: none; width: 1.1em; height: 1.1em; margin: 0; accent-color: var(--ui-accent); cursor: pointer; }
+.pg-roster-innate input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
 /* Owner 10-09: an injury suffered this game = the added skill's gold box (#e6b422, the icon ring's treatment) around
    the injury badge. A shadow plus padding inside the fixed badge slot, so the row keeps its height and alignment. */
 .pg-roster-inj-img[data-new='true'], .pg-roster-rip[data-new='true'] { box-sizing: border-box; padding: 0.12em 0.2em; border-radius: 3px; box-shadow: 0 0 0 1px #e6b422, inset 0 0 0 1px rgb(0 0 0 / 55%); }

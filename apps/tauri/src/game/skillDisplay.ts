@@ -26,6 +26,9 @@ import {
 interface PositionLike {
   positionId: string;
   skillArray?: string[];
+  /** Parallel to skillArray: the position's own skill values ("3" for Loner, a Hatred keyword) and display values. */
+  skillValues?: (string | null)[];
+  skillDisplayValues?: (string | null)[];
   movement?: number;
   strength?: number;
   agility?: number;
@@ -160,6 +163,58 @@ export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDeta
   const position = roster?.positionArray?.find((p) => p.positionId === player.positionId);
   if (!position) return playerDetailSkills(player).map((skill) => ({ ...skill, added: false }));
   return playerDetailSkills(player, new Set(position.skillArray ?? []));
+}
+
+export interface RosterSkill extends PlayerDetailSkill {
+  /** The position's OWN entry, unchanged: the roster panes' "Hide innate skills" box hides exactly these. */
+  innate: boolean;
+}
+
+/**
+ * Owner 10-10 (roster panes, "Hide innate skills") + Astra review: which of a player's skill chips is the POSITION's
+ * own entry. `added` (the gold outline) compares by NAME only, so a Troll Slayer granted Hatred (Orc) on top of his
+ * innate Hatred (Troll), or a prayer's Mighty Blow on a player who has it innately, reads "not added" - hiding by
+ * `!added` would drop a gained skill. A chip is innate only when ALL of these hold; anything the model cannot tell
+ * apart stays VISIBLE:
+ *   - the position lists the skill (RosterPosition skillArray);
+ *   - the player is not zapped (a frog's skills are its own, whatever the old position listed);
+ *   - no temporary grant carries it (temporarySkillsMap: prayers, cards, Intensive Training, FIELD_MODEL_ADD_HATRED
+ *     -> modelChangeProcessor addHatred); for Hatred, no temporary grant of THAT keyword;
+ *   - the player has no entry of his own for it: upstream RosterPlayer fills skillValues / displayValues only from the
+ *     player's own team-XML <skill> elements (RosterPlayer.java:542-544), never for position skills (:280), so a key
+ *     in skillValuesMap / skillDisplayValuesMap is a skill the PLAYER carries (a learned copy, an improved value);
+ *   - its keyword / value equals the position's (RosterPlayer.java:211-212: own value, else the position's).
+ */
+export function playerRosterSkills(player: PlayerJson, position: PositionLike | undefined): RosterSkill[] {
+  const positionSkills = position?.skillArray ?? [];
+  const detail = playerDetailSkills(player, new Set(positionSkills));
+  if (!position || String(player.playerKind) === 'zappedPlayer') return detail.map((skill) => ({ ...skill, innate: false }));
+  const text = (v: unknown): string => String(v ?? '').trim().toLowerCase();
+  const positionValue = (name: string): string => {
+    const index = positionSkills.indexOf(name);
+    return text(position.skillDisplayValues?.[index]) || text(position.skillValues?.[index]);
+  };
+  const decoded = decodePlayerSkills(player);
+  const ownKeys = new Set([...Object.keys(player.skillValuesMap ?? {}), ...Object.keys(player.skillDisplayValuesMap ?? {})]);
+  return detail.map((skill) => {
+    if (!positionSkills.includes(skill.name) || ownKeys.has(skill.name)) return { ...skill, innate: false };
+    const mine = decoded.filter((entry) => entry.name === skill.name);
+    const temporary = mine.filter((entry) => entry.source !== null);
+    const wanted = positionValue(skill.name);
+    if (normalizeSkillName(skill.name) === 'hatred') {
+      // One chip per keyword: the position's only when it shows the position's keyword and no grant carries that keyword.
+      // A bare "Hatred" chip means no entry carried a keyword at all (model sync leaves the position's keyword on the
+      // position): it is the position's unless a grant is among them.
+      const keyword = text(/^.+? \((.+)\)$/.exec(skill.label)?.[1]);
+      if (!keyword) return { ...skill, innate: temporary.length === 0 };
+      return { ...skill, innate: keyword === wanted && !temporary.some((entry) => text(entry.value) === keyword) };
+    }
+    // one chip per name: a temporary grant of the same name shares it, so the chip stays
+    if (temporary.length) return { ...skill, innate: false };
+    // the team-array serialization carries every base skill's value beside it: a value other than the position's is the player's
+    const base = text(mine.find((entry) => entry.source === null)?.value);
+    return { ...skill, innate: base === '' || base === wanted };
+  });
 }
 
 /** Owner 10-05: a valued skill's value - Hatred's keyword ("Hatred (Orc)" -> "Orc") - is written in small text under the

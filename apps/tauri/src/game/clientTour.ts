@@ -280,13 +280,13 @@ export function clientStep(id: ClientStepId): ClientStep {
           `${ROW} .pg-roster-lvl`,
           `${ROW} .pg-roster-name`,
           `${ROW} .pg-roster-pos`,
-          `${ROW} .pg-roster-skills`,
+          '.roster-popout .pg-roster-skills', // owner 10-10: innate skills are hidden by default, so the first row may have none
           `${ROW} .pg-roster-value`,
           `${ROW} .pg-roster-spp`,
           '.roster-popout [data-added="true"]',
         ],
         labels: ['Team', 'Level · Injury', 'Name', 'Position', 'Skills', 'Value', 'SPP', 'Added skill'],
-        optional: ['.roster-popout [data-added="true"]'],
+        optional: ['.roster-popout .pg-roster-skills', '.roster-popout [data-added="true"]'],
         placement: 'top',
       };
     case 'hud-card':

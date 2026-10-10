@@ -225,5 +225,10 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-dwarf-29395f09.zip",
     "size": 4131661,
     "sha256": "fef59fadab61175d1fba6be3eca070e0551400cd84b6df7d3b9384d76667ee3b"
+  },
+  "walk/dwarf@750ac04ef2b76f95": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-dwarf-750ac04e.zip",
+    "size": 4606821,
+    "sha256": "d4c2f8395760c886e26e5f95450ed0ce2fca5dffd1e3233cc887f9237e8bcdee"
   }
 }

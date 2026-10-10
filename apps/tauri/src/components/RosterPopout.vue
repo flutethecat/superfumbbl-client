@@ -18,6 +18,7 @@ import { defaultRosterPosition } from '../game/rosterPopoutLayout';
 import { ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, rosterPopoutScale } from '../game/rosterPopoutScale';
 import type { PostGameSide, Side } from '../game/postGameProjection';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
+import { settings } from '../game/settings';
 
 const props = withDefaults(defineProps<{
   teams: { home: PostGameSide; away: PostGameSide } | null;
@@ -137,6 +138,8 @@ watch(side, () => { void nextTick(applyScale); });
 // Astra re-review: icons <-> names changes row heights without resizing the frame - re-measure.
 // ...and keep it on screen: the default spot was computed from the other mode's width.
 watch(() => props.skillMode, () => { void nextTick(() => { applyScale(); clampToViewport(); }); });
+// Owner 10-10: "Hide innate skills" changes which rows wrap (their heights) without resizing the frame - re-measure.
+watch(() => settings.rosterHideInnateSkills, () => { void nextTick(applyScale); });
 
 let drag: { startX: number; startY: number; origX: number; origY: number; grip: HTMLElement } | null = null;
 function startDrag(event: PointerEvent) {

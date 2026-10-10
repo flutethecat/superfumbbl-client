@@ -6,8 +6,8 @@
  */
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
-import { TWO_D6_SHARE, actionFaces, armourLikelihood, blockLikelihood, d6Likelihood, diceFacts, emptyTally, injuryLikelihood, oneInGames, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
-import { addedSkillsLast, playerDetailSkills, type PlayerDetailSkill } from './skillDisplay';
+import { TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceFacts, emptyTally, injuryLikelihood, oneInOdds, twoD6Totals, type DiceFact, type DiceTally, type Likelihood } from './diceStats';
+import { addedSkillsLast, playerDetailSkills, playerRosterSkills, type PlayerDetailSkill } from './skillDisplay';
 import { sppEarnedThisGame } from './logic/sppEarned';
 import { advancementReadiness, advancementsTaken, type AdvancementReadiness } from './postGameAdvancement';
 import type { EndGameStatsProjection } from './endGameHudProjection';
@@ -41,7 +41,9 @@ export type PostGameMvp = { name: string; position: string; awards: number; play
 export type PostGamePlayer = {
   playerId: string; nr: number; name: string; position: string; spp: number; addedSkills: string; addedSkillList: { name: string; label: string }[];
   /** Owner 10-02: EVERY skill, sorted like the player portrait (base first, added last; `added` rings the icon gold). */
-  skillList?: { name: string; label: string; added: boolean }[];
+  /** Owner 10-10: `innate` = the position's own entry, unchanged (skillDisplay playerRosterSkills) - what "Hide innate
+   *  skills" removes. Not the inverse of `added`: a same-name grant or an improved value is neither added nor innate. */
+  skillList?: { name: string; label: string; added: boolean; innate?: boolean }[];
   /** Owner 10-02: current value in gold (playerValue.ts, the team builder's formula); null = position not on the roster */
   value: number | null;
   /** For the skill-icon lookup (pack icons can be per position). */
@@ -184,10 +186,9 @@ export function postGameSide(game: GameJson, side: Side): PostGameSide {
       // Owner 09-14: skills beyond the position's base (advancements + in-game grants) pop next to the player.
       // Owner 09-15: the in-game card's projection — a valued skill carries its value ("Hatred (Orc)", "Loner (4+)").
       const position = roster.positionArray?.find((q) => q.positionId === p?.positionId);
-      const posSkills = new Set(position?.skillArray ?? []);
-      const detail = p ? playerDetailSkills(p, posSkills) : [];
+      const detail = p ? playerRosterSkills(p, position) : [];
       const addedSkillList = detail.filter((sk) => sk.added).map((sk) => ({ name: sk.name, label: sk.label }));
-      const skillList = addedSkillsLast(detail).map((sk) => ({ name: sk.name, label: sk.label, added: sk.added }));
+      const skillList = addedSkillsLast(detail).map((sk) => ({ name: sk.name, label: sk.label, added: sk.added, innate: sk.innate }));
       const addedSkills = addedSkillList.map((sk) => sk.label).join(', ');
       const progress = p ? playerProgress(p, position) : { value: null, advancements: 0 };
       return {
@@ -349,25 +350,122 @@ export function pgBarChart(counts: number[], expectedShare: number[], labels: st
   const expectedPath = bars.map((b, i) => `${i === 0 ? 'M' : 'L'}${(i * slot).toFixed(1)} ${b.ey.toFixed(1)} L${((i + 1) * slot).toFixed(1)} ${b.ey.toFixed(1)}`).join(' ');
   return { bars, expectedPath, total };
 }
-/** Standard normal curve for the likelihood gauges (viewBox 0 0 200 44, z from -3.2 to 3.2). */
+/**
+ * Where a standard score sits on the likelihood gauge (viewBox 0 0 200 44, centre 100, edges 10 / 190).
+ * Astra N5: straight to |z| = 2.5 on the scale the gauge always had, then the far tail is compressed so the marker
+ * keeps moving outward all the way to the 1-in-1,000,000 cap (|z| = 4.75) at the edge - it used to stop at 3.2, so
+ * everything rarer than about 1 in 1,455 drew in one place. Monotone; the curve is drawn through the same mapping.
+ */
+export const PG_GAUGE_LINEAR_Z = 2.5;
+export const PG_GAUGE_EDGE_Z = 4.7534243;
+const PG_GAUGE_SLOPE = 90 / 3.2;
+export function pgGaugeX(z: number): number {
+  if (Number.isNaN(z)) return 100;
+  const a = Math.min(PG_GAUGE_EDGE_Z, Math.abs(z));
+  const knee = PG_GAUGE_LINEAR_Z * PG_GAUGE_SLOPE;
+  const off = a <= PG_GAUGE_LINEAR_Z ? a * PG_GAUGE_SLOPE : knee + ((a - PG_GAUGE_LINEAR_Z) / (PG_GAUGE_EDGE_Z - PG_GAUGE_LINEAR_Z)) * (90 - knee);
+  return 100 + (z < 0 ? -off : off);
+}
+/** Standard normal curve for the likelihood gauges, drawn through pgGaugeX so the marker always sits under it. */
 export const PG_GAUGE_CURVE = (() => {
   const pts: string[] = [];
-  for (let i = 0; i <= 64; i++) {
-    const z = -3.2 + (6.4 * i) / 64;
+  for (let i = 0; i <= 96; i++) {
+    const z = -PG_GAUGE_EDGE_Z + (2 * PG_GAUGE_EDGE_Z * i) / 96;
     const y = 40 - 34 * Math.exp(-0.5 * z * z);
-    pts.push(`${i === 0 ? 'M' : 'L'}${(100 + z * (90 / 3.2)).toFixed(1)} ${y.toFixed(1)}`);
+    pts.push(`${i === 0 ? 'M' : 'L'}${pgGaugeX(z).toFixed(1)} ${y.toFixed(1)}`);
   }
   return pts.join(' ');
 })();
-export function pgGaugeX(z: number): number { return 100 + Math.max(-3.2, Math.min(3.2, z)) * (90 / 3.2); }
-export function pgZ(like: Likelihood): string { return like.n === 0 ? '—' : `${like.z >= 0 ? '+' : ''}${like.z.toFixed(2)}σ`; }
-// Owner 09-17: the headline reads "1 in N" games — the chance of dice at least this far from fair, in this direction.
+// Owner 09-17: the headline reads "1 in N". Owner 10-09: a tally with no trial data (cached before the rework) and a
+// row with no rolls both read "—". Astra F1 / F2 (10-09): the odds are for fair dice ON THE ROLLS THAT WERE MADE (never
+// "games"); a result whose one-sided chance is a half or more reads "about average" with the marker on the centre line,
+// and otherwise the marker is placed from the same chance the "1 in N" states.
 export function pgOdds(like: Likelihood): string {
-  if (like.n === 0) return '—';
-  const { n, capped } = oneInGames(like);
-  return `1 in ${n.toLocaleString()}${capped ? '+' : ''}`;
+  if (!like.measured || like.n === 0) return '—';
+  const odds = oneInOdds(like);
+  return odds ? `1 in ${odds.n.toLocaleString()}${odds.capped ? '+' : ''}` : 'about average';
 }
-export function pgLuck(like: Likelihood): string { return like.n === 0 ? 'no rolls' : Math.abs(like.z) < 0.05 ? 'dead average' : like.z > 0 ? 'this lucky' : 'this unlucky'; }
+export function pgLuck(like: Likelihood): string {
+  if (!like.measured) return 'not measured';
+  return like.n === 0 ? 'no rolls' : like.average ? 'about average' : like.zShown > 0 ? 'lucky' : 'unlucky';
+}
+/** The sentence behind the number, for the hover text and screen readers. */
+export function pgOddsSentence(like: Likelihood): string {
+  if (!like.measured) return 'not measured';
+  if (like.n === 0) return 'no rolls';
+  if (like.average) return 'about what fair dice give on the rolls that were made';
+  return `fair dice do this ${like.zShown > 0 ? 'well or better' : 'badly or worse'} ${pgOdds(like)} times on the rolls that were made`;
+}
+/** The marker is drawn only for a measured row with at least one trial. */
+export function pgHasMarker(like: Likelihood): boolean { return like.measured && like.n > 0; }
+
+// Owner 10-09: each Likelihood row states the plain numbers behind it - what happened, and what fair dice expect.
+export interface PgLikelihoodRow {
+  key: 'all' | 'armour' | 'injury' | 'action' | 'block';
+  label: string;
+  like: Likelihood;
+  /** The row's numbers as one line (owner 10-10: no longer drawn under the row; `stats` carries the same numbers). */
+  summary: string;
+  /** Owner 10-10: the same numbers as short labelled lines, for the row's "i" popover. An empty label is a plain line. */
+  stats: PgLikelihoodStat[];
+  /** The hover text of the "1 in N". */
+  detail: string;
+}
+export interface PgLikelihoodStat { label: string; value: string }
+const PG_NOT_MEASURED = 'Not measured for this game';
+const exp1 = (v: number | undefined) => (v ?? 0).toFixed(1);
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+function unmeasuredNote(n: number): string { return n > 0 ? ` · ${n} not measured` : ''; }
+function unmeasuredStat(n: number): PgLikelihoodStat[] { return n > 0 ? [{ label: 'Not measured', value: String(n) }] : []; }
+function pgLikelihoodRow(key: PgLikelihoodRow['key'], label: string, like: Likelihood, summary: string, stats: PgLikelihoodStat[], extra = ''): PgLikelihoodRow {
+  if (!like.measured) return { key, label, like, summary: PG_NOT_MEASURED, stats: [{ label: '', value: PG_NOT_MEASURED }], detail: 'This game was saved before the likelihood was measured from results. Watch the replay to measure it.' };
+  if (like.n === 0) return { key, label, like, summary: `No rolls${unmeasuredNote(like.unmeasured)}`, stats: [{ label: '', value: 'No rolls' }, ...unmeasuredStat(like.unmeasured)], detail: 'no rolls' };
+  const odds = pgOddsSentence(like);
+  const sentence = odds.charAt(0).toUpperCase() + odds.slice(1);
+  return { key, label, like, summary: summary + unmeasuredNote(like.unmeasured), stats: [...stats, ...unmeasuredStat(like.unmeasured)], detail: extra ? `${sentence} · ${extra}` : sentence };
+}
+export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
+  const c = (row: 'armour' | 'injury' | 'action' | 'block') => t.luck?.[row].c ?? {};
+  const n = (v: number | undefined) => v ?? 0;
+  const all = allDiceLikelihood(t);
+  const armour = c('armour'), injury = c('injury'), action = c('action'), block = c('block');
+  // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled lines.
+  const sides = (their: string, own: string): PgLikelihoodStat[] =>
+    [{ label: 'Opponents', value: their }, { label: 'Own', value: own }].filter((s) => s.value);
+  const armourSides = sides(
+    n(armour.theirRolls) ? `${n(armour.theirBroken)} broken of ${n(armour.theirRolls)} (${exp1(armour.theirExpected)} expected)` : '',
+    n(armour.ownRolls) ? `${n(armour.ownBroken)} broken of ${n(armour.ownRolls)} (${exp1(armour.ownExpected)} expected)` : '',
+  );
+  const armourParts = armourSides.map((s) => `${s.label}: ${s.value}`);
+  const armourStats = armourSides.map((s) => ({ label: s.label === 'Own' ? 'Own armour' : "Opponents' armour", value: s.value }));
+  const injurySide = (rolls: number | undefined, cas: number | undefined, kos: number | undefined) =>
+    (n(rolls) ? `${plural(n(cas), 'casualty', 'casualties')} · ${plural(n(kos), 'KO', 'KOs')} of ${plural(n(rolls), 'roll', 'rolls')}` : '');
+  const injurySides = sides(injurySide(injury.theirRolls, injury.theirCasualties, injury.theirKos), injurySide(injury.ownRolls, injury.ownCasualties, injury.ownKos));
+  const injuryParts = injurySides.map((s) => `${s.label}: ${s.value}`);
+  const injuryStats = injurySides.map((s) => ({ label: s.label === 'Own' ? 'Own injuries' : "Opponents' injuries", value: s.value.replace(' · ', ', ') }));
+  const injuryValue = [
+    n(injury.theirRolls) ? `opponents ${exp1(injury.theirValue)} (${exp1(injury.theirExpected)} expected)` : '',
+    n(injury.ownRolls) ? `own ${exp1(injury.ownValue)} (${exp1(injury.ownExpected)} expected)` : '',
+  ].filter(Boolean).join(' · ');
+  const blockLike = blockLikelihood(t);
+  const actionLike = actionLikelihood(t);
+  const blockGood = `${n(block.good)} (${exp1(block.goodExpected)} expected)`;
+  const blockBad = `${n(block.bad)} (${exp1(block.badExpected)} expected)`;
+  return [
+    pgLikelihoodRow('all', 'All dice', all, `${plural(all.n, 'roll', 'rolls')} measured`, [{ label: 'Rolls measured', value: String(all.n) }],
+      'armour, injury, action and block rolls together'),
+    pgLikelihoodRow('armour', 'Armour', armourLikelihood(t), armourParts.join(' · '), armourStats, 'armour broken against the fair chance of breaking that armour'),
+    pgLikelihoodRow('injury', 'Injury', injuryLikelihood(t), injuryParts.join(' · '), injuryStats,
+      `injury value, a KO counting as half a casualty (less against Bloodweiser Kegs): ${injuryValue}`),
+    pgLikelihoodRow('action', 'Action dice', actionLike, `${n(action.passed)} of ${actionLike.n} passed · ${exp1(action.expected)} expected`,
+      [{ label: 'Passed', value: `${n(action.passed)} of ${actionLike.n}` }, { label: 'Expected', value: exp1(action.expected) }],
+      'every D6 rolled against a target number, rerolled rolls included'),
+    pgLikelihoodRow('block', 'Block dice', blockLike,
+      `Defender down available ${blockGood} · attacker down forced ${blockBad} · ${plural(blockLike.n, 'roll', 'rolls')}`,
+      [{ label: 'Defender down available', value: blockGood }, { label: 'Attacker down forced', value: blockBad }, { label: 'Rolls', value: String(blockLike.n) }],
+      'what each block roll offered whoever picked the die, for these two players'),
+  ];
+}
 export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
 /** Owner 10-01 (S67): dodges BY TARGET (2+..6+). Per column, bottom to top: GREEN = passed without a re-roll, BLUE =
  *  passed after a re-roll, RED = failed even after a re-roll; the outline is every attempt (its empty part = failed
@@ -448,8 +546,8 @@ export interface PgDiceSide {
   blocks: number;
   /** Owner 10-01 (S67): dodges by target, above the Dodge dice chart; null when the side never dodged. */
   dodgeTargets: PgDodgeTargetChart | null;
-  /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. */
-  likelihoods: { label: string; like: Likelihood }[];
+  /** Owner 09-17: per COACH (all of the side's dice grouped), not per player. Owner 10-09: results against their fair chance. */
+  likelihoods: PgLikelihoodRow[];
   facts: DiceFact[];
 }
 export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; logo: string | null } | null, fallbackTeam: string): PgDiceSide {
@@ -471,10 +569,7 @@ export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; lo
   return {
     team: surface?.team ?? fallbackTeam, logo: surface?.logo ?? '', charts,
     oneNinth: t.oneNinth, oneThirtySixth: t.oneThirtySixth, blocks: t.blocks ?? 0, dodgeTargets: pgDodgeTargetChart(t.dodgeByTarget),
-    likelihoods: [
-      { label: 'All dice', like: d6Likelihood(t) }, { label: 'Armour', like: armourLikelihood(t) },
-      { label: 'Injury', like: injuryLikelihood(t) }, { label: 'Block dice', like: blockLikelihood(t) },
-    ],
+    likelihoods: pgLikelihoodRows(t),
     facts: diceFacts(t),
   };
 }

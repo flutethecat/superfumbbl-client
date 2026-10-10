@@ -4,6 +4,7 @@
  * fields the Details popup reads (results, MVPs, SPP, statistics) and a dice tally for its Dice tab. Deterministic.
  */
 import { emptyTally, type DiceTally } from './diceStats';
+import { addCount, addTrial, binaryKey, blockFaceScores, blockRollKey, emptyLuck, injuryKey } from './diceLuck';
 import type { PostGameSnapshot } from './postGameProjection';
 
 export const EXAMPLE_GAME_ID = 'example';
@@ -104,6 +105,34 @@ function tally(seed: number): DiceTally {
   t.failedPickups = seed % 2;
   t.rushes = 5;
   t.failedRushes = 1;
+  // Owner 10-09: the Likelihood rows read results against their fair chance - a few plausible trials per row.
+  const luck = (t.luck = emptyLuck());
+  const odd = seed % 2 === 1;
+  for (let i = 0; i < 8; i++) { // armour on the opponents: a 9+ armour, broken twice (three times for the luckier side)
+    const broken = i < (odd ? 3 : 2);
+    addTrial(luck.armour, binaryKey(10, 36), broken ? 6 : 0);
+    addCount(luck.armour, 'theirRolls', 1); addCount(luck.armour, 'theirBroken', broken ? 1 : 0); addCount(luck.armour, 'theirExpected', 10 / 36);
+  }
+  for (let i = 0; i < 5; i++) { // armour on its own players: an 8+ armour, broken twice
+    const broken = i < 2;
+    addTrial(luck.armour, binaryKey(21, 36), broken ? 0 : 6);
+    addCount(luck.armour, 'ownRolls', 1); addCount(luck.armour, 'ownBroken', broken ? 1 : 0); addCount(luck.armour, 'ownExpected', 15 / 36);
+  }
+  for (const level of odd ? [0, 1, 2] : [0, 0, 1]) { // injuries on the opponents: stunned / knocked out / casualty
+    addTrial(luck.injury, injuryKey([21, 9, 6], 3, false), level === 2 ? 6 : level === 1 ? 3 : 0);
+    addCount(luck.injury, 'theirRolls', 1); addCount(luck.injury, 'theirKos', level === 1 ? 1 : 0); addCount(luck.injury, 'theirCasualties', level === 2 ? 1 : 0);
+    addCount(luck.injury, 'theirValue', level === 2 ? 1 : level === 1 ? 0.5 : 0); addCount(luck.injury, 'theirExpected', (9 * 0.5 + 6) / 36);
+  }
+  for (const [target, ok] of [[3, true], [2, true], [4, false], [3, true], [2, true], [4, true], [5, odd], [3, true], [2, false], [3, true], [4, true], [2, true], [6, false], [3, true]] as const) {
+    addTrial(luck.action, binaryKey(7 - target, 6), ok ? 6 : 0);
+    addCount(luck.action, 'passed', ok ? 1 : 0); addCount(luck.action, 'expected', (7 - target) / 6);
+  }
+  const scores = blockFaceScores({ attackerBlock: true, attackerWrestle: false, attackerTackle: false, defenderBlock: false, defenderDodge: false });
+  for (let i = 0; i < 8; i++) { // two-dice blocks, the attacker picking: a knock-down on offer five times (six for the luckier side)
+    const good = i < (odd ? 6 : 5);
+    addTrial(luck.block, blockRollKey(2, true, scores), good ? 6 : 0);
+    addCount(luck.block, 'good', good ? 1 : 0); addCount(luck.block, 'goodExpected', 0.75); addCount(luck.block, 'badExpected', 1 / 36);
+  }
   return t;
 }
 

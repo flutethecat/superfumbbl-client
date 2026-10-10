@@ -1438,7 +1438,7 @@
    "role": "deathroller",
    "side": "home",
    "file": "dwarf/deathroller-home.png",
-   "footY": 68,
+   "footY": 92,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1451,14 +1451,14 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 96
   },
   {
    "race": "dwarf",
    "role": "deathroller",
    "side": "away",
    "file": "dwarf/deathroller-away.png",
-   "footY": 68,
+   "footY": 92,
    "columns": 9,
    "fps": 10,
    "rows": [
@@ -1471,7 +1471,7 @@
     "W",
     "SW"
    ],
-   "frame": 72
+   "frame": 96
   },
   {
    "race": "dwarf",

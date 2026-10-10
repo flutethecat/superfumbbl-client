@@ -341,6 +341,9 @@ export interface AppSettings extends ConfirmationSettings {
   dugoutCounts: boolean;
   /** Owner 10-06: the "N RES / N OUT" tab hanging off each coach corner panel. Default ON; right-click on it hides it. */
   coachCornerCounts: boolean;
+  /** Owner 10-10: the roster panes (H pop-out, post-game Roster / MVP tabs, MVP nomination, Assign Touchdown) list only
+   *  the skills a player GAINED; position (innate) skills are left out. Default ON; the panes' own checkbox flips it. */
+  rosterHideInnateSkills: boolean;
   /** Owner 2026-07-08: end-zone label — 'team' (default, mirrors FUMBBL: each end
    *  bears its team's name) or 'touchdown' (just the word "TOUCHDOWN"). */
   endZoneLabel: 'team' | 'touchdown';
@@ -645,6 +648,7 @@ const DEFAULTS: AppSettings = {
   showFieldLogos: true,
   dugoutCounts: false,
   coachCornerCounts: true,
+  rosterHideInnateSkills: true,
   endZoneLabel: 'team',
   endZoneTint: true,
   showPlayerNumbers: false,
@@ -964,6 +968,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // Local presentation override only. Malformed/older blobs retain upstream variants.
     merged.dugoutCounts = raw.dugoutCounts === true; // owner 10-06: off unless the user turned it on
     merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
+    merged.rosterHideInnateSkills = raw.rosterHideInnateSkills !== false; // owner 10-10: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
     // Keychain move: password40k is no longer a settings field. Lift any stored copy out of the
     // merged object so the deep watcher below never writes it back, and hand it to credentials.ts.

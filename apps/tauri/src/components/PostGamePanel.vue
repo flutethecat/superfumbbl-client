@@ -5,7 +5,7 @@
  * the game settles) or cached (the Play blade's Details popup, game/postGameCache.ts). Every ruling in the
  * markup/CSS is carried over verbatim; live-only motion (the MVP roulette) arrives through `mvpRoll`.
  */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import D6Face from './D6Face.vue';
 import { blockDieFaceUrl } from '../game/blockDieFaceArt';
 import PlayerDetailSkillList from './PlayerDetailSkillList.vue';
@@ -13,8 +13,8 @@ import PostGameRoster from './PostGameRoster.vue';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceSide, pgGaugeX, pgLuck, pgOdds, pgZ,
-  postGamePublic, type PgMvpCard, type PostGameSnapshot, type RosterRowExtra, type Side,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpCardFor, mvpConcededSides, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence,
+  postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type RosterRowExtra, type Side,
 } from '../game/postGameProjection';
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
@@ -113,6 +113,88 @@ const pgDice = computed(() => ({
 }));
 const pgDiceSelected = computed(() => (diceSide.value === 'home' ? pgDice.value.home : pgDice.value.away));
 const dedFansMod = (mod: number) => (mod > 0 ? '+' + mod : String(mod));
+
+// Owner 10-10: the numbers behind each Likelihood row moved off the row into a popover on an "i" beside the row title.
+// It opens on hover and on keyboard focus, a click PINS it (so it survives the pointer leaving); Escape, a click
+// anywhere else, a scroll or a resize closes it; one at a time. It reuses the app's teleported, viewport-fixed bubble
+// (PlayerDetailSkillList's .skill-tip): the Likelihood block scrolls, so anything positioned inside it would be clipped.
+type PgLikelihoodKey = PgLikelihoodRow['key'];
+const DICE_TIP_MARGIN = 8;
+const DICE_TIP_GAP = 7;
+const diceTip = reactive<{ key: PgLikelihoodKey | null; pinned: boolean; left: number; top: number; below: boolean }>({
+  key: null, pinned: false, left: 0, top: 0, below: true,
+});
+const diceTipEl = ref<HTMLElement | null>(null);
+let diceTipAnchor: HTMLElement | null = null;
+const diceTipRow = computed(() => pgDiceSelected.value.likelihoods.find((r) => r.key === diceTip.key) ?? null);
+const diceTipId = (key: PgLikelihoodKey) => `pg-dice-tip-${key}`;
+function placeDiceTip(): void {
+  const el = diceTipEl.value;
+  if (!el || !diceTipAnchor) return;
+  const icon = diceTipAnchor.getBoundingClientRect();
+  const box = el.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // under the icon when it fits, else above it; either way kept inside the window
+  const below = icon.bottom + DICE_TIP_GAP + box.height + DICE_TIP_MARGIN <= vh || icon.top - DICE_TIP_GAP - box.height < DICE_TIP_MARGIN;
+  diceTip.below = below;
+  const top = below ? icon.bottom + DICE_TIP_GAP : icon.top - DICE_TIP_GAP - box.height;
+  diceTip.top = Math.max(DICE_TIP_MARGIN, Math.min(top, vh - DICE_TIP_MARGIN - box.height));
+  // its left edge starts at the row title (not centred on the icon), so it never spills over the distribution column
+  const start = (diceTipAnchor.parentElement ?? diceTipAnchor).getBoundingClientRect().left;
+  diceTip.left = Math.max(DICE_TIP_MARGIN, Math.min(start, vw - DICE_TIP_MARGIN - box.width));
+}
+function openDiceTip(key: PgLikelihoodKey, anchor: HTMLElement, pinned: boolean): void {
+  const icon = anchor.getBoundingClientRect();
+  diceTipAnchor = anchor;
+  diceTip.key = key; diceTip.pinned = pinned;
+  diceTip.left = icon.left; diceTip.top = icon.bottom + DICE_TIP_GAP; diceTip.below = true; // provisional; placed once measured
+  void nextTick(placeDiceTip);
+}
+function closeDiceTip(): void { diceTip.key = null; diceTip.pinned = false; diceTipAnchor = null; }
+function onDiceInfoEnter(key: PgLikelihoodKey, event: Event): void {
+  if (diceTip.pinned) return; // a pinned popover stays until it is dismissed
+  openDiceTip(key, event.currentTarget as HTMLElement, false);
+}
+function onDiceInfoLeave(key: PgLikelihoodKey): void { if (diceTip.key === key && !diceTip.pinned) closeDiceTip(); }
+function onDiceInfoFocus(key: PgLikelihoodKey, event: Event): void {
+  if (diceTip.key === key) return;
+  openDiceTip(key, event.currentTarget as HTMLElement, false); // keyboard focus moving to another row's icon replaces a pinned one
+}
+function onDiceInfoBlur(key: PgLikelihoodKey): void { if (diceTip.key === key) closeDiceTip(); }
+function onDiceInfoClick(key: PgLikelihoodKey, event: Event): void {
+  if (diceTip.key === key && diceTip.pinned) { closeDiceTip(); return; }
+  openDiceTip(key, event.currentTarget as HTMLElement, true);
+}
+function onDiceTipPointerDown(event: Event): void {
+  const target = event.target as Node | null;
+  if (target && (diceTipAnchor?.contains(target) || diceTipEl.value?.contains(target))) return;
+  closeDiceTip();
+}
+function onDiceTipKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return;
+  event.stopPropagation(); // Escape closes the popover only, not whatever is behind it
+  event.preventDefault();
+  closeDiceTip();
+}
+// The document listeners live only while a popover is open.
+function listenForDiceTipDismiss(on: boolean): void {
+  if (typeof document === 'undefined') return;
+  if (on) {
+    document.addEventListener('pointerdown', onDiceTipPointerDown, true);
+    document.addEventListener('keydown', onDiceTipKeyDown, true);
+    window.addEventListener('scroll', closeDiceTip, true);
+    window.addEventListener('resize', closeDiceTip);
+  } else {
+    document.removeEventListener('pointerdown', onDiceTipPointerDown, true);
+    document.removeEventListener('keydown', onDiceTipKeyDown, true);
+    window.removeEventListener('scroll', closeDiceTip, true);
+    window.removeEventListener('resize', closeDiceTip);
+  }
+}
+watch(() => diceTip.key !== null, listenForDiceTipDismiss, { flush: 'sync' });
+watch([diceModalOpen, diceSide, () => props.showStats], closeDiceTip);
+onBeforeUnmount(() => { closeDiceTip(); listenForDiceTipDismiss(false); });
+
 defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 </script>
 
@@ -179,7 +261,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
              roulette / awaiting / no-MVP line and the winner's portrait card ride in its slots. -->
         <div v-for="side in [pg.home, pg.away]" :key="side.which" class="pg-mvp-team" :data-side="side.which">
           <PostGameRoster class="pg-mvp-roster" :side="side.which" :switcher="false" two-line :teams="pg" :portrait="portrait" :local-side="localSide"
-            :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="pgMvpRows[side.which].ids" :extras="pgMvpRows[side.which].extras">
+            :skill-mode="skillMode" :icon-style="iconStyle" :only-ids="pgMvpRows[side.which].ids" :extras="pgMvpRows[side.which].extras" :innate-toggle="side.which === 'away'">
             <template #status>
               <!-- #25-v2 (owner 2026-07-14): active reveal. ⚖ the roulette lands on side.mvps (the SERVER award). -->
               <div v-if="roll[side.which].phase === 'cycling'" class="pg-mvp-roulette" aria-live="polite">
@@ -313,14 +395,25 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 <div class="pg-dice-cols pg-dice-cols-single">
                   <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
                     <div class="pg-dice-block">
-                      <div v-for="row in side.likelihoods" :key="row.label" class="pg-dice-gauge-row">
-                        <span class="pg-dice-gauge-label">{{ row.label }}</span>
-                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${pgOdds(row.like)} games ${pgLuck(row.like)} (${pgZ(row.like)})`">
+                      <!-- Owner 10-09: each row measures RESULTS against their fair chance (armour broken, rolls passed, what the
+                           block dice offered); a game cached before that reads "not measured". Owner 10-10: the plain numbers
+                           are no longer a line under the gauge - the "i" beside the title opens them in a popover. -->
+                      <div v-for="row in side.likelihoods" :key="row.key" class="pg-dice-gauge-row" :data-row="row.key" :data-measured="row.like.measured">
+                        <span class="pg-dice-gauge-head">
+                          <span class="pg-dice-gauge-label">{{ row.label }}</span>
+                          <button type="button" class="pg-dice-info" :aria-label="`${row.label} details`"
+                            :aria-expanded="diceTip.key === row.key" :aria-describedby="diceTip.key === row.key ? diceTipId(row.key) : undefined"
+                            :data-open="diceTip.key === row.key" :data-pinned="diceTip.key === row.key && diceTip.pinned"
+                            @pointerenter="onDiceInfoEnter(row.key, $event)" @pointerleave="onDiceInfoLeave(row.key)"
+                            @focus="onDiceInfoFocus(row.key, $event)" @blur="onDiceInfoBlur(row.key)"
+                            @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
+                        </span>
+                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${pgOddsSentence(row.like)}`">
                           <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
                           <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
-                          <line v-if="row.like.n > 0" :x1="pgGaugeX(row.like.z)" y1="4" :x2="pgGaugeX(row.like.z)" y2="42" class="pg-dice-marker" />
+                          <line v-if="pgHasMarker(row.like)" :x1="pgGaugeX(row.like.zShown)" y1="4" :x2="pgGaugeX(row.like.zShown)" y2="42" class="pg-dice-marker" />
                         </svg>
-                        <span class="pg-dice-gauge-value" :title="row.like.n > 0 ? `games ${pgLuck(row.like)} · ${row.like.n} rolls · avg ${row.like.mean.toFixed(2)} · ${pgZ(row.like)}` : 'no rolls'"><b>{{ pgOdds(row.like) }}</b></span>
+                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && row.like.average" :title="row.detail"><b>{{ pgOdds(row.like) }}</b></span>
                       </div>
                     </div>
                   </div>
@@ -344,6 +437,12 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             </div>
           </div>
         </div>
+      </div>
+      <!-- Owner 10-10: the open row's numbers. A sibling of the pane (not inside its scrolling block), fixed to the viewport. -->
+      <div v-if="diceModalOpen && showStats && diceTipRow" :id="diceTipId(diceTipRow.key)" ref="diceTipEl" class="skill-tip pg-dice-tip" role="tooltip"
+        :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px' }">
+        <b class="skill-tip-name">{{ diceTipRow.label }}</b>
+        <span v-for="(stat, i) in diceTipRow.stats" :key="i" class="pg-dice-tip-line"><span v-if="stat.label" class="pg-dice-tip-label">{{ stat.label }}: </span><span class="pg-dice-tip-value">{{ stat.value }}</span></span>
       </div>
     </Teleport>
   </div>
@@ -735,8 +834,9 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-left { min-height: 0; overflow: auto; padding-right: 6px; }
 .pg-dice-cols.pg-dice-cols-charts { grid-template-columns: 1fr; }
 .pg-dice-cols-charts .pg-dice-col { display: flex; flex-direction: column; }
-.pg-dice-right { min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
-.pg-dice-right-top { min-height: 0; }
+/* Owner 10-09: five rows, each with its numbers under the gauge - the block may take most of the column, then scrolls; the fun facts keep the rest. */
+.pg-dice-right { min-height: 0; display: grid; grid-template-rows: fit-content(72%) minmax(0, 1fr); gap: 12px; }
+.pg-dice-right-top { min-height: 0; overflow: auto; }
 /* Owner 10-01 (S70): the Fun facts header stays put; only the facts under it scroll. */
 .pg-dice-right-bottom { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .pg-dice-right-bottom > h3 { flex: 0 0 auto; }
@@ -749,13 +849,14 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-cols.pg-dice-cols-single { grid-template-columns: 1fr; }
 .pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 0.6em 1em 0.5em; }
 .pg-dice-col-single[data-side='away'] .pg-dice-block { border-top-color: #f2363c; }
-.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 1em; padding: 0.25em 0; } /* symmetric: the curve sits dead centre of the panel */
+.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 1em; padding: 0.1em 0; } /* symmetric: the curve sits dead centre of the panel */
 .pg-dice-col-single .pg-dice-gauge-value { text-align: right; max-width: none; }
 .pg-dice-col-single .pg-dice-gauge-label { font-size: 1.3em; }
-.pg-dice-col-single .pg-dice-gauge { height: clamp(70px, 9vh, 130px); }
+.pg-dice-col-single .pg-dice-gauge { height: clamp(48px, 6.5vh, 104px); } /* owner 10-09: shorter. Owner 10-10: the numbers line under it is gone, so the rows sit tighter still */
 .pg-dice-col-single .pg-dice-curve { stroke-width: 1.6; }
 .pg-dice-col-single .pg-dice-marker { stroke-width: 3.5; }
 .pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.5em; }
+.pg-dice-col-single .pg-dice-gauge-value[data-average='true'] b { font-size: 1.15em; } /* "about average" is words, not odds: quieter */
 .pg-dice-col-single .pg-dice-fact { padding: 0.3em 0; gap: 0.1em 1em; }
 .pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
 .pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
@@ -815,6 +916,17 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-gauge-value { line-height: 1.2; font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--ui-muted); max-width: 11em; }
 .pg-dice-gauge-value b { white-space: nowrap; }
 .pg-dice-gauge-value b { font-size: 0.95rem; color: var(--ui-text); }
+/* Owner 10-10: the plain numbers behind the row left the row; an "i" beside the title opens them (hover, focus or click).
+   The button is a quiet ring in the pane's own tokens; the popover is the app's teleported bubble (.skill-tip), left-aligned. */
+.pg-dice-gauge-head { display: inline-flex; align-items: center; gap: 0.45em; min-width: 0; }
+.pg-dice-info { flex: none; box-sizing: border-box; width: 1.5em; height: 1.5em; min-width: 18px; min-height: 18px; padding: 0; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--ui-border); background: var(--ui-surface); color: var(--ui-muted); font: inherit; font-size: max(var(--ui-min-text-size, 12px), 0.8em); font-weight: 700; font-style: italic; font-family: Georgia, 'Times New Roman', serif; line-height: 1; cursor: help; }
+.pg-dice-info:hover, .pg-dice-info:focus-visible, .pg-dice-info[data-open='true'] { border-color: var(--ui-accent); color: var(--ui-text); outline: none; }
+.pg-dice-info[data-pinned='true'] { background: color-mix(in srgb, var(--ui-accent) 25%, var(--ui-surface)); }
+.skill-tip.pg-dice-tip { z-index: 220; transform: none; align-items: flex-start; text-align: left; gap: 0.2rem; max-width: min(26rem, calc(100vw - 16px)); pointer-events: auto; font-variant-numeric: tabular-nums; }
+.pg-dice-tip-line { overflow-wrap: anywhere; }
+.pg-dice-tip-label { color: var(--ui-muted); }
+.pg-dice-gauge-row + .pg-dice-gauge-row { border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
+.pg-dice-gauge-row[data-measured='false'] .pg-dice-curve, .pg-dice-gauge-row[data-measured='false'] .pg-dice-mean { opacity: 0.4; }
 .pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: 0.9rem; }
 .pg-stat-cell[data-lead='true'] { color: var(--ui-accent); font-weight: 800; }
 .pg-stats table { width: 100%; table-layout: fixed; border-collapse: collapse; }
