@@ -5012,8 +5012,15 @@ function handleServerJoin(cmd: { spectators?: number; spectatorNames?: unknown; 
   const line = joinLogLine(cmd, spectatorIngress ? spectatorIngress.history.head?.model ?? null : game.value);
   if (line) log('system', line);
   // Owner 10-10: the opponent-left notice stays until THAT coach joins again as a player (never cleared by a spectator).
-  if (state.opponentLeft && /player/i.test(String(cmd.clientMode ?? ''))
-    && String(cmd.coach ?? '').trim().toLowerCase() === state.opponentLeft.coach.trim().toLowerCase()) state.opponentLeft = null;
+  // Owner 10-10 (stuck after a reconnect): also cleared when the server lists that coach among the connected players
+  // (the join broadcast's playerNames), whoever's join it is - a leave from a stale session can arrive after the rejoin.
+  if (state.opponentLeft) {
+    const left = state.opponentLeft.coach.trim().toLowerCase();
+    const joinedAsPlayer = /player/i.test(String(cmd.clientMode ?? '')) && String(cmd.coach ?? '').trim().toLowerCase() === left;
+    const listed = Array.isArray((cmd as { playerNames?: unknown }).playerNames)
+      && ((cmd as { playerNames?: unknown[] }).playerNames as unknown[]).some((name) => String(name ?? '').trim().toLowerCase() === left);
+    if (joinedAsPlayer || listed) state.opponentLeft = null;
+  }
   if (Array.isArray(cmd.spectatorNames)) state.spectatorNames = cmd.spectatorNames.map(String);
   if (typeof cmd.spectators !== 'number') return;
   const prev = state.spectatorCount;
@@ -21935,7 +21942,9 @@ function handleServerPush(cmd: Record<string, unknown>) {
     if (typeof cmd.spectators === 'number') state.spectatorCount = cmd.spectators as number;
     if (Array.isArray(cmd.spectatorNames)) state.spectatorNames = (cmd.spectatorNames as unknown[]).map(String);
     const leftCoach = String(cmd.coach ?? '');
-    if (/player/i.test(String(cmd.clientMode ?? '')) && leftCoach) {
+    // Owner 10-10: never about the coach in this seat (a leave for my own earlier session after I rejoined).
+    const mine = play.active && leftCoach.trim().toLowerCase() === String(play.coach ?? '').trim().toLowerCase();
+    if (/player/i.test(String(cmd.clientMode ?? '')) && leftCoach && !mine) {
       state.opponentLeft = { coach: leftCoach, seq: (state.opponentLeft?.seq ?? 0) + 1 };
       log('system', `${leftCoach} has left the game`);
     }
@@ -24954,6 +24963,8 @@ export const gameStore = {
   },
 
   /** Spec S15B: the player whose End Activation currently rolls (live activate intent, unmoved), for the row label. */
+  /** Owner 10-10: the coach can click the opponent-left notice away (it can never be stuck on screen). */
+  dismissOpponentLeft(): void { state.opponentLeft = null; },
   bigGuyActivateRollPlayerId(): string | null {
     return game.value ? liveBigGuyActivateIntent(game.value)?.playerId ?? null : null;
   },

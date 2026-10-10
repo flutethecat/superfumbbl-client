@@ -14484,7 +14484,7 @@ function sendChat() {
 
         <!-- #136 (owner): opponent-left connection notice — a player left the game; stays until that coach rejoins (owner 10-10). -->
         <div v-if="opponentLeftVisible && gameStore.state.opponentLeft" :key="'ol-' + gameStore.state.opponentLeft.seq"
-          class="opponent-left-toast">
+          class="opponent-left-toast" role="button" title="Click to dismiss" @click="gameStore.dismissOpponentLeft()">
           <span class="opponent-left-icon">⚠</span>
           <span class="opponent-left-text"><span><b>{{ gameStore.state.opponentLeft.coach }}</b> has left the game.</span><span>Waiting for <b>{{ gameStore.state.opponentLeft.coach }}</b> to reconnect.</span></span>
         </div>
@@ -18646,7 +18646,8 @@ function sendChat() {
   background: linear-gradient(120deg, #4a3a08f2, #2a2006e8);
   border: 1.5px solid #e0b040cc;
   box-shadow: 0 6px 22px #000b;
-  pointer-events: none;
+  pointer-events: auto; /* owner 10-10: click to dismiss */
+  cursor: pointer;
   white-space: nowrap;
   animation: injury-in var(--p-280) ease-out;
 }
