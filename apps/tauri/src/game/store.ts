@@ -18,7 +18,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
@@ -28,6 +28,7 @@ import { inducementDisplayName, useInducementPrompt } from './useInducementPromp
 import { freeReserveWireCoordinate } from './reserveSlot';
 import { PASTRIES_INDUCEMENT, pastriesOfferOf, pastriesStep, type PastriesOffer, type PastriesOutcome, type PastriesPendingDecline } from './pastriesSplash';
 import { waitingSeatRole } from './inducementsPhase';
+import { gettingEvenSplashes, gettingEvenSplashKey } from './gettingEvenSplash';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
@@ -1395,6 +1396,8 @@ const legacyState = reactive({
   touchbackWaiting: null as { message: string } | null,
   /** S91: 'Your opponent is choosing the kick-off destination' for every seat but the kicking coach. */
   kickoffWaiting: null as { message: string } | null,
+  /** Owner g1957941 (1.0.296): '<Coach> is choosing a hatred for <Player>' (BB2025 Getting Even `selectKeyword`) for every seat but the choosing coach. */
+  keywordWaiting: null as { title: string; message: string } | null,
   /** S62: '<Coach> is selecting / repositioning players for the Solid Defence!' for every seat but the kicking coach. */
   solidDefenceWaiting: null as { message: string } | null,
   /** Owner 10-02 (S99): "<who> is selecting players for Pick-Me-Up" for every seat but the choosing coach. */
@@ -1475,6 +1478,9 @@ const legacyState = reactive({
   /** Owner 10-26: the Bretonnian Pastries outcome splash on every seat - used (success / failed roll) or declined.
    *  Server-derived (pastriesSplash.ts); the reroll toast's look on its own slot. `seq` never repeats. */
   pastriesSplash: null as { side: 'home' | 'away'; outcome: 'success' | 'failed' | 'declined'; title: string; text: string; playerId: string; seq: number } | null,
+  /** Owner g1957941 (1.0.296): the Getting Even result splash on every seat ("<Player> learns to hate <Trait>"), the Pastries
+   *  toast's surface and timing. Server-derived (gettingEvenSplash.ts). `seq` never repeats. */
+  gettingEvenSplash: null as { side: 'home' | 'away'; outcome: 'success' | 'failed'; title: string; text: string; playerId: string; seq: number } | null,
 });
 const spectatorHudCache = new WeakMap<SpectatorPublishedPosition, Partial<typeof legacyState>>();
 /** Owner 10-11: the automatic (spectator / replay / review) field flip under Settings > Spectator and replay view.
@@ -1516,6 +1522,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     chargeWaiting: passive.chargeWaiting,
     touchbackWaiting: passive.touchbackWaiting,
     kickoffWaiting: passive.kickoffWaiting,
+    keywordWaiting: passive.keywordWaiting,
     solidDefenceWaiting: passive.solidDefenceWaiting,
     pickMeUpWaiting: passive.pickMeUpWaiting,
     pushWaiting: passive.pushWaiting,
@@ -1553,7 +1560,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
   'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPills', 'injuryPuff', 'injuryTokenHolds',
-  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'pastriesSplash', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
+  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'pastriesSplash', 'gettingEvenSplash', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
   'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
@@ -1572,7 +1579,8 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'keywordWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if (key === 'keywordWaiting' && !offerTransportAlive) return null; // Sol r1: a position drained after the socket closed never re-raises it
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection, chat: visibleLogLanes.chat,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -2802,7 +2810,7 @@ function clearApothecaryFixUps(): void {
   apothecaryFixUpInjuryWaitSince = null;
   apothecaryFixUpQueue = [];
   pendingApothecaryFixUps.clear();
-  clearPastriesSplash(); // owner 10-26: every reset that drops the fix-up toasts drops the Pastries splash too
+  clearPastriesSplash(); clearGettingEvenSplash(); // owner 10-26: every reset that drops the fix-up toasts drops the Pastries splash too
   apothecaryChoicesOpen.clear();
   state.apothecaryFixUp = null;
 }
@@ -3022,7 +3030,7 @@ function pastriesSplashPillWaitMs(playerId: string): number {
   return Math.max(0, popped + presentationMs(VIEWER_VISIBLE_PILL_MS) - Date.now());
 }
 function pumpPastriesSplash(): void {
-  if (pastriesSplashTimer || pastriesSplashPoll || state.pastriesSplash) return;
+  if (pastriesSplashTimer || pastriesSplashPoll || state.pastriesSplash || state.gettingEvenSplash) return; // Sol r1: the Getting Even toast's gap pumps us
   if (playback.catchingUp) { pastriesSplashQueue = []; pastriesSplashWaitSince = null; return; }
   const g = game.value;
   const gameId = String((g as { gameId?: unknown } | null)?.gameId ?? 'unknown');
@@ -3050,7 +3058,7 @@ function pumpPastriesSplash(): void {
   state.pastriesSplash = { side, outcome: next.kind, title: inducementDisplayName(PASTRIES_INDUCEMENT), text, playerId: next.playerId, seq: ++pastriesSplashSeq };
   pastriesSplashTimer = scheduleGameTimeout(() => {
     state.pastriesSplash = null;
-    pastriesSplashTimer = scheduleGameTimeout(() => { pastriesSplashTimer = null; pumpPastriesSplash(); }, PASTRIES_SPLASH_GAP_MS);
+    pastriesSplashTimer = scheduleGameTimeout(() => { pastriesSplashTimer = null; pumpPastriesSplash(); pumpGettingEvenSplash(); }, PASTRIES_SPLASH_GAP_MS);
   }, Math.max(450, presentationMs(PASTRIES_SPLASH_HOLD_MS)));
 }
 /** Called for every applied frame / presented review position: `before` = the open Pastries offer at frame start. */
@@ -3068,6 +3076,70 @@ function surfacePastriesSplash(lane: 'live' | 'review', before: PastriesOffer | 
     if (pastriesSplashQueue.length < PASTRIES_SPLASH_QUEUE_CAP) pastriesSplashQueue.push({ ...outcome, gameId });
   }
   pumpPastriesSplash();
+}
+/** Owner g1957941 (1.0.296): a Getting Even result (`gettingEvenRoll`) splashes the learned hatred ON THE PITCH for
+ *  every seat (both coaches, spectators, replays) on the Pastries toast's surface and timing (title "Getting Even", the
+ *  log's words beneath; store-timed self-hide). The injured player is in the casualty box by then, so nothing rides his
+ *  figure. Once per report occurrence (game + command + player: a rewind / re-sync does not re-fire); never during
+ *  catch-up. The keyword waiting notice dies on the same frame (the choice has resolved). Fire-and-forget. */
+const GETTING_EVEN_SPLASH_QUEUE_CAP = 4;
+let gettingEvenSplashQueue: { playerId: string; side: 'home' | 'away'; outcome: 'success' | 'failed'; text: string; gameId: string }[] = [];
+let gettingEvenSplashTimer: ReturnType<typeof setTimeout> | null = null;
+let gettingEvenSplashSeq = 0;
+/** Sol r1/r2: the occurrence keys outlive presentation resets, seeks, rewinds, Pause and same-game reconnects (each would
+ *  replay the same game + commandNr + player). The set restarts whenever the store ADOPTS a model with another gameId
+ *  (noteGettingEvenGameAdopted: the game setter - fresh join, reconnect snapshot, replay load - and every published
+ *  spectator position), independent of any report. Bounded FIFO: the newest GETTING_EVEN_SPLASH_SEEN_CAP keys (a
+ *  game has at most a few dozen casualties, so 64 never evicts a key a rewind inside the same game can still reach). */
+const GETTING_EVEN_SPLASH_SEEN_CAP = 64;
+const gettingEvenSplashSeen = new Set<string>();
+let gettingEvenSplashSeenGameId: string | null = null;
+function noteGettingEvenGameAdopted(model: GameJson | null | undefined): void {
+  if (!model) return; // a disconnect (null) is not a game change: a same-game reconnect keeps the keys
+  const gameId = String((model as { gameId?: unknown }).gameId ?? 'unknown');
+  if (gettingEvenSplashSeenGameId !== null && gettingEvenSplashSeenGameId !== gameId) gettingEvenSplashSeen.clear();
+  gettingEvenSplashSeenGameId = gameId;
+}
+function rememberGettingEvenSplash(key: string): void {
+  gettingEvenSplashSeen.add(key);
+  while (gettingEvenSplashSeen.size > GETTING_EVEN_SPLASH_SEEN_CAP) gettingEvenSplashSeen.delete(gettingEvenSplashSeen.values().next().value!);
+}
+function clearGettingEvenSplash(): void {
+  if (gettingEvenSplashTimer) cancelGameTimeout(gettingEvenSplashTimer);
+  gettingEvenSplashTimer = null;
+  gettingEvenSplashQueue = [];
+  state.gettingEvenSplash = null;
+}
+function pumpGettingEvenSplash(): void {
+  // Sol r1: one toast slot shared with the Pastries splash - wait while a Pastries line is up (its gap pumps us).
+  if (gettingEvenSplashTimer || state.gettingEvenSplash || state.pastriesSplash) return;
+  if (playback.catchingUp || !offerTransportAlive) { gettingEvenSplashQueue = []; return; } // Sol r2: nothing new after a socket close
+  const gameId = String((game.value as { gameId?: unknown } | null)?.gameId ?? 'unknown');
+  while (gettingEvenSplashQueue.length && gettingEvenSplashQueue[0]!.gameId !== gameId) gettingEvenSplashQueue.shift();
+  const next = gettingEvenSplashQueue.shift();
+  if (!next) return;
+  state.gettingEvenSplash = { side: next.side, outcome: next.outcome, title: $t('hud.gettingEven'), text: next.text, playerId: next.playerId, seq: ++gettingEvenSplashSeq };
+  gettingEvenSplashTimer = scheduleGameTimeout(() => {
+    state.gettingEvenSplash = null;
+    gettingEvenSplashTimer = scheduleGameTimeout(() => { gettingEvenSplashTimer = null; pumpGettingEvenSplash(); pumpPastriesSplash(); }, PASTRIES_SPLASH_GAP_MS);
+  }, Math.max(450, presentationMs(PASTRIES_SPLASH_HOLD_MS)));
+}
+function surfaceGettingEvenSplash(reports: readonly Record<string, unknown>[], g: GameJson | null, commandNr: number | null): void {
+  const splashes = gettingEvenSplashes(reports, g);
+  if (!splashes.length) return;
+  state.keywordWaiting = null;
+  const gameId = String((g as { gameId?: unknown } | null)?.gameId ?? 'unknown');
+  for (const splash of splashes) {
+    const key = gettingEvenSplashKey(g, commandNr, splash.playerId);
+    if (gettingEvenSplashSeen.has(key)) continue;
+    rememberGettingEvenSplash(key);
+    if (playback.catchingUp) continue; // history: nothing starts during catch-up
+    // Sol r2: a frame admitted before a socket close but drained after it starts no new toast (offerTransportAlive is
+    // false from the close to the next session; a file replay resets it with its playback, so replays still splash).
+    if (!offerTransportAlive) continue;
+    if (gettingEvenSplashQueue.length < GETTING_EVEN_SPLASH_QUEUE_CAP) gettingEvenSplashQueue.push({ ...splash, gameId });
+  }
+  pumpGettingEvenSplash();
 }
 /** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
  *  ordinary reRoll report's splash; a failed one without fallback shows nothing new). */
@@ -5584,6 +5656,7 @@ const game = customRef<GameJson | null>((track, trigger) => ({
     if (spectatorPublication.position.value) throw new Error('Cannot mutate the published spectator position');
     // Owner 10-10: a replaced model (reconnect snapshot, replay seek, game change) is drawn as it is - no held injury token.
     if (value !== legacyGame.value) { clearInjuryTokenHolds(); injuryEscorts.clear(); }
+    noteGettingEvenGameAdopted(value); // Sol r2: a new gameId restarts the Getting Even splash dedup
     legacyGame.value = value; trigger();
   },
 }));
@@ -6032,6 +6105,7 @@ async function pauseSpectatorView(): Promise<void> {
           }
         }
       }
+      noteGettingEvenGameAdopted(position.model); // Sol r2: the published path adopts models without the game setter
       spectatorPublication.publish(position, snap);
       // Beefee 10-26 (g1956976, "No ball marker shown on Quick Snap event"): a played kickoffScatter reveals its landing
       // marker HERE, in the synchronous publication boundary, as applyFrame does on the live path. present() runs a
@@ -6712,6 +6786,7 @@ async function pauseSpectatorView(): Promise<void> {
       // Owner 10-09: the fix-up splash is fire-and-forget - the review pipeline does not wait on it.
       surfaceApothecaryFixUps(reports, position.model, commandNr);
       surfacePastriesSplash('review', transitionPastriesBefore, reports, position.model, commandNr); // owner 10-26: fire-and-forget too
+      surfaceGettingEvenSplash(reports, position.model, commandNr); // owner g1957941: Getting Even result splash, every seat
       transitionPastriesBefore = null;
       if (sendOffOutcome === null) {
         state.sendOffResult = null;
@@ -7148,7 +7223,7 @@ function clearCatchupTransients(): void {
   rerollStageTimers = [];
   if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
-  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); state.reRollPrompt = null; state.skillChoice = null;
+  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
     if (pregameCineQueue[i]?.kind === 'prayer') pregameCineQueue.splice(i, 1);
   }
@@ -10564,6 +10639,8 @@ function applyFrameContents(frame: QueuedFrame) {
   // Owner 10-26: the Pastries outcome splash (used / declined) - fire-and-forget, every seat.
   surfacePastriesSplash('live', pastriesOfferAtFrameStart, reports, game.value,
     Number.isFinite(Number((cmd as { commandNr?: unknown }).commandNr)) ? Number((cmd as { commandNr?: unknown }).commandNr) : null);
+  surfaceGettingEvenSplash(reports, game.value, // owner g1957941: Getting Even result splash, every seat
+    Number.isFinite(Number((cmd as { commandNr?: unknown }).commandNr)) ? Number((cmd as { commandNr?: unknown }).commandNr) : null);
   const fireballInjury = reports.some((report) => String(report.reportId) === 'injury'
     && injuryTypeName(report.injuryType).toLowerCase() === 'fireball');
   if (!fireballInjury || !enqueueBehindFireball(`fireballInjury:${String((cmd as { commandNr?: unknown }).commandNr)}`, pumpInjuries)) pumpInjuries();
@@ -11803,7 +11880,7 @@ function applyFrameContents(frame: QueuedFrame) {
             seq: (state.keywordChoice?.seq ?? 0) + 1,
           };
         }
-      } else if (play.active && !humanReRollSurface() && keywords.length > 0) {
+      } else if (mine && !humanReRollSurface() && keywords.length > 0) { // Sol r1 P1: only the owning seat ever answers
         const key = `selectKeyword:${pid}`;
         if (!followupHandled.has(key)) {
           followupHandled.add(key);
@@ -12938,7 +13015,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); } // Astra 10-20 (P2-3)
     releaseSpectatorBlockCardHold(spectatorBlockCardHold, true); // owner 10-22: catch-up never waits on a walk for the block card
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
@@ -14020,7 +14097,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
+  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
@@ -14031,7 +14108,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
   armourPublishPending = 0; armourPublishGeneration++; armourPublishedWakes.clear(); // owner 10-20
@@ -14182,7 +14259,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -16863,7 +16940,7 @@ export function installApothecaryTestHarness(
   pendingApothecaryResult = null;
   visibleCasualtyRollProjection = createCasualtyRollProjection();
   visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
-  apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear();
+  apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); gettingEvenSplashSeen.clear();
   playback.catchingUp = false;
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
@@ -16944,7 +17021,7 @@ export function installApothecaryTestHarness(
     dispose() {
       clearApothecaryResult();
       clearRerollSplash();
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash();
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash();
       injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); // owner 10-20
       state.riotousRookiesSplash = priorRiotous;
       state.turnStart = priorTurnStart;
@@ -16968,7 +17045,7 @@ export function installApothecaryTestHarness(
       state.apothecaryAutoReturn = priorAutoReturn;
       visibleCasualtyRollProjection = priorCasualtyRollProjection;
       visibleInjuryOutcomeProjection = priorOriginalOutcomes;
-      apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear();
+      apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); gettingEvenSplashSeen.clear();
       for (const key of priorAutoReturnSeen) apothecaryAutoReturnSeen.add(key);
       apothecaryAutoReturnSeq = priorAutoReturnSeq;
       playback.catchingUp = priorCatchingUp;
@@ -21377,6 +21454,11 @@ let liveInterceptionCommandNr = 0;
  *  nothing else (see surfaceReRollPrompt). */
 let liveReRollDialog: Record<string, unknown> | null | undefined = null;
 let liveReRollOfferEpoch = 0;
+/** JLeav 1.0.296 (Sol P2): the reroll card's `seq`, monotonic for the session and never derived from the current card.
+ *  A card cleared because its server dialog closed or was replaced (resolvePlayFollowups) is null for a moment; a
+ *  replacement card armed in the same frame must still get a NEW seq, or the view's positioning watcher (keyed on seq)
+ *  sees 1 -> 1, skips, and keeps following the previous card's player. */
+let reRollPromptSeq = 0;
 /** Star S1 (Yoink!): the coach's ELECTION for the current interception offer, pinned to that offer's
  *  followupHandled key. Upstream keeps the same one-offer state in `DialogInterceptionHandler.interceptionSkill`
  *  (set on show, nulled when the coach takes the plain Yes / no holder remains). `skill` = the server's own
@@ -22194,7 +22276,7 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
       ...card,
       mine,
       chosen: null,
-      seq: (state.reRollPrompt?.seq ?? 0) + 1,
+      seq: ++reRollPromptSeq,
       instanceKey: reRollArmedKey,
     };
   };
@@ -23322,6 +23404,11 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // for that Yes to answer. Astra P2 (10-08): any OTHER frame (a clock / timeout-availability model sync, chat) is not
   // an answer and leaves it standing for the confirmEndAction that is still on its way.
   if (gazeEndRequest && !gazeEndRequestLive()) gazeEndRequest = null;
+  // JLeav 1.0.296 (latches fail open): an unanswered OWN reroll card dies with the server dialog it answers - closed (a
+  // timeout, the opponent's action) or replaced - on the frame that closes it, exactly as the coach's own answer clears
+  // it (resolveReRoll), with no further echo awaited. The lingering card kept the view re-rendering every frame. Sends
+  // nothing; a card that recorded no occurrence (instanceKey) keeps its lifecycle.
+  if (state.reRollPrompt?.mine && state.reRollPrompt.instanceKey && !dialogInstanceLive(state.reRollPrompt.instanceKey)) state.reRollPrompt = null;
   if (!play.active) return;
   const g = game.value;
   if (!g) return;
@@ -25231,6 +25318,8 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.chargeWaiting = playback.catchingUp ? null : chargeWaitingFromGame(g, myTeamId);
   state.touchbackWaiting = playback.catchingUp ? null : touchbackWaitingFromGame(g, myTeamId);
   state.kickoffWaiting = playback.catchingUp ? null : kickoffWaitingFromGame(g, myTeamId);
+  // Sol r1: frames still draining after a socket close never re-raise it (offerTransportAlive: false from close to the next session).
+  state.keywordWaiting = playback.catchingUp || !offerTransportAlive ? null : keywordWaitingFromGame(g, myTeamId);
   state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
@@ -25276,7 +25365,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -25637,7 +25726,7 @@ function drivePregameStep() {
   // (ownership, a dialog, the ball in play, a phase change, the setting off), ABOVE every early-return branch below.
   if (state.kickConfirm && !gameStore.kickConfirmLive()) state.kickConfirm = null;
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -26862,7 +26951,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -27011,7 +27100,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // caps stacking, so no separate throttle is needed here.
       const muteAtThisSpeed = replay.speed >= 4;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
       if (!wasCatchingUp && muteAtThisSpeed) setSoundsSuppressed(true);
       try {
         if (command.netCommandId === NetCommandId.SERVER_MODEL_SYNC) {
@@ -27075,7 +27164,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); // Astra 10-20 (P2-3)
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); // Astra 10-20 (P2-3)
       if (!wasCatchingUp) setSoundsSuppressed(true);
       try {
         commands.forEach((command, index) => {
@@ -28845,9 +28934,10 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
+      clearGettingEvenSplash(); // Sol r1: no toast timer / queued splash outlives the socket
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
       // transport cleanup, not a second error and must not overwrite that status.
       if (spectatorStatusTerminal) return;
@@ -29224,8 +29314,9 @@ export const gameStore = {
       retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       clearSendOffWaiting();
+      clearGettingEvenSplash(); // Sol r1: no toast timer / queued splash outlives the socket
       if (officialStatusTerminal) {
         expectingGame = false;
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
@@ -31928,7 +32019,7 @@ export const gameStore = {
     play.active = false;
     withdrawConnectDeclaredSeat(); // owner 10-08: the seat declaration belongs to one connection
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

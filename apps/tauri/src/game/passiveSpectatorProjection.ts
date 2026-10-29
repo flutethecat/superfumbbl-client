@@ -211,6 +211,25 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
+/** Owner g1957941 (1.0.296): BB2025 Getting Even - the server's `selectKeyword` dialog (playerId = the casualtied player,
+ *  keywordChoiceMode GETTING_EVEN) is answered by that player's coach, who picks the keyword to hate. Every other seat
+ *  (the opponent, spectators, replay) is told who is choosing; the owning seat sees the keyword card instead. Derived
+ *  from the published dialog each frame - no latch, never an answer. */
+export function keywordWaitingFromGame(g: GameJson, myTeamId: string | null): { title: string; message: string } | null {
+  const dialog = g.dialogParameter as Record<string, unknown> | null;
+  if (dialog?.dialogId !== 'selectKeyword' || dialog.playerId == null || dialog.playerId === '') return null;
+  const playerId = String(dialog.playerId);
+  const team = [g.teamHome, g.teamAway].find((t) => t?.playerArray?.some((pl) => String(pl.playerId) === playerId));
+  if (!team || (myTeamId !== null && myTeamId === String(team.teamId ?? ''))) return null;
+  const player = team.playerArray.find((pl) => String(pl.playerId) === playerId);
+  const coach = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.theOtherCoach');
+  const playerName = String(player?.playerName ?? '').trim() || playerId;
+  const gettingEven = String(dialog.keywordChoiceMode ?? '').toUpperCase() === 'GETTING_EVEN';
+  return gettingEven
+    ? { title: $t('hud.gettingEven'), message: $t('hud.waiting.text.choosingHatred', { coach, player: playerName }) }
+    : { title: $t('hud.keyword'), message: $t('hud.waiting.text.choosingKeyword', { coach, player: playerName }) };
+}
+
 /** Bretonnian Pastries lane (10-23): an upstream `useInducement` dialog aimed at a named player (DialogUseInducementParameter
  *  teamId + playerId: Pastries on a Knocked-out player, Igor on a dead one) is answered by that team's coach; every other
  *  seat (the other coach, spectators, replay) is told who is deciding. The title names the inducement when one type is
@@ -326,6 +345,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     pushWaiting: pushWaitingFromGame(g, null),
     reRollWaiting: reRollWaitingFromGame(g, null),
     useInducementWaiting: useInducementWaitingFromGame(g, null),
+    keywordWaiting: keywordWaitingFromGame(g, null),
     onTheBallWaiting: projectOnTheBallWaiting({ audience: 'spectator', turnMode: String(g.turnMode ?? ''), homePlaying: !!g.homePlaying, teamHome: g.teamHome, teamAway: g.teamAway }),
     penaltyShootout: p.endGame.dialog?.id === 'penaltyShootout' ? penaltyShootoutPresentation(g, p.endGame.dialog.payload ?? {}) : null,
     concedeNotice: concedeNoticeFromGame(g),

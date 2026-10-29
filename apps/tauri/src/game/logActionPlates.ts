@@ -443,6 +443,9 @@ export function logActionPlate(report: Report, game: GameJson | null, context: L
  * apothecary, regeneration, a skill, a crowd push) shows its own icon. A reroll row keeps only its reroll source icon.
  * `rows` are in display order (oldest first); the parent is the nearest earlier row at a lower indent.
  */
+// Perf (JLeav 1.0.296): a step row's reduced plate is built once per action, so the row's plate keeps its identity on
+// every recompute (the Log's memoised rows re-render only when a prop changes identity). Actions are immutable.
+const stepPlates = new WeakMap<LogActionPlate, LogActionPlate>();
 export function logRowPlates(rows: readonly { action?: LogActionPlate | null; indent?: number }[]): (LogActionPlate | null | undefined)[] {
   const kinds: (LogActionKind | null)[] = [];
   return rows.map(({ action, indent = 0 }) => {
@@ -453,7 +456,9 @@ export function logRowPlates(rows: readonly { action?: LogActionPlate | null; in
     kinds[indent] = kind;
     if (!indent || !action || !kind) return action;
     if (kind !== 'reroll' && kind !== parent) return action;
-    return action.source ? { kind: null, side: action.side, source: action.source } : { kind: null, side: action.side };
+    let step = stepPlates.get(action);
+    if (!step) stepPlates.set(action, step = action.source ? { kind: null, side: action.side, source: action.source } : { kind: null, side: action.side });
+    return step;
   });
 }
 

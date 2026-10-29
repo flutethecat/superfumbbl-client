@@ -157,6 +157,7 @@ import { logTagParts, type LogTagKind, type LogTagToken } from '../game/logTags'
 import breastplateIconUrl from '@fumbbl40k/ffb-pitch/assets/decorations/breastplate.png';
 import niStatDownIconUrl from '@fumbbl40k/ffb-pitch/assets/status/stat-down/ni.png';
 import LogActionPlate, { logRowSide } from '../components/LogActionPlate.vue';
+import LogRow from '../components/LogRow';
 import { logRowPlates } from '../game/logActionPlates';
 import { screenDirectionText } from '../game/logDirection';
 import { koLetteringUrl } from '../game/koLettering';
@@ -519,6 +520,7 @@ import { $t, data, terms, useLiveSet } from '../i18n';
 const liveSetHere = useLiveSet();
 import { playerStateLabel, playerStateToken } from '../game/playerStateToken';
 import { shownLogLine } from '../game/logShown';
+import { internLogEntry, logRowKeys, memoRows } from '../game/logRowStability';
 const GIVE_THANKS: string[] = givethanksRaw
   .split(/\r?\n/).slice(1).map((s) => s.trim()).filter(Boolean);
 /** Owner 09-21: two-line crowd SAYINGS for the placards (signsayings.csv: `top,bottom` per line) — mixed with the
@@ -807,23 +809,31 @@ const chatBubbleList = computed(() => settings.chatStyle === 'bubbles'
   ? chatBubbleRows(chatEntries.value, (side) => logNameColor(side), (side) => chatToastRole(side, gameStore.mySeat.value, gameStore.isPlaying.value))
   : []);
 const chatBubbleTimes = computed(() => chatEntries.value.map((e) => e.time));
+/** Perf (JLeav 1.0.296): chat rows keyed by the entry's identity, not its index (a capped chat shifted every row). */
+const chatRowKeyList = computed(() => logRowKeys(chatEntries.value));
 // Owner 2026-07-08: chat lives ONLY in the Chat tab now — occlude 'talk' lines from
 // the Log pane so it stays a pure event log.
 const logEntries = computed(() => {
   // i18n (Astra r2): client-authored lines are stored in English and shown in the current language
-  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical', settings.logStyle === 'fumbbl').map(shownLogLine);
+  // Perf (JLeav 1.0.296): an unchanged spectator / replay entry is the same object on every read (internLogEntry), so its
+  // row keeps its key and is not re-rendered
+  const entries = visibleMatchLogEntries(gameStore.state.log, settings.showServerSequencingEvents, settings.logStyle === 'graphical', settings.logStyle === 'fumbbl').map(internLogEntry).map(shownLogLine);
   // Owner 10-15 (Graphical block flow): a line whose Graphical version is null is left out there (another row says it)
   if (settings.logStyle !== 'graphical') return entries;
   // owner 10-16 (evening): the coach's block-die choice joins the block's dice row
   const joined = composeGraphicalJoins(entries);
   // a Graphical line can expand into further rows (g.more: a self-vomit's armour / injury and casualty rows); each
-  // becomes its own row with the parent's time, kind and tint
+  // becomes its own row with the parent's time, kind and tint. Perf (JLeav 1.0.296): built once per entry (memoRows),
+  // so the expanded rows are the same objects on every recompute and keep their keys.
   return joined.flatMap((entry) => (entry.g === null ? [] : entry.g?.more?.length
-    ? [entry, ...entry.g.more.map((more) => ({ ...entry, g: more }))]
+    ? memoRows(entry, (e) => [e, ...(e.g?.more ?? []).map((more) => ({ ...e, g: more }))])
     : [entry]));
 });
+/** Perf (JLeav 1.0.296, owner "option 2"): the Log rows' keys - each row's identity, never its index (logRowStability). */
+const logRowKeyList = computed(() => logRowKeys(logEntries.value));
 /** Owner 10-16 (FUMBBL log style): upstream's own lines, one row each (indent and text styles as the Java client). */
 const upstreamRows = computed(() => (settings.logStyle === 'fumbbl' ? upstreamLogRows(logEntries.value) : []));
+const upstreamRowKeyList = computed(() => logRowKeys(upstreamRows.value));
 const upstreamSegCache = new WeakMap<object, UpstreamLogSegment[]>();
 function upstreamSegmentsFor(line: UpstreamLogLine): UpstreamLogSegment[] {
   let segs = upstreamSegCache.get(line);
@@ -15519,9 +15529,14 @@ function sendChat() {
                    model sync) rebuilt a vnode per row and segment: the cost grew with the game's log. v-memo skips the subtree
                    unless something it reads changes; the list below is everything it reads (entries are immutable once
                    pushed, a new line makes a new logEntries array). Keep it complete when the row template changes. -->
-              <pre ref="logEl" v-memo="[logEntries, upstreamRows, logRowPlateList, settings.logStyle, settings.logTimestamps, settings.logDiceAsNumbers, settings.logNeededAsNumbers, gameStore.mySeat.value, seatTint, appliedPitchView.orientation, appliedPitchView.flipped, logTextStyle]" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
-</span></template><template v-else><span v-for="(entry, i) in logEntries" :key="i" :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="logRowPlateList[i]" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
-</span></span></template></pre>
+              <!-- Perf (JLeav 1.0.296, owner "option 2"): each row is a LogRow instance keyed by the row's identity (never its
+                   index), the row markup its slot. A new line renders only the new row: a kept row's props (identity-stable
+                   rows and plates, logRowStability.ts) are unchanged, so Vue skips it, and the row's own render tracks the
+                   settings / tint / view it reads. The slot reads only its slot props, never the v-for variables (that keeps
+                   the slot STABLE; a v-for variable read inside it would re-render every row again). -->
+              <pre ref="logEl" v-memo="[logEntries, upstreamRows, logRowPlateList, settings.logStyle, settings.logTimestamps, settings.logDiceAsNumbers, settings.logNeededAsNumbers, gameStore.mySeat.value, seatTint, appliedPitchView.orientation, appliedPitchView.flipped, logTextStyle]" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><LogRow v-for="(urow, i) in upstreamRows" :key="upstreamRowKeyList[i]" :entry="urow" v-slot="{ entry: row }"><span class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
+</span></LogRow></template><template v-else><LogRow v-for="(row, i) in logEntries" :key="logRowKeyList[i]" :entry="row" :plate="logRowPlateList[i]" v-slot="{ entry, plate }"><span :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="plate" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
+</span></span></LogRow></template></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 {{ $t('hud.logPanel.log.newEvents') }}
               </button>
@@ -15566,7 +15581,7 @@ function sendChat() {
                    08-19 line markup below (message words through ChatEmojiText: :shortcode: emoji, display only). -->
               <!-- Owner 08-19: chat — muted HH:MM stamp, coach NAME seat-coloured (logNameColor),
                    spectator LINES pale green, names in Nuffle over sans-serif message text. -->
-              <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" /><template v-else><span v-for="(entry, i) in chatEntries" :key="i" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
+              <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" :keys="chatRowKeyList" /><template v-else><span v-for="(entry, i) in chatEntries" :key="chatRowKeyList[i]" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
 </span></template></pre>
               <button v-if="chatNewEvents" class="new-events" @click="jumpToBottom('chat')">
                 {{ $t('hud.logPanel.newMessages') }}
@@ -16661,6 +16676,11 @@ function sendChat() {
           :message="gameStore.state.kickoffWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Owner g1957941 (1.0.296): Getting Even - the casualtied player's coach is choosing a hatred; every other seat waits on them. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.keywordWaiting" :title="gameStore.state.keywordWaiting.title" notice-id="keyword-waiting"
+          :message="gameStore.state.keywordWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
           :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
 
@@ -17194,6 +17214,17 @@ function sendChat() {
           <span class="pastries-toast-lines">
             <span class="pastries-toast-title">{{ gameStore.state.pastriesSplash.title }}</span>
             <span class="reroll-toast-text">{{ gameStore.state.pastriesSplash.text }}</span>
+          </span>
+        </div>
+        <!-- Owner g1957941 (1.0.296): the Getting Even result on every seat ("<Player> learns to hate <Trait>" / the failure
+             wording) - the Pastries toast's surface and timing, on the pitch (the injured player is in the casualty box).
+             Store-timed (self-hides), server-derived (gettingEvenSplash.ts); the key never repeats. -->
+        <div v-if="gameStore.state.gettingEvenSplash" :key="'getting-even-' + gameStore.state.gettingEvenSplash.seq"
+          class="reroll-toast pastries-toast getting-even-toast" :data-side="gameStore.state.gettingEvenSplash.side" :data-outcome="gameStore.state.gettingEvenSplash.outcome" data-testid="getting-even-splash">
+          <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Hatred', effectiveIconStyle)" class="reroll-toast-icon pastries-toast-icon" :src="skillIconUrl('Hatred', effectiveIconStyle) ?? ''" alt="" />
+          <span class="pastries-toast-lines">
+            <span class="pastries-toast-title">{{ gameStore.state.gettingEvenSplash.title }}</span>
+            <span class="reroll-toast-text">{{ gameStore.state.gettingEvenSplash.text }}</span>
           </span>
         </div>
 

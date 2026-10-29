@@ -170,6 +170,9 @@ export function joinGraphicalRows(previous: GraphicalLine, next: GraphicalLine):
 /** Owner 10-16: the Graphical rows as displayed - an entry whose row joins the previous entry's row (the coach's
  *  block-die choice onto the dice row) is folded into a copy of that entry and dropped. Entries are never mutated
  *  (consumers track rows by identity); the Text style, which never calls this, keeps every entry. */
+// Perf (JLeav 1.0.296): a joined row is built once per (row, joining entry) pair, so it is the same object on every
+// recompute of the view's rows (the Log keys and memoises rows by identity). Both inputs are immutable.
+const joinedRows = new WeakMap<object, WeakMap<object, object>>();
 export function composeGraphicalJoins<T extends { g?: GraphicalLine | null; action?: { kind?: string | null } | null }>(entries: readonly T[]): T[] {
   const out: T[] = [];
   for (const entry of entries) {
@@ -180,7 +183,11 @@ export function composeGraphicalJoins<T extends { g?: GraphicalLine | null; acti
       while (at >= 0 && out[at]!.action?.kind === 'teamCaptain') at--;
       const target = at >= 0 ? out[at] : undefined;
       if (target?.g && target.g.join === entry.g.joinPrevious) {
-        out[at] = { ...target, g: joinGraphicalRows(target.g, entry.g) };
+        let byEntry = joinedRows.get(target);
+        if (!byEntry) joinedRows.set(target, byEntry = new WeakMap());
+        let joined = byEntry.get(entry) as T | undefined;
+        if (!joined) byEntry.set(entry, joined = { ...target, g: joinGraphicalRows(target.g, entry.g) });
+        out[at] = joined;
         continue;
       }
     }
@@ -490,7 +497,7 @@ function skillRoll(verb: string) {
 }
 
 /** The Hatred keyword a Getting Even roll is about, as the server names it; "their foe" without one. */
-function hatredTrait(r: Report): string {
+export function hatredTrait(r: Report): string {
   const keyword = typeof r.keyword === 'string' && r.keyword.trim() ? r.keyword.trim() : '';
   return keyword ? pluralKeyword(titleCase(humanize(keyword))) : 'their foe';
 }

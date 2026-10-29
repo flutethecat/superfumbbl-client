@@ -16,10 +16,13 @@ defineProps<{
   timestamps: boolean;
   /** Per-row time strings (same index as rows). */
   times: readonly (string | undefined)[];
+  /** Perf (JLeav 1.0.296): per-row keys (same index as rows): the entry's identity, so a capped chat does not shift
+   *  every bubble by one. Without them a row is keyed by its index, as before. */
+  keys?: readonly (number | string)[];
 }>();
 </script>
 
-<template><span v-for="(row, i) in rows" :key="i" class="chat-bubble" data-kind="talk" :data-side="row.side" :data-chained="row.chained ? 'true' : undefined" :style="row.style"><span v-if="(row.name && !row.chained) || (timestamps && times[i])" class="chat-bubble-head"><span v-if="row.name && !row.chained" class="chat-bubble-name">{{ row.name }}</span><span v-if="timestamps && times[i]" class="chat-bubble-time">{{ times[i] }}</span></span><span class="chat-bubble-text"><ChatEmojiText :text="row.rest" /></span></span></template>
+<template><span v-for="(row, i) in rows" :key="keys?.[i] ?? i" class="chat-bubble" data-kind="talk" :data-side="row.side" :data-chained="row.chained ? 'true' : undefined" :style="row.style"><span v-if="(row.name && !row.chained) || (timestamps && times[i])" class="chat-bubble-head"><span v-if="row.name && !row.chained" class="chat-bubble-name">{{ row.name }}</span><span v-if="timestamps && times[i]" class="chat-bubble-time">{{ times[i] }}</span></span><span class="chat-bubble-text"><ChatEmojiText :text="row.rest" /></span></span></template>
 
 <style scoped>
 .chat-bubble {

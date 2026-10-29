@@ -353,3 +353,11 @@ export class ReplayTelestrator {
     return element.radiusX < 0.03 || element.radiusY < 0.03;
   }
 }
+
+/** Perf (JLeav 1.0.296): the view's camera-follow loop (a refresh every animation frame) runs only while something on
+ *  screen has to follow the camera: the tool is open, or at least one drawing (or a draft) is showing. Collapsed with
+ *  nothing drawn there is nothing to reproject, so the loop stops; owner 08-17 still holds - any visible drawing tracks
+ *  pan / zoom every frame. */
+export function telestratorNeedsCameraLoop(enabled: boolean, expanded: boolean, shapeCount: number): boolean {
+  return enabled && (expanded || shapeCount > 0);
+}

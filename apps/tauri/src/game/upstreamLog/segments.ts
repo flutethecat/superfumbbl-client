@@ -94,16 +94,42 @@ export function upstreamLogRows<T extends UpstreamLogRowEntry>(entries: readonly
         // a paragraph the previous report left open: the continuation joins it into ONE paragraph, which takes the
         // paragraph style of its last print (upstream's ChatLogTextPane sets it per print)
         if (line.continues && openRow >= 0) {
-          rows[openRow] = { ...rows[openRow]!, line: joinParagraph(rows[openRow]!.line, line) };
+          rows[openRow] = stableRow(rows[openRow]!.entry, joinedParagraph(rows[openRow]!.line, line), rows[openRow]!.first);
           if (!line.open) openRow = -1;
           return;
         }
-        rows.push({ entry, line, first: index === 0 });
+        rows.push(stableRow(entry, line, index === 0));
         openRow = line.open ? rows.length - 1 : -1;
       });
     } else {
-      rows.push({ entry, line: { text: entry.text, indent: 0, spans: [], names: entry.names ?? [] }, first: true });
+      rows.push(stableRow(entry, noticeLine(entry), true));
     }
   }
   return rows;
+}
+
+// Perf (JLeav 1.0.296): the rows above keep their identity across calls - a row is memoised on its line, a joined
+// paragraph on its two halves, a notice's line on its entry (all immutable) - so the view's Log keys and memoises
+// them by identity and a new line renders only the new row.
+const rowCache = new WeakMap<UpstreamLogLine, { entry: unknown; line: UpstreamLogLine; first: boolean }>();
+function stableRow<T>(entry: T, line: UpstreamLogLine, first: boolean): { entry: T; line: UpstreamLogLine; first: boolean } {
+  const hit = rowCache.get(line);
+  if (hit && hit.entry === entry && hit.first === first) return hit as { entry: T; line: UpstreamLogLine; first: boolean };
+  const row = { entry, line, first };
+  rowCache.set(line, row);
+  return row;
+}
+const joinCache = new WeakMap<UpstreamLogLine, WeakMap<UpstreamLogLine, UpstreamLogLine>>();
+function joinedParagraph(head: UpstreamLogLine, tail: UpstreamLogLine): UpstreamLogLine {
+  let byTail = joinCache.get(head);
+  if (!byTail) joinCache.set(head, byTail = new WeakMap());
+  let joined = byTail.get(tail);
+  if (!joined) byTail.set(tail, joined = joinParagraph(head, tail));
+  return joined;
+}
+const noticeLines = new WeakMap<object, UpstreamLogLine>();
+function noticeLine(entry: UpstreamLogRowEntry): UpstreamLogLine {
+  let line = noticeLines.get(entry);
+  if (!line) noticeLines.set(entry, line = { text: entry.text, indent: 0, spans: [], names: entry.names ?? [] });
+  return line;
 }

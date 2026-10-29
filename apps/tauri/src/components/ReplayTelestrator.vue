@@ -6,6 +6,7 @@ import {
   TELESTRATOR_THICKNESS_PRESETS,
   gridSteps,
   inSquareCore,
+  telestratorNeedsCameraLoop,
   type SketchElement,
   type SketchPoint,
   type SketchTool,
@@ -111,14 +112,19 @@ function scale(): number { return props.cameraScale?.() ?? 1; }
 // Owner 08-17: reproject every frame while enabled so shapes track the camera (pan/zoom) even
 // when the coach isn't actively drawing — the same RAF-follows-camera pattern used elsewhere
 // (KO/fall toasts, punt cone) for DOM overlays that sit outside the Pixi world container.
+// Perf (JLeav 1.0.296): only while there is something to reproject (telestratorNeedsCameraLoop: the tool open, or a
+// drawing showing). The view mounts this always enabled, so a collapsed, empty telestrator re-rendered every frame
+// all game; it now stops, and starts again when the tool opens or a drawing appears (every model change refreshes).
 let cameraRaf = 0;
 function cameraLoop(): void {
   refresh();
   cameraRaf = requestAnimationFrame(cameraLoop);
 }
-watch(() => props.enabled, (enabled) => {
+const cameraLoopNeeded = computed(() => telestratorNeedsCameraLoop(props.enabled, state.value.expanded, visible.value.length));
+watch(cameraLoopNeeded, (needed) => {
   cancelAnimationFrame(cameraRaf);
-  if (enabled) cameraRaf = requestAnimationFrame(cameraLoop);
+  cameraRaf = 0;
+  if (needed) cameraRaf = requestAnimationFrame(cameraLoop);
 }, { immediate: true });
 onBeforeUnmount(() => cancelAnimationFrame(cameraRaf));
 function closePopovers(): void { openPopover.value = null; }
