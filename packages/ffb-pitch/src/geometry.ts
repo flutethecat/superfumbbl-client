@@ -403,6 +403,23 @@ export function worldToSquare(worldX: number, worldY: number): FieldCoordinateJs
   return orientation === 'ns' ? [d, w] : [w, d];
 }
 
+/** Owner 10-29: `isOnPitch(worldToSquare(worldX, worldY))` without allocating a coordinate - the ball glow's per-frame
+ *  check. Same depth bands and width tile as worldToSquare; the field flip mirrors inside the pitch, so it is moot. */
+export function isWorldPointOnPitch(worldX: number, worldY: number): boolean {
+  let d = -1;
+  for (let row = 0; row < P.rows; row++) {
+    if (worldY <= P.boundaryY[row]! && worldY > P.boundaryY[row + 1]!) {
+      d = row;
+      break;
+    }
+  }
+  if (d < 0) return false;
+  const scale = boundaryScaleD(d + 0.5);
+  const widthTile = P.widthTile;
+  const w = Math.floor((worldX - (P.centerX - (P.cols * widthTile * scale) / 2)) / (widthTile * scale));
+  return w >= 0 && w < P.cols;
+}
+
 /** Owner 10-12 (pitch view flip, Astra review): the CONTINUOUS inverse of extPoint for the projection as it stands
  *  NOW: world pixels -> fractional game coordinates of the ground point drawn there (square [x, y] spans x..x+1,
  *  y..y+1; beyond the pitch it extrapolates the same way extPoint does). The returned function closes over the

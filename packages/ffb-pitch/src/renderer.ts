@@ -55,6 +55,7 @@ import {
   worldHeight,
   worldToSquare,
   worldWidth,
+  isWorldPointOnPitch,
 } from './geometry';
 import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
 import { markerAnchorFor, type MarkerSpriteSet } from './markerAnchor';
@@ -939,6 +940,48 @@ export function kickArcTweenPosition(
     x: from.x + (to.x - from.x) * easedT,
     y: from.y + (to.y - from.y) * easedT - Math.sin(flightT * Math.PI) * arcPx,
   };
+}
+
+/** Owner 10-29: the ball glow's placement record. Filled in place by the placement code (Sol r1: no per-frame
+ *  allocation); never kept by a caller past the call that filled it. */
+type BallGlowPlace = { x: number; y: number; scale: number; alpha: number };
+
+/** Owner 10-29: where a move tween is at `now` - the live segment, its raw and eased fraction. The one source for the
+ *  movement ticker and the ball's ground glow, so the glow can never drift from the sprite it follows. Fills `out`
+ *  (a shared scratch record by default: read it before the next call) instead of allocating every frame. */
+const TWEEN_PROGRESS = { total: 0, elapsed: 0, done: false, segment: 0, t: 0, ease: 0 };
+function moveTweenProgress(tween: MoveTweenRecord, now: number, out = TWEEN_PROGRESS): typeof TWEEN_PROGRESS {
+  const segments = tween.waypoints.length - 1;
+  const total = segments * tween.segmentMs;
+  const elapsed = now - tween.start;
+  const done = elapsed >= total || segments <= 0;
+  const segment = done ? Math.max(0, segments - 1) : Math.min(segments - 1, Math.floor(elapsed / tween.segmentMs));
+  const t = done ? 1 : (elapsed - segment * tween.segmentMs) / tween.segmentMs;
+  out.total = total;
+  out.elapsed = elapsed;
+  out.done = done;
+  out.segment = segment;
+  out.t = t;
+  out.ease = (tween.style === 'slide' || tween.style === 'trail') && tween.easeOut !== false
+    ? 1 - (1 - t) * (1 - t)
+    : t;
+  return out;
+}
+
+/** Owner 10-29 (ball glow on the ground): the GROUND point under a move tween's waypoint `i` - `groundWaypoints[i]`,
+ *  else the kickPath square's anchor with its `rise` dropped, else the waypoint itself through `snap`. With
+ *  moveTweenProgress's segment and ease this is the tween's path with no arc / hop / bob rise. Allocates: callers
+ *  resolve it once per segment, not per frame. */
+export function moveTweenGroundWaypoint(
+  tween: MoveTweenRecord,
+  i: number,
+  snap: (p: { x: number; y: number }) => { x: number; y: number } = (p) => ({ x: p.x, y: p.y }),
+): { x: number; y: number } {
+  const g = tween.groundWaypoints?.[i];
+  if (g) return { x: g.x, y: g.y };
+  const k = tween.kickPath?.length === tween.waypoints.length ? tween.kickPath[i] : undefined;
+  if (k && k !== 'rest') return squareAnchor(k.square[0], k.square[1]);
+  return snap(tween.waypoints[i]!);
 }
 /** Kickoff result card display duration (owner 10-26: it no longer holds the ball; the card plays over the flight,
  *  and the value is still the pre-flight ARMING window a decision-dwell holdBallKickIn passes). Owner W9 2026-08-13: 5000 -> 2200
@@ -2018,6 +2061,9 @@ export interface MoveTweenRecord {
    *  ball sprite's own resting position). `waypoints` are pixels, so a projection toggle mid-flight re-derives them
    *  from these on the SAME clock (refreshForProjectionChange) instead of letting the flight restart. */
   kickPath?: ({ square: [number, number]; rise: number } | 'rest')[];
+  /** Owner 10-29: the GROUND point under each waypoint, for a lifted flight with no kickPath (the armed fly-in rises to
+   *  an apex above the aim): the ball glow follows these instead of the risen waypoints. */
+  groundWaypoints?: { x: number; y: number }[];
   /** step-stutter: the presentation step this tile tween presents (armPresentationStepTween only). Tagged so
    *  the ticker can mark exactly THAT step consumed at its visual end — never a neighbouring tween for the
    *  same player (a leap arc, a coalesced-jump path) that happens to finish first. */
@@ -2520,6 +2566,47 @@ export class PitchRenderer {
   /** B9-15: blue glow behind the ball — STATIC when the ball is at rest on the
    *  ground (owner), pulses only while it is in flight/moving. */
   private ballGlow: Graphics | null = null;
+  /** Owner 10-29 (ball glow on the ground): the ONE persistent cyan ground glow, in ballGlowLayer (under the tokens),
+   *  placed every frame at the ball's ground point by syncBallGroundGlow. Never destroyed by refresh(). `ballGlow`
+   *  points at it so the breathe ticker drives it. */
+  private ballGroundGlow: Graphics | null = null;
+  /** The glow's depth scale and fade (ball-out) from syncBallGroundGlow, and the breathe ticker's pulse; the node's
+   *  scale / alpha are always base x pulse, whichever of the two writes last in a frame. */
+  private ballGlowBaseScale = 1;
+  private ballGlowFade = 1;
+  private ballGlowPulseScale = 1;
+  private ballGlowPulseAlpha = 1;
+  /** Set by refresh(): where a loose ball rests (anchor + depth scale, computed with the ball group; null: no ball on
+   *  the pitch), and whether a carrier holds it. */
+  private ballGlowRest: { x: number; y: number; scale: number } | null = null;
+  private ballGlowCarried = false;
+  /** Owner 10-29 (Sol r1 P2): the glow placement's reusable records - nothing here is allocated per frame. */
+  private readonly ballGlowPlace: BallGlowPlace = { x: 0, y: 0, scale: 1, alpha: 1 };
+  /** The '__ball__' tween segment last resolved: its ground ends, their depth scales, and whether a point between
+   *  them can be off the pitch (`check`). Reset by refresh() (a reprojection rebuilds through it). */
+  private readonly ballGlowSeg = {
+    tween: null as MoveTweenRecord | null, waypoints: null as MoveTweenRecord['waypoints'] | null, segment: -1,
+    ax: 0, ay: 0, bx: 0, by: 0, sa: 1, sb: 1, check: false,
+  };
+  /** The kick landing beat's aim anchor for one pending bounce (reset by refresh()). */
+  private ballGlowBounce: { pending: object; x: number; y: number; scale: number; onPitch: boolean } | null = null;
+  /** The movement ticker's '__ball__' progress this frame; `fresh` until the decoration listener has used it. */
+  private readonly ballTweenFrame = {
+    tween: null as MoveTweenRecord | null, now: -1, segment: 0, ease: 0, done: false, fresh: false,
+  };
+  /** What the glow was last placed for: a repeat call in the same frame with nothing changed is a no-op. */
+  private readonly ballGlowMemo = {
+    now: Number.NaN, tween: null as MoveTweenRecord | null, waypoints: null as MoveTweenRecord['waypoints'] | null,
+    ball: null as Container | null, visible: false, flight: null as object | null, out: null as object | null,
+    rest: null as object | null, carried: false, bounce: null as object | null, flightPending: null as object | null,
+    cleared: false, glow: null as Graphics | null,
+  };
+  /** The ball sprite rests 3 px above its square's anchor: such a waypoint's ground point is the anchor. */
+  private readonly snapBallRestPoint = (wp: { x: number; y: number }): { x: number; y: number } => {
+    const sq = worldToSquare(wp.x, wp.y + 3);
+    const a = squareAnchor(sq[0], sq[1]);
+    return Math.abs(a.x - wp.x) < 0.5 && Math.abs(a.y - (wp.y + 3)) < 0.5 ? a : { x: wp.x, y: wp.y };
+  };
   /** Owner 09-05: the carrier's cyan glow ring, wrapped so the ticker can breathe it (slight scale pulse). */
   private ballHalo: Container | null = null;
   /** Current model-derived ball token. Hidden while the dedicated pass-flight token owns presentation. */
@@ -2744,6 +2831,9 @@ export class PitchRenderer {
   /** Owner 10-20 (Astra R-5): a RELOCATED blood decal on a crowd square (bloodDecalSpots) - above the dugout floor /
    *  stand ground art that covers the squares off the pitch, still under every token. On-pitch decals stay in bloodLayer. */
   private crowdBloodLayer = new Container();
+  /** Owner 10-29: the ball's cyan ground glow, directly under the token layer, so a moving ball's glow never washes
+   *  over the players it passes. Outside tokenLayer so refresh() never rebuilds it. */
+  private ballGlowLayer = new Container();
   /** Owner 10-05: "Kickoff ball and trail should pass over the players in dugout." While a kick-off ball is in
    *  the air (fly-in, apex hang, descent and its bounce) its sprite rides here, above the dugout players and their
    *  skill markings; it returns to the token layer (normal depth sorting with the players) when it has landed. */
@@ -3349,7 +3439,12 @@ export class PitchRenderer {
   private adCompletedMotionTargets = new Map<string, { x: number; y: number }>();
   private activeVisualEffects = 0;
   /** Owner 10-07: the running ball-out stand-in (playBallOut); null when idle. */
-  private ballOutFlight: { hidesModel: boolean; cleanup: () => void; travelUntil: number; reproject: () => void } | null = null;
+  private ballOutFlight: {
+    hidesModel: boolean; cleanup: () => void; travelUntil: number; reproject: () => void;
+    /** Owner 10-29: fills the ball glow's ground point under the stand-in ball (only when it leaves the pitch);
+     *  false = hidden. */
+    glowGround?: (out: BallGlowPlace) => boolean;
+  } | null = null;
   /** Owner 10-07: keep the model ball hidden after a ball-out until the server clears outOfBounds. */
   private ballOutHideWhileOut = false;
 
@@ -3533,10 +3628,12 @@ export class PitchRenderer {
         if (tween.token.destroyed || tween.token.parent == null) { this.moveTweens.delete(id); continue; }
       }
       this.anchorPresentationTileOnFirstTweenPass(id, tween, now);
-      const segments = tween.waypoints.length - 1;
-      const total = segments * tween.segmentMs;
-      const elapsed = now - tween.start;
-      if (elapsed >= total || segments <= 0) {
+      const { total, elapsed, done, segment, t, ease } = moveTweenProgress(tween, now);
+      if (id === '__ball__') { // owner 10-29: the ground glow reads this frame's progress instead of recomputing it
+        const f = this.ballTweenFrame;
+        f.tween = tween; f.now = now; f.segment = segment; f.ease = ease; f.done = done; f.fresh = true;
+      }
+      if (done) {
         const end = tween.waypoints[tween.waypoints.length - 1]!;
         tween.token.position.set(end.x, end.y);
         this.followTokenDecorations(id, end.x, end.y);
@@ -3560,11 +3657,6 @@ export class PitchRenderer {
         this.finishPresentationStepTween(id, tween, end);
         continue;
       }
-      const segment = Math.min(segments - 1, Math.floor(elapsed / tween.segmentMs));
-      const t = (elapsed - segment * tween.segmentMs) / tween.segmentMs;
-      const ease = (tween.style === 'slide' || tween.style === 'trail') && tween.easeOut !== false
-        ? 1 - (1 - t) * (1 - t)
-        : t;
       const a = tween.waypoints[segment]!;
       const b = tween.waypoints[segment + 1]!;
       let x = a.x + (b.x - a.x) * ease;
@@ -3598,7 +3690,7 @@ export class PitchRenderer {
     this.redrawBlockPreviewOnDecorChange();
     this.replaceActiveMarkerOnDecorChange();
     this.placeMoveBadge(); // Astra r2: a walker decor rung re-snapped the feet skill row
-    this.syncKickBallLayer(); // a kick tween just ended (or began): re-seat the ball this frame
+    this.syncKickBallLayer(now); // a kick tween just ended (or began): re-seat the ball this frame
   }
 
   /** 10-08: a projection change re-fits the camera (resetCamera). A kick follow started under the OLD projection
@@ -5897,6 +5989,11 @@ export class PitchRenderer {
       // ball is drawn at the model (already-applied) square — the ball ran ahead of the carrier. The tween ticker
       // only follows a token while it tweens; glue the carried-ball group to the carrier's live position every frame.
       this.tickCarriedBallGlue();
+      { // owner 10-29: the ground glow follows the ball's ground point - on the movement ticker's clock when it ran
+        const f = this.ballTweenFrame;
+        this.syncBallGroundGlow(f.fresh ? f.now : performance.now());
+        f.fresh = false;
+      }
       this.updateOffscreenBallIndicator();
       this.updateOffscreenActivePlayerIndicator();
       if (this.ballGlow) {
@@ -5909,8 +6006,13 @@ export class PitchRenderer {
         const aLo = bouncing ? 0.4 : 0.55;
         const sLo = bouncing ? 0.8 : 0.9;
         const sHi = bouncing ? 1.34 : 1.08;
-        this.ballGlow.alpha = aLo + (1 - aLo) * t;
-        this.ballGlow.scale.set(sLo + (sHi - sLo) * t);
+        // Owner 10-29: the pulse rides on the ground glow's depth scale / fade (syncBallGroundGlow), never over it.
+        this.ballGlowPulseAlpha = aLo + (1 - aLo) * t;
+        this.ballGlowPulseScale = sLo + (sHi - sLo) * t;
+        if (!this.ballGlow.destroyed) {
+          this.ballGlow.alpha = this.ballGlowPulseAlpha * this.ballGlowFade;
+          this.ballGlow.scale.set(this.ballGlowBaseScale * this.ballGlowPulseScale);
+        }
       }
     });
     app.ticker.add(() => {
@@ -6126,6 +6228,7 @@ export class PitchRenderer {
     this.movementReachLayer.eventMode = 'none';
     this.movementPathCostLayer.eventMode = 'none';
     this.crosshairLayer.eventMode = 'none';
+    this.ballGlowLayer.eventMode = 'none';
     // item1 scope-add: needed for TRAIL_ECHO_Z / TRAIL_NUMBER_Z to order the trail pair. Pixi's sort is
     // stable, and every other effectsLayer node keeps the default zIndex 0, so insertion order is preserved
     // among them — only the (negative) trail marks are re-seated, and only relative to each other.
@@ -6145,6 +6248,7 @@ export class PitchRenderer {
       this.marksLayer, // owner 2026-07-04f: persistent square marks (under tokens)
       this.dugoutGroundLayer, // owner 10-05: dugout floor + band text, under the tokens (and the kick-off ball)
       this.crowdBloodLayer, // owner 10-20: a thrown team-mate's crowd-injury blood on his crowd square, over the dugout floor
+      this.ballGlowLayer, // owner 10-29: the ball's cyan glow on the ground, under every token
       this.tokenLayer,
       this.pathLayer,
       this.dugoutLayer,
@@ -6862,7 +6966,10 @@ export class PitchRenderer {
    * ticker pointing at a destroyed Graphics/Text transform. */
   private clearTokenTickerPointers(): void {
     this.ballMarker = null;
-    this.ballGlow = null;
+    // Owner 10-29: ballGlow is the persistent ground glow (ballGlowLayer, never a token-layer node): it stays; the
+    // ball state it follows is dropped so it hides until the ball is drawn again.
+    this.ballGlowRest = null;
+    this.ballGlowCarried = false;
     this.ballHalo = null;
     this.renderedBall = null;
     this.carrierFollow = null;
@@ -7530,7 +7637,10 @@ export class PitchRenderer {
     const groundHold = this.resolveGroundBallHold(presentedBall, modelBall, arcActive);
     const ball = groundHold ? groundHold.square : presentedBall;
     this.ballMarker = null;
-    this.ballGlow = null;
+    this.ballGlowRest = null; // owner 10-29: the persistent ground glow re-reads the ball below
+    this.ballGlowCarried = false;
+    this.ballGlowSeg.tween = null; // cached pixels are re-derived (a reprojection rebuilds through here)
+    this.ballGlowBounce = null;
     this.ballHalo = null;
     this.renderedBall = null;
     this.carrierFollow = null; // rebuilt below if a carrier holds the ball (nodes destroyed each refresh)
@@ -7543,13 +7653,12 @@ export class PitchRenderer {
       // Owner: a vertical CYAN COLUMN of light rising from the ball — opacity 80%
       // around the ball, fading to 0% at half-a-square tall; visibly pulses.
       const br = BALL_SPRITE_SIZE * 0.5; // ball radius
-      const g = new Graphics(); // container: light column (behind) + ball (front)
-      const glow = this.buildBallGlow();
+      const g = new Graphics(); // container: the ball only (owner 10-29: its glow is the ground node in ballGlowLayer)
       const ballDot = this.ballTexture
         ? this.sizedBallSprite(BALL_SPRITE_SIZE)
         : new Graphics().ellipse(0, 0, br, br * 0.78).fill(COLORS.ball).stroke({ color: 0x5a3a1a, width: 1 });
-      g.addChild(glow, ballDot);
-      this.ballGlow = glow;
+      g.addChild(ballDot);
+      this.ensureBallGroundGlow(); // re-seated the same frame the ball group is rebuilt
       // Owner 2026-07-03: a LOOSE ball sits CENTRED in its square; only a
       // carried ball keeps the corner offset so it reads beside the carrier.
       const carrier =
@@ -7602,7 +7711,7 @@ export class PitchRenderer {
           : 3 - TOKEN_BASE_SHIFT_PX; // bases sit +11 below the anchor
         g.position.set(tp.x, anchor.y - chestLift * scale * carrierScale);
         g.scale.set(scale * (carrierIsWalker ? CARRIED_BALL_BASE * 0.6 * ballModelK : CARRIED_BALL_BASE) * carrierScale);
-        if (this.ballGlow) this.ballGlow.visible = false;
+        this.ballGlowCarried = true; // the carrier's ballHalo does the glow's job; the ground glow hides
         // Owner 2026-07-15 (live test): pin the carried ball to the carrier token's live tweened position.
         this.carrierFollow = {
           carrierId: carrier.playerId,
@@ -7613,6 +7722,7 @@ export class PitchRenderer {
       } else {
         g.position.set(anchor.x, anchor.y - 3);
         g.scale.set(scale);
+        this.ballGlowRest = isOnPitch(ball) ? { x: anchor.x, y: anchor.y, scale } : null;
       }
       g.zIndex = this.depthZ(ball[0], ball[1]) + (carrier ? 2 : 1); // over the carrier's sprite
       this.tokenLayer.addChild(g);
@@ -7660,6 +7770,8 @@ export class PitchRenderer {
         // prevBall below (heldBounce), so the freeze→bounce delta tweens on release.
         const p = squareAnchor(prevBall[0], prevBall[1]);
         g.position.set(p.x, p.y - 3);
+        // owner 10-29: the glow waits with the frozen ball
+        this.ballGlowRest = isOnPitch(prevBall) ? { x: p.x, y: p.y, scale: depthScale(prevBall[0], prevBall[1]) } : null;
         heldBounce = true;
       } else if (carrier && this.lastCarrierId === carrier.playerId && prevBall && (prevBall[0] !== ball[0] || prevBall[1] !== ball[1])) {
         // Owner 09-27: the carrier is walking with the ball — no independent ball tween; the glue owns the sprite.
@@ -7716,6 +7828,7 @@ export class PitchRenderer {
             g.position.set(edge.x, edge.y);
             this.moveTweens.set('__ball__', {
               token: g, waypoints: [edge, apex], style: 'slide',
+              groundWaypoints: [edge, a], // owner 10-29: the glow runs along the ground, edge -> under the apex
               start: this.kickInFlyStart, segmentMs: presentationMs(KICK_FLYIN_MS), arc: KICK_ARC_PX,
               baseScale: g.scale.x, growTo: KICK_BALL_GROW, growMode: 'up', // grow toward the apex
               kickAir: true,
@@ -7881,6 +7994,7 @@ export class PitchRenderer {
       this.lastCarrierId = null;
       this.ballEverRendered = true;
     }
+    this.syncBallGroundGlow(); // owner 10-29: place (or hide) the ground glow for the ball as rebuilt
 
     // Shared live-play-adopted signal: highlight the ACTIVE player with a subtle gold halo
     // under the token + a beveled, drop-shadowed gold BADGE over the head that
@@ -14630,6 +14744,11 @@ export class PitchRenderer {
     token: Container | null;
     tick: (() => void) | null;
     retireTimer: ReturnType<typeof setTimeout>;
+    /** Owner 10-29: fills the ball glow's ground point under this flight at `now`; false = off the pitch. */
+    glowGround?: (out: BallGlowPlace, now: number) => boolean;
+    /** Owner 10-29 (Sol r3): a projection change re-derives the flight's endpoints and scales from its squares and
+     *  places the ball and its glow at once; the flight clock is untouched. */
+    reproject?: () => void;
   } | null = null;
   // (the ball-arc engine `pendingBallThrow` is armed by playThrow('pass' | 'punt', …) — see the single throw entry.)
   /** Owner 2026-07-08: while true, a loose ball that just came free (carrier knocked down) is
@@ -14897,10 +15016,131 @@ export class PitchRenderer {
    *  edge" is automatic in every orientation (N-S top/bottom, E-W left/right, flat).
    *  The moving visual ball temporarily becomes the unified Auto Director target;
    *  it uses the same 1/2/3-square policy as a moving player. */
+  /** Owner 10-29: the persistent ground glow, built once (rebuilt only if destroyed) and kept seated in
+   *  ballGlowLayer; `ballGlow` points at it for the breathe ticker. */
+  private ensureBallGroundGlow(): Graphics {
+    let glow = this.ballGroundGlow;
+    if (!glow || glow.destroyed) {
+      glow = this.buildBallGlow();
+      glow.eventMode = 'none';
+      glow.label = 'ballGroundGlow';
+      glow.visible = false;
+      this.ballGroundGlow = glow;
+    }
+    if (glow.parent !== this.ballGlowLayer) this.ballGlowLayer.addChild(glow);
+    this.ballGlow = glow;
+    return glow;
+  }
+
+  /** Owner 10-29 ("the glow is rendered over the top of the sprite during movement"): place the ground glow at the
+   *  ball's GROUND point for what the ball is doing at `now`, or hide it. Position / scale / alpha writes only and no
+   *  allocation (Sol r1); called from the existing per-frame hooks (decoration listener, kick-ball re-seat, pass-flight
+   *  tick, ball-out tick) and at the end of refresh()'s ball rebuild. A repeat call for the same frame and state is a
+   *  no-op. */
+  private syncBallGroundGlow(now: number = performance.now()): void {
+    const tween = this.moveTweens.get('__ball__') ?? null;
+    const ball = this.renderedBall;
+    const m = this.ballGlowMemo;
+    const glowNode = this.ballGroundGlow;
+    if (m.now === now && m.tween === tween && m.waypoints === (tween ? tween.waypoints : null) && m.ball === ball
+      && m.visible === (ball ? ball.visible : false) && m.flight === this.passBallFlight && m.out === this.ballOutFlight
+      && m.rest === this.ballGlowRest && m.carried === this.ballGlowCarried && m.bounce === this.kickBouncePending
+      && m.flightPending === this.kickFlightPending && m.cleared === this.boardCleared && m.glow === glowNode
+      && !(glowNode && glowNode.destroyed)) return;
+    m.now = now; m.tween = tween; m.waypoints = tween ? tween.waypoints : null; m.ball = ball;
+    m.visible = ball ? ball.visible : false; m.flight = this.passBallFlight; m.out = this.ballOutFlight;
+    m.rest = this.ballGlowRest; m.carried = this.ballGlowCarried; m.bounce = this.kickBouncePending;
+    m.flightPending = this.kickFlightPending; m.cleared = this.boardCleared;
+    const place = this.ballGlowPlace;
+    if (!this.ballGroundPlacement(now, tween, place)) {
+      if (glowNode && !glowNode.destroyed) glowNode.visible = false;
+      this.ballGlowFade = 1;
+      m.glow = glowNode;
+      return;
+    }
+    const glow = this.ensureBallGroundGlow();
+    m.glow = glow;
+    glow.position.set(place.x, place.y);
+    this.ballGlowBaseScale = place.scale;
+    this.ballGlowFade = place.alpha;
+    glow.scale.set(place.scale * this.ballGlowPulseScale);
+    glow.alpha = this.ballGlowPulseAlpha * place.alpha;
+    glow.visible = true;
+  }
+
+  /** Fills `place` with the ground point, depth scale and fade for the ball glow; false = hidden. Priority: the
+   *  ball-out stand-in, the pass / punt flight, the '__ball__' move tween (kick fly-in, descent, bounce, scatter,
+   *  slide), the kick's landing beat (resting on the aim until its bounce), then the loose ball at rest. A carried,
+   *  hidden or cleared ball, or a ground point off the pitch, hides it. */
+  private ballGroundPlacement(now: number, tween: MoveTweenRecord | null, place: BallGlowPlace): boolean {
+    if (this.boardCleared || this.destroyed) return false;
+    place.alpha = 1;
+    const out = this.ballOutFlight;
+    if (out?.glowGround) return out.glowGround(place);
+    const flight = this.passBallFlight;
+    if (flight?.glowGround) return flight.glowGround(place, now);
+    const ball = this.renderedBall;
+    if (!ball || ball.destroyed || !ball.visible || this.ballGlowCarried) return false;
+    if (tween && !tween.token.destroyed) return this.placeGlowOnTween(tween, now, place);
+    // Sol r1 P2: between a kick's air phase and its bounce no tween runs and the sprite rests on the aim, while the
+    // rebuilt ball's resting square is already the final landing. Only this kick's pending bounce counts (its flight
+    // completion has not run): a bounce left behind by a reset kick never pins the glow.
+    const bp = this.kickBouncePending;
+    if (bp && bp.flight != null && bp.flight === this.kickFlightPending) {
+      let c = this.ballGlowBounce;
+      if (!c || c.pending !== bp) {
+        const a = squareAnchor(bp.aim[0], bp.aim[1]);
+        c = this.ballGlowBounce = { pending: bp, x: a.x, y: a.y, scale: depthScale(bp.aim[0], bp.aim[1]), onPitch: isOnPitch(bp.aim) };
+      }
+      if (!c.onPitch) return false;
+      place.x = c.x; place.y = c.y; place.scale = c.scale;
+      return true;
+    }
+    const rest = this.ballGlowRest;
+    if (!rest) return false;
+    place.x = rest.x; place.y = rest.y; place.scale = rest.scale;
+    return true;
+  }
+
+  /** The glow under a '__ball__' tween: this frame's progress (shared with the movement ticker when it ran on the same
+   *  clock), lerped between the segment's cached ground ends. Resolves (and allocates) only on a segment change. */
+  private placeGlowOnTween(tween: MoveTweenRecord, now: number, place: BallGlowPlace): boolean {
+    const n = tween.waypoints.length;
+    if (n === 0) return false;
+    const f = this.ballTweenFrame;
+    let segment: number;
+    let ease: number;
+    if (f.tween === tween && f.now === now) {
+      segment = f.segment;
+      ease = f.done ? 1 : f.ease;
+    } else {
+      const pr = moveTweenProgress(tween, now);
+      segment = pr.segment;
+      ease = pr.done ? 1 : pr.ease;
+    }
+    const s = this.ballGlowSeg;
+    if (s.tween !== tween || s.waypoints !== tween.waypoints || s.segment !== segment) {
+      const a = moveTweenGroundWaypoint(tween, segment, this.snapBallRestPoint);
+      const b = n > 1 ? moveTweenGroundWaypoint(tween, segment + 1, this.snapBallRestPoint) : a;
+      const sqA = worldToSquare(a.x, a.y);
+      const sqB = worldToSquare(b.x, b.y);
+      s.tween = tween; s.waypoints = tween.waypoints; s.segment = segment;
+      s.ax = a.x; s.ay = a.y; s.bx = b.x; s.by = b.y;
+      s.sa = depthScale(sqA[0], sqA[1]); s.sb = depthScale(sqB[0], sqB[1]);
+      s.check = !(isOnPitch(sqA) && isOnPitch(sqB)); // between two on-pitch points the line stays on the pitch
+    }
+    const x = s.ax + (s.bx - s.ax) * ease;
+    const y = s.ay + (s.by - s.ay) * ease;
+    if (s.check && !isWorldPointOnPitch(x, y)) return false; // e.g. the fly-in's start beyond the end zone
+    place.x = x; place.y = y; place.scale = s.sa + (s.sb - s.sa) * ease;
+    return true;
+  }
+
   /** Owner 10-05 / Astra: seat the ball sprite in the layer its LIVE state calls for. Called from refresh() and at the
    *  end of every tween tick, so there is no landing timer or deadline to go stale: a re-kick, a refresh mid-flight
    *  or a rebuilt sprite are all just "what is the ball doing now". */
-  private syncKickBallLayer(): void {
+  private syncKickBallLayer(now?: number): void {
+    this.syncBallGroundGlow(now); // owner 10-29: every kick-ball re-seat moves the ground glow with it
     const g = this.renderedBall;
     if (!g || g.destroyed) return;
     const tween = this.moveTweens.get('__ball__');
@@ -14930,7 +15170,7 @@ export class PitchRenderer {
     // grow to the apex (mid-flight) then shrink back as it drops to the aim
     if (tween) { tween.baseScale = g.scale.x; tween.growTo = KICK_BALL_GROW; tween.growMode = 'arc'; tween.kickAir = true; }
     if (tween) tween.kickPath = [{ square: [edge[0], edge[1]], rise: 0 }, bounceSteps === 0 ? 'rest' : { square: [aim[0], aim[1]], rise: 0 }];
-    const bouncePending = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] as [number, number] };
+    const bouncePending: { aim: [number, number]; flight?: object } | null = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] };
     this.kickBouncePending = bouncePending;
     // B0: the persistent target crosshair clears once the ball has LANDED
     const flyClearMs = presentationMs(KICK_FLYIN_MS) + presentationMs(KICK_FLY_HOP_DELAY_MS) + bounceMs + presentationMs(KICK_CLEAR_TAIL_MS);
@@ -14938,6 +15178,7 @@ export class PitchRenderer {
     this.kickFlightSeq = this.kickDescendSnapshot?.seq ?? null; // which kick this flight belongs to (kickFlightInAir)
     const flight = {}; // this flight's completion is pending from here until the callback below runs
     this.kickFlightPending = flight;
+    if (bouncePending) bouncePending.flight = flight; // owner 10-29: the landing beat belongs to this flight
     this.startKickFollow(g, flyClearMs + Math.max(0, this.kickInHoldUntil - performance.now())); // owner 09-14: slow pan with the ball, then return
     this.scheduleTimer(() => {
       if (this.kickFlightPending === flight) this.kickFlightPending = null;
@@ -15039,7 +15280,7 @@ export class PitchRenderer {
         bounceSteps > 0 ? { square: [aim[0], aim[1]], rise: 0 } : targetSquare ? { square: [targetSquare[0], targetSquare[1]], rise: 0 } : 'rest',
       ],
     });
-    const bouncePending = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] as [number, number] };
+    const bouncePending = bounceSteps === 0 ? null : { aim: [aim[0], aim[1]] as [number, number], flight };
     this.kickBouncePending = bouncePending;
     if (bounceSteps === 0) return;
     // phase 2: the ball has REACHED the target (descent done + a landing beat) — NOW it
@@ -15077,7 +15318,7 @@ export class PitchRenderer {
    *  rebuilds them from it so they are not stale until the pointer moves. */
   private kickHoverLast: [number, number] | null = null;
   /** 10-08: the landing beat between a kick's air phase and its bounce (no tween runs): the ball rests on `aim`. */
-  private kickBouncePending: { aim: [number, number] } | null = null;
+  private kickBouncePending: { aim: [number, number]; flight?: object } | null = null;
   /** 10-08: a projection toggle rebuilt the ball sprite mid kick flight: old sprite -> the sprite (and its resting
    *  position) that carries the flight on. Only refreshForProjectionChange writes it. */
   private kickBallSuccessor = new WeakMap<Container, { token: Container; rest: { x: number; y: number } }>();
@@ -15173,6 +15414,7 @@ export class PitchRenderer {
       flash.g.scale.set(flash.scale * live);
     }
     this.ballOutFlight?.reproject(); // the ball-out stand-in + TOUCHBACK / OUT OF BOUNDS stamp (elapsed time kept)
+    this.passBallFlight?.reproject?.(); // owner 10-29: a pass / punt in the air, its sprite and ground glow (clock kept)
     this.thrownOutStamp?.reproject(); // owner 10-20: a thrown player's OUT OF BOUNDS stamp
     // The kicking coach's aim markers are rebuilt only on pointer move: rebuild them from the last hovered square.
     const hover = this.kickPickLock ?? this.kickHoverLast;
@@ -15192,6 +15434,7 @@ export class PitchRenderer {
    *  created, cancelled or re-timed. Outside a kick flight this is exactly refresh() + reprojectKickCues(). */
   private refreshForProjectionChange(): void {
     if (this.refreshCarryingKickFlight()) this.projectionKickCarriedInSetGame = true;
+    this.ballGlowMemo.now = Number.NaN; // owner 10-29: a same-frame glow sync after the reprojection must not be skipped
     this.reprojectKickCues();
   }
 
@@ -21284,19 +21527,25 @@ export class PitchRenderer {
     const app = this.app;
     let token: Container | null = null;
     let tick: (() => void) | null = null;
+    let glowGround: ((out: BallGlowPlace, now: number) => boolean) | undefined;
+    let reproject: (() => void) | undefined;
 
     if (app) {
       // Owner 10-07: a throw-in after a ball-out starts in the stands (a fractional square), so interpolate.
-      const p0 = fractionalSquareAnchor(throwState.from[0], throwState.from[1]);
-      const p1 = squareAnchor(throwState.to[0], throwState.to[1]);
+      // Owner 10-29 (Sol r3): the pixel endpoints and depth scales are derived from the flight's squares under the
+      // CURRENT projection, here and again in reproject(); the sprite and the ground glow share them.
+      let p0 = fractionalSquareAnchor(throwState.from[0], throwState.from[1]);
+      let p1 = squareAnchor(throwState.to[0], throwState.to[1]);
+      let s0 = depthScale(throwState.from[0], throwState.from[1]);
+      let s1 = depthScale(throwState.to[0], throwState.to[1]);
       const ball = new Container();
       const br = BALL_SPRITE_SIZE * 0.5;
       const ballDot = this.ballTexture
         ? this.sizedBallSprite(BALL_SPRITE_SIZE)
         : new Graphics().ellipse(0, 0, br, br * 0.78).fill(COLORS.ball).stroke({ color: 0x5a3a1a, width: 1 });
-      ball.addChild(this.buildBallGlow(), ballDot);
+      ball.addChild(ballDot); // owner 10-29: the glow stays on the ground (ballGlowLayer), not on the flying ball
       ball.position.set(p0.x, p0.y);
-      ball.scale.set(depthScale(throwState.to[0], throwState.to[1]));
+      ball.scale.set(s1);
       ball.zIndex = 99000;
       this.effectsLayer.addChild(ball);
       if (this.renderedBall) this.renderedBall.visible = false;
@@ -21309,11 +21558,38 @@ export class PitchRenderer {
         const easedT = 1 - (1 - flightT) * (1 - flightT); // same `slide` ease as the kickoff move tween
         const pos = kickArcTweenPosition(p0, p1, easedT, flightT);
         ball.position.set(pos.x, pos.y);
+        this.syncBallGroundGlow();
+      };
+      // Owner 10-29: the glow runs the straight ground line p0 -> p1 at the arc's own eased fraction (the arc's ground
+      // component), its depth scale easing from the throw square to the target square. Scales and the off-pitch test
+      // are settled here once; the per-frame fill allocates nothing (Sol r1).
+      const check = !isOnPitch(throwState.from) || !isOnPitch(throwState.to);
+      glowGround = (out, now) => {
+        if (ball.destroyed) return false;
+        const flightT = Math.min(1, Math.max(0, (now - throwState.start) / throwState.durationMs));
+        const easedT = 1 - (1 - flightT) * (1 - flightT);
+        const x = p0.x + (p1.x - p0.x) * easedT;
+        const y = p0.y + (p1.y - p0.y) * easedT;
+        if (check && !isWorldPointOnPitch(x, y)) return false;
+        out.x = x; out.y = y; out.scale = s0 + (s1 - s0) * easedT;
+        return true;
+      };
+      const flightTick = tick;
+      reproject = () => {
+        if (ball.destroyed) return;
+        p0 = fractionalSquareAnchor(throwState.from[0], throwState.from[1]);
+        p1 = squareAnchor(throwState.to[0], throwState.to[1]);
+        s0 = depthScale(throwState.from[0], throwState.from[1]);
+        s1 = depthScale(throwState.to[0], throwState.to[1]);
+        ball.scale.set(s1);
+        this.ballGlowMemo.now = Number.NaN; // the glow's last placement used the old pixels
+        flightTick(); // place the ball and its glow for the CURRENT elapsed time
       };
     }
 
     const retireTimer = this.scheduleTimer(() => this.retirePassBallFlight(throwState), throwState.durationMs);
-    this.passBallFlight = { throwState, app, token, tick, retireTimer };
+    this.passBallFlight = { throwState, app, token, tick, retireTimer, glowGround, reproject };
+    this.syncBallGroundGlow();
     if (tick) app!.ticker.add(tick);
   }
 
@@ -21333,6 +21609,7 @@ export class PitchRenderer {
     this.passBallFlight = null;
     if (this.pendingBallThrow === flight.throwState) this.pendingBallThrow = null;
     if (this.renderedBall && !this.renderedBall.destroyed) this.renderedBall.visible = true;
+    this.syncBallGroundGlow(); // owner 10-29: the glow hands back to the landed ball this frame
     if (notifyComplete) this.onAnimDone?.('throw', '__ball__');
   }
 
@@ -21352,6 +21629,11 @@ export class PitchRenderer {
     const exit = cue.exit;
     const stops: [number, number][] = exit ? [...cue.path, exit] : [...cue.path];
     let points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
+    // Owner 10-29 (Sol r2): each stop's depth scale beside its pixel point, for the ground glow - depthScale builds a
+    // tuple, so the per-frame placement reads these numbers; reproject() rebuilds both.
+    const stopScale = (stop: [number, number]): number =>
+      depthScale(Math.max(0, Math.min(PITCH_COLS - 1, stop[0])), Math.max(0, Math.min(PITCH_ROWS - 1, stop[1])));
+    let scales = stops.map(stopScale);
     const travelMs = exit ? (stops.length - 1) * hopMs : 0;
     const fadeMs = presentationMs(250);
     const stampMs = Math.max(450, presentationMs(1200));
@@ -21366,7 +21648,7 @@ export class PitchRenderer {
       const ballDot = this.ballTexture
         ? this.sizedBallSprite(BALL_SPRITE_SIZE)
         : new Graphics().ellipse(0, 0, br, br * 0.78).fill(COLORS.ball).stroke({ color: 0x5a3a1a, width: 1 });
-      ball.addChild(this.buildBallGlow(), ballDot);
+      ball.addChild(ballDot); // owner 10-29: the glow stays on the ground (ballGlowLayer)
       ball.position.set(points[0]!.x, points[0]!.y - 3);
       ball.scale.set(depthScale(Math.max(0, Math.min(PITCH_COLS - 1, last[0])), Math.max(0, Math.min(PITCH_ROWS - 1, last[1]))));
       ball.zIndex = 99000;
@@ -21407,6 +21689,7 @@ export class PitchRenderer {
           ball.alpha = Math.max(0, 1 - (elapsed - travelMs) / fadeMs);
         }
       }
+      if (ball) this.syncBallGroundGlow(); // owner 10-29: the ground glow follows the hops
       const stampElapsed = elapsed - travelMs;
       if (stampElapsed >= 0 && !plate.destroyed) popBallOutStamp(plate, stampElapsed, stampScale, stampMs);
       if (elapsed >= travelMs + Math.max(stampMs, exit ? fadeMs : 0)) { settledNaturally = true; cleanup(); }
@@ -21416,6 +21699,8 @@ export class PitchRenderer {
     // untouched, so the hop, the fade and the >= 450 ms stamp hold carry on from their elapsed time.
     const reproject = () => {
       points = stops.map(([x, y]) => fractionalSquareAnchor(x, y));
+      scales = stops.map(stopScale);
+      this.ballGlowMemo.now = Number.NaN; // the glow's last placement used the old pixels: re-place it in tick()
       if (ball && !ball.destroyed) {
         ball.position.set(points[0]!.x, points[0]!.y - 3);
         ball.scale.set(depthScale(Math.max(0, Math.min(PITCH_COLS - 1, last[0])), Math.max(0, Math.min(PITCH_ROWS - 1, last[1]))));
@@ -21428,7 +21713,31 @@ export class PitchRenderer {
       }
       tick(); // place the ball / pop the stamp for the CURRENT elapsed time
     };
-    const flight = { hidesModel: !!exit, cleanup: () => cleanup(), travelUntil: startAt + travelMs, reproject };
+    // Owner 10-29: the glow follows the in-bounds hops on the ground; on the exit hop it stays on the last in-bounds
+    // square and fades with the ball.
+    const glowGround = exit ? (out: BallGlowPlace): boolean => {
+      if (!ball || ball.destroyed || this.app !== app) return false;
+      const elapsed = performance.now() - startAt;
+      if (elapsed < 0) return false;
+      const lastIn = points.length - 2; // the exit point is the last stop
+      let x = points[lastIn]!.x, y = points[lastIn]!.y, scale = scales[lastIn]!, alpha = 1;
+      if (elapsed < travelMs) {
+        const seg = Math.min(points.length - 2, Math.floor(elapsed / hopMs));
+        if (seg < lastIn) {
+          const t = (elapsed - seg * hopMs) / hopMs;
+          const a = points[seg]!, b = points[seg + 1]!;
+          x = a.x + (b.x - a.x) * t;
+          y = a.y + (b.y - a.y) * t;
+          scale = scales[seg]! + (scales[seg + 1]! - scales[seg]!) * t;
+        }
+      } else {
+        alpha = Math.max(0, 1 - (elapsed - travelMs) / fadeMs);
+      }
+      if (!(alpha > 0)) return false;
+      out.x = x; out.y = y; out.scale = scale; out.alpha = alpha;
+      return true;
+    } : undefined;
+    const flight = { hidesModel: !!exit, cleanup: () => cleanup(), travelUntil: startAt + travelMs, reproject, glowGround };
     this.ballOutFlight = flight;
     cleanup = this.registerEffectTicker(app, tick, nodes, () => {
       finishEffect();
