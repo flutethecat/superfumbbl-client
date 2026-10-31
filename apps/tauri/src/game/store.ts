@@ -18,7 +18,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, swarmingWaitingFromGame, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
@@ -29,6 +29,7 @@ import { freeReserveWireCoordinate } from './reserveSlot';
 import { PASTRIES_INDUCEMENT, pastriesOfferOf, pastriesStep, type PastriesOffer, type PastriesOutcome, type PastriesPendingDecline } from './pastriesSplash';
 import { waitingSeatRole } from './inducementsPhase';
 import { gettingEvenSplashes, gettingEvenSplashKey } from './gettingEvenSplash';
+import { swarmingSplashes, swarmingSplashKey, type SwarmingSplash } from './swarmingSplash';
 import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
@@ -51,7 +52,7 @@ import { reduceDriveProjection, type DriveProjection } from './driveProjection';
 import { spectatorFieldFlip, spectatorFixedFlip, viewerCoachName, viewerSide } from './spectatorView';
 import { currentTurnKey, selectedBlitzTargetId, reduceBlitzProjection, blitzTokenView, type BlitzProjection } from './blitzProjection';
 import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHeldTeamMate, reduceFumblerooskie, reduceDodgySnackPlayers } from './persistentPlayerMarkers';
-import { computed, customRef, nextTick, reactive, ref, shallowRef, triggerRef, watch } from 'vue';
+import { computed, customRef, nextTick, reactive, ref, shallowRef, toRaw, triggerRef, watch } from 'vue';
 import { boardTurnKey, boardTurnKeyAfter, createBoardProjection, reduceBoardProjection } from './boardProjection';
 import {
   GameSession,
@@ -1350,15 +1351,21 @@ const legacyState = reactive({
   sendOffWaiting: null as {
     occurrenceKey: string;
     playerId: string;
+    /** The player's team (Bribery & Corruption reports and dialogs name a team, not a player). */
+    teamId: string;
     playerName: string;
     coach: string;
     teamName: string;
     portraitUrl: string | null;
     baseIconPath: string | null;
     stage: 'argue' | 'bribe' | 'reroll' | 'resolving' | 'resolved';
-    status: string;
     resolved: boolean;
-    steps: { key: string; text: string; tone: 'pending' | 'success' | 'failure' | 'neutral' }[];
+    /** Owner 10-30 (send-off reveal): typed lines, in arrival order; the modal types each one in. */
+    steps: SendOffRevealStep[];
+    /** The authoritative call, once the server has decided it; the modal flips to its back face. */
+    outcome: SendOffRevealOutcome | null;
+    /** The last argueTheCall / bribesRoll report for this occurrence (a failed argue followed by a Bribe). */
+    lastRoll: { decidedBy: 'argue' | 'bribe'; successful: boolean; roll: number | null; minimumRoll: number | null } | null;
     seq: number;
   } | null,
   /** Generic interactive PLAYER PICK — eligibleIds stays the server set; FIX 7 splits its render glyph by side. Click answers (or Decline when declinable). Consumers arm via armPlayerPick: playerChoice(19)/interception(40)/touchback(17)/bloodlust(42)/kickoffReturn(16)/Zap(59)/gaze(38). */
@@ -1400,6 +1407,9 @@ const legacyState = reactive({
   keywordWaiting: null as { title: string; message: string } | null,
   /** S62: '<Coach> is selecting / repositioning players for the Solid Defence!' for every seat but the kicking coach. */
   solidDefenceWaiting: null as { message: string } | null,
+  /** Owner 10-30 (BB2025 Swarming): every seat but the team placing its Swarming players (turn mode `swarming`) is told
+   *  who is placing, with the latched D3 when known (swarmingWaitingFromGame). Re-derived every frame, never held. */
+  swarmingWaiting: null as { title: string; message: string } | null,
   /** Owner 10-02 (S99): "<who> is selecting players for Pick-Me-Up" for every seat but the choosing coach. */
   pickMeUpWaiting: null as { message: string } | null,
   /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach. */
@@ -1473,11 +1483,17 @@ const legacyState = reactive({
   rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
-   *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element. */
-  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned' | 'casualty' | 'failed'; kind: 'apothecary' | 'regeneration'; text: string; seq: number } | null,
+   *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element.
+   *  Owner 10-30: a Regeneration line carries the square its player's casualty pill sat on (`square`, null = the
+   *  centred rail as before) and, when that pill rode his armour dice, the dice's square (`armourSquare`, the pill's
+   *  armourPillAnchor rule); apothecary lines: both null. */
+  apothecaryFixUp: null as { side: 'home' | 'away'; outcome: 'bench' | 'stunned' | 'casualty' | 'failed'; kind: 'apothecary' | 'regeneration'; text: string; seq: number; playerId: string; square: [number, number] | null; armourSquare: [number, number] | null } | null,
   /** Owner 10-26: the Bretonnian Pastries outcome splash on every seat - used (success / failed roll) or declined.
    *  Server-derived (pastriesSplash.ts); the reroll toast's look on its own slot. `seq` never repeats. */
   pastriesSplash: null as { side: 'home' | 'away'; outcome: 'success' | 'failed' | 'declined'; title: string; text: string; playerId: string; seq: number } | null,
+  /** Owner 10-30 (BB2025 Swarming): the kick-off-event-styled splash of a `swarmingPlayersRoll` report, every seat. Server-
+   *  derived (swarmingSplash.ts); shown on the kick-off card's channel and dwell (KICKOFF_CINE_MS). `seq` never repeats. */
+  swarmingSplash: null as { side: 'home' | 'away'; team: string; amount: number; text: string; img: string | null; seq: number } | null,
   /** Owner g1957941 (1.0.296): the Getting Even result splash on every seat ("<Player> learns to hate <Trait>"), the Pastries
    *  toast's surface and timing. Server-derived (gettingEvenSplash.ts). `seq` never repeats. */
   gettingEvenSplash: null as { side: 'home' | 'away'; outcome: 'success' | 'failed'; title: string; text: string; playerId: string; seq: number } | null,
@@ -1524,6 +1540,7 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     kickoffWaiting: passive.kickoffWaiting,
     keywordWaiting: passive.keywordWaiting,
     solidDefenceWaiting: passive.solidDefenceWaiting,
+    swarmingWaiting: swarmingWaitingFromGame(position.checkpoint.model, null, swarmingAmountByTeam), // the publication latched this position's roll
     pickMeUpWaiting: passive.pickMeUpWaiting,
     pushWaiting: passive.pushWaiting,
     reRollWaiting: passive.reRollWaiting,
@@ -1560,7 +1577,7 @@ const spectatorTransientKeys = new Set<PropertyKey>([
   'rockThrow', 'turnover', 'turnStart', 'turnToast', 'weatherCine', 'kickoffCine', 'fanFactorCine',
   'kickoffVictimSplash', 'masterChefSplash', 'riotousRookiesSplash', 'prayerAnnounce',
   'dodgySnackAnnouncement', 'dodgySnackCine', 'injurySplash', 'injuryPills', 'injuryPuff', 'injuryTokenHolds',
-  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'pastriesSplash', 'gettingEvenSplash', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
+  'apothecaryAnim', 'apothecaryAutoReturn', 'apothecaryFixUp', 'pastriesSplash', 'gettingEvenSplash', 'swarmingSplash', 'sendOff', 'sendOffResult', 'vampireBite', 'fallOver',
   'grabUse', 'pushArrows', 'deferMove', 'followupFlash', 'followupIndicator', 'bncScatter',
   'passBallHold', 'kickoffArcNeedsDecisionDwell', 'ttmRailResetSeq', 'ttmRailTerminal',
   'negatraitCue', 'addPlayerPuff', 'coinToss', 'inducementReveal',
@@ -1579,8 +1596,9 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'keywordWaiting' || key === 'solidDefenceWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'keywordWaiting' || key === 'solidDefenceWaiting' || key === 'swarmingWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'keywordWaiting' && !offerTransportAlive) return null; // Sol r1: a position drained after the socket closed never re-raises it
+      if (key === 'swarmingWaiting' && !offerTransportAlive) return null; // Sol r2 P2-2: likewise
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection, chat: visibleLogLanes.chat,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -2810,9 +2828,56 @@ function clearApothecaryFixUps(): void {
   apothecaryFixUpInjuryWaitSince = null;
   apothecaryFixUpQueue = [];
   pendingApothecaryFixUps.clear();
-  clearPastriesSplash(); clearGettingEvenSplash(); // owner 10-26: every reset that drops the fix-up toasts drops the Pastries splash too
+  clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); // owner 10-26: every reset that drops the fix-up toasts drops the Pastries splash too
   apothecaryChoicesOpen.clear();
+  injuryAnchorsByPlayer.clear();
   state.apothecaryFixUp = null;
+}
+/** Owner 10-30 (Sol r1 P2-1): where each casualty pill was actually DRAWN - the view's resolved anchor
+ *  (renderer.injuryPillSquare, so a crowd-surf / thrown team-mate's renderer-held crowd square wins over the store's
+ *  own coordinate) and the armour dice square it hung under, if any. Written by the view's pill follow every frame
+ *  the pill is up; keyed by the injury occurrence (the event object), never by player. */
+const pillPresentationAnchors = new WeakMap<InjuryEvent, { square: [number, number] | null; armourSquare: [number, number] | null }>();
+export function notePillPresentationSquare(pill: InjuryEvent, square: [number, number] | null, armourSquare: [number, number] | null): void {
+  pillPresentationAnchors.set(toRaw(pill), { square: square ? [square[0], square[1]] : null, armourSquare: armourSquare ? [armourSquare[0], armourSquare[1]] : null });
+}
+/** Owner 10-30 (Sol r1 P2-2): the injury occurrences of recent frames, by player, so a Regeneration claim binds to ITS
+ *  injury when it is raised (claimInjuryAnchors) - never to whichever pill of his is newest when the line shows.
+ *  `commandNr` = the injury's frame; `sequence` = its injury sequence (game / turn / activation), stamped by the
+ *  surface pass of that frame. Entries expire on the surface pass of a frame outside their sequence and with the
+ *  fix-up queue (reset / seek / game change); no timers. */
+const injuryAnchorsByPlayer = new Map<string, { event: InjuryEvent; commandNr: number | null; sequence: string | null }>();
+const claimInjuryAnchors = new WeakMap<ApothecaryFixUpClaim, InjuryEvent>();
+function noteInjuryAnchor(event: InjuryEvent, command: unknown): void {
+  const nr = Number((command as { commandNr?: unknown } | null)?.commandNr);
+  injuryAnchorsByPlayer.set(event.playerId, { event: toRaw(event), commandNr: Number.isFinite(nr) ? nr : null, sequence: null });
+}
+/** Bind each new Regeneration claim to its injury: the injury of this same frame, or - a rerolled regeneration, which
+ *  arrives on a later frame - the injury of the same sequence. Then the entries of other sequences expire. */
+function bindRegenerationAnchors(claims: readonly ApothecaryFixUpClaim[], reports: readonly Record<string, unknown>[], commandNr: number | null, sequence: string): void {
+  for (const [playerId, entry] of [...injuryAnchorsByPlayer]) {
+    if (entry.sequence === null && entry.commandNr !== null && entry.commandNr === commandNr) entry.sequence = sequence;
+    if (entry.sequence !== sequence) injuryAnchorsByPlayer.delete(playerId);
+  }
+  for (const claim of claims) {
+    if (claim.kind !== 'regeneration') continue;
+    const entry = injuryAnchorsByPlayer.get(claim.playerId);
+    if (!entry) continue;
+    const sameFrame = commandNr !== null && entry.commandNr === commandNr;
+    const rerolled = reports.some((report) => String(report.reportId) === 'regenerationRoll' && String(report.playerId ?? '') === claim.playerId && report.reRolled === true);
+    if (sameFrame || rerolled) claimInjuryAnchors.set(claim, entry.event);
+  }
+}
+/** Owner 10-30 ("Regen splash is appearing at the center of the pitch rather than at the square where the casualty
+ *  occurred"): where a Regeneration line sits - where its own injury's pill was drawn (the view's resolved anchor),
+ *  else that injury's store square; no bound injury -> null (the centred rail). */
+function regenerationLineAnchor(claim: ApothecaryFixUpClaim): { square: [number, number] | null; armourSquare: [number, number] | null } {
+  const event = claimInjuryAnchors.get(claim);
+  if (!event) return { square: null, armourSquare: null };
+  const drawn = pillPresentationAnchors.get(event);
+  if (drawn) return { square: drawn.square, armourSquare: drawn.armourSquare };
+  const square = event.pillSquare ?? event.square;
+  return { square: square ? [square[0], square[1]] : null, armourSquare: event.armourDice && event.square ? [event.square[0], event.square[1]] : null };
 }
 function pumpApothecaryFixUps(): void {
   if (apothecaryFixUpTimer || state.apothecaryFixUp) return;
@@ -2854,6 +2919,7 @@ function pumpApothecaryFixUps(): void {
   apothecaryFixUpInjuryPoll = null;
   const g = game.value;
   let cue: ReturnType<typeof apothecaryFixUpCue> | null = null;
+  let shownClaim: ApothecaryFixUpClaim | null = null;
   while (g && !cue && apothecaryFixUpQueue.length) {
     // Owner 10-18: a Regeneration line stays behind its player's casualty pill (queued or on screen) - the roll came
     // in the injury frame. The slot's end wakes this pump; the poll covers a slot voided without one; the cap ends it.
@@ -2885,10 +2951,11 @@ function pumpApothecaryFixUps(): void {
     const claim = apothecaryFixUpQueue.shift()!;
     // Re-validated at the moment it is shown: a player who was re-fielded or changed state while the line waited
     // behind another one is skipped.
-    if (apothecaryFixUpVerdict(g, claim) === 'agrees') cue = apothecaryFixUpCue(g, claim);
+    if (apothecaryFixUpVerdict(g, claim) === 'agrees') { cue = apothecaryFixUpCue(g, claim); shownClaim = claim; }
   }
   if (!cue) { dropApothecaryFixUpQueue(); return; }
-  state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, kind: cue.kind, text: cue.text, seq: ++apothecaryFixUpSeq };
+  const anchor = cue.kind === 'regeneration' && shownClaim ? regenerationLineAnchor(shownClaim) : { square: null, armourSquare: null };
+  state.apothecaryFixUp = { side: cue.side, outcome: cue.outcome, kind: cue.kind, text: cue.text, seq: ++apothecaryFixUpSeq, playerId: cue.playerId, square: anchor.square, armourSquare: anchor.armourSquare };
   // Owner 10-20 ("When that happens, the casualty pill toast should disappear and be replaced by the Apothecary
   // toast"): his casualty pill, still up (persisted while the coach decided, or within its own beat), goes now.
   // Owner 10-21: a Regeneration line - success or the failed red pill - never replaces it: it FOLLOWS the casualty
@@ -2923,6 +2990,7 @@ function surfaceApothecaryFixUps(reports: readonly Record<string, unknown>[], g:
   const dialogId = String(g.dialogParameter?.dialogId ?? '');
   const apothecaryDialogOpen = APOTHECARY_DIALOG_IDS.has(dialogId);
   const claims = [...apothecaryFixUpClaims(reports, g), ...regenerationFixUpClaims(reports, g)];
+  bindRegenerationAnchors(claims, reports, commandNr, `${gameId}|${turn}|${actingId}`); // owner 10-30 (Sol r1 P2-2)
   // Astra r2 P2-4: a treatment settled by the coach's Original / Rerolled choice (the apothecaryChoice DIALOG) gets its
   // outcome line once the dialog has closed and the model holds his final state. Bounded: the game / turn changing
   // drops it.
@@ -3141,6 +3209,103 @@ function surfaceGettingEvenSplash(reports: readonly Record<string, unknown>[], g
   }
   pumpGettingEvenSplash();
 }
+/** Owner 10-30 (BB2025 Swarming): each `swarmingPlayersRoll` report (kicking team's pass, then the receiving team's)
+ *  shows the kick-off-event-styled Swarming splash on every seat, on the kick-off card's channel and dwell: play mode
+ *  the #67 FIFO cine (`swarming:<teamId>`, so the two passes never collapse into one slot), spectate / replay the
+ *  pregame queue + holdPlayback, the published review path a staged hold. Once per report occurrence (game, half, turn,
+ *  team, command number: a reconnect / rewind re-applying the frame does not re-fire); never during catch-up. The
+ *  report's D3 is also latched per team for the waiting notice while that team places (cleared once it no longer does). */
+const SWARMING_SPLASH_SEEN_CAP = 32;
+const swarmingSplashSeen = new Set<string>();
+let swarmingSplashSeenGameId: string | null = null;
+let swarmingSplashSeq = 0;
+let swarmingTimer: ReturnType<typeof setTimeout> | null = null;
+const swarmingAmountByTeam = new Map<string, number>();
+function noteSwarmingGameAdopted(model: GameJson | null | undefined): void {
+  if (!model) return; // a disconnect is not a game change: a same-game reconnect keeps the keys
+  const gameId = String((model as { gameId?: unknown }).gameId ?? 'unknown');
+  if (swarmingSplashSeenGameId !== null && swarmingSplashSeenGameId !== gameId) { swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); }
+  swarmingSplashSeenGameId = gameId;
+}
+function latchSwarmingAmounts(reports: readonly Record<string, unknown>[], g: GameJson | null): void {
+  if (!offerTransportAlive) return; // Sol r2 P2-2: a frame drained after the socket closed latches nothing (a file replay resets it alive)
+  for (const splash of swarmingSplashes(reports, g)) swarmingAmountByTeam.set(splash.teamId, splash.amount);
+}
+/** A latched amount lives only while its team is the one placing (turn mode `swarming`, the playing side). */
+function pruneSwarmingAmounts(g: GameJson): void {
+  if (!swarmingAmountByTeam.size) return;
+  const placing = g.turnMode === 'swarming' ? String((g.homePlaying ? g.teamHome : g.teamAway)?.teamId ?? '') : '';
+  for (const teamId of [...swarmingAmountByTeam.keys()]) if (teamId !== placing) swarmingAmountByTeam.delete(teamId);
+}
+/** The not-yet-seen splashes of this frame (marks each seen; catch-up marks them without presenting). */
+/** Sol r1 P2-5: the occurrence of a frame - its wire command number, else a stable identity of the command object (a
+ *  re-applied frame is the same object, a distinct unnumbered frame is not). No command (demo) = 'unknown'. */
+const swarmingFrameIds = new WeakMap<object, number>();
+let swarmingFrameIdSeq = 0;
+function swarmingOccurrence(cmd: Record<string, unknown> | undefined): string | null {
+  if (!cmd) return null;
+  const nr = cmd.commandNr == null ? NaN : Number(cmd.commandNr);
+  if (Number.isFinite(nr)) return `c${nr}`;
+  // Sol r2 P2-3: a spectator command's identity is assigned at ingress (its history cursor, shared with the history
+  // clone the published review route presents), so live playback and a later rewind key it alike.
+  const ingress = injuryOccurrenceIds.get(cmd);
+  if (ingress) return `s${ingress}`;
+  let id = swarmingFrameIds.get(cmd);
+  if (id === undefined) { id = ++swarmingFrameIdSeq; swarmingFrameIds.set(cmd, id); }
+  return `u${id}`;
+}
+function freshSwarmingSplashes(reports: readonly Record<string, unknown>[], g: GameJson | null, occurrence: string | null): SwarmingSplash[] {
+  const out: SwarmingSplash[] = [];
+  for (const splash of swarmingSplashes(reports, g)) {
+    const key = swarmingSplashKey(g, occurrence, splash.teamId, splash.index);
+    if (swarmingSplashSeen.has(key)) continue;
+    swarmingSplashSeen.add(key);
+    while (swarmingSplashSeen.size > SWARMING_SPLASH_SEEN_CAP) swarmingSplashSeen.delete(swarmingSplashSeen.values().next().value!);
+    if (playback.catchingUp) continue;
+    if (!offerTransportAlive) continue; // Sol r2 P2-2: drained after a socket close (spent, never shown; a file replay is alive)
+    out.push(splash);
+  }
+  return out;
+}
+function swarmingSplashState(splash: SwarmingSplash): NonNullable<typeof state.swarmingSplash> {
+  return { side: splash.side, team: splash.team, amount: splash.amount, text: splash.text,
+    img: kickoffSplashUrl('Swarming'), seq: ++swarmingSplashSeq };
+}
+/** Sol r1 P2-4: the release of the published review route's on-screen Swarming hold (dismissShownCine resolves it). */
+let publishedCineRelease: (() => void) | null = null;
+/** Sol r1 P2-3: retire the displayed and every queued Swarming splash (pregame queue and #67 FIFO) - catch-up entry,
+ *  catch-up cleanup, resets, seeks, socket close. The occurrence keys stay spent, so nothing re-fires afterwards. */
+function clearSwarmingSplash(): void {
+  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
+  swarmingTimer = null;
+  for (let i = pregameCineQueue.length - 1; i >= 0; i--) if (pregameCineQueue[i]?.kind === 'swarming') pregameCineQueue.splice(i, 1);
+  for (let i = presentation.queue.length - 1; i >= 0; i--) {
+    const event = presentation.queue[i];
+    if (event?.kind === 'cine' && event.label.startsWith('swarming:')) presentation.queue.splice(i, 1);
+  }
+  for (const ev of [...inFlightFifoCines.keys()]) if (ev.label.startsWith('swarming:')) cancelInFlightFifoCine(ev); // waiting to arm, or shown
+  if (presentation.presenting?.kind === 'cine' && presentation.presenting.id.startsWith('swarming:')) presentation.presenting.release();
+  publishedCineRelease?.(); // the published hold fails open too: nothing waits on a splash that is gone
+  state.swarmingSplash = null;
+}
+/** Spectate / replay pregame step: the kick-off card's own dwell timer shape (showKickoff). */
+function showSwarmingSplash(splash: SwarmingSplash): void {
+  state.swarmingSplash = swarmingSplashState(splash);
+  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
+  swarmingTimer = settings.clickDismissCinematics ? null
+    : scheduleGameTimeout(() => { swarmingTimer = null; state.swarmingSplash = null; }, presentationMs(KICKOFF_CINE_MS));
+}
+function surfaceSwarmingSplash(reports: readonly Record<string, unknown>[], g: GameJson | null, occurrence: string | null): void {
+  for (const splash of freshSwarmingSplashes(reports, g, occurrence)) {
+    if (settings.order66) {
+      enqueueFifoCine(`swarming:${splash.teamId}`, () => { state.swarmingSplash = swarmingSplashState(splash); },
+        () => { state.swarmingSplash = null; }, presentationMs(KICKOFF_CINE_MS));
+    } else {
+      enqueuePregameCine(() => showSwarmingSplash(splash), presentationMs(KICKOFF_CINE_MS), 'swarming');
+      holdPlayback(presentationMs(KICKOFF_CINE_MS)); // the splash reads before the placement frames apply
+    }
+  }
+}
 /** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
  *  ordinary reRoll report's splash; a failed one without fallback shows nothing new). */
 export function mascotSuccessReport(reports: readonly Record<string, unknown>[]): { teamId: string; roll: number | null } | null {
@@ -3227,6 +3392,7 @@ const KICKOFF_SPLASH: Record<string, string> = {
   nice: 'nice', pouringrain: 'pouring_rain', swelteringheat: 'sweltering_heat', verysunny: 'very_sunny',
   blizzard: 'blizzard',
   weatherchange: 'changing_weather', changingweather: 'changing_weather',
+  swarming: 'swarming', // owner 10-30: no banner yet (not in SUPER_KICKOFF_BANNERS), so the big name renders
 };
 const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const SEAT_AWARE_KICKOFFS = new Set([
@@ -3524,7 +3690,7 @@ type PregameCineStep = {
   fire: () => void;
   clear?: () => void;
   holdMs: number;
-  kind?: 'fan' | 'weather' | 'coin' | 'kickoff' | 'prayer' | 'masterChef';
+  kind?: 'fan' | 'weather' | 'coin' | 'kickoff' | 'prayer' | 'masterChef' | 'swarming';
 };
 const pregameCineQueue: PregameCineStep[] = [];
 let pregameCineBusyUntil = 0;
@@ -3532,12 +3698,12 @@ let pregameCineTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** A queued splash (fan/weather/coin/kickoff/prayer) is currently on screen. */
 function isQueuedCineShowing() {
-  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || state.prayerAnnounce || legacyMasterChefShowing);
+  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || state.swarmingSplash || state.prayerAnnounce || legacyMasterChefShowing);
 }
 
 /** Only legacy/cinematic surfaces with an owner-approved skip affordance. Prayer announcements always complete on the FIFO clock. */
 function isDismissibleCineShowing() {
-  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || blockingSplashCine.value);
+  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || state.swarmingSplash || blockingSplashCine.value);
 }
 
 function pumpPregameCine() {
@@ -3627,6 +3793,20 @@ function flushPendingPregameWait(): void {
  *  fail-open cap (Meero SR-248 🟡) so a STUCK pregame cine can never freeze the card — wedge-immunity lives HERE and
  *  is inherited by every caller, not re-derived per call. `once` guards the drain-vs-cap double-fire. */
 let pregameDrainedCallbacks: { run: () => void; cap: ReturnType<typeof setTimeout>; onCancel?: () => void }[] = [];
+/** Sol r2 P2-1: every #67 FIFO cine taken off the queue and not yet completed (waiting on the pregame drain, or on screen),
+ *  with its idempotent `finish` (clears its field, frees the slot, resolves its promise). */
+const inFlightFifoCines = new Map<{ label: string }, () => void>();
+/** Cancel one in-flight FIFO cine: drop its pending pregame-drain callback and cap, then finish it (never shown later). */
+function cancelInFlightFifoCine(ev: { label: string }): void {
+  const finish = inFlightFifoCines.get(ev);
+  if (!finish) return;
+  pregameDrainedCallbacks = pregameDrainedCallbacks.filter((entry) => {
+    if (entry.onCancel !== finish) return true;
+    cancelGameTimeout(entry.cap);
+    return false;
+  });
+  finish();
+}
 function onPregameDrained(cb: () => void, capMs: number, onCancel?: () => void): void {
   if (!pregameCineBusy()) { cb(); return; }
   let fired = false;
@@ -3649,6 +3829,8 @@ function runPregameDrainedCallbacks(): void {
 
 /** Click-to-SKIP the on-screen splash (works in AUTO-timer mode too) — cancels the auto-clear + advance timers. */
 function dismissShownCine() {
+  // Sol r1 P2-4: the published review route's Swarming hold resolves here (clears the splash, the presentation goes on).
+  if (publishedCineRelease) { publishedCineRelease(); return; }
   // Slice 2: a FIFO kickoff-transaction cine owns its own completion — release exactly THAT slot (advances one
   // FIFO event, clears its own cine field) and leave the pregame pump (coin/fan/weather + spectate kickoff) alone.
   if (presentation.presenting?.kind === 'cine') { presentation.presenting.release(); return; }
@@ -3663,13 +3845,14 @@ function dismissShownCine() {
     return;
   }
   if (!isDismissibleCineShowing()) return;
-  for (const t of [coinTimer, weatherTimer, fanFactorTimer, kickoffTimer]) if (t) cancelGameTimeout(t);
-  coinTimer = weatherTimer = fanFactorTimer = kickoffTimer = null;
+  for (const t of [coinTimer, weatherTimer, fanFactorTimer, kickoffTimer, swarmingTimer]) if (t) cancelGameTimeout(t);
+  coinTimer = weatherTimer = fanFactorTimer = kickoffTimer = swarmingTimer = null;
   if (pregameCineTimer) { cancelGameTimeout(pregameCineTimer); pregameCineTimer = null; }
   if (state.coinToss) finishCoinToss(true);
   state.weatherCine = null;
   state.fanFactorCine = null;
   state.kickoffCine = null;
+  state.swarmingSplash = null;
   pregameCineBusyUntil = 0;
   pumpPregameCine();
 }
@@ -3741,7 +3924,7 @@ function collapseStalePregameCine() {
   if (state.prayerAnnounce || legacyMasterChefShowing || pregameCineQueue.some((step) => step.kind === 'prayer' || step.kind === 'masterChef')) return;
   const keepCoin = !playback.catchingUp;
   const queuedCoin = pregameCineQueue.find((s) => s.kind === 'coin');
-  const keptKickoffs = pregameCineQueue.filter((s) => s.kind === 'kickoff'); // never drop a queued kickoff splash
+  const keptKickoffs = pregameCineQueue.filter((s) => s.kind === 'kickoff' || s.kind === 'swarming'); // never drop a queued kickoff (or Swarming) splash
   pregameCineQueue.length = 0;
   if (keepCoin && queuedCoin) {
     // Re-wrap the coin with a compressed auto-clear: showCoinToss arms COIN_CINE_MS (and NO timer in
@@ -3769,6 +3952,11 @@ function collapseStalePregameCine() {
     if (keepCoin) coinTimer = scheduleGameTimeout(() => { coinTimer = null; finishCoinToss(true); pumpPregameCine(); }, presentationMs(COIN_COMPRESSED_MS));
     else finishCoinToss(false);
   }
+  // Sol r1 P1: an on-screen Swarming splash (a pregame step, not a #67 FIFO cine) is part of this kick-off, not stale
+  // pregame: it keeps its remaining dwell, and the running pump timer releases the kept steps behind it.
+  const swarmingStepShowing = !!state.swarmingSplash
+    && !(presentation.presenting?.kind === 'cine' && presentation.presenting.id.startsWith('swarming:'));
+  if (swarmingStepShowing) return;
   // Restart the pump NOW: drop the stale busy window + inter-cine gap so the kept steps (compressed coin →
   // kickoff splash) fire immediately; an emptied queue drains → flushPendingPregameWait() inside the pump.
   if (pregameCineTimer) { cancelGameTimeout(pregameCineTimer); pregameCineTimer = null; }
@@ -3790,6 +3978,9 @@ function clearPregameCine() {
   if (kickoffTimer) cancelGameTimeout(kickoffTimer);
   kickoffTimer = null;
   state.kickoffCine = null;
+  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
+  swarmingTimer = null;
+  state.swarmingSplash = null;
   legacyMasterChefShowing = false;
   state.prayerAnnounce = null;
   pendingPrayerEffects.length = 0;
@@ -4070,6 +4261,12 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   state.dodgySnackPlayers = reduceDodgySnackPlayers(state.dodgySnackPlayers, reports, g);
   const home = fanRolls.get('home');
   const away = fanRolls.get('away');
+  // Owner 10-30: the Swarming roll (D3 per eligible team, before the kick) - latch for the waiting notice, splash every
+  // seat (catch-up only marks the occurrence seen: freshSwarmingSplashes returns nothing then).
+  // Sol r2 P2-3: the frame's RAW reports (the review route reads them raw too), so a report's index is the same on both.
+  const swarmingReports = (cmd?.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? reports;
+  latchSwarmingAmounts(swarmingReports, g);
+  surfaceSwarmingSplash(swarmingReports, g, swarmingOccurrence(cmd));
   // B9-13: enforce pregame ORDER Fan Factor → Weather → Coin Toss via the queue (one frame or spread out).
   // Brilliant Coaching and Cheering Fans are held for their following authoritative winner report.
   let kickoffPalette: KickoffBannerPalette = null;
@@ -5656,7 +5853,9 @@ const game = customRef<GameJson | null>((track, trigger) => ({
     if (spectatorPublication.position.value) throw new Error('Cannot mutate the published spectator position');
     // Owner 10-10: a replaced model (reconnect snapshot, replay seek, game change) is drawn as it is - no held injury token.
     if (value !== legacyGame.value) { clearInjuryTokenHolds(); injuryEscorts.clear(); }
+    if (value !== legacyGame.value) swarmingAmountByTeam.clear(); // Sol r1 P2-2: a replaced model (reconnect snapshot) brings no roll; the plain line shows
     noteGettingEvenGameAdopted(value); // Sol r2: a new gameId restarts the Getting Even splash dedup
+    noteSwarmingGameAdopted(value); // owner 10-30: and the Swarming splash dedup + amount latch
     legacyGame.value = value; trigger();
   },
 }));
@@ -6106,6 +6305,17 @@ async function pauseSpectatorView(): Promise<void> {
         }
       }
       noteGettingEvenGameAdopted(position.model); // Sol r2: the published path adopts models without the game setter
+      noteSwarmingGameAdopted(position.model);
+      // Owner 10-30: latch the played event's Swarming roll BEFORE publishing (this position's HUD reads it); a seek /
+      // snapshot keeps none (the plain waiting line), and a team that no longer places drops its amount.
+      if (snap || !previous) swarmingAmountByTeam.clear();
+      else if (previous.cursor.sequence !== position.cursor.sequence) {
+        const played = history.eventAfter(previous.cursor);
+        if (played && played.cursor.sequence === position.cursor.sequence) {
+          latchSwarmingAmounts((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [], position.model);
+        }
+      }
+      pruneSwarmingAmounts(position.model);
       spectatorPublication.publish(position, snap);
       // Beefee 10-26 (g1956976, "No ball marker shown on Quick Snap event"): a played kickoffScatter reveals its landing
       // marker HERE, in the synchronous publication boundary, as applyFrame does on the live path. present() runs a
@@ -6234,6 +6444,30 @@ async function pauseSpectatorView(): Promise<void> {
           ...(gap > 0 ? [{ delayBefore: presentationMs(gap), present: () => {} }] : []),
         ], signal);
       };
+      // Sol r1 P2-4: a click-to-skip hold - dismissCine releases it (the presentation goes on at once), and it expires on
+      // its own only when click-to-dismiss is off. false only when the presentation was aborted.
+      const holdDismissibleSurface = async (holdMs: number, show: () => void, clear: () => void, gap = 0): Promise<boolean> => {
+        if (signal.aborted) return false;
+        show();
+        const completed = await new Promise<boolean>((resolve) => {
+          let timer: ReturnType<typeof setTimeout> | null = null;
+          const finish = (ok: boolean) => {
+            if (publishedCineRelease !== release) return;
+            publishedCineRelease = null;
+            if (timer) cancelGameTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+            clear(); // synchronously: a skip hides it in the same tick
+            resolve(ok);
+          };
+          const release = () => finish(true);
+          const onAbort = () => finish(false);
+          publishedCineRelease = release;
+          signal.addEventListener('abort', onAbort);
+          if (!settings.clickDismissCinematics) timer = scheduleGameTimeout(release, presentationMs(holdMs));
+        });
+        if (!completed) return false;
+        return gap > 0 ? presentStages([{ delayBefore: presentationMs(gap), present: () => {} }], signal) : !signal.aborted;
+      };
       // S45: the held Master Chef steal, shown as its own staged hold; false only when the presentation was aborted.
       const presentMasterChef = async (): Promise<boolean> => {
         const chef = transitionMasterChef;
@@ -6320,6 +6554,11 @@ async function pauseSpectatorView(): Promise<void> {
         if (!await holdSurface(COIN_CINE_MS,
           () => { state.coinToss = { result: coin.result, coach: coin.coach, won: coin.won, called: coin.called }; },
           () => { state.coinToss = null; }, PREGAME_CINE_GAP_MS)) return;
+      }
+      const swarmingOccurrenceKey = commandNr != null ? `c${commandNr}` : `s${spectatorCursorKey(event.cursor)}`; // Sol r2 P2-3: the ingress identity
+      for (const splash of freshSwarmingSplashes(reports, position.model, swarmingOccurrenceKey)) { // owner 10-30: Swarming roll, kick-off card dwell
+        if (!await holdDismissibleSurface(KICKOFF_CINE_MS, () => { state.swarmingSplash = swarmingSplashState(splash); },
+          () => { state.swarmingSplash = null; }, PREGAME_CINE_GAP_MS)) return;
       }
       if (kickoffWeather.kickoff) {
         const kickoff = kickoffWeather.kickoff;
@@ -6737,6 +6976,7 @@ async function pauseSpectatorView(): Promise<void> {
         notePillCrowdSquare(injury, reports); // owner 10-20 (Astra round 5): a thrown team-mate's pill on his crowd square
         if (injury.isCasualty) casualtyPresentationsOutstanding++;
         injuryEventOccurrence.set(injury, event.command); // owner 10-12: its pill resolves this occurrence's beat only
+        noteInjuryAnchor(injury, event.command); // owner 10-30: its Regeneration line binds to this occurrence
         if (armourCuePids.has(pid) && modernInjuryTiming()) { armourCueEvents.add(injury); injury.armourDice = true; } // owner 10-20: his pill pops with (and below) his armour dice (Modern; Astra P2-6)
         injuryQueue.push(injury);
       }
@@ -7223,7 +7463,7 @@ function clearCatchupTransients(): void {
   rerollStageTimers = [];
   if (state.rerollResultPending) state.rerollResultPending = null;
   state.opponentReviewingDice = false; state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.stallerDetected = null; lastStallerCommandNr = null;
-  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); state.reRollPrompt = null; state.skillChoice = null;
+  clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); state.reRollPrompt = null; state.skillChoice = null;
   for (let i = pregameCineQueue.length - 1; i >= 0; i--) {
     if (pregameCineQueue[i]?.kind === 'prayer') pregameCineQueue.splice(i, 1);
   }
@@ -7620,6 +7860,7 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       let auto: ReturnType<typeof setTimeout> | undefined;
       const finish = () => {
         if (done) return; done = true;
+        inFlightFifoCines.delete(ev);
         if (auto) cancelGameTimeout(auto);
         try { ev.clear(); } catch (e) { log('system', `#67 cine clear failed: ${String(e)}`); }
         presentation.presenting = null;
@@ -7637,6 +7878,8 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       // fail-open cap lives INSIDE onPregameDrained (Meero SR-248 🟡), sized to EXCEED the uncollapsed pregame so it
       // never undercuts a live cine (Meero SR-248-successor); `finish` is the teardown canceller (item-583) so a
       // fresh game while we wait un-armed RESOLVES this Promise (no orphan) without showing a stale card.
+      // Sol r2 P2-1: the handle lives from dequeue (here, possibly still waiting on the pregame drain) to completion.
+      inFlightFifoCines.set(ev, finish);
       onPregameDrained(arm, kickoffCinePregameCapMs(), finish);
     });
   }
@@ -7705,7 +7948,13 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
       presentation.presenting = null;
       noteFailedMoveArrival(ev.playerId); // owner 10-09: a failed roll's read beat starts when its token has arrived
       resolve();
-      if (!watchdog && state.presentationStep?.seq === presentedStep.seq) state.presentationStep = null;
+      // Owner 10-30 (pickup skip/teleport): a read beat (pickup, catch, bounce, fireball) queued between this tile and
+      // the mover's next tile must not hand the token to the model draw - the model already sits on the run's FINAL
+      // square, so the refresh walked it ahead and the next tile snapped it back. Keep the completed snapshot while the
+      // FIFO still owns the mover; the next presentStep replaces it and onPresentationDrainIdle releases or retires it.
+      const fifoOwnsMover = presentation.queue.some((queued) => queued.kind === 'beat'
+        || (queued.kind === 'step' && queued.playerId === ev.playerId));
+      if (!watchdog && !fifoOwnsMover && state.presentationStep?.seq === presentedStep.seq) state.presentationStep = null;
       // owner 09-06: the failed walk drained. Owner 10-06 (g1950459): only once every step the held fence owns has walked -
       // a planned run arrives as one burst, so the failure of step 7 is held while steps 2-6 are still queued; releasing
       // it at the first earlier tile published the fence, dropped the queued tiles and snapped the token to the end.
@@ -8447,6 +8696,16 @@ function offerHoldDialog(dialog: unknown): Record<string, unknown> | null | unde
 /** Test seam (Astra r4): the socket-close teardown, without a socket. */
 export function installOfferTransportTestHarness(): { lose(): void; alive(): boolean } {
   return { lose: () => retireOfferHoldsOnTransportLoss(), alive: () => offerTransportAlive };
+}
+/** The socket closed: what the close handler tears down before deciding on a reconnect (shared with the send-off
+ *  test seam, so a test drives the real path). Frames still draining afterwards see offerTransportAlive false. */
+function teardownPassiveSurfacesOnTransportClose(): void {
+  retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
+  state.waitingForMatch = null; // connection ended — drop the waiting modal
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  clearSendOffWaiting();
+  clearGettingEvenSplash(); clearSwarmingSplash(); // Sol r1: no toast timer / queued splash outlives the socket
+  swarmingAmountByTeam.clear(); // Sol r1 P2-2: a latched Swarming amount never outlives the socket
 }
 function resetPresentation(): void {
   modalOfferHoldTeardown.value++;
@@ -10619,6 +10878,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // Owner 10-12: his stunned decoration / the frame's injury sound wait for this event's pill (armed only for a
       // queued event - a fast-forwarded frame draws and sounds as before).
       injuryEventOccurrence.set(event, cmd);
+      noteInjuryAnchor(event, cmd); // owner 10-30: its Regeneration line binds to this occurrence
       const diceHeld = armourCueEvents.has(event) && (armourAfterFollow !== null || armourRevealScheduled > 0 || armourPublishPending > 0);
       const beat = injuryPillBeatFor(event, preStates.get(playerId), game.value, cmd.sound, !frameInjurySoundClaimed, settings.uiMode === 'classic', diceHeld);
       if (armInjuryPillBeat(playerId, event.injuryBase, beat.stun, beat.sound, cmd, injuryPillOccurrenceKey(cmd, playerId))) frameInjurySoundClaimed = true;
@@ -13015,7 +13275,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); } // Astra 10-20 (P2-3)
     releaseSpectatorBlockCardHold(spectatorBlockCardHold, true); // owner 10-22: catch-up never waits on a walk for the block card
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
@@ -14070,7 +14330,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.inducementBuy = null; state.cardBuy = null;
   state.inducementOwnDialogPending = false; // re-derived on the next sync from inducementPhaseEvidence, which a rejoin keeps
   clearUnknownCall(); unknownDialogInstance = 0;
-  state.weatherCine = null; state.kickoffCine = null; state.kickoffArcNeedsDecisionDwell = false;
+  state.weatherCine = null; state.kickoffCine = null; state.swarmingSplash = null; state.kickoffArcNeedsDecisionDwell = false;
   state.dodgySnackCine = null; state.dodgySnackAnnouncement = null; state.dodgySnackPlayers = [];
   pendingMasterChef = null; blockingSplashCine.value = null; state.kickTargetReveal = null; // S45: a held steal / blocking splash / landing marker never survives a reset, seek or game change
   state.kickoffVictimSplash = null; // #131: flush the kickoff victim-splash on a game change
@@ -14097,7 +14357,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearRockImpactGate();
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
-  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
+  state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
   for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
@@ -14108,7 +14368,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
   armourPublishPending = 0; armourPublishGeneration++; armourPublishedWakes.clear(); // owner 10-20
@@ -14259,7 +14519,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -17021,7 +17281,7 @@ export function installApothecaryTestHarness(
     dispose() {
       clearApothecaryResult();
       clearRerollSplash();
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash();
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash();
       injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); // owner 10-20
       state.riotousRookiesSplash = priorRiotous;
       state.turnStart = priorTurnStart;
@@ -19663,6 +19923,10 @@ export function installPresentationRunTestHarness(): {
   drainIdle(): void;
   drainIdleAtModel(coordinate: [number, number] | null): void;
   turnEnd(): void;
+  /** Owner 10-30: a store-paced read beat (pickup/catch/bounce) through the production enqueueBeat. */
+  beat(ms: number): void;
+  /** Set the authoritative model coordinate the REAL drain-idle path reads, without firing it. */
+  setModel(playerId: string, coordinate: [number, number] | null): void;
   /** retire-gap hook 1, over the production predicate: the acting player carried by an APPLIED frame. */
   actingPlayer(playerId: string): void;
   /** retire-gap hook 2, over the production predicate: the applied frame's coordinate for the presented player. */
@@ -19711,6 +19975,14 @@ export function installPresentationRunTestHarness(): {
       onPresentationDrainIdle();
     },
     turnEnd() { requestPresentationRetire(); },
+    beat(ms) { enqueueBeat(ms); },
+    setModel(playerId, coordinate) {
+      game.value = {
+        fieldModel: {
+          playerDataArray: coordinate == null ? [] : [{ playerId, playerCoordinate: [coordinate[0], coordinate[1]] }],
+        },
+      } as unknown as GameJson;
+    },
     actingPlayer(playerId) { retirePresentationOnActingChange(playerId); },
     modelCoordinate(coordinate) { retirePresentationOnModelDivergence(coordinate); },
     presented: () => state.presentationStep,
@@ -20095,6 +20367,114 @@ export function installCoinPresentationTestHarness(
   };
 }
 
+/** @internal Owner 10-30: the Swarming splash + waiting notice over production applyFrame. `order66` true = the play
+ *  route (#67 FIFO cine), false = the spectate / replay route (pregame queue + its own dwell timer). */
+export function installSwarmingSplashTestHarness(
+  fixture: GameJson,
+  options: { seat: 'home' | 'away' | 'spectator'; order66: boolean; clickDismiss?: boolean },
+): {
+  apply(command: Record<string, unknown>): void;
+  splash(): typeof state.swarmingSplash;
+  waiting(): typeof state.swarmingWaiting;
+  kickoffCine(): typeof state.kickoffCine;
+  /** Labels of the #67 FIFO cines, the presenting one first. */
+  fifoCines(): string[];
+  /** The queued #67 FIFO cines with their dwell (before the pump takes them). */
+  queuedFifoCines(): { label: string; dwellMs: number }[];
+  pregameKinds(): (string | undefined)[];
+  cineShowing(): boolean;
+  dismiss(): void;
+  /** Forget the applier's own report de-dup so a re-applied frame reaches the report readers again. */
+  forgetReportDedupe(): void;
+  /** Apply this exact command object (no manufactured commandNr): an unnumbered wire frame, or the same frame re-applied. */
+  applyRaw(cmd: Record<string, unknown>): void;
+  /** A reconnect: the SERVER_GAME_STATE handler's reset + snapshot adoption. */
+  snapshot(model: GameJson): void;
+  /** Queue a backlog through the production playback pump (more than CATCHUP_FRAMES = catch-up). */
+  backlog(commands: Record<string, unknown>[]): void;
+  catchingUp(): boolean;
+  /** The next session's playback reset (offerTransportAlive again), on the same model. */
+  revive(): void;
+  setCatchingUp(value: boolean): void;
+  dispose(): void;
+} {
+  const priorGame = game.value;
+  const priorPlay = { ...play };
+  const priorOrder66 = settings.order66;
+  const priorClickDismiss = settings.clickDismissCinematics;
+  const priorCatchingUp = playback.catchingUp;
+  const priorSplash = state.swarmingSplash;
+  const priorWaiting = state.swarmingWaiting;
+  const priorLastReportSig = lastReportSig;
+  const priorLastReportCommandNr = lastReportCommandNr;
+  const priorTransportAlive = offerTransportAlive;
+  offerTransportAlive = true;
+  const resetSwarming = () => {
+    resetPresentation(); clearPregameCine();
+    swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); swarmingSplashSeenGameId = null;
+    lastReportSig = null; lastReportCommandNr = null;
+  };
+  resetSwarming();
+  playback.catchingUp = false;
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  play.active = options.seat !== 'spectator';
+  play.coach = options.seat === 'home' ? String(fixture.teamHome.coach ?? 'home-coach')
+    : options.seat === 'away' ? String(fixture.teamAway.coach ?? 'away-coach') : 'spectator-not-seated';
+  settings.order66 = options.order66;
+  settings.clickDismissCinematics = options.clickDismiss ?? false;
+  state.swarmingSplash = null; state.swarmingWaiting = null;
+  return {
+    apply(command) {
+      applyFrame({
+        receivedAt: Date.now(),
+        cmd: {
+          netCommandId: NetCommandId.SERVER_MODEL_SYNC,
+          modelChangeList: { modelChangeArray: [] },
+          reportList: { reports: [] },
+          ...command,
+          commandNr: command.commandNr ?? ++isolatedPresentationTestCommandNr,
+        },
+      });
+    },
+    splash: () => state.swarmingSplash,
+    kickoffCine: () => state.kickoffCine,
+    waiting: () => state.swarmingWaiting,
+    fifoCines: () => [
+      ...(presentation.presenting?.kind === 'cine' ? [presentation.presenting.id] : []),
+      ...presentation.queue.flatMap((event) => event.kind === 'cine' ? [event.label] : []),
+    ],
+    queuedFifoCines: () => presentation.queue.flatMap((event) => event.kind === 'cine' ? [{ label: event.label, dwellMs: event.dwellMs }] : []),
+    pregameKinds: () => pregameCineQueue.map((step) => step.kind),
+    cineShowing: () => gameStore.cineShowing.value,
+    dismiss: () => gameStore.dismissCine(),
+    forgetReportDedupe() { lastReportSig = null; lastReportCommandNr = null; },
+    applyRaw(cmd) { applyFrame({ receivedAt: Date.now(), cmd }); },
+    snapshot(model) { resetPlayback(); game.value = structuredClone(model); },
+    backlog(commands) {
+      for (const command of commands) playback.queue.push({ receivedAt: Date.now(), cmd: {
+        netCommandId: NetCommandId.SERVER_MODEL_SYNC, modelChangeList: { modelChangeArray: [] }, reportList: { reports: [] },
+        ...command, commandNr: command.commandNr ?? ++isolatedPresentationTestCommandNr } });
+      pumpPlayback();
+    },
+    catchingUp: () => playback.catchingUp,
+    revive: () => resetPlayback(),
+    setCatchingUp(value) { playback.catchingUp = value; },
+    dispose() {
+      resetSwarming();
+      resetPlayback();
+      clearAllGameTimeouts();
+      lastReportSig = priorLastReportSig; lastReportCommandNr = priorLastReportCommandNr;
+      game.value = priorGame;
+      play.active = priorPlay.active; play.coach = priorPlay.coach;
+      settings.order66 = priorOrder66;
+      settings.clickDismissCinematics = priorClickDismiss;
+      playback.catchingUp = priorCatchingUp;
+      state.swarmingSplash = priorSplash; state.swarmingWaiting = priorWaiting;
+      offerTransportAlive = priorTransportAlive;
+    },
+  };
+}
+
 /** @internal Kickoff command-sequence seam over production applyFrame + the presentation FIFO. */
 export function installKickoffPresentationTestHarness(
   fixture: GameJson,
@@ -20372,10 +20752,14 @@ export function installSendOffTestHarness(
   hardBoundary(next?: GameJson): void;
   setCatchingUp(value: boolean): void;
   disconnect(): void;
+  /** The socket-close teardown (the real handler's), leaving play active so queued frames can still drain. */
+  transportClose(): void;
   dispose(): void;
 } {
   const priorGame = game.value;
   const priorSession = session;
+  const priorTransportAlive = offerTransportAlive;
+  offerTransportAlive = true;
   const priorPlay = { ...play };
   const priorOrder66 = settings.order66;
   const priorInteractive = interactiveReRolls;
@@ -20438,8 +20822,10 @@ export function installSendOffTestHarness(
     },
     disconnect() {
       play.active = false; clearSendOffWaiting(); },
+    transportClose: () => teardownPassiveSurfacesOnTransportClose(),
     dispose() {
       clearSendOffWaiting();
+      offerTransportAlive = priorTransportAlive;
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active;
@@ -21861,13 +22247,67 @@ function surfaceSendOff(g: GameJson, dp: Record<string, unknown> | undefined) {
   };
 }
 
-let sendOffWaitingClearTimer: ReturnType<typeof setTimeout> | null = null;
-const SEND_OFF_WAITING_RESULT_HOLD_MS = 4200;
+/** Owner 10-30 (send-off reveal): the kinds of line the opponent-seat review types in. */
+export type SendOffRevealStepKind = 'decidingArgue' | 'argues' | 'notConvinced' | 'decidingBribe' | 'offersBribe'
+  | 'decidingReroll' | 'rerollUsed' | 'rerollDeclined';
+export interface SendOffRevealStep {
+  key: string;
+  kind: SendOffRevealStepKind;
+  tone: 'pending' | 'failure' | 'neutral';
+  text: string;
+}
+/** The decided call: the last authoritative argueTheCall / bribesRoll report (or the send-to-box model truth). */
+export interface SendOffRevealOutcome {
+  result: 'overturned' | 'sentOff';
+  decidedBy: 'argue' | 'bribe';
+  roll: number | null;
+  minimumRoll: number | null;
+}
 
-function clearSendOffWaiting(): void {
+/** The result hold's clear: a fresh SEND_OFF_WAITING_RESULT_HOLD_MS from the modal's first flip report
+ *  (`noteSendOffRevealShown`), or the fallback hold the backstop started. */
+let sendOffWaitingClearTimer: ReturnType<typeof setTimeout> | null = null;
+/** Latches fail open: a view that never reports the flip (Classic, headless) still gets a hold started by this. */
+let sendOffWaitingBackstopTimer: ReturnType<typeof setTimeout> | null = null;
+/** A view reported the flip for this occurrence: its hold is the one that stands (later reports are no-ops). */
+let sendOffWaitingHoldConfirmed = false;
+const SEND_OFF_WAITING_RESULT_HOLD_MS = 4200;
+/** Owner 10-30 / Sol r1: with no flip report this long after the decision, the store starts the hold itself, so a
+ *  view-less seat clears at SEND_OFF_REVEAL_FALLBACK_MS + SEND_OFF_WAITING_RESULT_HOLD_MS (5.7 s). The modal finishes
+ *  any typing still queued at this point at once, so its flip report always lands inside that fallback hold. */
+export const SEND_OFF_REVEAL_FALLBACK_MS = 1500;
+/** Rulebook targets, for the reports that do not serialise one (ReportArgueTheCallRoll / ReportBribesRoll):
+ *  Argue the Call succeeds on a 6, a Bribe on 2+. */
+const SEND_OFF_ARGUE_TARGET = 6;
+const SEND_OFF_BRIBE_TARGET = 2;
+
+function cancelSendOffWaitingTimers(): void {
   if (sendOffWaitingClearTimer) cancelGameTimeout(sendOffWaitingClearTimer);
+  if (sendOffWaitingBackstopTimer) cancelGameTimeout(sendOffWaitingBackstopTimer);
   sendOffWaitingClearTimer = null;
+  sendOffWaitingBackstopTimer = null;
+  sendOffWaitingHoldConfirmed = false;
+}
+
+/** Drop every referee occurrence: the card, the undecided ones and the decided ones still to be presented. */
+function clearSendOffWaiting(): void {
+  cancelSendOffWaitingTimers();
   state.sendOffWaiting = null;
+  sendOffTrackedOccurrences.clear();
+  sendOffDecidedQueue.length = 0;
+  sendOffPresentedKey = null;
+  sendOffFocusPlayerId = '';
+}
+
+/** (Re)start the result hold: a full SEND_OFF_WAITING_RESULT_HOLD_MS from now; the backstop is no longer needed. */
+function startSendOffWaitingHold(): void {
+  if (sendOffWaitingBackstopTimer) cancelGameTimeout(sendOffWaitingBackstopTimer);
+  if (sendOffWaitingClearTimer) cancelGameTimeout(sendOffWaitingClearTimer);
+  sendOffWaitingBackstopTimer = null;
+  sendOffWaitingClearTimer = scheduleGameTimeout(() => {
+    sendOffWaitingClearTimer = null;
+    finishSendOffPresentation();
+  }, presentationMs(SEND_OFF_WAITING_RESULT_HOLD_MS));
 }
 
 function sendOffWaitingPlayerContext(g: GameJson, playerId: string) {
@@ -21896,31 +22336,44 @@ function sendOffWaitingOwnedByOpponent(g: GameJson, teamId: string): boolean {
   return !!myTeamId && teamId !== myTeamId && (teamId === homeTeamId || teamId === awayTeamId);
 }
 
+function sendOffRevealLineText(kind: SendOffRevealStepKind, current: NonNullable<typeof state.sendOffWaiting>): string {
+  const coach = current.coach || current.teamName;
+  const playerName = current.playerName;
+  switch (kind) {
+    case 'decidingArgue': return $t('dialogs.sendOffWaitingModal.line.decidingArgue', { coach });
+    case 'argues': return $t('dialogs.sendOffWaitingModal.line.argues', { playerName });
+    case 'notConvinced': return $t('dialogs.sendOffWaitingModal.line.notConvinced');
+    case 'decidingBribe': return $t('dialogs.sendOffWaitingModal.line.decidingBribe', { coach });
+    case 'offersBribe': return $t('dialogs.sendOffWaitingModal.line.offersBribe', { coach });
+    case 'decidingReroll': return $t('dialogs.sendOffWaitingModal.line.decidingReroll', { coach });
+    case 'rerollUsed': return $t('dialogs.sendOffWaitingModal.line.rerollUsed', { coach });
+    case 'rerollDeclined': return $t('dialogs.sendOffWaitingModal.line.rerollDeclined', { coach });
+  }
+}
+
+/** Append one line (once per key). Only the newest line may read as pending: an earlier "deciding" line settles. */
 function sendOffWaitingStep(
   current: NonNullable<typeof state.sendOffWaiting>,
   key: string,
-  text: string,
-  tone: 'pending' | 'success' | 'failure' | 'neutral',
+  kind: SendOffRevealStepKind,
+  tone: SendOffRevealStep['tone'],
 ): NonNullable<typeof state.sendOffWaiting> {
   if (current.steps.some((step) => step.key === key)) return current;
-  return { ...current, steps: [...current.steps, { key, text, tone }], seq: current.seq + 1 };
+  const settled = current.steps.map((step) => step.tone === 'pending' ? { ...step, tone: 'neutral' as const } : step);
+  return { ...current, steps: [...settled, { key, kind, tone, text: sendOffRevealLineText(kind, current) }], seq: current.seq + 1 };
 }
 
 function sendOffWaitingPhase(
   current: NonNullable<typeof state.sendOffWaiting>,
   stage: NonNullable<typeof state.sendOffWaiting>['stage'],
-  status: string,
-  resolved = false,
 ): NonNullable<typeof state.sendOffWaiting> {
-  if (current.stage === stage && current.status === status && current.resolved === resolved) return current;
-  return { ...current, stage, status, resolved, seq: current.seq + 1 };
+  if (current.stage === stage) return current;
+  return { ...current, stage, seq: current.seq + 1 };
 }
 
-function sendOffRollText(report: Record<string, unknown>): string {
-  const roll = Number(report.roll);
-  const needed = Number(report.minimumRoll);
-  if (!Number.isFinite(roll)) return '';
-  return Number.isFinite(needed) ? ` — rolled ${roll} (${needed}+)` : ` — rolled ${roll}`;
+function sendOffReportNumber(value: unknown): number | null {
+  const n = Number(value);
+  return value != null && value !== '' && Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -21937,6 +22390,240 @@ function isRefereeSendOffModelChange(
   return reason === 'foulban' || reason === 'secretweaponban';
 }
 
+type SendOffWaitingOccurrence = NonNullable<typeof state.sendOffWaiting>;
+type SendOffModelChange = { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown };
+
+/**
+ * Sol r2/r3: every opponent player's referee occurrence, tracked per player (per game) whether or not it is on screen.
+ * Secret-weapon bans at the end of a drive ask Away to argue (for all its secret weapons at once), then Home, then offer
+ * Away a Bribe (StepEndTurn); an occurrence keeps its lines and rolls while another election holds the screen.
+ * Undecided occurrences live here; a decided one moves to `sendOffDecidedQueue` until it has been presented.
+ */
+const sendOffTrackedOccurrences = new Map<string, SendOffWaitingOccurrence>();
+/** Decided occurrences in decision order. The head is on screen through its reveal and hold; the rest wait their turn.
+ *  Each leaves only when its hold ends (or on a hard clear). */
+const sendOffDecidedQueue: SendOffWaitingOccurrence[] = [];
+/** The decided occurrence whose presentation (backstop / hold) has started. */
+let sendOffPresentedKey: string | null = null;
+/** The opponent player the latest frame is about: shown while no decided card holds the screen. */
+let sendOffFocusPlayerId = '';
+let sendOffTrackedGameId = '';
+
+/** Put the right card on screen: the head of the decided queue (its presentation starts once), else the undecided
+ *  focus occurrence, else nothing. Idempotent: a repeated projection never restarts or cancels a reveal. */
+function refreshSendOffScreen(): void {
+  const head = sendOffDecidedQueue[0];
+  if (head) {
+    if (sendOffPresentedKey === head.occurrenceKey) return;
+    cancelSendOffWaitingTimers();
+    sendOffPresentedKey = head.occurrenceKey;
+    state.sendOffWaiting = { ...head, seq: Math.max(state.sendOffWaiting?.seq ?? 0, head.seq) + 1 };
+    // Owner 10-30: the hold starts when the modal has flipped to its back face (`noteSendOffRevealShown`). Latches fail
+    // open: with no report from a view by SEND_OFF_REVEAL_FALLBACK_MS after it is shown, the store starts it itself.
+    sendOffWaitingBackstopTimer = scheduleGameTimeout(() => {
+      sendOffWaitingBackstopTimer = null;
+      startSendOffWaitingHold();
+    }, presentationMs(SEND_OFF_REVEAL_FALLBACK_MS));
+    return;
+  }
+  const focus = sendOffFocusPlayerId ? sendOffTrackedOccurrences.get(sendOffFocusPlayerId) ?? null : null;
+  if (state.sendOffWaiting !== focus) state.sendOffWaiting = focus;
+}
+
+/** The presented card's hold ended: it leaves the queue and the next one (or the undecided focus) takes the screen. */
+function finishSendOffPresentation(): void {
+  if (sendOffDecidedQueue[0] && sendOffDecidedQueue[0].occurrenceKey === sendOffPresentedKey) sendOffDecidedQueue.shift();
+  sendOffPresentedKey = null;
+  cancelSendOffWaitingTimers();
+  state.sendOffWaiting = null;
+  // Sol r4: a focus id whose occurrence is gone (decided and now presented) must never seed a new card.
+  if (!sendOffTrackedOccurrences.has(sendOffFocusPlayerId)) sendOffFocusPlayerId = '';
+  refreshSendOffScreen();
+}
+
+function newSendOffOccurrence(
+  g: GameJson,
+  playerId: string,
+  context: NonNullable<ReturnType<typeof sendOffWaitingPlayerContext>>,
+  commandNr: number | null,
+): SendOffWaitingOccurrence {
+  return {
+    occurrenceKey: `${String(g.gameId)}:${context.teamId}:${playerId}:${commandNr ?? 'snapshot'}`,
+    playerId,
+    teamId: context.teamId,
+    playerName: context.playerName,
+    coach: context.coach,
+    teamName: context.teamName,
+    portraitUrl: context.portraitUrl,
+    baseIconPath: context.baseIconPath,
+    stage: 'resolving',
+    resolved: false,
+    // Owner 10-30: no "spotted" line - the SPOTTED! badge says it.
+    steps: [],
+    outcome: null,
+    lastRoll: null,
+    seq: 1,
+  };
+}
+
+/** The open referee dialog (argueTheCall / bribes / a Bribery & Corruption reroll offer) as one shape. */
+interface SendOffRefereeDialog { id: string; playerIds: string[]; teamId: string }
+
+/** This player failed a roll on a natural 1 (the only roll a Bribery & Corruption reroll is offered for), or was
+ *  already offered the reroll. */
+function sendOffRerollEligible(occurrence: SendOffWaitingOccurrence): boolean {
+  const last = occurrence.lastRoll;
+  return occurrence.stage === 'reroll' || (!!last && !last.successful && last.roll === 1);
+}
+
+/**
+ * Advance one player's occurrence by one authoritative frame: its reports (in order), the decided call, and the
+ * pending line for its own open dialog. `dialog` is the open referee dialog (null when none). It is THIS player's when
+ * it lists them, or names only their team: an argue / Bribe offer for the team, or a Bribery & Corruption offer when
+ * this player is the one who rolled the natural 1 (never broadcast to teammates). Otherwise another player's referee
+ * election is open, so this player's failed roll may still be followed by its own Bribe. A parked (off-screen)
+ * occurrence takes only reports naming its player.
+ */
+function advanceSendOffOccurrence(
+  start: SendOffWaitingOccurrence,
+  reports: Record<string, unknown>[],
+  modelChanges: SendOffModelChange[],
+  frameKey: string,
+  dialog: SendOffRefereeDialog | null,
+  parked: boolean,
+): SendOffWaitingOccurrence {
+  let waiting = start;
+  const rerollWasOffered = waiting.stage === 'reroll';
+  const isOutcomeReport = (report: Record<string, unknown>) => {
+    const reportId = normalizedWireName(report.reportId);
+    return reportId === 'arguethecall' || reportId === 'bribesroll';
+  };
+  /** A USED Bribery & Corruption report (it names a team, not a player) belongs to the player named by the rerolled
+   *  roll that follows it; with no roll after it in this frame, to the player who was offered the reroll. */
+  const isOwnRerollUsed = (index: number) => {
+    const report = reports[index]!;
+    if (normalizedWireName(report.reportId) !== 'briberyandcorruptionreroll') return false;
+    if (normalizedWireName(report.briberyAncCorruptionAction ?? report.action) !== 'used') return false;
+    const teamId = String(report.teamId ?? '');
+    if (teamId && teamId !== waiting.teamId) return false;
+    const rerolled = reports.slice(index + 1).find(isOutcomeReport);
+    if (rerolled) return String(rerolled.playerId ?? (parked ? '' : waiting.playerId)) === waiting.playerId;
+    return rerollWasOffered;
+  };
+  const briberyRerollUsed = reports.some((_, index) => isOwnRerollUsed(index));
+  const outcomeReports: Record<string, unknown>[] = [];
+  let ownDialogId = '';
+  let otherElectionPending = false;
+  let briberyRerollPending = false;
+  const settleDialogOwnership = () => {
+    const owns = !!dialog && (dialog.playerIds.includes(waiting.playerId)
+      || (!dialog.playerIds.length && dialog.teamId === waiting.teamId
+        && (dialog.id !== 'briberyandcorruptionreroll' || sendOffRerollEligible(waiting))));
+    ownDialogId = owns ? dialog!.id : '';
+    otherElectionPending = !!dialog && !owns;
+    briberyRerollPending = ownDialogId === 'briberyandcorruptionreroll';
+  };
+  /** A failed argue followed by a Bribe (the bribes dialog or a bribesRoll): the referee was not convinced.
+   *  Server-derived only - never read from inducement counts. */
+  const notConvinced = (current: SendOffWaitingOccurrence) =>
+    current.lastRoll?.decidedBy === 'argue' && !current.lastRoll.successful
+      ? sendOffWaitingStep(current, `${current.occurrenceKey}:notConvinced`, 'notConvinced', 'failure')
+      : current;
+  if (!waiting.resolved) {
+    for (let index = 0; index < reports.length; index += 1) {
+      const report = reports[index]!;
+      const reportId = normalizedWireName(report.reportId);
+      const stepKey = `${waiting.occurrenceKey}:report:${frameKey}:${index}`;
+      const reportPlayer = parked ? String(report.playerId ?? '') : String(report.playerId ?? waiting.playerId);
+      if ((reportId === 'arguethecall' || reportId === 'bribesroll') && reportPlayer === waiting.playerId) {
+        outcomeReports.push(report);
+        const bribe = reportId === 'bribesroll';
+        if (bribe) waiting = notConvinced(waiting);
+        waiting = sendOffWaitingStep(waiting, stepKey, bribe ? 'offersBribe' : 'argues', 'neutral');
+        waiting = {
+          ...waiting,
+          lastRoll: {
+            decidedBy: bribe ? 'bribe' : 'argue',
+            successful: report.successful === true,
+            roll: sendOffReportNumber(report.roll),
+            // The live reports carry no target; the rulebook's stands in (Argue 6+, Bribe 2+).
+            minimumRoll: sendOffReportNumber(report.minimumRoll) ?? (bribe ? SEND_OFF_BRIBE_TARGET : SEND_OFF_ARGUE_TARGET),
+          },
+        };
+      } else if (isOwnRerollUsed(index)) {
+        // Upstream BriberyAndCorruptionAction: ADDED (pre-game) / USED / WASTED (end of turn); only USED is this call.
+        waiting = sendOffWaitingStep(waiting, stepKey, 'rerollUsed', 'neutral');
+      }
+    }
+    settleDialogOwnership();
+    // The reroll offer is answered once its dialog has closed: USED (reported above, in report order) or, since the
+    // server reports no decline, declined. Either way it is never inferred again (the stage moves on).
+    if (rerollWasOffered && !briberyRerollPending) {
+      if (!briberyRerollUsed) {
+        waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:rerollDeclined`, 'rerollDeclined', 'neutral');
+      }
+      waiting = sendOffWaitingPhase(waiting, 'resolving');
+    }
+  }
+
+  if (waiting.resolved) settleDialogOwnership();
+  // A failed roll is not final while the server keeps the election open: a Bribe offered after a failed argue, ANOTHER
+  // Bribe offered after a failed one (StepBribes, ONLY_ONE_BRIBE_PER_SEND_OFF off), a Bribery & Corruption reroll, or
+  // another player's referee election that may still be followed by this player's Bribe (StepEndTurn).
+  // The last authoritative outcome report after that election owns the final presentation.
+  let outcome: SendOffRevealOutcome | null = null;
+  const finalOutcome = outcomeReports.length ? waiting.lastRoll : null;
+  if (!waiting.resolved && finalOutcome) {
+    const electionPending = ownDialogId === 'bribes' || briberyRerollPending || otherElectionPending;
+    // Kept from before: a frame with a USED reroll and a single failed Bribe roll still waits for the rerolled result.
+    const awaitingRerolledBribe = finalOutcome.decidedBy === 'bribe' && briberyRerollUsed && outcomeReports.length === 1;
+    if (finalOutcome.successful) {
+      outcome = { result: 'overturned', decidedBy: finalOutcome.decidedBy, roll: finalOutcome.roll, minimumRoll: finalOutcome.minimumRoll };
+    } else if (!electionPending && !awaitingRerolledBribe) {
+      outcome = { result: 'sentOff', decidedBy: finalOutcome.decidedBy, roll: finalOutcome.roll, minimumRoll: finalOutcome.minimumRoll };
+    }
+  }
+
+  // A decision with no roll to settle it (declined), or a held failed roll: the send-to-box model truth decides it.
+  const boxed = modelChanges.some((change) => isRefereeSendOffModelChange(change)
+    && String(change.modelChangeKey ?? '') === waiting.playerId);
+  if (boxed && !waiting.resolved && !outcome) {
+    // The last roll (if any) decided it; a declined decision has no roll and no die.
+    const last = waiting.lastRoll;
+    outcome = last && !last.successful
+      ? { result: 'sentOff', decidedBy: last.decidedBy, roll: last.roll, minimumRoll: last.minimumRoll }
+      : {
+        result: 'sentOff',
+        decidedBy: waiting.steps.some((step) => step.kind === 'decidingBribe') ? 'bribe' : 'argue',
+        roll: null,
+        minimumRoll: null,
+      };
+  }
+  if (outcome) {
+    const settled = waiting.steps.map((step) => step.tone === 'pending' ? { ...step, tone: 'neutral' as const } : step);
+    waiting = { ...waiting, steps: settled, outcome, resolved: true, stage: 'resolved', seq: waiting.seq + 1 };
+  }
+
+  if (!waiting.resolved) {
+    if (ownDialogId === 'arguethecall') {
+      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:argue`, 'decidingArgue', 'pending');
+      waiting = sendOffWaitingPhase(waiting, 'argue');
+    } else if (ownDialogId === 'bribes') {
+      waiting = notConvinced(waiting);
+      // One pending line per offer: a further Bribe offered after a failed one asks again.
+      const offers = waiting.steps.filter((step) => step.kind === 'offersBribe').length;
+      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:bribe:${offers}`, 'decidingBribe', 'pending');
+      waiting = sendOffWaitingPhase(waiting, 'bribe');
+    } else if (ownDialogId === 'briberyandcorruptionreroll') {
+      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:reroll`, 'decidingReroll', 'pending');
+      waiting = sendOffWaitingPhase(waiting, 'reroll');
+    } else if (!parked) {
+      waiting = sendOffWaitingPhase(waiting, 'resolving');
+    }
+  }
+  return waiting;
+}
+
 /**
  * Project the other coach's server-owned send-off election. This is presentation-only: it observes the
  * addressed dialog, result reports and send-to-box model truth but never enters the existing command path.
@@ -21944,16 +22631,28 @@ function isRefereeSendOffModelChange(
 function syncOpponentSendOffWaiting(
   g: GameJson,
   reports: Record<string, unknown>[] = [],
-  modelChanges: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] = [],
+  modelChanges: SendOffModelChange[] = [],
   commandNr: number | null = null,
 ): void {
-  if (!play.active || replay.active || state.demoMode || playback.catchingUp) {
+  // Sol r4: frames still draining after a socket close project nothing (offerTransportAlive, as Getting Even and
+  // Swarming); the close itself cleared the reviews.
+  if (!play.active || replay.active || state.demoMode || playback.catchingUp || !offerTransportAlive) {
     clearSendOffWaiting();
     return;
   }
+  const gameId = String(g.gameId ?? '');
+  if (sendOffTrackedGameId !== gameId) {
+    clearSendOffWaiting();
+    sendOffTrackedGameId = gameId;
+  }
 
   const dp = g.dialogParameter as Record<string, unknown> | null | undefined;
-  const dialogId = normalizedWireName(dp?.dialogId);
+  const rawDialogId = normalizedWireName(dp?.dialogId);
+  // Sol r4: several natural 1s at the end of a drive make StepEndTurn offer the Bribery & Corruption reroll as a
+  // playerChoice (mode briberyAndCorruption) over those players: that is the same referee election, not an unrelated
+  // dialog.
+  const dialogId = rawDialogId === 'playerchoice' && normalizedWireName(dp?.playerChoiceMode) === 'briberyandcorruption'
+    ? 'briberyandcorruptionreroll' : rawDialogId;
   const isDecisionDialog = dialogId === 'arguethecall' || dialogId === 'bribes'
     || dialogId === 'briberyandcorruptionreroll';
   // A live unrelated dialog (Shadowing, reroll, player choice, etc.) authoritatively owns the interaction now.
@@ -21963,125 +22662,91 @@ function syncOpponentSendOffWaiting(
     clearSendOffWaiting();
     return;
   }
-  const dialogPlayerId = Array.isArray(dp?.playerIds) ? String(dp?.playerIds[0] ?? '') : '';
-  const reportPlayerId = [...reports].reverse()
-    .find((report) => normalizedWireName(report.reportId) === 'arguethecall'
-      || normalizedWireName(report.reportId) === 'bribesroll')?.playerId;
-  const boxedPlayerId = [...modelChanges].reverse()
-    .find(isRefereeSendOffModelChange)?.modelChangeKey;
-  const candidatePlayerId = dialogPlayerId || String(reportPlayerId ?? '') || String(boxedPlayerId ?? '')
-    || state.sendOffWaiting?.playerId || '';
-  const context = candidatePlayerId ? sendOffWaitingPlayerContext(g, candidatePlayerId) : null;
-  const decisionTeamId = isDecisionDialog ? String(dp?.teamId ?? context?.teamId ?? '') : String(context?.teamId ?? '');
-
-  if (!context || !sendOffWaitingOwnedByOpponent(g, decisionTeamId || context.teamId)) {
-    clearSendOffWaiting();
-    return;
-  }
-
-  let waiting = state.sendOffWaiting;
-  const freshDialog = isDecisionDialog && !!dialogPlayerId;
-  if (!waiting || waiting.playerId !== candidatePlayerId || waiting.coach !== context.coach
-    || (waiting.resolved && freshDialog)) {
-    if (sendOffWaitingClearTimer) cancelGameTimeout(sendOffWaitingClearTimer);
-    sendOffWaitingClearTimer = null;
-    const occurrenceKey = `${String(g.gameId)}:${context.teamId}:${candidatePlayerId}:${commandNr ?? 'snapshot'}`;
-    waiting = {
-      occurrenceKey,
-      playerId: candidatePlayerId,
-      playerName: context.playerName,
-      coach: context.coach,
-      teamName: context.teamName,
-      portraitUrl: context.portraitUrl,
-      baseIconPath: context.baseIconPath,
-      stage: 'resolving',
-      status: `Waiting for ${context.coach || context.teamName} and the referee…`,
-      resolved: false,
-      steps: [{ key: `${occurrenceKey}:spotted`, text: $t('store.text.theRefereeHasSpotted', { playerName: context.playerName }), tone: 'neutral' }],
-      seq: (state.sendOffWaiting?.seq ?? 0) + 1,
-    };
-  }
-
+  const dialogPlayerIds = isDecisionDialog && Array.isArray(dp?.playerIds) ? dp!.playerIds.map((id) => String(id ?? '')).filter(Boolean) : [];
+  const dialogTeamId = isDecisionDialog ? String(dp?.teamId ?? '') : '';
+  const dialogPlayerId = dialogPlayerIds[0] ?? '';
+  const outcomeReportPlayerIds = reports
+    .filter((report) => normalizedWireName(report.reportId) === 'arguethecall' || normalizedWireName(report.reportId) === 'bribesroll')
+    .map((report) => String(report.playerId ?? '')).filter(Boolean);
+  const boxedPlayerIds = modelChanges.filter(isRefereeSendOffModelChange)
+    .map((change) => String(change.modelChangeKey ?? '')).filter(Boolean);
+  // Sol r4: a remembered id only selects an occurrence that is still tracked; it never creates one.
+  const rememberedPlayerId = [sendOffFocusPlayerId, state.sendOffWaiting?.playerId ?? '']
+    .find((playerId) => !!playerId && sendOffTrackedOccurrences.has(playerId)) ?? '';
+  // Sol r5: a reroll offer naming only a team is shown on the card of the player it was offered to - the team's natural-1
+  // roller in this frame (or the one already offered it) - not on the last report's player.
+  const teamOnlyRerollOwnerId = (() => {
+    if (dialogId !== 'briberyandcorruptionreroll' || dialogPlayerIds.length || !dialogTeamId) return '';
+    const naturalOne = [...reports].reverse().find((report) => {
+      const reportId = normalizedWireName(report.reportId);
+      return (reportId === 'arguethecall' || reportId === 'bribesroll') && report.successful !== true
+        && Number(report.roll) === 1 && sendOffWaitingPlayerContext(g, String(report.playerId ?? ''))?.teamId === dialogTeamId;
+    });
+    if (naturalOne) return String(naturalOne.playerId ?? '');
+    return [...sendOffTrackedOccurrences.values()]
+      .find((occurrence) => occurrence.teamId === dialogTeamId && sendOffRerollEligible(occurrence))?.playerId ?? '';
+  })();
+  const candidatePlayerId = dialogPlayerId || teamOnlyRerollOwnerId || outcomeReportPlayerIds.at(-1) || boxedPlayerIds.at(-1)
+    || rememberedPlayerId;
   const frameKey = `${commandNr ?? 'snapshot'}`;
-  const briberyRerollPending = dialogId === 'briberyandcorruptionreroll';
-  const briberyRerollUsed = reports.some((report) => normalizedWireName(report.reportId) === 'briberyandcorruptionreroll'
-    && normalizedWireName(report.briberyAncCorruptionAction ?? report.action) === 'used');
-  const outcomeReports: Record<string, unknown>[] = [];
-  for (let index = 0; index < reports.length; index += 1) {
-    const report = reports[index]!;
-    const reportId = normalizedWireName(report.reportId);
-    if ((reportId === 'arguethecall' || reportId === 'bribesroll')
-      && String(report.playerId ?? waiting.playerId) === waiting.playerId) {
-      outcomeReports.push(report);
-      const kind = reportId === 'bribesroll' ? 'Bribe' : 'Argue the Call';
-      const success = report.successful === true;
-      waiting = sendOffWaitingStep(
-        waiting,
-        `${waiting.occurrenceKey}:report:${frameKey}:${index}`,
-        `${kind} ${success ? 'succeeds' : 'fails'}${sendOffRollText(report)}.`,
-        success ? 'success' : 'failure',
-      );
-    } else if (reportId === 'briberyandcorruptionreroll') {
-      const action = normalizedWireName(report.briberyAncCorruptionAction ?? report.action);
-      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:report:${frameKey}:${index}`,
-        `Bribery & Corruption reroll ${action === 'used' ? 'used' : action || 'resolved'}.`, 'neutral');
-    }
-  }
 
-  // A failed Bribe is not final while the server is offering/processing Bribery & Corruption.
-  // The last authoritative outcome report after that election owns the final presentation.
-  const finalOutcome = outcomeReports.at(-1);
-  if (finalOutcome?.successful === true) {
-    waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:final:stays`,
-      `${waiting.playerName} stays on the pitch.`, 'success');
-    waiting = sendOffWaitingPhase(waiting, 'resolved', 'The referee decision is complete.', true);
-  } else if (normalizedWireName(finalOutcome?.reportId) === 'bribesroll'
-    && !briberyRerollPending && !(briberyRerollUsed && outcomeReports.length === 1)) {
-    waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:final:ejected`,
-      `${waiting.playerName} is sent off.`, 'failure');
-    waiting = sendOffWaitingPhase(waiting, 'resolved', 'The referee decision is complete.', true);
-  }
+  // Track every opponent player this frame names: the decision dialog's players (a secret-weapon dialog lists them all),
+  // the outcome reports' players and the referee-boxed players. A player whose decided card is still to be presented
+  // starts a new occurrence only on a fresh dialog for them (a re-projected frame never repeats a reveal).
+  const opponentContext = (playerId: string, teamIdHint = '') => {
+    const context = sendOffWaitingPlayerContext(g, playerId);
+    return context && sendOffWaitingOwnedByOpponent(g, teamIdHint || context.teamId) ? context : null;
+  };
+  const track = (playerId: string, freshDialog: boolean, teamIdHint = '') => {
+    const context = opponentContext(playerId, teamIdHint);
+    if (!context) return;
+    const existing = sendOffTrackedOccurrences.get(playerId);
+    if (existing && existing.coach === context.coach) return;
+    if (!freshDialog && sendOffDecidedQueue.some((occurrence) => occurrence.playerId === playerId)) return;
+    sendOffTrackedOccurrences.set(playerId, newSendOffOccurrence(g, playerId, context, commandNr));
+  };
+  for (const playerId of dialogPlayerIds) track(playerId, true, dialogTeamId);
+  // Occurrences are created only from this frame's evidence: the dialog's players, outcome reports, referee boxing.
+  for (const playerId of [...outcomeReportPlayerIds, ...boxedPlayerIds]) track(playerId, false);
+  const focusContext = candidatePlayerId ? opponentContext(candidatePlayerId, candidatePlayerId === dialogPlayerId ? dialogTeamId : '') : null;
+  sendOffFocusPlayerId = focusContext && sendOffTrackedOccurrences.has(candidatePlayerId) ? candidatePlayerId : '';
 
-  const boxed = modelChanges.some((change) => isRefereeSendOffModelChange(change)
-    && String(change.modelChangeKey ?? '') === waiting!.playerId);
-  if (boxed && !waiting.resolved) {
-    waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:final:ejected`,
-      `${waiting.playerName} is sent off.`, 'failure');
-    waiting = sendOffWaitingPhase(waiting, 'resolved', 'The referee decision is complete.', true);
-  }
-
-  if (!waiting.resolved) {
-    if (dialogId === 'arguethecall') {
-      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:argue`,
-        `${waiting.coach || waiting.teamName} is deciding whether to Argue the Call.`, 'pending');
-      waiting = sendOffWaitingPhase(waiting, 'argue', `Waiting for ${waiting.coach || waiting.teamName} to act…`);
-    } else if (dialogId === 'bribes') {
-      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:bribe`,
-        `${waiting.coach || waiting.teamName} is deciding whether to use a Bribe.`, 'pending');
-      waiting = sendOffWaitingPhase(waiting, 'bribe', `Waiting for ${waiting.coach || waiting.teamName} to act…`);
-    } else if (dialogId === 'briberyandcorruptionreroll') {
-      waiting = sendOffWaitingStep(waiting, `${waiting.occurrenceKey}:reroll`,
-        `${waiting.coach || waiting.teamName} is deciding on a Bribery & Corruption reroll.`, 'pending');
-      waiting = sendOffWaitingPhase(waiting, 'reroll', `Waiting for ${waiting.coach || waiting.teamName} to act…`);
+  // Advance every tracked occurrence by this frame; the decided ones queue for presentation in decision order.
+  const decidedThisFrame: SendOffWaitingOccurrence[] = [];
+  const refereeDialog: SendOffRefereeDialog | null = isDecisionDialog
+    ? { id: dialogId, playerIds: dialogPlayerIds, teamId: dialogTeamId } : null;
+  for (const [playerId, occurrence] of [...sendOffTrackedOccurrences]) {
+    const next = advanceSendOffOccurrence(occurrence, reports, modelChanges, frameKey, refereeDialog,
+      playerId !== sendOffFocusPlayerId);
+    if (next.resolved) {
+      sendOffTrackedOccurrences.delete(playerId);
+      decidedThisFrame.push(next);
     } else {
-      waiting = sendOffWaitingPhase(waiting, 'resolving', 'Waiting for the referee to resolve the send-off…');
+      sendOffTrackedOccurrences.set(playerId, next);
     }
   }
-
-  state.sendOffWaiting = waiting;
-  if (waiting.resolved && !sendOffWaitingClearTimer) {
-    sendOffWaitingClearTimer = scheduleGameTimeout(() => {
-      sendOffWaitingClearTimer = null;
-      state.sendOffWaiting = null;
-    }, presentationMs(SEND_OFF_WAITING_RESULT_HOLD_MS));
-  }
+  sendOffDecidedQueue.push(...decidedThisFrame);
 
   const crossedBoundary = modelChanges.some((change) => {
     const id = normalizedWireName(change.modelChangeId);
     return id === 'turndatasetturnnr' || id === 'gamesethomeplaying'
       || (id === 'gamesetturnmode' && normalizedWireName(change.modelChangeValue) !== 'regular');
   });
-  if (crossedBoundary && !isDecisionDialog) clearSendOffWaiting();
+  if (crossedBoundary && !isDecisionDialog) {
+    // Sol r3: the boundary drops stale and undecided state, but a call decided in this very frame (e.g. a secret weapon
+    // boxed in the same sync that starts the next drive) keeps its reveal and hold.
+    const keep = new Set(decidedThisFrame.map((occurrence) => occurrence.occurrenceKey));
+    sendOffTrackedOccurrences.clear();
+    sendOffFocusPlayerId = '';
+    const kept = sendOffDecidedQueue.filter((occurrence) => keep.has(occurrence.occurrenceKey));
+    sendOffDecidedQueue.splice(0, sendOffDecidedQueue.length, ...kept);
+    if (sendOffPresentedKey && !keep.has(sendOffPresentedKey)) {
+      cancelSendOffWaitingTimers();
+      sendOffPresentedKey = null;
+      state.sendOffWaiting = null;
+    }
+  }
+  refreshSendOffScreen();
 }
 
 /** Adapt the distinct DialogBribesParameter offer into its validated election seam. */
@@ -25321,6 +25986,8 @@ function syncOnTheBallWaiting(g: GameJson): void {
   // Sol r1: frames still draining after a socket close never re-raise it (offerTransportAlive: false from close to the next session).
   state.keywordWaiting = playback.catchingUp || !offerTransportAlive ? null : keywordWaitingFromGame(g, myTeamId);
   state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
+  pruneSwarmingAmounts(g);
+  state.swarmingWaiting = playback.catchingUp || !offerTransportAlive ? null : swarmingWaitingFromGame(g, myTeamId, swarmingAmountByTeam); // Sol r2 P2-2
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
   state.reRollWaiting = playback.catchingUp ? null : reRollWaitingFromGame(g, myTeamId);
@@ -25365,7 +26032,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -25726,7 +26393,7 @@ function drivePregameStep() {
   // (ownership, a dialog, the ball in play, a phase change, the setting off), ABOVE every early-return branch below.
   if (state.kickConfirm && !gameStore.kickConfirmLive()) state.kickConfirm = null;
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -26951,7 +27618,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -27100,7 +27767,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       // caps stacking, so no separate throttle is needed here.
       const muteAtThisSpeed = replay.speed >= 4;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); // Astra 10-20 (P2-3): a seek / fast-forward drops a pending captain splash
       if (!wasCatchingUp && muteAtThisSpeed) setSoundsSuppressed(true);
       try {
         if (command.netCommandId === NetCommandId.SERVER_MODEL_SYNC) {
@@ -27164,7 +27831,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
       updateFieldFlip(seed);
       const wasCatchingUp = playback.catchingUp;
       playback.catchingUp = true;
-      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); // Astra 10-20 (P2-3)
+      clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); // Astra 10-20 (P2-3)
       if (!wasCatchingUp) setSoundsSuppressed(true);
       try {
         commands.forEach((command, index) => {
@@ -28142,6 +28809,16 @@ export const gameStore = {
     sendCommand({ netCommandId: NetCommandId.CLIENT_ILLEGAL_PROCEDURE });
   },
 
+  /** Owner 10-30 (send-off reveal): the opponent-seat modal has flipped to its back face. The FIRST report gives the
+   *  back face a fresh full hold, replacing a fallback hold the backstop may have started; repeats are no-ops.
+   *  Presentation only (nothing sends). A stale or unresolved occurrence is ignored. */
+  noteSendOffRevealShown(occurrenceKey: string) {
+    const waiting = state.sendOffWaiting;
+    if (!waiting || !waiting.resolved || waiting.occurrenceKey !== occurrenceKey || sendOffWaitingHoldConfirmed) return;
+    sendOffWaitingHoldConfirmed = true;
+    startSendOffWaitingHold();
+  },
+
   /** Owner 2026-07-04 send-off: ARGUE THE CALL for the spotted player. Row19: answered-instance latch — once we've sent this for a playerId, never again for the same instance (guards against the dialog re-arming and against the upstream server's missing once-only check). */
   sendOffArgue() {
     const so = state.sendOff;
@@ -28934,10 +29611,11 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
-      clearGettingEvenSplash(); // Sol r1: no toast timer / queued splash outlives the socket
+      clearGettingEvenSplash(); clearSwarmingSplash(); // Sol r1: no toast timer / queued splash outlives the socket
+      swarmingAmountByTeam.clear(); // Sol r1 P2-2: a latched Swarming amount never outlives the socket
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
       // transport cleanup, not a second error and must not overwrite that status.
       if (spectatorStatusTerminal) return;
@@ -29311,12 +29989,8 @@ export const gameStore = {
     });
     session.on('close', (code, reason) => {
       if (thisSession !== session) return;
-      retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
+      teardownPassiveSurfacesOnTransportClose();
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
-      state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
-      clearSendOffWaiting();
-      clearGettingEvenSplash(); // Sol r1: no toast timer / queued splash outlives the socket
       if (officialStatusTerminal) {
         expectingGame = false;
         if (joinTimer) { cancelGameTimeout(joinTimer); joinTimer = null; }
@@ -32019,7 +32693,8 @@ export const gameStore = {
     play.active = false;
     withdrawConnectDeclaredSeat(); // owner 10-08: the seat declaration belongs to one connection
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+    swarmingAmountByTeam.clear(); // Sol r1 P2-2
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

@@ -4,6 +4,7 @@ declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 import { installMouseEntropy } from '../game/mouseEntropy';
 import { composeGraphicalJoins } from '../game/reportFormatter';
+import { watchFixUpLine } from '../game/fixUpLineAnchor';
 import { casualtyPillLines, decayPillLine } from '../game/injuryPillText';
 import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch, watchEffect } from 'vue';
 import { blockDiceIdleStep, createBlockDiceRowProvider, type BlockDiceWarmSignal } from '../game/blockDiceRowProvider';
@@ -49,7 +50,7 @@ import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { effectiveArmour, effectiveMovement, playerSkillDisplayNames, playerSkillNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { cardStatLine, positionStatLine } from '../game/statDisplay';
-import { gameStore, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing, movementStepsPending } from '../game/store';
+import { gameStore, notePillPresentationSquare, reRollPromptScreenPosition, bindBallAnimating, bindPlayersAnimating, bindArmourDiceShowing, movementStepsPending } from '../game/store';
 import { isRightStuffReRolledAction } from '../game/logic/ttmLandingPromptHold';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
@@ -503,6 +504,7 @@ import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCa
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { createHudClearanceSync, createHudDragEnds, measureHudTopDom } from '../game/hudTopClearance';
+import { autoDirectorBadgeState, bindAutoDirectorManualHold } from '../game/autoDirectorBadge';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import { onReportOwnedKey } from '../game/reportModalKeys';
 import { kickConfirmEnter } from '../game/kickConfirmKeys';
@@ -1111,6 +1113,18 @@ const spectatorDirectorSuspended = computed(() => {
   const review = gameStore.spectatorReview.value;
   return review.active && (review.phase === 'pausing' || review.phase === 'seeking' || !review.controls?.playing);
 });
+// Owner 10-30: the Auto Director badge dims (it stays) while the camera director is held off — the spectator review is
+// paused/seeking, live playback is catching up (the same two gates that stop the focus follow above), or the coach's
+// manual camera input owns the camera (the renderer's edge-raised manual hold; cinematic / kick-off camera work is
+// automatic and leaves it bright). Ordinary replay pause is not a gate.
+const autoDirectorManualHold = ref(false);
+let unbindAutoDirectorManualHold: (() => void) | null = null;
+const autoDirectorBadge = computed(() => autoDirectorBadgeState({
+  enabled: settings.autoDirector,
+  reviewSuspended: spectatorDirectorSuspended.value,
+  catchingUp: gameStore.playbackCatchingUp.value,
+  manualHold: autoDirectorManualHold.value,
+}));
 const spectatorPauseButton = ref<HTMLButtonElement | null>(null);
 watch(() => gameStore.spectatorReview.value.active, async (active, wasActive) => {
   await nextTick();
@@ -4391,12 +4405,21 @@ watch(
         const square = renderer.injuryPillSquare(ev);
         const p = under ?? (square ? renderer.screenPosOf(square) : null) ?? renderer.playerScreenPos(ev.playerId, ev.square);
         if (p) koToastPositions[ev.playerId] = { x: p.x, y: p.y, below: !!under };
+        // Owner 10-30 (Sol r1 P2-1): where this occurrence's pill is drawn - its Regeneration line takes this place
+        notePillPresentationSquare(ev, square, under && ev.square ? ev.square : null);
       }
       koToastRaf = requestAnimationFrame(follow);
     };
     follow();
   },
 );
+
+// Owner 10-30: the Regeneration line at its casualty square (fixUpLineAnchor: the pill's own anchor rule), re-read
+// every frame so it tracks pan / zoom. The follow ends when the line clears or is replaced (no timers).
+const apoFixUpAnchor = ref<{ x: number; y: number } | null>(null);
+// Sol r2 P2-1: also restarted when the renderer becomes ready, and immediate (a line already up at mount).
+const apoFixUpFollow = watchFixUpLine(() => gameStore.state.apothecaryFixUp, () => rendererReady.value, () => renderer, (anchor) => { apoFixUpAnchor.value = anchor; });
+onBeforeUnmount(apoFixUpFollow.stop);
 
 // Owner 2026-07-08: FALLS OVER toast — a failed Dodge/GFI knocks the player over; a brief
 // "Falls over!" toast rides the fall square (RAF-follows pan/zoom), auto-clears.
@@ -4694,7 +4717,7 @@ const reactivePromptStyle = (key: ReactivePromptDragKey, anchored?: { x: number;
 // Owner 09-06: the On the Ball waiting notice docks under the top-centre panel at that panel's width; a drag wins.
 // Owner 10-13: the kick-off aim card sits under the scoreboard; with the pitch-flip badge hanging there it drops below
 // the badge (centerPanelBox.bottom includes the scoreboard's overhang). The CSS 76px stays the default.
-const kickAimModalStyle = computed(() => (settings.pitchFlipped && centerPanelBox.value
+const kickAimModalStyle = computed(() => ((settings.pitchFlipped || settings.autoDirector) && centerPanelBox.value
   ? { top: `${Math.max(76, Math.round(centerPanelBox.value.bottom + 8))}px` }
   : undefined));
 const onTheBallWaitingStyle = computed(() => {
@@ -7365,6 +7388,7 @@ const centreBannerVisible = computed(() => !!(
   || gameStore.state.coinToss
   || gameStore.state.weatherCine
   || gameStore.state.kickoffCine
+  || gameStore.state.swarmingSplash
   || gameStore.state.fanFactorCine
 ));
 watch(centreBannerVisible, (visible) => gameStore.setCentreBannerVisible(visible), { immediate: true, flush: 'sync' });
@@ -10270,6 +10294,8 @@ function cancelViewMatchPresentation() {
   for (const frame of [negatraitCueRaf, skillToastRaf, koToastRaf, fallOverRaf,
     rerollSplashTokenRaf, followupRaf, lonerFailedCueRaf, tentaclesCueRaf]) cancelAnimationFrame(frame);
   negatraitCueRaf = skillToastRaf = koToastRaf = fallOverRaf = rerollSplashTokenRaf = followupRaf = lonerFailedCueRaf = tentaclesCueRaf = 0;
+  apoFixUpFollow.cancel();
+  apoFixUpAnchor.value = null;
   lonerFailedCuePos.ready = false;
   tentaclesCuePos.ready = false;
   for (const timer of sendOffTimers) clearTimeout(timer);
@@ -11781,6 +11807,8 @@ onMounted(async () => {
   // Owner 10-15: the renderer's click bodies consult the single confirmation-card gate before acting.
   renderer.pitchInputHold = confirmCardLocked;
   renderer.onPitchInputHeld = nudgeConfirmCard;
+  unbindAutoDirectorManualHold?.();
+  unbindAutoDirectorManualHold = bindAutoDirectorManualHold(renderer, autoDirectorManualHold); // owner 10-30: badge dims
   renderer.onPlayerClick = (playerId, clickX = 0, clickY = 0) => {
     if (pitchHeldByConfirmation()) return; // Astra review 10-04: answer the open confirmation first
     renderer?.clearUnactivatedCues(); // owner 09-08: any player click ends the End-Turn idle-player cue
@@ -12954,6 +12982,7 @@ onMounted(async () => {
       inducePhaseOpen.value, // bug 10-13: the coach plates hide during the inducement phase
       settings.modernHudStyle,
       settings.pitchFlipped, // owner 10-13: the flip badge hangs off the scoreboard (no parent resize to observe)
+      settings.autoDirector, // owner 10-30: so does the Auto Director badge beside it
       !!gameStore.state.kickPlacement, // the kick-off aim card moves below the badge
       settings.uiTextSize, // Astra P2-4: text size / font reflow the plates (the ResizeObserver also catches it)
       settings.uiFont,
@@ -13057,6 +13086,8 @@ onBeforeUnmount(() => {
   if (panelReanchorHandler) { window.removeEventListener('resize', panelReanchorHandler); panelReanchorHandler = null; }
   if (panelMeasureHandler) { window.removeEventListener('resize', panelMeasureHandler); panelMeasureHandler = null; }
   intensiveFocusRendererMounted = false;
+  unbindAutoDirectorManualHold?.();
+  unbindAutoDirectorManualHold = null;
   renderer?.destroy();
   renderer = null;
 });
@@ -15304,6 +15335,11 @@ function sendChat() {
           <span v-if="settings.pitchFlipped" class="pitch-flip-badge" data-panel-overhang
             :title="$t('hud.uiPanel.thePitchViewIs')"
             :aria-label="$t('hud.uiPanel.thePitchViewIs')"><i class="pfb-glyph" aria-hidden="true">&#8645;</i><span class="pfb-full">{{ $t('hud.uiPanel.pitchFlipped') }}</span><span class="pfb-short">{{ $t('hud.uiPanel.flipped') }}</span></span>
+          <!-- Owner 10-30: Auto Director badge, beside the flip badge (same family; shares its look). Dimmed while the director is held off. -->
+          <span v-if="autoDirectorBadge.shown" class="pitch-flip-badge auto-director-badge" data-panel-overhang
+            :data-paused="autoDirectorBadge.paused"
+            :title="autoDirectorBadge.paused ? $t('hud.uiPanel.autoDirectorPaused') : $t('hud.uiPanel.theCameraFollowsThe')"
+            :aria-label="autoDirectorBadge.paused ? $t('hud.uiPanel.autoDirectorPaused') : $t('hud.uiPanel.theCameraFollowsThe')"><i class="pfb-glyph" aria-hidden="true">🎬</i><span class="pfb-full">{{ $t('hud.uiPanel.autoDirector') }}</span><span class="pfb-short">{{ $t('hud.uiPanel.director') }}</span></span>
         </div>
         <!-- #18a (owner tester): passive "opponent reviewing dice" indicator near the scorebar. Bound
              directly to state.opponentReviewingDice — DERIVED each frame in-store (keyed on the block
@@ -15788,6 +15824,15 @@ function sendChat() {
           <div v-if="gameStore.state.kickoffCine.outcome" class="ko-outcome" :data-side="gameStore.state.kickoffCine.outcome.side">
             {{ gameStore.state.kickoffCine.outcome.text }}
           </div>
+        </div>
+        <!-- Owner 10-30 (BB2025 Swarming): the D3 roll of each Swarming team, in the kick-off event card's look. No dice
+             row (a D3 is not a D6 face; the amount is the point): the big name, then "<Team> may place N Swarming
+             player(s)" in that side's colour. A banner slots in through `img` once the art exists. -->
+        <div v-if="gameStore.state.swarmingSplash" :key="gameStore.state.swarmingSplash.seq" class="kickoff-cine swarming-cine"
+          :class="{ 'cine-hold': settings.clickDismissCinematics }" data-testid="swarming-splash">
+          <img v-if="gameStore.state.swarmingSplash.img" :src="gameStore.state.swarmingSplash.img" class="ko-splash" alt="" />
+          <div v-else class="ko-name-big">{{ $t('hud.swarming') }}</div>
+          <div class="ko-outcome" :data-side="gameStore.state.swarmingSplash.side">{{ gameStore.state.swarmingSplash.text }}</div>
         </div>
 
         <!-- Owner 2026-07-08: click-to-SKIP the pregame splashes (coin/weather/fans/kickoff)
@@ -16646,6 +16691,12 @@ function sendChat() {
           :message="gameStore.state.solidDefenceWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Owner 10-30 (BB2025 Swarming): the team placing its Swarming players; every other seat waits on them (the
+             choosing coach has the placement surface instead). The roll's splash reads first. -->
+        <OnTheBallWaitingModal v-if="gameStore.state.swarmingWaiting && !gameStore.state.swarmingSplash" :title="gameStore.state.swarmingWaiting.title" notice-id="swarming-waiting"
+          :message="gameStore.state.swarmingWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S99 (owner 10-02): Pick-Me-Up - the coach with prone players is choosing who stands; every other seat waits on them. -->
         <OnTheBallWaitingModal v-if="gameStore.state.pickMeUpWaiting" :title="$t('hud.pickMeUp')" notice-id="pick-me-up-waiting"
           :message="gameStore.state.pickMeUpWaiting.message"
@@ -16682,7 +16733,8 @@ function sendChat() {
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <SendOffWaitingModal v-if="gameStore.state.sendOffWaiting"
-          :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName" />
+          :progress="gameStore.state.sendOffWaiting" :referee-icon-url="refereeIconUrl" :position-name="sendOffWaitingPositionName"
+          @flip-shown="gameStore.noteSendOffRevealShown" />
 
         <!-- Owner 10-09: the Assign Touchdown step and the MVP nomination are ONE pane design (EndGamePickPane): same
              frame, title line, ONE fixed team roster panel (the H-roster pane's rows, the check mark beside the LVL
@@ -17200,8 +17252,11 @@ function sendChat() {
         <!-- Owner 10-09: the server-resolved apothecary line. The reroll toast's look on its OWN rail and position
              (a match announcement, one band below the centred reroll announcements), so neither can cover or
              replace the other. The key never repeats: each line mounts a fresh element and replays the entry. -->
+        <!-- Owner 10-30: a Regeneration line with a square takes its casualty pill's place at that square
+             (apoFixUpAnchor, RAF-followed); without one, and every apothecary line, the centred rail as before. -->
         <div v-if="gameStore.state.apothecaryFixUp" :key="'apo-fix-' + gameStore.state.apothecaryFixUp.seq"
-          class="reroll-toast apo-fixup-toast" :data-side="gameStore.state.apothecaryFixUp.side" :data-kind="gameStore.state.apothecaryFixUp.kind" :data-outcome="gameStore.state.apothecaryFixUp.outcome" data-testid="apothecary-fix-up">
+          class="reroll-toast apo-fixup-toast" :class="{ 'is-anchored': apoFixUpAnchor }" :data-anchored="apoFixUpAnchor ? 'square' : undefined"
+          :style="apoFixUpAnchor ? { left: apoFixUpAnchor.x + 'px', top: apoFixUpAnchor.y + 'px' } : undefined" :data-side="gameStore.state.apothecaryFixUp.side" :data-kind="gameStore.state.apothecaryFixUp.kind" :data-outcome="gameStore.state.apothecaryFixUp.outcome" data-testid="apothecary-fix-up">
           <img class="reroll-toast-icon" :src="gameStore.state.apothecaryFixUp.kind === 'regeneration' ? regenerationIconUrl : apothecaryIconUrl" alt="" />
           <span class="reroll-toast-text">{{ gameStore.state.apothecaryFixUp.text }}</span>
         </div>
@@ -18053,6 +18108,12 @@ function sendChat() {
 }
 .pitch-flip-badge .pfb-glyph { font-style: normal; color: #e8b84a; }
 .pitch-flip-badge .pfb-short { display: none; }
+/* Owner 10-30: the Auto Director badge reuses the flip badge's rules; with both showing they sit side by side
+   under the scoreboard's centre line (flip on the left), and the director one dims while it is held off. */
+.pitch-flip-badge.auto-director-badge .pfb-glyph { color: inherit; }
+.pitch-flip-badge:not(.auto-director-badge):has(~ .auto-director-badge) { transform: translateX(calc(-100% - 1px)); }
+.pitch-flip-badge:not(.auto-director-badge) ~ .auto-director-badge { transform: translateX(1px); }
+.auto-director-badge[data-paused="true"] { opacity: 0.55; filter: saturate(0.4); }
 @media (max-width: 1299px) {
   .pitch-flip-badge .pfb-full { display: none; }
   .pitch-flip-badge .pfb-short { display: inline; }
@@ -21559,6 +21620,9 @@ function sendChat() {
   100% { opacity: 0; transform: translate(-50%, -4px); }
 }
 .reroll-toast.apo-fixup-toast { top: calc(40% + 56px); }
+/* Owner 10-30: the Regeneration line in its casualty pill's place - left/top come from the square (inline style), the
+   pill's tier; the entry animation's translate(-50%, ..) centres it on the anchor point instead of the pitch. */
+.reroll-toast.apo-fixup-toast.is-anchored { z-index: 40; }
 /* Owner 10-21: a failed Regeneration reads fail red whichever side it is (the fail-pill red of .negatrait-cue.fail);
    the attribute selector outranks [data-side='home'] (declared below) on specificity. */
 .reroll-toast.apo-fixup-toast[data-outcome='failed'] {

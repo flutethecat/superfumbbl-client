@@ -167,6 +167,27 @@ export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null
   return { message: repositioning ? $t('hud.waiting.text.waitingForSubjectRepositioning', { subject }) : $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
 }
 
+/** Owner 10-30 (BB2025 Swarming): StepSwarming sets turn mode `swarming` for the team placing its Swarming players
+ *  (kicking team first, then the receiving team with `homePlaying` flipped), so the playing side is the choosing team
+ *  on both passes. Every other seat is told who is placing. The amount is the latched D3 of that team's
+ *  `swarmingPlayersRoll` report (store-side; a reconnect mid-swarming has none, so the plain line shows). */
+export function swarmingWaitingFromGame(
+  g: GameJson, myTeamId: string | null, amountByTeam?: ReadonlyMap<string, number> | null,
+): { title: string; message: string } | null {
+  if (g.turnMode !== 'swarming') return null;
+  const team = g.homePlaying ? g.teamHome : g.teamAway;
+  const teamId = String(team?.teamId ?? '');
+  if (!team || !teamId || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
+  const amount = amountByTeam?.get(teamId);
+  return {
+    title: $t('hud.swarming'),
+    message: amount != null
+      ? $t('hud.waiting.text.waitingForSubjectSwarming', { subject, n: amount })
+      : $t('hud.waiting.text.waitingForSubject', { subject }),
+  };
+}
+
 /** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
  *  RECEIVING coach - the side NOT playing (upstream DialogTouchbackHandler:25, StepApplyKickoffResult skips the flip) - who
  *  nominates the player who takes the ball. Every other seat is told who is choosing. The dialog carries no teamId. */
@@ -341,6 +362,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     touchbackWaiting: touchbackWaitingFromGame(g, null),
     kickoffWaiting: kickoffWaitingFromGame(g, null),
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
+    swarmingWaiting: swarmingWaitingFromGame(g, null), // no report latch in a closed checkpoint projection: the store HUD adds it
     pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
     pushWaiting: pushWaitingFromGame(g, null),
     reRollWaiting: reRollWaitingFromGame(g, null),

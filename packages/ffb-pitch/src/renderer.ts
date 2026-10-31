@@ -3347,6 +3347,13 @@ export class PitchRenderer {
   private adRequestedNudge: { subject: string; point: { x: number; y: number } } | null = null;
   private adSuspended = false;
   private adManualUntil = 0;
+  /** Owner 10-30 (Auto Director badge): last value handed to onAutoDirectorManualHoldChange. */
+  private adManualHeldReported = false;
+  /** Owner 10-30 (Auto Director badge): raised on each EDGE of the coach's manual camera ownership — the 1.5 s
+   *  manual-input hold, a drag, multitouch, keyboard/stick panning, residual pan velocity, or the pad crosshair. While a
+   *  cinematic or the kick-off follow owns the camera it reads false even with the manual latch live (that is still
+   *  automatic camera work), and true again once they end if the latch still is. Presentation-only. */
+  onAutoDirectorManualHoldChange: ((held: boolean) => void) | null = null;
   private adIdleSince: number | null = null;
   private adIdleZoomTargetScale: number | null = null;
   private adIdleZoomEvaluated = false;
@@ -3820,7 +3827,32 @@ export class PitchRenderer {
     };
   }
 
+  /** True while the coach's manual camera input owns the camera and the director holds its follow. */
+  autoDirectorManualHoldActive(now = performance.now()): boolean {
+    return now < this.adManualUntil || this.dragging || this.pointers.size > 1 || this.crosshairTarget !== null
+      || this.panDir.x !== 0 || this.panDir.y !== 0 || this.panVel.x !== 0 || this.panVel.y !== 0;
+  }
+
+  /** The effective manual-hold state as last raised through onAutoDirectorManualHoldChange (seed a listener from this). */
+  get autoDirectorManualHeld(): boolean { return this.adManualHeldReported; }
+
+  /** Edge-reports effective manual ownership from the existing per-frame director tick (no extra timer); returns the
+   *  raw latch for the tick's own camera decisions. */
+  private reportAutoDirectorManualHold(now: number): boolean {
+    const raw = this.autoDirectorManualHoldActive(now);
+    // Sol r2: report EFFECTIVE manual ownership - a cinematic or the kick-off follow outranks the manual latch and
+    // moves the camera itself, so the badge must not read "paused" while it does. The raw latch still drives the tick.
+    const held = raw && !this.cinematic && !this.kickFollow;
+    if (held !== this.adManualHeldReported) {
+      this.adManualHeldReported = held;
+      try { this.onAutoDirectorManualHoldChange?.(held); }
+      catch (error) { console.warn('[pitch] auto director hold listener failed:', (error as Error)?.message); }
+    }
+    return raw;
+  }
+
   private tickAutoDirector(dtMs: number, now: number): void {
+    const manualHeld = this.destroyed ? false : this.reportAutoDirectorManualHold(now);
     if (!this.app || !this.autoDirector || this.adSuspended || this.destroyed) {
       if (this.adFocusMode !== 'idle' || this.adIdleZoomTargetScale != null) this.resetAutoDirectorCamera(true);
       return;
@@ -3840,8 +3872,7 @@ export class PitchRenderer {
     }
     // Controller P2a (Astra P2-1): while the pad crosshair is shown it owns the camera — the director holds (even with
     // the crosshair parked past the manual hold) and resumes when mouse mode returns or the crosshair hides.
-    if (now < this.adManualUntil || this.dragging || this.pointers.size > 1 || this.crosshairTarget !== null
-      || this.panDir.x !== 0 || this.panDir.y !== 0 || this.panVel.x !== 0 || this.panVel.y !== 0) {
+    if (manualHeld) {
       this.adIdleSince = now;
       return;
     }

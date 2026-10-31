@@ -450,5 +450,10 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-witchelf-1be4b7c2.zip",
     "size": 1520732,
     "sha256": "154412516e0755e982b58184cb79e61c3cf62fa2ba7799bac1f3722f6d93607b"
+  },
+  "walk/highelf@3fa7a7dd87740ced": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-highelf-3fa7a7dd.zip",
+    "size": 3022366,
+    "sha256": "b541b63df77eafd98246a5c959468a6947981e25b345fb3ade69c670f55764c8"
   }
 }
