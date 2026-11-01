@@ -4,6 +4,7 @@ import { settings } from '../game/settings';
 import { authenticateAccount, getAccount, rehydrateAccountSession, signInWithDiscordAccount, signOutAccount, updateAccount, type AccountIdentity } from '../game/accountApi';
 import { DesktopSignInCancelled } from '../game/desktopAuth';
 import { startTournamentNotificationPolling } from '../game/tournamentNotificationClient';
+import { FORK_EDITION } from '../game/edition';
 import { $t, useLiveSet } from '../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
@@ -43,7 +44,7 @@ async function authenticate() {
     loadEditor(account.value);
     loginPassword.value = '';
     liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSavingChangesRequires'));
-    startTournamentNotificationPolling();
+    if (FORK_EDITION) startTournamentNotificationPolling(); // fork edition only (compile-time; the poller also refuses)
   } catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
@@ -78,7 +79,7 @@ async function openDiscordSso() {
     loadEditor(account.value);
     const ffbCoachId = account.value.ffbCoachId;
     liveSetHere(status, 'value', () => t('ui.accountSettings.text.signedInAsFfbcoachid', { ffbCoachId }));
-    startTournamentNotificationPolling();
+    if (FORK_EDITION) startTournamentNotificationPolling(); // fork edition only (compile-time; the poller also refuses)
   } catch (error) {
     status.value = error instanceof DesktopSignInCancelled ? t('ui.accountSettings.text.discordSignInCancelled') : error instanceof Error ? error.message : String(error);
   } finally {

@@ -1,4 +1,5 @@
 import { createGameSession } from './gameSessionFactory';
+import { forkFeaturesEnabled } from './forkAccess';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   GameSession,
@@ -803,6 +804,14 @@ export function routeJnlpRequest(
     return 'invalid';
   }
   jnlpEntryError.value = '';
+
+  // Owner 10-31 / ruling 11-01: a Super FUMBBL (fork) file needs the fork features (public: launch with --fork-server).
+  // Without them, refuse rather than fall back to FUMBBL with a fork game id.
+  if (request.fork && !forkFeaturesEnabled()) {
+    liveSet(jnlpEntryError, 'value', () => t('jnlp.text.forkFileNeedsForkServer'));
+    logJnlp(lt('jnlp.text.forkFileNeedsForkServer'));
+    return 'invalid';
+  }
 
   if (request.mode === 'replay' && request.gameId) {
     ui.settingsOpen = false;

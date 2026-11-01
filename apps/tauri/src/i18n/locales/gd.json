@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "Roinn-tìde",
   "settings.account.accountCard.scheduling.to": "gu",
   "settings.allServerTargets.officialFumbbl": "FUMBBL oifigeil",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — fork ({FORK_SERVER_HOST})",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — fork",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — leasachadh ionadail",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "Dìosgan casg a-mhàin",
   "settings.assetPackSettings.exportSections.combinedPack": "Pasgan co-cheangailte",

@@ -27,6 +27,7 @@
 import { challengeForkCredentials, type AuthTransport, type ForkLoginOutcome } from './configWebAuth';
 import { fetchFumbblCoachTeams, type FumbblCoachTeamsResult } from './fumbblCoachTeams';
 import { t } from '../i18n';
+import { requireForkBaseUrl } from './forkBase';
 
 /**
  * What the dialog renders under the button. `warn` is the state that keeps the FUMBBL tab honest —
@@ -86,6 +87,7 @@ export async function runForkChallenge(
   const trimmed = coach.trim();
   if (!trimmed) return { kind: 'fail', message: t('login.text.enterACoachName') };
   if (!password) return { kind: 'fail', message: t('login.text.enterAPasswordFirst') };
+  try { requireForkBaseUrl(baseUrl); } catch (error) { return { kind: 'fail', message: (error as Error).message }; } // owner 10-31: no fork host
   return forkChallengeState(await challengeForkCredentials({ coach: trimmed, password }, transport, baseUrl));
 }
 

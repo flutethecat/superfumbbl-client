@@ -10,7 +10,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { FORK_EDITION } from '../game/edition';
-import { botConfigBaseUrl, resolveJoinCreds, serializeSettingsForFile, settings } from '../game/settings';
+import { bugReportBaseUrl, resolveJoinCreds, serializeSettingsForFile, settings } from '../game/settings';
 import { coachPassword } from '../game/credentials';
 import {
   BUG_REPORT_DESCRIPTION_MAX,
@@ -217,7 +217,8 @@ async function submitReport() {
       // Owner 10-21: allow-listed display / performance settings + machine facts, so performance reports are diagnosable.
       context: { ...props.host.context(), settings: bugReportSettingsSnapshot(settings, collectBugReportEnv(props.host.pitch()?.element)) },
     });
-    const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, botConfigBaseUrl());
+    // Owner ruling 11-01: public reports go to the baked default host's config-web, flag or no flag (bugReportBaseUrl).
+    const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, bugReportBaseUrl());
     reportText.value = '';
     if (screenshotDropped) {
       // Astra: the relay refused the picture as too large (413) and the report went again without it. Say so in the

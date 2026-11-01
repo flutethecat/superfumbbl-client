@@ -30,13 +30,16 @@ function forkCreds(): { coach: string; password: string } {
   return { coach: settings.coach40k ?? '', password: coachPassword() };
 }
 async function botGet(path: string, params: Record<string, string>): Promise<Record<string, unknown>> {
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, params, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, params, forkCreds(), transport, base);
     const query = new URLSearchParams(auth.payload as Record<string, string>).toString();
     let res: Response;
-    try { res = await transport(`${botConfigBaseUrl()}/api/fork/${path}?${query}`, { headers: auth.headers }); }
-    catch (e) { throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(e))); }
+    try { res = await transport(`${base}/api/fork/${path}?${query}`, { headers: auth.headers }); }
+    catch (e) { throw new Error(configWebUnreachableMessage(base, errText(e))); }
     if (shouldRetryAfterUnauthorized(res.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || data.error) throw new Error(String(data.error ?? `HTTP ${res.status}`));
@@ -44,10 +47,13 @@ async function botGet(path: string, params: Record<string, string>): Promise<Rec
   }
 }
 async function botPost(path: string, bodyObj: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const url = `${botConfigBaseUrl()}/api/fork/${path}`;
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
+  const url = `${base}/api/fork/${path}`;
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, bodyObj, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, bodyObj, forkCreds(), transport, base);
     let res: Response;
     try {
       res = await transport(url, {
@@ -55,7 +61,7 @@ async function botPost(path: string, bodyObj: Record<string, unknown>): Promise<
         headers: { 'content-type': 'application/json', ...auth.headers },
         body: JSON.stringify(auth.payload),
       });
-    } catch (e) { throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(e))); }
+    } catch (e) { throw new Error(configWebUnreachableMessage(base, errText(e))); }
     if (shouldRetryAfterUnauthorized(res.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok || data.error) {

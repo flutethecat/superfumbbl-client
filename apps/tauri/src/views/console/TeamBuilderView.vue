@@ -32,7 +32,7 @@ import { markerGlyph } from '../../game/skillDisplay';
 import { playerSkillCategoryClass } from '../../game/skillCategory';
 import { reactiveSkillIconUrl } from '../../game/assetModUi';
 import { walkerPortraitUrl } from '../../game/walkerPortrait';
-import { botConfigBaseUrl, configWebUnreachableMessage, resolveJoinCreds, settings } from '../../game/settings';
+import { botConfigBaseUrl, configWebUnreachableMessage, forkAccountCreds, settings } from '../../game/settings';
 import { coachPassword } from '../../game/credentials';
 import { authorizeForkRequest, shouldRetryAfterUnauthorized } from '../../game/configWebAuth';
 import {
@@ -272,8 +272,10 @@ type AdvancementMethod = typeof ADVANCEMENT_METHODS[number];
 const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 const inlineCoach = ref('');
 const inlinePassword = ref('');
-const resolvedCreds = computed(() => resolveJoinCreds());
-const needsInlineCreds = computed(() => !resolvedCreds.value.coach.trim());
+// Sol r15: the Team Builder talks to config-web, so its identity is ONLY the fork account - never the active target's
+// (FUMBBL) credentials. Without a saved fork coach and password the inline fork credential fields are shown instead.
+const resolvedCreds = computed(() => forkAccountCreds());
+const needsInlineCreds = computed(() => !resolvedCreds.value.coach.trim() || !resolvedCreds.value.password);
 const coach = computed(() => needsInlineCreds.value ? inlineCoach.value.trim() : resolvedCreds.value.coach);
 const password = computed(() => needsInlineCreds.value ? inlinePassword.value : resolvedCreds.value.password);
 const mode = ref<BuilderMode>(props.initialMode);
@@ -407,15 +409,18 @@ function forkCreds(): { coach: string; password: string } {
 }
 
 async function botGet(path: string, params: Record<string, string>): Promise<Record<string, unknown>> {
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, params, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, params, forkCreds(), transport, base);
     const query = new URLSearchParams(auth.payload as Record<string, string>).toString();
     let response: Response;
     try {
-      response = await transport(`${botConfigBaseUrl()}/api/fork/${path}?${query}`, { headers: auth.headers });
+      response = await transport(`${base}/api/fork/${path}?${query}`, { headers: auth.headers });
     } catch (error) {
-      throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+      throw new Error(configWebUnreachableMessage(base, errText(error)));
     }
     if (shouldRetryAfterUnauthorized(response.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -436,15 +441,18 @@ class TeamApiError extends Error {
 }
 
 async function teamDetailGet(teamId: string): Promise<Record<string, unknown>> {
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
   const path = `teams/${encodeURIComponent(teamId)}/detail`;
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, {}, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, {}, forkCreds(), transport, base);
     let response: Response;
     try {
-      response = await transport(`${botConfigBaseUrl()}/api/${path}`, { headers: auth.headers });
+      response = await transport(`${base}/api/${path}`, { headers: auth.headers });
     } catch (error) {
-      throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+      throw new Error(configWebUnreachableMessage(base, errText(error)));
     }
     if (shouldRetryAfterUnauthorized(response.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -454,19 +462,22 @@ async function teamDetailGet(teamId: string): Promise<Record<string, unknown>> {
 }
 
 async function teamAdvancementPost(teamId: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
   const path = `teams/${encodeURIComponent(teamId)}/advancement`;
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, body, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, body, forkCreds(), transport, base);
     let response: Response;
     try {
-      response = await transport(`${botConfigBaseUrl()}/api/${path}`, {
+      response = await transport(`${base}/api/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...auth.headers },
         body: JSON.stringify(auth.payload),
       });
     } catch (error) {
-      throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+      throw new Error(configWebUnreachableMessage(base, errText(error)));
     }
     if (shouldRetryAfterUnauthorized(response.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -476,12 +487,13 @@ async function teamAdvancementPost(teamId: string, body: Record<string, unknown>
 }
 
 async function apiGet(path: string): Promise<Record<string, unknown>> {
-  const url = `${botConfigBaseUrl()}/api/${path}`;
+  const base = botConfigBaseUrl(); // Sol r12: one base per operation (request and its error message)
+  const url = `${base}/api/${path}`;
   let response: Response;
   try {
     response = inTauri ? await tauriFetch(url) : await fetch(url);
   } catch (error) {
-    throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+    throw new Error(configWebUnreachableMessage(base, errText(error)));
   }
   const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
   if (!response.ok || data.error) throw new Error(String(data.error ?? `HTTP ${response.status}`));
@@ -499,10 +511,13 @@ class BotPostError extends Error {
 }
 
 async function botPost(path: string, body: object, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const url = `${botConfigBaseUrl()}/api/fork/${path}`;
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
+  const url = `${base}/api/fork/${path}`;
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, body as Record<string, unknown>, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, body as Record<string, unknown>, forkCreds(), transport, base);
     let response: Response;
     try {
       const init: RequestInit = {
@@ -513,7 +528,7 @@ async function botPost(path: string, body: object, signal?: AbortSignal): Promis
       };
       response = await transport(url, init);
     } catch (error) {
-      throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+      throw new Error(configWebUnreachableMessage(base, errText(error)));
     }
     if (shouldRetryAfterUnauthorized(response.status, auth.authorized, retried)) { retried = true; continue; }
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -1517,6 +1532,12 @@ async function requestPreview(requestId: number): Promise<void> {
 
 async function buildTeam(): Promise<void> {
   if (mode.value === 'import' || buildBusy.value) return;
+  // Sol r15: no fork credentials (saved or entered in the inline fork fields) = ask for them and send nothing.
+  if (!coach.value || !password.value) {
+    buildResult.value = null;
+    buildErrors.value = [$t(!coach.value ? 'login.text.enterACoachName' : 'login.text.enterAPasswordFirst')];
+    return;
+  }
   const editedTeamId = editingLibraryTeamId.value;
   buildBusy.value = true;
   buildResult.value = null;
@@ -1567,18 +1588,21 @@ function libraryPlayerStatus(player: LibraryPlayerDetail): string {
 // 200-string convention tolerated on read (contract §1). One mutation in flight (PromiseQueue floor);
 // on success the detail refreshes in place (no flicker) — optimistic-then-reload, server-authoritative.
 async function teamManagementPost(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  // Sol r11: ONE config-web base per operation - authorisation, transport and retries all use it (a destination that
+  // changes during the awaited login never receives this request or its token).
+  const base = botConfigBaseUrl();
   let retried = false;
   for (;;) {
-    const auth = await authorizeForkRequest(path, body, forkCreds(), transport, botConfigBaseUrl());
+    const auth = await authorizeForkRequest(path, body, forkCreds(), transport, base);
     let response: Response;
     try {
-      response = await transport(`${botConfigBaseUrl()}/api/${path}`, {
+      response = await transport(`${base}/api/${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...auth.headers },
         body: JSON.stringify(auth.payload),
       });
     } catch (error) {
-      throw new Error(configWebUnreachableMessage(botConfigBaseUrl(), errText(error)));
+      throw new Error(configWebUnreachableMessage(base, errText(error)));
     }
     if (shouldRetryAfterUnauthorized(response.status, auth.authorized, retried)) { retried = true; continue; }
     const text = await response.text().catch(() => '');

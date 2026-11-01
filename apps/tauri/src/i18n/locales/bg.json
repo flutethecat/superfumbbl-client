@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "Часова зона",
   "settings.account.accountCard.scheduling.to": "до",
   "settings.allServerTargets.officialFumbbl": "Официален FUMBBL",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — форк ({FORK_SERVER_HOST})",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — форк",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — локална разработка",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "Само зарове за блок",
   "settings.assetPackSettings.exportSections.combinedPack": "Комбиниран пакет",

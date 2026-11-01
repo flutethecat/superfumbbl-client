@@ -51,13 +51,14 @@ function formatGold(value: number): string {
 async function loadRecords(): Promise<void> {
   loading.value = true;
   error.value = '';
-  const url = `${botConfigBaseUrl()}/api/fork/records`;
+  const base = botConfigBaseUrl(); // Sol r12: one base per operation (request and its error message)
+  const url = `${base}/api/fork/records`;
   try {
     let response: Response;
     try {
       response = inTauri ? await tauriFetch(url) : await fetch(url);
     } catch (fetchError) {
-      throw new Error(`config-web unreachable at ${botConfigBaseUrl()} — ${errText(fetchError)}`);
+      throw new Error(`config-web unreachable at ${base} — ${errText(fetchError)}`);
     }
     const data = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);

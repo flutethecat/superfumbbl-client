@@ -1,7 +1,9 @@
 import { reactive, watch } from 'vue';
 import { SPECTATOR_TACKLE_ZONE_MODES, type SpectatorTackleZoneMode } from './tackleZoneQuickBar';
 import { FORK_EDITION } from './edition';
+import { FORK_SERVER_HOST, LOCAL_CONFIG_WEB_PORT, effectiveForkHost, forkConfigWebBase, forkHostFrozen, registerConfigWebResolver, forkFeaturesEnabled, forkHostFromLaunch, isLocalForkHost, launchFlagsSettled, registerSettingsForkHostReader } from './forkAccess';
 import { setWireLogSecondClientProbe } from './bugReportHost';
+import { requireForkBaseUrl } from './forkBase';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { FLOAT_QUEUE_MIN, sanitizeFloatPos, sanitizeFloatSize, sanitizeFloatZoom } from './fumbblFloatLayout';
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
@@ -51,14 +53,31 @@ function noteSettingsIssue(msg: string): void {
  *  must never write defaults over a blob that reads fine at persist time. */
 let diskAuthority = false;
 
-/** Owner 2026-07-21 (#102): the Super FUMBBL FORK server HOST — a DDNS hostname, single source. Distributed/tester
- *  builds must always reach the fork here; the connection (settings.url) + config-web (:4310) resolve to this.
- *  DDNS (superfumbbltest.duckdns.org) tracks the fork host's dynamic ISP IP, so an IP change needs NO rebuild —
- *  this replaces the old hardcoded raw IP that broke every distributed build when the ISP reassigned it (#102).
- *  An explicit `settings.forkHost` (empty by default) overrides the game WS at runtime (belt-and-braces).
- *  (Local dev uses the separate 'local' SERVER_TARGET = localhost.) */
-export const FORK_SERVER_HOST = 'superfumbbltest.duckdns.org';
-export const FORK_WS_URL = `ws://${FORK_SERVER_HOST}:22227/command`;
+/** Owner ruling 11-01: the Super FUMBBL FORK server's default host is baked again (single source: forkAccess.ts,
+ *  re-exported here). The effective host is the launch flag's (`--fork-server=<host>`), or in the FORK edition
+ *  `settings.forkHost` / VITE_FORK_SERVER_HOST, else this default (game/forkAccess.ts effectiveForkHost). The game WS
+ *  rides port 22227 on that host (an optional `:port` in the flag is the config-web port, see configWebBaseFor).
+ *  (Local dev uses the separate 'local' SERVER_TARGET.) */
+export { FORK_SERVER_HOST };
+export function forkWsUrlFor(host: string): string {
+  const hostname = host.replace(/:\d+$/, '');
+  return `ws://${hostname}:22227/command`;
+}
+export const FORK_WS_URL = forkWsUrlFor(FORK_SERVER_HOST);
+/** Owner 10-31: a PUBLIC session that loaded a persisted 'fork' target before the launch flag was read: coerced to
+ *  FUMBBL at load, restored once the flag resolves (reconcileForkTarget). Declared before load() runs. */
+let publicForkTargetPending = false;
+/** Owner 10-31 (Sol r6): the last malformed settings bytes this session quarantined, kept IN MEMORY only in a public
+ *  build (they may name another edition's fork host and cannot be sanitised structurally). Declared before load(). */
+let publicCorruptSettingsInMemory: string | null = null;
+/** Sol r6/r7: a PUBLIC load notes a malformed localStorage blob as a host-free marker in CORRUPT_KEY (raw bytes in
+ *  memory only). It never removes or rewrites the primary / backup key itself: another window may have just repaired
+ *  it, and a pre-existing malformed key written by another edition persists nothing new. The normal save path
+ *  (mayPersistOverDisk) replaces a junk primary when this window next saves. FORK edition: untouched. */
+function quarantinePublicMalformed(text: string): void {
+  if (FORK_EDITION || isJsonObjectText(text)) return;
+  try { localStorage.setItem(CORRUPT_KEY, publicDiskText(text)); } catch { /* ignore */ }
+}
 export const FUMBBL_WS_URL = 'ws://fumbbl.com:22223/command';
 
 /** Owner 10-02: keys the fixed shortcuts already own - a rebindable hotkey may not take one (or the other rebindable key). */
@@ -178,14 +197,18 @@ export interface AppSettings extends ConfirmationSettings {
    *  is active. The picker derives url + compression from it. */
   activeServerTarget: string;
   /** Owner 2026-07-07 / 2026-07-21 (#102): OPTIONAL override for the effective FORK host (game WS + config-web).
-   *  EMPTY by default → the client uses the baked DDNS FORK_SERVER_HOST. A non-empty value re-points the fork
-   *  to `ws://<forkHost>:22227/command` (+ `http://<forkHost>:4310`) at runtime with no rebuild — belt-and-braces
-   *  for a future address change. Empty-default so a stale value can never misdirect distributed builds. */
+   *  Owner 10-31: FORK edition only (the public build never reads or writes it). EMPTY by default → the host comes
+   *  from the launch flag or VITE_FORK_SERVER_HOST (game/forkAccess.ts). A non-empty value re-points the fork to
+   *  `ws://<forkHost>:22227/command` (+ config-web) at runtime with no rebuild. */
   forkHost: string;
   /** Owner 2026-07-08: base URL of the Tournament Bot's config-web server, which exposes the
    *  fork-JNLP endpoint (`/api/fork/jnlp`) used for one-click "Launch" joins. Empty = derive
    *  `http://<forkHost>:4310` (the Bot runs on the fork host). Editable so it can point elsewhere. */
   botConfigUrl: string;
+  /** Sol r21 (FORK edition): the fork target's `url` is a custom value the coach typed in the raw Server input (not
+   *  the preset derived from the fork host). false = derive it from the effective host at load. Never persisted by the
+   *  public build. */
+  forkUrlCustom: boolean;
   // video (F-2): renderScale 1 = 100% default; 0 remains the explicit Auto option. FPS is always bounded.
   renderScale: number;
   /** 'display' (owner 10-13) = match the monitor's measured refresh rate; resolved to a number before the renderer. */
@@ -686,7 +709,7 @@ const DEFAULTS: AppSettings = {
   blockDiceSurface: 'auto', // owner 10-06: per face set, so existing users see no change
   skillIconPackInstallId: null,
   assetPackAssignments: { skillIcons: '', playerSprites: '', walkSheets: '', soundEvents: '', teamLogos: '', blockDice: '' },
-  url: FORK_EDITION ? FORK_WS_URL : FUMBBL_WS_URL, // owner 2026-07-13: match the default target ('fork' below; public edition = Official FUMBBL) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
+  url: FORK_EDITION ? FORK_WS_URL : FUMBBL_WS_URL, // as on base (Sol r20); hydrate() re-derives a 'fork' target's url from the effective host. Owner 2026-07-13: match the default target ('fork' below; public edition = Official FUMBBL) — was ws://fumbbl.com (a fresh install then connected to FUMBBL, not the fork). RC/public builds set BOTH this + activeServerTarget to fumbbl.
   coach: '',
   password: '',
   coach40k: '',
@@ -694,8 +717,9 @@ const DEFAULTS: AppSettings = {
   // Owner 2026-07-07: TEST builds default to the FORK server. ⚠ RC/public builds MUST ship this
   // 'fumbbl' (see docs/release-checklist.md). Only affects fresh installs; a user's pick wins.
   activeServerTarget: FORK_EDITION ? 'fork' : 'fumbbl', // owner 09-10: the public edition has no fork target
-  forkHost: '', // #102: empty → use the baked DDNS FORK_SERVER_HOST; a non-empty value overrides the fork host (game WS + config-web) at runtime, no rebuild
+  forkHost: '', // owner 10-31: FORK edition override of the effective fork host (empty → launch flag / VITE_FORK_SERVER_HOST)
   botConfigUrl: '', // empty → derive http://<forkHost>:4310 (Tournament Bot config-web / fork-JNLP endpoint)
+  forkUrlCustom: false, // Sol r21: the fork url is the derived preset until the coach types a custom one
   renderScale: 0, // owner 09-05: Auto (= devicePixelRatio) — a 1x canvas upscaled on a hi-DPI screen read soft everywhere
   uiCustomize: false,
   uiLayout: {},
@@ -992,7 +1016,8 @@ function purgeStoredSecret(field: 'password40k' | 'password'): void {
       const raw = JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, unknown>;
       if (!(field in raw)) continue;
       delete raw[field];
-      localStorage.setItem(key, JSON.stringify(raw));
+      // Sol r5: a public run never re-writes another edition's fork fields while retiring a secret.
+      localStorage.setItem(key, JSON.stringify(publicPersistable(raw)));
     } catch { /* ignore */ }
   }
 }
@@ -1038,7 +1063,8 @@ function stampStoredSecret(field: 'password40k' | 'password', value: string): vo
     if (value) raw[field] = value;
     else if (field in raw) delete raw[field];
     else return;
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(raw));
+    // Sol r5: sanitised in a public run (the backup this may copy from can carry fork fields); credentials untouched.
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(publicPersistable(raw)));
   } catch { /* ignore */ }
 }
 
@@ -1053,6 +1079,9 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       spriteOverrides?: unknown;
       logoOverrides?: unknown;
     };
+    // Sol r7: a settings blob is a JSON OBJECT. null, an array or a primitive is malformed (exactly like unparseable
+    // text) - rejected before anything is spread into settings or stamped back to storage.
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('settings blob is not a JSON object');
     const rawConfiguredSounds = raw.configuredSoundOverrides;
     const rawSprites = raw.spriteOverrides;
     const rawLogos = raw.logoOverrides;
@@ -1325,17 +1354,13 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       merged.autoUseSkills = { ...DEFAULTS.autoUseSkills, ...merged.autoUseSkills };
       merged.settingsVersion = 7;
     }
-    // v8 (owner 2026-07-21, #102): the fork address moved from a hardcoded raw IP to the baked DDNS
-    // FORK_SERVER_HOST, and settings.forkHost became an OPTIONAL empty-default override (game WS + config-web).
-    // Existing installs persist TWO stale copies of the old fork IP ('75.172.13.17'): (a) forkHost, and (b) url
-    // (DEFAULTS.url was the old FORK_WS_URL, kept by the {...DEFAULTS,...raw} merge). BOTH must be refreshed or
-    // already-installed testers keep dialing the dead IP: (a) the play-join override path, and — Meero FR-1 — (b)
-    // SPECTATE, whose connect() dials the RAW settings.url (SpectateView:4325 / ClassicView:1223, not forkServerUrl).
-    // CLEAR forkHost; and for a FORK install reset url to the baked DDNS FORK_WS_URL (non-fork targets — fumbbl/
-    // local — keep their deliberate url). Load-bearing: without BOTH resets the fix doesn't reach existing installs.
+    // v8 (owner 2026-07-21, #102): existing installs persist TWO stale copies of the old fork IP: (a) forkHost, and
+    // (b) url. BOTH must be refreshed — (b) because SPECTATE dials the RAW settings.url (Meero FR-1). CLEAR forkHost
+    // and the stale fork url here; owner 10-31: a 'fork' target's url is then re-derived from the effective fork host
+    // at the end of hydrate (or falls back to FUMBBL when no host is available). Non-fork targets keep their url.
     if ((raw.settingsVersion ?? 0) < 8) {
       merged.forkHost = '';
-      if (merged.activeServerTarget === 'fork') merged.url = FORK_WS_URL;
+      if (merged.activeServerTarget === 'fork') merged.url = FORK_WS_URL; // as on base (the baked default's url)
       merged.settingsVersion = 8;
     }
     // v9 (owner 2026-07-22, #127): FUMBBL-Default is the install-default turf (DEFAULTS.turf since #66 `9da3520c`,
@@ -1487,8 +1512,31 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       if (merged.moveSpeedMs === 150) merged.moveSpeedMs = 200;
       merged.settingsVersion = 34;
     }
-    // Owner 09-10: the public edition has no fork / local-dev targets — force Official FUMBBL on load.
-    if (!FORK_EDITION && merged.activeServerTarget !== 'fumbbl') { merged.activeServerTarget = 'fumbbl'; merged.url = FUMBBL_WS_URL; }
+    // Owner 09-10: the public edition has no local-dev target, and (owner 10-31) a fork target only in a run launched
+    // with --fork-server. Load runs BEFORE the async launch-flag read, so a persisted 'fork' is coerced to FUMBBL now
+    // and remembered; reconcileForkTarget() restores it once the flag resolves (and drops it when no flag comes).
+    // Sol r3: the deferred restore is RECOMPUTED for every adopted blob (a later authoritative settings file decides,
+    // not the first localStorage read); applyServerTarget() cancels it on any explicit selection.
+    if (!FORK_EDITION) {
+      const wasFork = merged.activeServerTarget === 'fork';
+      const keepFork = wasFork && forkFeaturesEnabled();
+      publicForkTargetPending = wasFork && !keepFork && !launchFlagsSettled.value;
+      if (merged.activeServerTarget !== 'fumbbl' && !keepFork) {
+        merged.activeServerTarget = 'fumbbl';
+        merged.url = FUMBBL_WS_URL;
+      }
+    }
+    // Owner 10-31: a 'fork' target's url derives from the effective host. Sol r20/r21: the FORK edition keeps a url the
+    // coach typed in the raw Server input (forkUrlCustom) exactly as on base, and re-derives the preset otherwise (so a
+    // host change saved after the freeze lands on restart); a public run's fork target (flag-only, never persisted)
+    // always derives it. Settings saved before the flag existed: a non-preset fork url is inferred custom once.
+    const derivedForkUrl = merged.activeServerTarget === 'fork' ? forkWsUrlFor(effectiveForkHost(() => merged.forkHost)) : '';
+    if (typeof (raw as { forkUrlCustom?: unknown }).forkUrlCustom !== 'boolean') {
+      const stored = (merged.url || '').trim();
+      merged.forkUrlCustom = FORK_EDITION && merged.activeServerTarget === 'fork' && stored !== '' && stored !== FORK_WS_URL && stored !== derivedForkUrl;
+    }
+    merged.forkUrlCustom = FORK_EDITION && merged.forkUrlCustom === true;
+    if (merged.activeServerTarget === 'fork' && !merged.forkUrlCustom) merged.url = derivedForkUrl;
     // Owner 09-10: public edition — wire log file always on (bug reports carry it), developer panel never shown.
     if (!FORK_EDITION) { merged.wireLog = true; merged.devPanelOpen = false; }
     if (!FORK_EDITION) merged.uiMode = 'fumbbl40k'; // owner 09-12: FUMBBL Classic is fork-edition only
@@ -1506,7 +1554,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       && !v26UserOverrideMigrationPending) {
       // Keep the legacy clear-text password in the blob until credentials.ts confirms the keychain
       // write — a migration stamp must not be the thing that loses it.
-      const stamped = legacyPassword40k ? { ...merged, password40k: legacyPassword40k } : merged;
+      const stamped = publicPersistable(legacyPassword40k ? { ...merged, password40k: legacyPassword40k } : { ...merged });
       try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(stamped)); } catch { /* ignore */ }
     }
     return merged;
@@ -1530,10 +1578,11 @@ function load(): AppSettings {
       diskAuthority = true;
       // Refresh the last-good backup (verbatim, so a surviving password40k rides along —
       // purgeStoredPassword40k retires the clear text from BOTH keys once the keychain confirms).
-      try { localStorage.setItem(BACKUP_KEY, rawText); } catch { /* ignore */ }
+      try { localStorage.setItem(BACKUP_KEY, publicDiskText(rawText)); } catch { /* ignore */ }
       return loaded;
     } catch (e) {
       noteSettingsIssue(`settings blob corrupt (${(e as Error)?.message ?? String(e)}) — trying last-good backup`);
+      quarantinePublicMalformed(rawText);
     }
   }
   // Primary missing, unreadable, or corrupt: recover from the last-good backup.
@@ -1544,13 +1593,18 @@ function load(): AppSettings {
       // Heal the primary FIRST so the targeted read-modify-write helpers (purge/stamp/persist
       // carry-forward) see good data; hydrate()'s migration stamp then overwrites with the
       // migrated form where one applies.
-      try { localStorage.setItem(SETTINGS_KEY, bakText); } catch { /* ignore */ }
+      // Sol r6: a public build heals the primary only from a backup that is a JSON object (sanitised); a malformed backup
+      // is left alone (a marker in the primary would read as a real blob and block this session's persists).
+      if (FORK_EDITION || isJsonObjectText(bakText)) {
+        try { localStorage.setItem(SETTINGS_KEY, publicDiskText(bakText)); } catch { /* ignore */ }
+      }
       const loaded = hydrate(bakText);
       diskAuthority = true;
       noteSettingsIssue('settings restored from last-good backup');
       return loaded;
     } catch {
       noteSettingsIssue('backup blob corrupt too');
+      quarantinePublicMalformed(bakText);
     }
   }
   // Genuine fresh install: nothing stored anywhere and the store itself is healthy.
@@ -1563,6 +1617,13 @@ function load(): AppSettings {
 }
 
 export const settings = reactive<AppSettings>(load());
+// Owner 10-31: forkAccess reads the FORK edition's override through this (it never imports settings itself).
+registerSettingsForkHostReader(() => settings.forkHost);
+// Sol r15: how the run's config-web base derives from its host (the FORK edition's explicit botConfigUrl wins).
+registerConfigWebResolver((host) => {
+  const explicit = FORK_EDITION ? (settings.botConfigUrl || '').trim() : '';
+  return explicit ? explicit.replace(/\/+$/, '') : configWebBaseFor(host);
+});
 
 /** P1 08-19 (leak #4): TWO instances share one WebView2 profile (same identifier; the
  *  single-instance plugin is opt-in — two-coach testing runs two clients). A window that
@@ -1602,13 +1663,10 @@ function mayPersistOverDisk(): boolean {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw === null || raw === '') return true;
-    try {
-      JSON.parse(raw);
-      return false;
-    } catch {
-      try { localStorage.setItem(CORRUPT_KEY, raw); } catch { /* ignore */ }
-      return true;
-    }
+    // Sol r7: only a JSON OBJECT "reads fine" (hydrate rejects null / arrays / primitives as malformed too).
+    if (isJsonObjectText(raw)) return false;
+    try { localStorage.setItem(CORRUPT_KEY, publicDiskText(raw)); } catch { /* ignore */ } // public: a host-free marker
+    return true;
   } catch {
     return false;
   }
@@ -1635,7 +1693,7 @@ function persistSettings(value: AppSettings): void {
     diskAuthority = true; // disk is absent/quarantined junk — this session may own it now
   }
   try {
-    const payload = { ...value } as Record<string, unknown>;
+    const payload = publicPersistable({ ...value }) as Record<string, unknown>;
     // One disk read serves the password40k carry-forward and the cred-clobber guard below.
     // Own try: a corrupt/unreadable blob (already quarantined above) must not abort the write.
     let disk: Record<string, unknown> = {};
@@ -1660,6 +1718,47 @@ function persistSettings(value: AppSettings): void {
 }
 
 watch(settings, persistSettings, { deep: true });
+
+/** Owner 10-31: the PUBLIC build persists nothing about the fork. Every public payload (localStorage, its backup and
+ *  migration stamp, the settings file, the bug-report settings) carries the Official FUMBBL target and url - always,
+ *  whatever the live url says - and no `forkHost` / `botConfigUrl` at all. Credential fields are left as they are
+ *  (their own carry-forward rules apply). Mutates and returns the given (already copied) object; FORK edition: as is. */
+export function publicPersistable<T extends object>(value: T): T {
+  if (FORK_EDITION) return value;
+  const rec = value as Record<string, unknown>;
+  rec.activeServerTarget = 'fumbbl';
+  rec.url = FUMBBL_WS_URL;
+  delete rec.forkHost;
+  delete rec.botConfigUrl;
+  delete rec.forkUrlCustom;
+  return value;
+}
+
+/** @internal test seam / diagnostics. */
+export function lastCorruptSettingsInMemory(): string | null { return publicCorruptSettingsInMemory; }
+
+/** publicPersistable for raw blob text written to a localStorage key (backup refresh / heal / corrupt quarantine).
+ *  Public build: a JSON object is parsed and sanitised; anything else (unparseable or not an object) is NEVER written
+ *  as is (Sol r6) - the raw bytes stay in memory and a host-free marker {corrupt, length, at} is persisted instead.
+ *  FORK edition: unchanged. */
+function isJsonObjectText(text: string): boolean {
+  try {
+    const v = JSON.parse(text) as unknown;
+    return !!v && typeof v === 'object' && !Array.isArray(v);
+  } catch {
+    return false;
+  }
+}
+
+export function publicDiskText(text: string): string {
+  if (FORK_EDITION) return text;
+  try {
+    const raw = JSON.parse(text) as unknown;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return JSON.stringify(publicPersistable(raw as Record<string, unknown>));
+  } catch { /* malformed: the marker below */ }
+  publicCorruptSettingsInMemory = text;
+  return JSON.stringify({ corrupt: true, length: text.length, at: new Date().toISOString() });
+}
 
 /** The edition name the shell compares against (second_client.rs running_edition). */
 export const SECOND_CLIENT_EDITION: 'public' | 'fork' = FORK_EDITION ? 'fork' : 'public';
@@ -1756,7 +1855,8 @@ export function stripSecretFields<T>(value: T): T {
 /** The ONE serializer for the on-disk file AND the bug-report attachment: pretty-printed,
  *  secret-free. The JSON round-trip also sheds Vue's reactive proxy before the strip mutates. */
 export function serializeSettingsForFile(value: AppSettings): string {
-  return JSON.stringify(stripSecretFields(JSON.parse(JSON.stringify(value)) as Record<string, unknown>), null, 2);
+  const copy = publicPersistable(JSON.parse(JSON.stringify(value)) as AppSettings) as unknown as Record<string, unknown>;
+  return JSON.stringify(stripSecretFields(copy), null, 2);
 }
 
 function noteFileBaseline(payload: Record<string, unknown>): void {
@@ -1795,6 +1895,13 @@ function fileWrite(contents: string, refreshBackup: boolean, patch?: Record<stri
   // conditional on the primary still being unreadable when the shell holds the lock; `restorePatch` (Astra r5) is what
   // that branch applies to the raw backup (migration diff + own changes). An older shell ignores them and writes
   // `contents` whole.
+  // Sol r5: a public patch save always states the official target + url and retires the fork keys, so the merge can
+  // never keep another edition's values (the public shell enforces the same under its lock).
+  if (!FORK_EDITION && patch) {
+    patch = publicPersistable({ ...patch, activeServerTarget: 'fumbbl' });
+    retire = [...new Set([...(retire ?? []), 'forkHost', 'botConfigUrl'])];
+    if (restorePatch) restorePatch = publicPersistable({ ...restorePatch, activeServerTarget: 'fumbbl' });
+  }
   const args: Record<string, unknown> = patch
     ? {
       contents, refreshBackup, patch: JSON.stringify(patch),
@@ -1926,7 +2033,7 @@ export async function initSettingsFile(): Promise<void> {
     } catch (e) {
       noteSettingsIssue(`settings ${source} corrupt (${(e as Error)?.message ?? String(e)})`);
       // Park, never destroy: the unreadable bytes survive for diagnosis before anything overwrites.
-      if (source === 'file') { try { localStorage.setItem(CORRUPT_KEY, text); } catch { /* ignore */ } }
+      if (source === 'file') { try { localStorage.setItem(CORRUPT_KEY, publicDiskText(text)); } catch { /* ignore */ } }
     }
   }
   // No readable file: one-shot import. localStorage first — module eval already hydrated it when
@@ -2165,35 +2272,64 @@ export const FUMBBL_SITE = import.meta.env.DEV && !inTauri ? '/fumbbl-site' : 'h
 const ALL_SERVER_TARGETS: ServerTarget[] = [
   { id: 'fumbbl', get label() { return $t('settings.allServerTargets.officialFumbbl'); }, url: FUMBBL_WS_URL, auth: 'fumbbl', compression: true },
   { id: 'local', get label() { return $t('settings.allServerTargets.superFumbblLocalDev'); }, url: 'ws://localhost:22227/command', auth: 'standalone', compression: true },
-  // Owner 2026-07-07: the FORK server (external IPv4). TEST builds default to this (see the
-  // activeServerTarget default below); RC/public builds default to 'fumbbl' (docs/release-checklist.md).
-  { id: 'fork', get label() { return $t('settings.allServerTargets.superFumbblForkFork', { FORK_SERVER_HOST }); }, url: FORK_WS_URL, auth: 'standalone', compression: true },
+  // Owner 2026-07-07: the FORK server. FORK builds default to this (see the activeServerTarget default below).
+  // Owner 10-31: no host in the label or the url - the url resolves from the effective fork host (forkServerUrl).
+  { id: 'fork', get label() { return $t('settings.allServerTargets.superFumbblForkFork'); }, get url() { return forkServerUrl(); }, auth: 'standalone', compression: true },
 ];
-// Owner 09-10: the public edition offers Official FUMBBL only.
-export const SERVER_TARGETS: ServerTarget[] = ALL_SERVER_TARGETS.filter((t) => FORK_EDITION || t.id === 'fumbbl');
-
-/** The FORK server's ws URL. Owner 2026-07-21 (#102): resolves to the baked DDNS FORK_SERVER_HOST by default;
- *  an explicit `settings.forkHost` (empty by default) overrides it at runtime — belt-and-braces for a future
- *  address change with no rebuild. Empty-default means a stale persisted value can't misdirect distributed
- *  builds (the v8 migration clears the old baked IP). Local dev uses the separate 'local' target. */
-export function forkServerUrl(): string {
-  const override = (settings.forkHost || '').trim();
-  return override ? `ws://${override}:22227/command` : FORK_WS_URL;
+/** The targets this run offers. Owner 09-10: the public edition offers Official FUMBBL only - owner 10-31: plus the
+ *  fork when launched with --fork-server. The FORK edition always keeps its fork target (only the connection needs a
+ *  host: with none, its url is '' and nothing is dialled). */
+export function serverTargets(): ServerTarget[] {
+  return ALL_SERVER_TARGETS.filter((t) => {
+    if (t.id === 'fumbbl') return true;
+    if (t.id === 'local') return FORK_EDITION;
+    return forkFeaturesEnabled();
+  });
 }
 
-/** Owner 2026-07-08: the Tournament Bot config-web base URL (fork-JNLP / team-builder endpoint host). Owner
- *  2026-07-21 (#102): derives from the same effective fork host as the game WS — the empty-default
- *  `settings.forkHost` override (below) covers BOTH surfaces, else DDNS FORK_SERVER_HOST. An explicit
- *  `settings.botConfigUrl` still wins (full-URL escape hatch to point config-web elsewhere entirely, empty by
- *  default). Trailing slash trimmed. */
+/** The FORK server's ws URL from the effective fork host (owner 10-31: launch flag; FORK edition: settings.forkHost
+ *  / VITE_FORK_SERVER_HOST). '' = no host: the fork is unavailable and its target is hidden (serverTargets). Local dev
+ *  uses the separate 'local' target. */
+export function forkServerUrl(): string {
+  const host = effectiveForkHost();
+  return host ? forkWsUrlFor(host) : '';
+}
+
+/** Owner 2026-07-08: the Tournament Bot config-web base URL (fork-JNLP / team-builder endpoint host). Derives from
+ *  the same effective fork host as the game WS (owner ruling 11-01: launch flag, FORK override, else the baked default). An explicit `settings.botConfigUrl`
+ *  still wins in the FORK edition (full-URL escape hatch, empty by default). '' = no host (fork unavailable; callers
+ *  a local host on a port other than 4310). Trailing slash trimmed. */
 export function botConfigBaseUrl(): string {
-  const explicit = (settings.botConfigUrl || '').trim();
-  if (explicit) return explicit.replace(/\/+$/, '');
-  const host = (settings.forkHost || '').trim() || FORK_SERVER_HOST;
-  // TLS cutover (owner 08-18): public hostnames ride the Caddy proxy on 443 (LE cert);
-  // loopback/LAN-IP/.local dev forks keep the direct plain-HTTP :4310.
-  const local = /^(localhost|127\.|\[?::1|(\d{1,3}\.){3}\d{1,3}$)/i.test(host) || /\.local$/i.test(host);
-  return local ? `http://${host}:4310` : `https://${host}`;
+  // Sol r15: frozen together with the fork host as one pair (forkAccess) - a later botConfigUrl / forkHost edit applies
+  // on the next launch.
+  return forkConfigWebBase();
+}
+watch(() => settings.botConfigUrl, (next, prev) => {
+  if (forkHostFrozen() && next !== prev) {
+    try { console.info('[settings] config-web URL saved; restart Super FUMBBL to use it (this run keeps its config-web)'); } catch { /* ignore */ }
+  }
+});
+
+/** The config-web base URL for a fork host. TLS cutover (owner 08-18): public hostnames ride the Caddy proxy on 443
+ *  (LE cert), or the flag's explicit port; loopback/LAN-IP/.local dev forks keep the direct plain-HTTP :4310 - the ONLY
+ *  plain-HTTP port the shell allows (owner 10-31, Sol r1), so a local host with any other port is '' (unavailable). */
+export function configWebBaseFor(host: string): string {
+  const portMatch = /:(\d+)$/.exec(host);
+  const hostname = portMatch ? host.slice(0, -portMatch[0].length) : host;
+  const local = isLocalForkHost(hostname) || /^(127\.|\[?::1)/i.test(hostname);
+  if (local) {
+    if (portMatch && Number(portMatch[1]) !== LOCAL_CONFIG_WEB_PORT) return '';
+    return `http://${hostname}:${LOCAL_CONFIG_WEB_PORT}`;
+  }
+  return portMatch ? `https://${hostname}:${portMatch[1]}` : `https://${hostname}`;
+}
+
+/** Owner ruling 11-01 ("we cannot hide the address if it breaks bug reports"): where a bug report goes. The FORK
+ *  edition: its config-web (botConfigBaseUrl, as before this branch). The PUBLIC build: always the config-web of the
+ *  baked default host - with or without --fork-server, and even when the flag names a custom host (a tester's private
+ *  fork does not receive public reports). */
+export function bugReportBaseUrl(): string {
+  return FORK_EDITION ? botConfigBaseUrl() : configWebBaseFor(FORK_SERVER_HOST);
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
@@ -2229,7 +2365,8 @@ export function forkJnlpUrl(params: { coach: string; teamId: string; gameName: s
   const q = new URLSearchParams({
     coach: params.coach, teamId: params.teamId, gameName: params.gameName, passwordMd5: md5Hex(params.password),
   });
-  return `${botConfigBaseUrl()}/api/fork/jnlp?${q.toString()}`;
+  // Sol r3: never a relative URL (the digest would go to the app origin).
+  return `${requireForkBaseUrl(botConfigBaseUrl())}/api/fork/jnlp?${q.toString()}`;
 }
 
 /** The `/api/fork/register` URL for the Connection pane's "Register this coach on the fork" button.
@@ -2239,33 +2376,118 @@ export function forkJnlpUrl(params: { coach: string; teamId: string; gameName: s
  *  way (owner security ruling 08-17). */
 export function forkRegisterUrl(params: { coach: string; password: string }): string {
   const q = new URLSearchParams({ coach: params.coach, passwordMd5: md5Hex(params.password) });
-  return `${botConfigBaseUrl()}/api/fork/register?${q.toString()}`;
+  return `${requireForkBaseUrl(botConfigBaseUrl())}/api/fork/register?${q.toString()}`;
 }
 
 /** The currently-selected backend preset (falls back to the first). The 'fork' target's
- *  URL is resolved dynamically from settings.forkHost. */
+ *  URL is resolved dynamically from the effective fork host. */
 export function activeServerTarget(): ServerTarget {
-  const target = SERVER_TARGETS.find((t) => t.id === settings.activeServerTarget) ?? SERVER_TARGETS[0]!;
+  const targets = serverTargets();
+  const target = targets.find((t) => t.id === settings.activeServerTarget) ?? targets[0]!;
   return target.id === 'fork' ? { ...target, url: forkServerUrl() } : target;
 }
 
 /** Point the client at a preset backend: remembers the choice and derives
  *  url + compression from it. Auth is resolved per-join by resolveJoinCreds. */
 export function applyServerTarget(id: string): void {
-  const target = SERVER_TARGETS.find((t) => t.id === id);
+  publicForkTargetPending = false; // Sol r3: an explicit selection always beats a late launch-flag restore
+  const target = serverTargets().find((t) => t.id === id);
   if (!target) return;
+  settings.forkUrlCustom = false; // Sol r21: picking a target puts its preset url back
+  const changed = settings.activeServerTarget !== target.id;
   settings.activeServerTarget = target.id;
   settings.url = target.id === 'fork' ? forkServerUrl() : target.url;
   settings.compression = target.compression;
+  // Sol r18: listeners hear only a real target CHANGE (a same-target call - e.g. a spectator JNLP for the selected
+  // target - must not rebase an open Settings snapshot, so Cancel still restores e.g. compression as on base).
+  if (changed) {
+    serverSwitchGeneration += 1; // Sol r19: a Cancel that started before this re-derives url / compression when it lands
+    for (const listener of serverTargetSwitchListeners) listener();
+  }
 }
 
-/** Owner 2026-07-07 / 2026-07-21 (#102): set the fork-host override (`settings.forkHost`) and re-point the client
- *  immediately if the fork is the active target — a changed fork address takes effect with no rebuild. Empty
- *  string clears the override (back to the baked DDNS FORK_SERVER_HOST). No dedicated UI input yet (deferred). */
-export function setForkHost(host: string): void {
-  settings.forkHost = host.trim();
-  if (settings.activeServerTarget === 'fork') applyServerTarget('fork');
+/** Sol r19: bumped on every real target change. A Settings Cancel captures it when it starts; if it moved by the time
+ *  the Cancel applies its snapshot, url / compression are re-derived from the CURRENT target (realignServerConnection). */
+let serverSwitchGeneration = 0;
+export function serverSwitchGenerationNow(): number {
+  return serverSwitchGeneration;
 }
+
+/** Sol r19: url + compression re-derived from the CURRENT activeServerTarget (the derivation applyServerTarget uses),
+ *  without changing the target - only those two fields. */
+export function realignServerConnection(): void {
+  const target = serverTargets().find((t) => t.id === settings.activeServerTarget);
+  if (!target) return;
+  settings.url = target.id === 'fork' ? forkServerUrl() : target.url;
+  settings.compression = target.compression;
+  settings.forkUrlCustom = false; // Sol r22: a preset url was just installed
+}
+
+/** Sol r17/r18: told after an applyServerTarget() call that CHANGED the target (the Settings picker, a Discord spectate, a
+ *  JNLP, Play flows). */
+const serverTargetSwitchListeners = new Set<() => void>();
+export function onServerTargetSwitch(listener: () => void): () => void {
+  serverTargetSwitchListeners.add(listener);
+  return () => { serverTargetSwitchListeners.delete(listener); };
+}
+
+/** Sol r17: rebase an open Settings snapshot (settingsTransactionSnapshot text) onto the CURRENT url / compression after a
+ *  target switch, so a later Cancel restores the switched target's own connection - never the previous target's url.
+ *  The target itself is outside the snapshot (base behaviour), so the switch is kept like a toggle. */
+export function rebaseSettingsSnapshotConnection(snapshot: string, value: Pick<AppSettings, 'url' | 'compression' | 'forkUrlCustom'> = settings): string {
+  try {
+    const parsed = JSON.parse(snapshot) as Record<string, unknown>;
+    if ('url' in parsed) parsed.url = value.url;
+    if ('compression' in parsed) parsed.compression = value.compression;
+    // Sol r22: the "typed fork url" flag travels with the url it describes (a switch installs a preset: false)
+    if ('forkUrlCustom' in parsed) parsed.forkUrlCustom = value.forkUrlCustom;
+    return JSON.stringify(parsed);
+  } catch {
+    return snapshot;
+  }
+}
+
+/** Owner 2026-07-07 / 2026-07-21 (#102): set the fork-host override (`settings.forkHost`) - no rebuild needed. Empty
+ *  string clears the override. No dedicated UI input yet (deferred). Owner 10-31: FORK edition only - the public
+ *  build never writes settings.forkHost (nothing persisted). Sol r13: the run's fork host is FROZEN once the launch
+ *  flags settle (forkAccess), so a change made after that takes effect on the NEXT launch; before it (start-up) the
+ *  client re-points at once, as before. */
+export function setForkHost(host: string): void {
+  if (!FORK_EDITION) return;
+  settings.forkHost = host.trim();
+  if (forkHostFrozen()) {
+    try { console.info('[settings] fork host override saved; restart Super FUMBBL to use it (this run keeps its fork host)'); } catch { /* ignore */ }
+    return;
+  }
+  // Sol r21: a url the coach typed (forkUrlCustom) is never replaced by a host change; the preset follows the host.
+  if (settings.activeServerTarget === 'fork' && !settings.forkUrlCustom) applyServerTarget('fork');
+}
+
+/** Sol r21 (FORK edition): the raw Server input changed `settings.url`. It is custom only when the fork is the target
+ *  and the value differs from the derived preset; clearing it (or typing the preset) makes it the preset again. */
+export function noteForkUrlEdited(): void {
+  if (!FORK_EDITION) return;
+  const typed = (settings.url || '').trim();
+  settings.forkUrlCustom = settings.activeServerTarget === 'fork' && typed !== '' && typed !== forkServerUrl();
+}
+
+/** Owner 10-31: re-align the active target with fork availability. Runs when the launch flag resolves (the async
+ *  `launch_flags` read lands after load()): a public run WITHOUT the flag is forced to FUMBBL; a run WITH it gets
+ *  back the 'fork' target load() deferred, and a 'fork' target's url follows the effective host. */
+export function reconcileForkTarget(): void {
+  const available = forkFeaturesEnabled();
+  if (settings.activeServerTarget === 'fork') {
+    // Sol r20: the FORK edition's saved url (e.g. a custom raw Server url) is kept when the launch flags settle, as on base.
+    if (available && !FORK_EDITION) settings.url = forkServerUrl();
+    else if (!FORK_EDITION) applyServerTarget('fumbbl');
+  } else if (!FORK_EDITION && settings.activeServerTarget !== 'fumbbl') {
+    applyServerTarget('fumbbl');
+  } else if (publicForkTargetPending && available && settings.activeServerTarget === 'fumbbl') {
+    applyServerTarget('fork');
+  }
+  if (available || launchFlagsSettled.value) publicForkTargetPending = false;
+}
+watch([forkHostFromLaunch, launchFlagsSettled], reconcileForkTarget);
 
 /** Resolve the coach/password a spectate join should send for the active
  *  target. standalone (our local server) falls back to the dev TestCoach when
@@ -2278,6 +2500,14 @@ export function resolveJoinCreds(): { coach: string; password: string } {
     return { coach: 'TestCoach', password: 'test' };
   }
   return { coach: settings.coach, password: settings.password };
+}
+
+/** Sol r15: the Super FUMBBL FORK account's saved credentials, whatever the active target - what every config-web
+ *  (fork) request builder uses. Never the official FUMBBL account, and no dev fallback: empty when not configured, and
+ *  the caller then asks for the fork credentials and sends nothing. */
+export function forkAccountCreds(): { coach: string; password: string } {
+  const coach = settings.coach40k.trim();
+  return coach ? { coach, password: coachPassword40k() } : { coach: '', password: '' };
 }
 
 /** Build a spectator connection from the target already selected by the initiating blade. This is intentionally

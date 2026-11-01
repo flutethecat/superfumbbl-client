@@ -2,6 +2,7 @@
 // client-supplied entropy on outgoing commands (owner 10-16) and the server-version gate (serverVersionGate.ts).
 import { GameSession, type ClientMode, type ServerCommandVersion } from '@fumbbl40k/ffb-protocol';
 import { FORK_EDITION } from './edition';
+import { isForkServerUrl } from './forkAccess';
 import { withEntropy } from './mouseEntropy';
 import { APPROVED_FFB_SERVER_VERSIONS, lastServerVersion, serverVersionBlock, serverVersionRefusal } from './serverVersionGate';
 import { clientVersionBlock, clientVersionJoinGate, noteSeatTaken } from './clientVersionGate';
@@ -12,7 +13,9 @@ export interface GameSessionTarget { url: string; compression?: boolean }
 type GateJoin = { mode: ClientMode; gameId: number | null; coach: string | null; gameName?: string | null; listOnly?: boolean };
 export function serverVersionJoinGate(version: ServerCommandVersion, join: GateJoin, serverUrl: string | null = null): string | null {
   lastServerVersion.value = String(version.serverVersion ?? '');
-  const refusal = serverVersionRefusal(version, join.mode, { enforced: !FORK_EDITION });
+  // Owner 10-31: not enforced for the fork target (it runs a newer FFB) - in the FORK edition, or a public run launched
+  // with --fork-server whose session dials that host. FUMBBL stays gated in the public build.
+  const refusal = serverVersionRefusal(version, join.mode, { enforced: !(FORK_EDITION || isForkServerUrl(serverUrl)) });
   if (refusal) {
     serverVersionBlock.value = {
       serverVersion: String(version.serverVersion ?? '?'),

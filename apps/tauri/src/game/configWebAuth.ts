@@ -30,6 +30,8 @@
 // parameter. A client pointed at a server that predates this change must keep working.
 
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
+import { requireForkBaseUrl } from './forkBase';
+import { configWebOrigin } from './forkAccess';
 
 export type AuthTransport = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -46,6 +48,8 @@ export interface ConfigWebCoordinationIdentity {
   source: 'discord' | 'userid-password';
   /** Epoch ms. We renew a little early rather than eat a guaranteed 401. */
   expiresAt: number;
+  /** Sol r9: the config-web origin (scheme + host + port) that issued the token; it is only ever sent back there. */
+  origin: string;
 }
 
 /** Renew this long before the server's stated expiry, so a token never dies mid-flight. */
@@ -55,7 +59,12 @@ const RENEW_MARGIN_MS = 60_000;
 // performs one exchange; persisting it would put a second credential at rest for no gain. (The
 // password itself is no longer on disk either — it moved to the OS store, see credentials.ts.)
 let held: ConfigWebCoordinationIdentity | null = null;
-let inFlight: Promise<string | null> | null = null;
+/** Sol r10: pending login exchanges, keyed by the NORMALISED config-web origin + coach - a caller only ever joins an
+ *  exchange for its own origin and coach, and each promise removes only its own entry when it settles. */
+const inFlight = new Map<string, Promise<string | null>>();
+function exchangeKey(baseUrl: string, coach: string): string {
+  return `${configWebOrigin(baseUrl)}\n${coach.trim().toLowerCase()}`;
+}
 
 /**
  * Routes whose credential was ONLY ever an auth credential, so a held token replaces it outright.
@@ -70,23 +79,32 @@ let inFlight: Promise<string | null> | null = null;
  */
 export const TOKEN_GUARDED_PATHS = new Set(['my-games', 'team-builder/build', 'team-builder/preview']);
 
-export function heldTokenFor(coach: string, now = Date.now()): string | null {
+/** The held token for `coach`. `origin` (the config-web about to receive it) must match the issuer's when given. */
+export function heldTokenFor(coach: string, now = Date.now(), origin?: string): string | null {
   if (!held) return null;
+  if (origin !== undefined && held.origin !== configWebOrigin(origin)) return null;
   if (held.coach.toLowerCase() !== coach.trim().toLowerCase()) return null;
   if (held.expiresAt - RENEW_MARGIN_MS <= now) return null;
   return held.token;
 }
 
 /** Read-only snapshot for coordination UI. The secret token never leaves this module. */
-export function configWebCoordinationIdentity(now = Date.now()): Omit<ConfigWebCoordinationIdentity, 'token'> | null {
+export function configWebCoordinationIdentity(now = Date.now()): Omit<ConfigWebCoordinationIdentity, 'token' | 'origin'> | null {
   if (!held || held.expiresAt - RENEW_MARGIN_MS <= now) return null;
-  const { token: _token, ...identity } = held;
+  const { token: _token, origin: _origin, ...identity } = held;
   return { ...identity };
 }
 
-/** Header projection for Config-Web API modules; they never receive or retain the token itself. */
-export function configWebBearerHeaders(now = Date.now()): Record<string, string> {
+/** The issuing config-web origin of the held session ('' when none). */
+export function configWebSessionOrigin(): string {
+  return held?.origin ?? '';
+}
+
+/** Header projection for Config-Web API modules; they never receive or retain the token itself. Sol r9: only for the
+ *  origin that issued the token - another config-web gets no header. */
+export function configWebBearerHeaders(origin: string, now = Date.now()): Record<string, string> {
   if (!held || held.expiresAt - RENEW_MARGIN_MS <= now) return {};
+  if (!held.origin || held.origin !== configWebOrigin(origin)) return {};
   return { authorization: `Bearer ${held.token}` };
 }
 
@@ -98,6 +116,8 @@ export function adoptConfigWebSession(input: {
   avatarUrl?: string | null;
   expiresAt?: number;
   source: 'discord' | 'userid-password';
+  /** The issuing config-web (any URL on it); '' / absent = unscoped (tests only: never sent as a header). */
+  origin?: string;
 }, now = Date.now()): boolean {
   const token = input.token.trim();
   const coach = input.coach.trim();
@@ -109,15 +129,20 @@ export function adoptConfigWebSession(input: {
     avatarUrl: input.avatarUrl ?? null,
     source: input.source,
     expiresAt: input.expiresAt && input.expiresAt > now ? input.expiresAt : now + 8 * 60 * 60 * 1000,
+    origin: input.origin ? configWebOrigin(input.origin) : '',
   };
-  inFlight = null;
   return true;
 }
 
 /** Drop the held token — on a 401, on sign-out, or when the coach identity changes. */
 export function clearConfigWebToken(): void {
   held = null;
-  inFlight = null;
+  inFlight.clear();
+}
+
+/** Sol r9: drop the held token only when it was issued by this config-web (a refusal from another one never clears it). */
+export function clearConfigWebTokenFor(origin: string): void {
+  if (held && held.origin === configWebOrigin(origin)) clearConfigWebToken();
 }
 
 /**
@@ -148,6 +173,7 @@ async function login(
   baseUrl: string,
   now: number,
 ): Promise<ForkLoginOutcome> {
+  requireForkBaseUrl(baseUrl); // owner 10-31 (Sol r2): never a relative request without a fork host
   let response: Response;
   try {
     response = await transport(`${baseUrl}/api/fork/login`, {
@@ -175,6 +201,7 @@ async function login(
     source: 'userid-password',
     // A server that gives us no usable expiry still gets a bounded token life on our side.
     expiresAt: Number.isFinite(parsed) ? parsed : now + 60 * 60 * 1000,
+    origin: baseUrl,
   }, now);
   return { kind: 'ok', coach, token };
 }
@@ -216,13 +243,16 @@ export async function ensureConfigWebToken(
   now = Date.now(),
 ): Promise<string | null> {
   if (!creds.coach.trim() || !creds.password) return null;
-  const existing = heldTokenFor(creds.coach, now);
+  const existing = heldTokenFor(creds.coach, now, baseUrl);
   if (existing) return existing;
-  if (inFlight) return inFlight;
-  inFlight = exchange(creds, transport, baseUrl, now).finally(() => {
-    inFlight = null;
+  const key = exchangeKey(baseUrl, creds.coach);
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+  const promise: Promise<string | null> = exchange(creds, transport, baseUrl, now).finally(() => {
+    if (inFlight.get(key) === promise) inFlight.delete(key); // per-promise cleanup: never a newer exchange's entry
   });
-  return inFlight;
+  inFlight.set(key, promise);
+  return promise;
 }
 
 export interface AuthorizedRequest {
@@ -244,8 +274,11 @@ export async function authorizeForkRequest(
   transport: AuthTransport,
   baseUrl: string,
 ): Promise<AuthorizedRequest> {
+  requireForkBaseUrl(baseUrl); // callers fetch `${baseUrl}/...` next: refuse a relative base before anything goes out
   const token = await ensureConfigWebToken(creds, transport, baseUrl);
   if (!token) return { headers: {}, payload, authorized: false };
+  // Sol r10: revalidate the issuer before attaching - only a token held for THIS origin and coach goes on the request.
+  if (heldTokenFor(creds.coach, Date.now(), baseUrl) !== token) return { headers: {}, payload, authorized: false };
   const next = { ...payload };
   if (TOKEN_GUARDED_PATHS.has(path)) delete next.password;
   return { headers: { authorization: `Bearer ${token}` }, payload: next, authorized: true };

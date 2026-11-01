@@ -99,7 +99,8 @@ onSoundError(({ soundId, src, code, message }) => {
   const file = (src.split('/').pop() ?? src).split(/[?#]/)[0]!.slice(0, 60);
   log('system', `⚠ sound "${soundId}" failed to play (${code === null ? '' : `media error ${code}: `}${message}) — ${file}`);
 });
-import { settings, FORK_SERVER_HOST } from './settings';
+import { settings } from './settings';
+import { effectiveForkHost } from './forkAccess';
 import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
@@ -27297,7 +27298,7 @@ if (FORK_EDITION) {
           context: { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome },
           enabled: settings.coachBrain !== 'none' && play.active && !humanSetupSurface()
             && !replay.active && playPermitted() && session.connection.isOpen
-            && coachHostAllowed(url, FORK_SERVER_HOST, settings.forkHost)
+            && coachHostAllowed(url, effectiveForkHost()) // owner 10-31: the effective fork host
             && !playback.catchingUp && playback.queue.length === 0
             && !unsettledMovementIntent() && !endTurnInFlight && !blockInFlight
             && (commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN }) || blastinChooserPicks(g)), // S46: the picker's End Turn is refused, its pick is not

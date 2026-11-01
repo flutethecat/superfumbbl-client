@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "Parth amser",
   "settings.account.accountCard.scheduling.to": "tan",
   "settings.allServerTargets.officialFumbbl": "FUMBBL swyddogol",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — fforc ({FORK_SERVER_HOST})",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — fforc",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — datblygu lleol",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "Disiau bloc yn unig",
   "settings.assetPackSettings.exportSections.combinedPack": "Pecyn cyfunol",

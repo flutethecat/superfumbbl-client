@@ -36,7 +36,7 @@ import CreateGameModal from './play/CreateGameModal.vue';
 import CoachCard from './play/CoachCard.vue';
 import { fetchFumbblCoachProfile, type FumbblCoachProfile } from '../../game/fumbblCoachProfile';
 import { EXAMPLE_GAME_ID, exampleSnapshot } from '../../game/clientTourExample';
-import { FORK_EDITION } from '../../game/edition';
+import { forkFeaturesEnabled } from '../../game/forkAccess'; // owner 10-31: runtime fork gate (public: --fork-server)
 import { $t, terms, useLiveSet } from '../../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
@@ -442,7 +442,7 @@ function crestFailed(url: string | null): void {
       <CoachCard :name="coach" :profile="coachProfile" />
       <div class="head-actions">
         <!-- Owner 09-25: Super FUMBBL games keep their own button (fork edition), as before. -->
-        <button v-if="FORK_EDITION" class="bevel super-button" type="button" @click="createGameOpen = true">
+        <button v-if="forkFeaturesEnabled()" class="bevel super-button" type="button" @click="createGameOpen = true">
           <img :src="superFumbblLogoUrl" alt="" />
           <span><DisplayCaps :text="$t('play.playOnSuperFumbbl')" /></span>
           <span class="test-environment-splash">{{ $t('play.testEnvironmentSplash.testEnvironment') }}</span>
@@ -675,7 +675,7 @@ function crestFailed(url: string | null): void {
       </div>
     </div>
     <input ref="fileInput" class="file-input" type="file" accept=".jnlp,text/xml,application/xml" @change="openJnlpFile" />
-    <CreateGameModal v-if="FORK_EDITION && createGameOpen" @close="createGameOpen = false" />
+    <CreateGameModal v-if="forkFeaturesEnabled() && createGameOpen" @close="createGameOpen = false" />
   </main>
 </template>
 

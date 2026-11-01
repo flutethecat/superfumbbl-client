@@ -13238,17 +13238,22 @@ function joinPlay() {
 async function launchViaBot(creds: { coach: string; password: string }, gameNameStr: string, teamId: string) {
   const log = (text: string) =>
     gameStore.appendSystemNotice(text);
+  // Sol r12: one fork game-server URL for the whole launch (the bot fetch is awaited in between).
+  const gameUrl = forkServerUrl();
   const directJoin = () => {
     applyServerTarget('fork');
     void gameStore.connectAsPlayer({
-      url: forkServerUrl(), compression: activeServerTarget().compression,
+      url: gameUrl, compression: activeServerTarget().compression,
       coach: creds.coach, password: creds.password, gameName: gameNameStr, teamId,
     });
   };
   // connectAsPlayer() clears the log on join, so defer the launch note to the next tick so it
   // survives (and lands alongside the connection lines).
   const noteAfterJoin = (text: string) => setTimeout(() => log(text), 0);
-  const url = forkJnlpUrl({ coach: creds.coach, teamId, gameName: gameNameStr, password: creds.password });
+  // Sol r3: no fork host = say so and send nothing (forkJnlpUrl refuses a relative URL).
+  let url: string;
+  try { url = forkJnlpUrl({ coach: creds.coach, teamId, gameName: gameNameStr, password: creds.password }); }
+  catch (e) { log(errText(e)); return; }
   try {
     // tauriFetch (desktop) bypasses CORS; window.fetch is the dev-browser path (needs the Bot to
     // send Access-Control-Allow-Origin, or a dev proxy).
@@ -13258,7 +13263,7 @@ async function launchViaBot(creds: { coach: string; password: string }, gameName
     if (req.fork && req.mode === 'player' && req.teamId && (req.gameName || req.gameId)) {
       applyServerTarget('fork');
       void gameStore.connectAsPlayer({
-        url: forkServerUrl(), compression: activeServerTarget().compression,
+        url: gameUrl, compression: activeServerTarget().compression,
         coach: req.coach ?? creds.coach, password: req.password ?? creds.password,
         gameName: req.gameName ?? undefined, teamId: req.teamId, gameId: req.gameId ?? undefined,
       });

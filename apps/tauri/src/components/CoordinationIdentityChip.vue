@@ -15,7 +15,7 @@ import { $t, useLiveSet } from '../i18n';
 const liveSetHere = useLiveSet();
 import { t } from '../i18n';
 
-type PublicIdentity = Omit<ConfigWebCoordinationIdentity, 'token'>;
+type PublicIdentity = Omit<ConfigWebCoordinationIdentity, 'token' | 'origin'>;
 const identity = ref<PublicIdentity | null>(configWebCoordinationIdentity());
 const busy = ref(false);
 const status = ref('');

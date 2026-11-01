@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import DisplayCaps from '../../components/DisplayCaps.vue';
-import { FORK_EDITION } from '../../game/edition';
+import { forkFeaturesEnabled } from '../../game/forkAccess'; // owner 10-31: runtime fork gate (public: --fork-server)
 import fumbblLogoUrl from '../../assets/resources/fumbbl-logo.png';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, applyServerTarget } from '../../game/settings';
@@ -299,7 +299,7 @@ onBeforeUnmount(() => {
           :aria-pressed="spectateSection === 'fumbbl'" :title="$t('spectateBrowser.fumbbl')" @click="selectSpectateServer('fumbbl')">
           <img :src="fumbblLogoUrl" :alt="$t('spectateBrowser.fumbbl')" />
         </button>
-        <button v-if="FORK_EDITION" type="button" class="server-plate server-plate-super" :data-active="spectateSection === 'fork'"
+        <button v-if="forkFeaturesEnabled()" type="button" class="server-plate server-plate-super" :data-active="spectateSection === 'fork'"
           :aria-pressed="spectateSection === 'fork'" :title="$t('spectateBrowser.superFumbbl')" @click="selectSpectateServer('fork')">
           <img :src="superFumbblLogoUrl" :alt="$t('spectateBrowser.superFumbbl')" />
         </button>

@@ -1,6 +1,7 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { botConfigBaseUrl } from './settings';
-import { claimDesktopDiscordSession } from './desktopAuth';
+import { requireForkBaseUrl } from './forkBase';
+import { claimDesktopDiscordSession, DesktopSignInCancelled } from './desktopAuth';
 import {
   clearAccountSession as clearSecureAccountSession,
   loadAccountSession as loadSecureAccountSession,
@@ -10,9 +11,28 @@ import {
   adoptConfigWebSession,
   challengeForkCredentials,
   clearConfigWebToken,
+  clearConfigWebTokenFor,
   configWebBearerHeaders,
   configWebCoordinationIdentity,
+  configWebSessionOrigin,
 } from './configWebAuth';
+import { configWebOrigin, isDefaultConfigWebOrigin } from './forkAccess';
+
+/** Sol r9/r11: the config-web this run talks to (absolute; throws when there is none). Account sessions are scoped to
+ *  its ORIGIN: the in-memory token is only ever sent back to the origin that issued it. ONLY the default origin
+ *  (forkAccess DEFAULT_CONFIG_WEB_ORIGIN) reads, writes or deletes the stored session (the existing, legacy keychain
+ *  slot - so a legacy unscoped token restores for the default origin only); any other origin (a FORK-edition override
+ *  or flag host) keeps its session in memory for the run. */
+function accountBase(): string {
+  return requireForkBaseUrl(botConfigBaseUrl());
+}
+function persistsSessions(base: string): boolean {
+  return isDefaultConfigWebOrigin(base);
+}
+/** Sol r12: has the current destination moved away from the base an operation captured? */
+function destinationChanged(base: string): boolean {
+  try { return configWebOrigin(accountBase()) !== configWebOrigin(base); } catch { return true; }
+}
 import { t } from '../i18n';
 
 export interface AccountIdentity {
@@ -51,13 +71,14 @@ function desktopFetch(): FetchLike {
     : fetch;
 }
 
-async function jsonRequest<T>(path: string, init: RequestInit = {}, fetchFn: FetchLike = desktopFetch()): Promise<T> {
-  const response = await fetchFn(`${botConfigBaseUrl()}${path}`, {
+/** Sol r12: every account request runs against ONE base captured by its operation (default: read once, here). */
+async function jsonRequest<T>(path: string, init: RequestInit = {}, fetchFn: FetchLike = desktopFetch(), base: string = accountBase()): Promise<T> {
+  const response = await fetchFn(`${base}${path}`, {
     credentials: 'include',
     ...init,
     headers: {
       ...(init.body ? { 'content-type': 'application/json' } : {}),
-      ...configWebBearerHeaders(),
+      ...configWebBearerHeaders(base),
       ...(init.headers ?? {}),
     },
   });
@@ -66,8 +87,8 @@ async function jsonRequest<T>(path: string, init: RequestInit = {}, fetchFn: Fet
   return body;
 }
 
-async function desktopAuthRequest(path: string, init: RequestInit, fetchFn: FetchLike = desktopFetch()) {
-  const response = await fetchFn(`${botConfigBaseUrl()}${path}`, { credentials: 'include', ...init });
+async function desktopAuthRequest(path: string, init: RequestInit, fetchFn: FetchLike, base: string) {
+  const response = await fetchFn(`${base}${path}`, { credentials: 'include', ...init });
   const data = await response.json().catch(() => ({})) as Record<string, unknown>;
   return {
     status: response.status,
@@ -78,40 +99,60 @@ async function desktopAuthRequest(path: string, init: RequestInit, fetchFn: Fetc
 }
 
 export async function authenticateAccount(coach: string, password: string, fetchFn?: FetchLike): Promise<AccountIdentity> {
-  const login = await challengeForkCredentials(
-    { coach, password }, fetchFn ?? desktopFetch(), botConfigBaseUrl(),
-  );
+  const base = accountBase(); // Sol r12: login, persistence and the account read all use this one base
+  const login = await challengeForkCredentials({ coach, password }, fetchFn ?? desktopFetch(), base);
   if (login.kind !== 'ok') throw new Error('Config-Web did not issue an account session.');
-  await saveSecureAccountSession(login.token);
-  return getAccount(fetchFn);
+  if (persistsSessions(base)) await saveSecureAccountSession(login.token);
+  return getAccountAt(base, fetchFn);
 }
 
+/** Drop the session `base` issued: the in-memory one only when that origin issued it, the stored one only when that
+ *  origin is the default one. Another origin's session is never deleted. */
+async function clearSessionFor(base: string): Promise<void> {
+  clearConfigWebTokenFor(base);
+  if (persistsSessions(base)) await clearSecureAccountSession();
+}
+
+/** Sign-out / refusal for the CURRENT config-web (see clearSessionFor). */
 export async function clearAccountSession(): Promise<void> {
-  clearConfigWebToken();
-  await clearSecureAccountSession();
+  let base = '';
+  try { base = accountBase(); } catch { /* no config-web: nothing of ours to clear */ }
+  if (base) await clearSessionFor(base);
 }
 
+function hasSessionFor(base: string): boolean {
+  return configWebCoordinationIdentity() !== null && configWebSessionOrigin() === configWebOrigin(base);
+}
+
+/** A held session issued by the current config-web. */
 export function hasAccountSession(): boolean {
-  return configWebCoordinationIdentity() !== null;
+  try { return hasSessionFor(accountBase()); } catch { return false; }
+}
+
+function getAccountAt(base: string, fetchFn?: FetchLike): Promise<AccountIdentity> {
+  return jsonRequest<AccountIdentity>('/api/account', {}, fetchFn ?? desktopFetch(), base);
 }
 
 export function getAccount(fetchFn?: FetchLike): Promise<AccountIdentity> {
-  return jsonRequest<AccountIdentity>('/api/account', {}, fetchFn ?? desktopFetch());
+  return getAccountAt(accountBase(), fetchFn);
 }
 
 export async function rehydrateAccountSession(fetchFn?: FetchLike): Promise<AccountIdentity | null> {
-  if (!hasAccountSession()) {
+  const base = accountBase();
+  // Sol r9: the stored (legacy, unscoped) session belongs to the default origin - never restored for another one.
+  const persists = persistsSessions(base);
+  if (!hasSessionFor(base) && persists) {
     const token = await loadSecureAccountSession();
-    if (token) adoptConfigWebSession({ token, coach: 'restored-session', source: 'discord' });
+    if (token) adoptConfigWebSession({ token, coach: 'restored-session', source: 'discord', origin: base });
   }
-  const session = await jsonRequest<{ authenticated: boolean }>('/api/auth/session', {}, fetchFn ?? desktopFetch());
+  const session = await jsonRequest<{ authenticated: boolean }>('/api/auth/session', {}, fetchFn ?? desktopFetch(), base);
   if (!session.authenticated) {
-    await clearAccountSession();
+    await clearSessionFor(base); // the refusal came from `base`: only its session is dropped
     return null;
   }
-  const identity = await getAccount(fetchFn);
-  const token = await loadSecureAccountSession();
-  if (token) adoptConfigWebSession({ token, coach: identity.ffbCoachId, displayName: identity.profile.displayName, source: 'discord' });
+  const identity = await getAccountAt(base, fetchFn);
+  const token = persists ? await loadSecureAccountSession() : '';
+  if (token) adoptConfigWebSession({ token, coach: identity.ffbCoachId, displayName: identity.profile.displayName, source: 'discord', origin: base });
   return identity;
 }
 
@@ -121,28 +162,45 @@ export async function signInWithDiscordAccount(options: {
   signal: AbortSignal;
   fetchFn?: FetchLike;
 }): Promise<AccountIdentity> {
+  const base = accountBase();
+  // Sol r12: the whole flow (start, claim, cancel, the account read) is bound to the base captured here. If the
+  // destination moves while authorisation is open, the flow is aborted - its cancel still goes to `base` - so the flow
+  // id, state and PKCE verifier never reach another origin.
+  const flow = new AbortController();
+  if (options.signal.aborted) flow.abort();
+  else options.signal.addEventListener('abort', () => flow.abort(), { once: true });
+  const fetchFn = options.fetchFn ?? desktopFetch();
   const result = await claimDesktopDiscordSession({
     coach: options.coach,
-    baseUrl: botConfigBaseUrl(),
-    request: (path, init) => desktopAuthRequest(path, init, options.fetchFn ?? desktopFetch()),
+    baseUrl: base,
+    request: (path, init) => {
+      if (path !== '/api/auth/desktop/cancel' && destinationChanged(base)) {
+        flow.abort();
+        return Promise.reject(new DesktopSignInCancelled());
+      }
+      return desktopAuthRequest(path, init, fetchFn, base);
+    },
     openAuthorization: options.openAuthorization,
-    saveSession: saveSecureAccountSession,
-    signal: options.signal,
+    // Sol r9: only the default origin's session is stored (a custom origin's stays in memory for the run).
+    saveSession: (token: string) => (persistsSessions(base) ? saveSecureAccountSession(token) : Promise.resolve()),
+    signal: flow.signal,
   });
   adoptConfigWebSession({
     token: result.token,
     coach: result.coach,
     source: 'discord',
     expiresAt: Date.parse(result.expiresAt),
+    origin: base,
   });
-  return getAccount(options.fetchFn);
+  return getAccountAt(base, options.fetchFn);
 }
 
 export async function signOutAccount(fetchFn?: FetchLike): Promise<void> {
+  const base = accountBase(); // Sol r12: the logout and its cleanup target the same config-web
   try {
-    await jsonRequest('/api/auth/logout', { method: 'POST', headers: { 'X-CW-Auth': '1' } }, fetchFn ?? desktopFetch());
+    await jsonRequest('/api/auth/logout', { method: 'POST', headers: { 'X-CW-Auth': '1' } }, fetchFn ?? desktopFetch(), base);
   } finally {
-    await clearAccountSession();
+    await clearSessionFor(base);
   }
 }
 
@@ -163,8 +221,9 @@ export function discordSsoStartUrl(): string {
 }
 
 export async function fetchTournamentNotifications(fetchFn?: FetchLike): Promise<TournamentClientNotification[]> {
-  if (!hasAccountSession()) return [];
-  const result = await jsonRequest<{ notifications: TournamentClientNotification[] }>('/api/tournament/notifications', {}, fetchFn ?? desktopFetch());
+  const base = accountBase();
+  if (!hasSessionFor(base)) return [];
+  const result = await jsonRequest<{ notifications: TournamentClientNotification[] }>('/api/tournament/notifications', {}, fetchFn ?? desktopFetch(), base);
   return Array.isArray(result.notifications) ? result.notifications : [];
 }
 
@@ -185,6 +244,6 @@ export function clearWaitingPresence(scheduledMatchId: string, fetchFn?: FetchLi
 export const accountApiTest = {
   setToken(token: string, coach = 'Tarkin') {
     if (!token) clearConfigWebToken();
-    else adoptConfigWebSession({ token, coach, source: 'userid-password' });
+    else adoptConfigWebSession({ token, coach, source: 'userid-password', origin: botConfigBaseUrl() });
   },
 };

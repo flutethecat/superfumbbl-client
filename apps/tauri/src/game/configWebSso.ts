@@ -7,7 +7,7 @@ import {
 const POLL_INTERVAL_MS = 2_000;
 const PAIRING_TIMEOUT_MS = 5 * 60 * 1000;
 
-type PublicIdentity = Omit<ConfigWebCoordinationIdentity, 'token'>;
+type PublicIdentity = Omit<ConfigWebCoordinationIdentity, 'token' | 'origin'>;
 
 export type PairingOutcome =
   | { kind: 'ok'; identity: PublicIdentity }
@@ -76,6 +76,7 @@ export async function pairConfigWebSession(options: PairingOptions): Promise<Pai
       displayName: typeof data.displayName === 'string' ? data.displayName : coach,
       avatarUrl: typeof data.avatarUrl === 'string' ? data.avatarUrl : null,
       source: 'discord',
+      origin: options.baseUrl, // Sol r9: scoped to the issuing config-web
     }, now())) return { kind: 'unavailable', detail: 'Config-Web returned an invalid claimed session.' };
     const identity: PublicIdentity = {
       coach,

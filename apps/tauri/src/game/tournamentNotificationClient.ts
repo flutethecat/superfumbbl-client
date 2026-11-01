@@ -1,5 +1,6 @@
 import { reactive } from 'vue';
 import { fetchTournamentNotifications, type TournamentClientNotification } from './accountApi';
+import { FORK_EDITION } from './edition';
 
 export const tournamentNotificationState = reactive({
   active: null as TournamentClientNotification | null,
@@ -34,7 +35,10 @@ export async function pollTournamentNotifications(): Promise<void> {
   }
 }
 
+/** Owner 09-10: tournament notifications are fork-edition only (compile-time). Owner 10-31 (Sol r2): enforced HERE, so a
+ *  public run that signs in to a fork account (--fork-server) never polls - a no-op stop, no request, no timer. */
 export function startTournamentNotificationPolling(intervalMs = 20_000): () => void {
+  if (!FORK_EDITION) return () => undefined;
   if (timer) clearInterval(timer);
   void pollTournamentNotifications().catch(() => undefined);
   timer = setInterval(() => void pollTournamentNotifications().catch(() => undefined), intervalMs);

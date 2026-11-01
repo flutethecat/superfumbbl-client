@@ -38,6 +38,9 @@ import ReplayLauncherView from './views/ReplayLauncherView.vue';
 import AssetPackSettings from './components/AssetPackSettings.vue';
 import AccountSettings from './components/AccountSettings.vue';
 import { FORK_EDITION } from './game/edition';
+import { applyLaunchForkFlag, forkFeaturesEnabled, launchFlagsSettled, markLaunchFlagsSettled } from './game/forkAccess';
+import { createJnlpIntakeHold } from './game/jnlpIntakeHold';
+import { requestForkRegistration } from './game/forkRegistration';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
 import ClientTour from './components/ClientTour.vue';
@@ -67,7 +70,8 @@ import { fetchLatestRelease, inAppUpdaterEnabled, isRequiredUpdate, MENU_RETURN_
 import { updateNotesText } from './game/updateNotes';
 import { artPack, formatMb, syncArtPack, tauriArtPackHost, webArtPackHost } from './game/artPack';
 import { decideAppPatch, installAppPatch, lastAppPatchStatus, restartIntoPatch, shellUpdateAvailable, tauriAppPatchHost, useBuiltInVersion, versionLine, type AppPatchHost, type AppPatchOffer, type AppPatchStatus } from './game/appPatch';
-import { parseSpectateSecret, presenceFor } from './game/discordPresence';
+import { presenceFor } from './game/discordPresence';
+import { handleDiscordSpectate } from './game/discordSpectateIntake';
 import { CONFIRMATION_SETTING_ROWS } from './game/confirmationSettings';
 import { CONTROL_ACTIONS, activeInput, isPadOnlyAction, connectedPads, padShortName, bodyCursorHider, createInputSwitcher, legacyCollisionNote, mouseButtonInput, actionsForInput, controlAction, controllerInputLabel, createControllerRouter, dispatchControlAction, findBindingConflicts, getBinding, isBindingEditable, nextInCycle, registerActionHandler, resetControlBindings, setBinding, type BindingMethod, type BindingSlot, type ControlActionId } from './game/controls';
 import { CROSSHAIR_SPEED_MAX, CROSSHAIR_SPEED_MIN } from './game/crosshair';
@@ -76,7 +80,7 @@ import { cornerNotice, hideControllerNotices, hideCornerNotice, showCornerNotice
 import PadOverlay from './components/PadOverlay.vue';
 import { browserHapticPads, hapticForSound } from './game/haptics';
 import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
-import { botConfigBaseUrl, controlBindingConflict, flushSettingsFile, secondClientEnabled, secondClientEnabledElsewhere, setAllowSecondClient, forkRegisterUrl, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { applyServerTarget, noteForkUrlEdited, onServerTargetSwitch, realignServerConnection, rebaseSettingsSnapshotConnection, serverSwitchGenerationNow, serverTargets, botConfigBaseUrl, controlBindingConflict, flushSettingsFile, secondClientEnabled, secondClientEnabledElsewhere, setAllowSecondClient, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { SKILL_CONFIG_AS_SKILL, SKILL_CONFIG_NAMES, iconWriteKey, isStarPlayerTrait, skillConfigEntryFor } from './game/skillConfigRows';
@@ -384,11 +388,15 @@ onMounted(async () => {
   const { listen } = await import('@tauri-apps/api/event');
   // A friend pressed Spectate on Discord: Discord hands THIS client the secret → open that game as a spectator.
   await listen<string>('discord-spectate', (event) => {
-    const target = parseSpectateSecret(event.payload);
-    if (!target) return;
-    if (target.server === 'fork' && !FORK_EDITION) return; // the public edition has no fork target
-    settings.activeServerTarget = target.server;
-    openSpectateGame(target.gameId);
+    // Sol r19: synchronous, in arrival order; an idle Settings dialog starts its normal close, a busy one is left alone.
+    handleDiscordSpectate(event.payload, {
+      forkFeaturesEnabled,
+      settingsOpen: () => ui.settingsOpen,
+      settingsBusy: () => settingsTransactionBusy.value,
+      closeSettings: async () => { await cancelSettingsChanges(); },
+      applyServerTarget,
+      openSpectateGame,
+    });
   });
 });
 function openUpdateRelease(): void {
@@ -463,13 +471,17 @@ const introNeedsGesture = ref(false);
 // so it can never flash open first. Skips the VIDEO only: the legal acknowledgement stays unskippable.
 const introFlagsReady = ref(false);
 const LAUNCH_FLAGS_TIMEOUT_MS = 1500;
+// Owner 10-31: the same read carries `--fork-server=<host>` (forkServer, validated by the shell, validated again in
+// forkAccess). It is applied whenever it lands - even after the intro's 1500 ms bound - and settings' fork-target
+// coercion re-runs on it (reconcileForkTarget). The browser build's `?forkServer=` is read by forkAccess itself.
 function readLaunchFlags(): void {
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('skipIntro')) {
     introDone.value = true;
     introFlagsReady.value = true;
+    markLaunchFlagsSettled();
     return;
   }
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) { introFlagsReady.value = true; return; }
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) { introFlagsReady.value = true; markLaunchFlagsSettled(); return; }
   // Bounded at 1500 ms (timeout = no flag; a late answer is ignored) so the intro/legal ordering is deterministic.
   let settled = false;
   const settle = (skip: boolean): void => {
@@ -479,10 +491,17 @@ function readLaunchFlags(): void {
     introFlagsReady.value = true;
   };
   setTimeout(() => settle(false), LAUNCH_FLAGS_TIMEOUT_MS);
+  // The fork gates (and held fork JNLPs) wait for the flag ANSWER, never a timeout (Sol r2): only the shell's reply -
+  // a host or an authoritative "no flag" - or a failed invoke settles the read. A slow reply still routes a held fork
+  // JNLP once; fork features stay off until then (fail closed), FUMBBL launches are never held.
   void import('@tauri-apps/api/core')
-    .then(({ invoke }) => invoke<{ skipIntro?: boolean; skip_intro?: boolean }>('launch_flags'))
-    .then((flags) => settle(!!(flags?.skipIntro || flags?.skip_intro)))
-    .catch(() => settle(false));
+    .then(({ invoke }) => invoke<{ skipIntro?: boolean; skip_intro?: boolean; forkServerEnabled?: boolean; forkServer?: string | null }>('launch_flags'))
+    .then((flags) => {
+      applyLaunchForkFlag(flags?.forkServerEnabled, flags?.forkServer); // bare --fork-server = the default host
+      markLaunchFlagsSettled();
+      settle(!!(flags?.skipIntro || flags?.skip_intro));
+    })
+    .catch(() => { markLaunchFlagsSettled(); settle(false); });
 }
 readLaunchFlags();
 // Held behind the beta splash: no autoplay, and no window Esc/Enter/Space listener that could skip it.
@@ -534,7 +553,12 @@ watch(introOpen, (open) => {
   }
 }, { immediate: true });
 const legalNoticeError = ref('');
-const legalHeldJnlps: JnlpJoinRequest[] = [];
+// Native JNLPs wait for the first-open gate; a fork JNLP also waits for the launch-flag read (owner 10-31, Sol r1).
+const jnlpIntakeHold = createJnlpIntakeHold<JnlpJoinRequest>({
+  gateOpen: () => firstOpenGateOpen.value,
+  flagsSettled: () => launchFlagsSettled.value,
+  route: (request) => routeNativeJnlp(request),
+});
 
 async function acknowledgeLegalNotice(): Promise<void> {
   if (legalNoticeBusy.value || !legalNoticeOpen.value) return;
@@ -558,10 +582,7 @@ async function acknowledgeLegalNotice(): Promise<void> {
 // A JNLP opened before acceptance remains usable, but no route (and therefore no socket
 // connection or game command) is allowed until the WHOLE first-open gate (legal +
 // contributions) has closed.
-watch(firstOpenGateOpen, (open) => {
-  if (open) return;
-  for (const request of legalHeldJnlps.splice(0)) routeNativeJnlp(request);
-});
+watch([firstOpenGateOpen, launchFlagsSettled], () => jnlpIntakeHold.drain());
 
 // Settings > General "Associate .jnlp files with this app" (Windows only, per-user HKCU;
 // see src-tauri/src/lib.rs jnlp_assoc). Hidden entirely when the native command reports
@@ -605,19 +626,25 @@ onMounted(async () => {
   detectDevMode(); // owner 2026-07-10: unlock the Developer panel when launched with -dev (or ?dev)
 });
 let stopTournamentNotificationPolling: (() => void) | undefined;
-onMounted(async () => {
-  if (!FORK_EDITION) return; // owner 09-10: no fork account / config-web session in the public edition
+// Owner 09-10: no fork account / config-web session without the fork. Owner 10-31: runtime - the FORK edition with a
+// host, or a public run launched with --fork-server (the flag can land after mount, hence the watch). Once per run.
+let forkAccountSessionStarted = false;
+async function startForkAccountSession(): Promise<void> {
+  if (forkAccountSessionStarted || !forkFeaturesEnabled()) return;
+  forkAccountSessionStarted = true;
   try {
     const restored = await rehydrateAccountSession();
     if (!restored) {
       if (!settings.coach40k.trim() || !coachPassword()) return;
       await authenticateAccount(settings.coach40k, coachPassword());
     }
-    if (FORK_EDITION) stopTournamentNotificationPolling = startTournamentNotificationPolling(); // owner 09-10: fork edition only
+    if (FORK_EDITION) stopTournamentNotificationPolling = startTournamentNotificationPolling(); // owner 09-10: fork edition only (compile-time)
   } catch {
     // Account pane surfaces actionable auth errors; ordinary game startup remains available.
   }
-});
+}
+onMounted(() => { void startForkAccountSession(); });
+watch(forkFeaturesEnabled, (on) => { if (on) void startForkAccountSession(); });
 onBeforeUnmount(() => stopTournamentNotificationPolling?.());
 
 function openTournamentNotification() {
@@ -691,7 +718,7 @@ const credsMenuDialog = ref<HTMLElement | null>(null);
 let credsMenuOpener: HTMLElement | null = null;
 function openCredsMenu(tab: 'fumbbl' | 'fumbbl40k' = 'fumbbl') {
   credsMenuOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  credsMenuTab.value = tab;
+  credsMenuTab.value = tab === 'fumbbl40k' && !forkFeaturesEnabled() ? 'fumbbl' : tab; // Sol r3: no fork tab without fork features
   credsMenuOpen.value = true;
 }
 
@@ -759,10 +786,13 @@ async function registerForkAccount() {
     // Owner ruling 08-17: the chosen password is hashed before it leaves — forkRegisterUrl sends
     // passwordMd5, which is exactly what ffb_coaches stores, so the clear text never enters a
     // query string (and so never enters an access or proxy log). See game/settings.ts.
-    const url = forkRegisterUrl({ coach, password });
-    const res = inTauri ? await tauriFetch(url) : await fetch(url);
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    const outcome = await requestForkRegistration({ coach, password }, inTauri ? tauriFetch as typeof fetch : fetch);
+    if (!outcome.ok) {
+      // Sol r3: no fork host = the actionable message as is (nothing was sent); a server refusal keeps its prefix.
+      if (outcome.hostUnavailable) liveSetHere(registerStatus, 'value', () => outcome.message);
+      else liveSetHere(registerStatus, 'value', () => t('app.text.couldnTRegisterMessage', { message: outcome.message }));
+      return;
+    }
     settings.coach40k = coach;
     await setCoachPassword(password); // OS credential store, not localStorage
     // Owner ruling 08-17: the coach identity just changed, so any held config-web session token
@@ -1121,11 +1151,7 @@ function routeNativeJnlp(request: JnlpJoinRequest): void {
 // One app-lifetime native JNLP consumer prevents drain_launch_jnlps queue races.
 // Only the official-server Play blade defers a player request for its preview.
 useNativeJnlpIntake((request) => {
-  if (firstOpenGateOpen.value) {
-    legalHeldJnlps.push(request);
-    return;
-  }
-  routeNativeJnlp(request); // (the router refuses under a required update, for the startup drain too)
+  jnlpIntakeHold.offer(request); // (the router refuses under a required update, for the startup drain too)
 }, () => settleFumbblFloatAfterLaunch('intake-failed')); // a launch that could not be read or parsed is over too
 function chooseAmbiguousJnlp(choice: 'replay' | 'live'): void {
   applyJnlpResultView(resolveAmbiguousJnlpEntry(choice));
@@ -1673,6 +1699,11 @@ function settingsFingerprint(): string {
   return settingsTransactionSnapshot(settings as unknown as Record<string, unknown>);
 }
 const settingsDirty = computed(() => settingsSnapshot.value != null && settingsFingerprint() !== settingsSnapshot.value);
+// Sol r17: a server switch made while Settings is open (its picker, a Discord spectate, a JNLP) rebases the open snapshot's
+// url / compression, so a later Cancel never restores the previous target's url. Other Cancel behaviour is base.
+onServerTargetSwitch(() => {
+  if (settingsSnapshot.value != null) settingsSnapshot.value = rebaseSettingsSnapshotConnection(settingsSnapshot.value, settings);
+});
 function requestCloseSettings() {
   void cancelSettingsChanges();
 }
@@ -1696,6 +1727,7 @@ async function applySettingsChanges(closeAfter = false): Promise<boolean> {
 async function cancelSettingsChanges(): Promise<boolean> {
   if (settingsTransactionBusy.value) return false;
   invalidateMarkingsImports(); // a pending markings import must not land on top of the restored snapshot
+  const switchGeneration = serverSwitchGenerationNow(); // Sol r19: a server switch during this Cancel is kept
   if (!settingsDirty.value || settingsSnapshot.value == null) {
     ui.settingsOpen = false;
     return true;
@@ -1714,7 +1746,7 @@ async function cancelSettingsChanges(): Promise<boolean> {
         );
         return ok ? { ...assetMods.activeAssignments } : null;
       },
-      apply: (snapshot) => Object.assign(settings, snapshot),
+      apply: (snapshot) => { Object.assign(settings, snapshot); if (serverSwitchGenerationNow() !== switchGeneration) realignServerConnection(); },
     }));
   if (!restored) {
     settingsDiscardBusy.value = false;
@@ -1756,9 +1788,9 @@ function resetPanelLayoutImmediately() {
   );
 }
 
-// owner 2026-07-21 (#102): the fork server address is the baked DDNS FORK_SERVER_HOST (settings.ts); the old
-// editable IP input + applyForkIp were removed so distributed builds can't be misdirected. An advanced
-// settings.forkHost override exists (empty by default) but has no dedicated input yet. Local dev = 'local' target.
+// owner ruling 11-01: the fork server's default address is baked (FORK_SERVER_HOST); `--fork-server=<host>` (or, in
+// the FORK edition, settings.forkHost / VITE_FORK_SERVER_HOST; game/forkAccess.ts) overrides it. The old editable IP
+// input + applyForkIp stay removed. Local dev = 'local' target.
 
 // Owner ruling (08-18): the header server plates are DEPRECATED as controls — the FUMBBL plate is
 // removed entirely and the Super FUMBBL plate is now inert branding (see the header template below).
@@ -2101,7 +2133,7 @@ watch(() => ui.settingsOpen, (open) => { if (!open) { clearCaptureBHold(); captu
 function visibleBlades(): AppView[] {
   const blades: AppView[] = homeBladeEnabled ? ['home'] : [];
   blades.push('play', 'spectate', 'replay');
-  if (FORK_EDITION) blades.push('team');
+  if (forkFeaturesEnabled()) blades.push('team'); // owner 10-31: runtime (public: --fork-server)
   return blades;
 }
 /** Main-screen (and app-wide) half of the action dispatcher; the in-game view registers over it. */
@@ -2367,7 +2399,7 @@ onBeforeUnmount(() => {
         <!-- Owner 10-06 (replay pane revamp): the Replay blade is in BOTH editions again, after Play / Spectate — its
              search finds any coach's games or a game id (owner 09-25 had made it fork-only; reverse here if wanted). -->
         <button class="blade" type="button" data-tour="blade-replay" :data-active="view === 'replay'" @click="selectBlade('replay')">{{ $t('blades.replay') }}</button>
-        <template v-if="FORK_EDITION">
+        <template v-if="forkFeaturesEnabled()">
         <span class="blade-ribbon-sep" aria-hidden="true"></span>
         <button class="blade" type="button" :data-active="view === 'team'" @click="selectBlade('team')">{{ $t('blades.team') }}</button>
         </template>
@@ -2440,7 +2472,7 @@ onBeforeUnmount(() => {
       <PlayView v-else-if="view === 'play'" ref="playViewRef" />
       <SpectateBrowserView v-else-if="view === 'spectate'" :tour-example="ui.clientTourActive" @spectate="openSpectateGame" />
       <ReplayLauncherView v-else-if="view === 'replay'" />
-      <TeamBuilderView v-else-if="FORK_EDITION && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
+      <TeamBuilderView v-else-if="forkFeaturesEnabled() && view === 'team'" :initial-mode="tournamentBuilderPackage ? 'tournament' : 'create'" :initial-package-name="tournamentBuilderPackage" :launch-revision="tournamentBuilderLaunchRevision" />
       <TournamentsView v-else-if="FORK_EDITION && view === 'tournaments'" @create-team="openTournamentTeamBuilder" />
       <StatisticsView v-else-if="FORK_EDITION && view === 'statistics'" />
       <div v-else-if="view === 'league'" class="ui-placeholder">{{ $t('app.league.leaguePlaceHolder') }}</div>
@@ -2627,7 +2659,7 @@ onBeforeUnmount(() => {
         <h2 tabindex="-1">{{ activeSettingsSection.label }}</h2>
         <!-- ============================ GENERAL ============================ -->
         <section v-if="settingsTab === 'general'">
-          <AccountSettings v-if="FORK_EDITION" />
+          <AccountSettings v-if="forkFeaturesEnabled()" />
 
           <!-- Owner 10-23: client language; each option is labelled in its own language, and the switch applies live. -->
           <fieldset class="settings-group" data-testid="language-settings">
@@ -2660,7 +2692,7 @@ onBeforeUnmount(() => {
             </label>
             <p class="creds-status">
               <span>{{ $t('settings.general.connection.fumbbl') }} <b>{{ settings.coach.trim() || '—' }}</b></span>
-              <span v-if="FORK_EDITION" class="connection-fork-status">
+              <span v-if="forkFeaturesEnabled()" class="connection-fork-status">
                 <span>{{ $t('settings.general.connection.superFumbbl') }}
                   <b v-if="forkChallenge.kind === 'ok'">✓ {{ settings.coach40k.trim() }}</b>
                   <button
@@ -2679,9 +2711,18 @@ onBeforeUnmount(() => {
               </span>
             </p>
             <p class="hint">{{ $t('settings.general.connection.credentialsAreStoredLocally') }}</p>
+            <!-- Owner 10-31 (Sol r1): pick the server target whenever the fork is reachable (FORK edition, or a public run
+                 launched with --fork-server). The raw URL / bot URL inputs below stay fork-edition only. -->
+            <label v-if="forkFeaturesEnabled()" class="row">
+              <span>{{ $t('settings.general.connection.serverTarget') }}</span>
+              <select :value="settings.activeServerTarget" data-testid="server-target-select"
+                @change="applyServerTarget(($event.target as HTMLSelectElement).value)">
+                <option v-for="target in serverTargets()" :key="target.id" :value="target.id">{{ target.label }}</option>
+              </select>
+            </label>
             <!-- Owner 09-10: the raw server URL is a fork-edition control; the public edition is FUMBBL-only. -->
             <label v-if="FORK_EDITION">{{ $t('settings.general.connection.server') }}
-              <input v-model="settings.url" placeholder="ws://host:port/command" />
+              <input v-model="settings.url" placeholder="ws://host:port/command" @input="noteForkUrlEdited()" />
             </label>
             <label v-if="FORK_EDITION">{{ $t('settings.general.connection.tournamentBotUrl') }} <span class="hint-inline">(optional — blank = https://&lt;fork host&gt;, or http://&lt;local host&gt;:4310)</span>
               <input v-model="settings.botConfigUrl" type="text" :placeholder="$t('settings.general.connection.botUrlOptional')" />
@@ -4048,9 +4089,10 @@ onBeforeUnmount(() => {
         </div>
         <div class="creds-tabs">
           <button :data-active="credsMenuTab === 'fumbbl'" @click="credsMenuTab = 'fumbbl'">{{ $t('login.fumbbl') }}</button>
-          <button :data-active="credsMenuTab === 'fumbbl40k'" @click="credsMenuTab = 'fumbbl40k'">{{ $t('login.superFumbbl') }}</button>
+          <!-- Sol r3: the Super FUMBBL credentials / registration tab only with fork features (public: --fork-server). -->
+          <button v-if="forkFeaturesEnabled()" :data-active="credsMenuTab === 'fumbbl40k'" data-testid="creds-tab-fork" @click="credsMenuTab = 'fumbbl40k'">{{ $t('login.superFumbbl') }}</button>
         </div>
-        <section v-if="credsMenuTab === 'fumbbl'" class="creds-panel">
+        <section v-if="credsMenuTab === 'fumbbl' || !forkFeaturesEnabled()" class="creds-panel">
           <p class="hint">{{ $t('login.fumbbl.yourOfficial') }} <b>{{ $t('login.fumbbl.fumbbl') }}</b>{{ $t('login.fumbbl.accountRequiredToSpectate') }}</p>
           <label class="creds-field">{{ $t('login.fumbbl.coachName') }}
             <input v-model="settings.coach" type="text" autocomplete="username" :placeholder="$t('login.fumbbl.yourFumbblCoachName')" />
@@ -4110,7 +4152,7 @@ onBeforeUnmount(() => {
 
     <!-- Owner 2026-07-08: REGISTER a new fork account. Asks the user to match their real FUMBBL name
          (so opponents recognise them) and to choose a DIFFERENT password than their FUMBBL one. -->
-    <div v-if="registerModalOpen" class="modal-backdrop creds-menu-backdrop" @click.self="closeRegisterModal">
+    <div v-if="registerModalOpen && forkFeaturesEnabled()" class="modal-backdrop creds-menu-backdrop" @click.self="closeRegisterModal">
       <form ref="registerDialog" class="creds-menu register-modal" role="dialog" aria-modal="true"
         aria-labelledby="register-dialog-title" @keydown="trapRegisterFocus" @submit.prevent="registerForkAccount">
         <div class="creds-menu-head">
@@ -4184,13 +4226,13 @@ onBeforeUnmount(() => {
     <div class="corner-stamp">
       <div class="header-identity" :aria-label="$t('app.signedInAccounts')">
         <!-- Owner 09-10: the public edition shows just the coach name (no "Signed in as" / service labels, no fork account). -->
-        <span v-if="FORK_EDITION" class="identity-label">{{ $t('app.signedInAs') }}</span>
+        <span v-if="forkFeaturesEnabled()" class="identity-label">{{ $t('app.signedInAs') }}</span>
         <span class="identity-account">
-          <span v-if="FORK_EDITION" class="identity-service">{{ $t('app.fumbbl') }}</span>
+          <span v-if="forkFeaturesEnabled()" class="identity-service">{{ $t('app.fumbbl') }}</span>
           <span class="identity-name" :class="{ 'is-signed-out': !settings.coach.trim() }"
             :title="settings.coach.trim() || $t('app.signedOut')">{{ settings.coach.trim() || '—' }}</span>
         </span>
-        <span v-if="FORK_EDITION" class="identity-account">
+        <span v-if="forkFeaturesEnabled()" class="identity-account">
           <span class="identity-service">{{ $t('app.superfumbbl') }}</span>
           <span class="identity-name" :class="{ 'is-signed-out': !settings.coach40k.trim() }"
             :title="settings.coach40k.trim() || $t('app.signedOut')">{{ settings.coach40k.trim() || '—' }}</span>

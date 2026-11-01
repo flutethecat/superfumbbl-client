@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "时区",
   "settings.account.accountCard.scheduling.to": "至",
   "settings.allServerTargets.officialFumbbl": "官方 FUMBBL",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — 分支服务器（{FORK_SERVER_HOST}）",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — 分支服务器",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — 本地开发",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "仅阻挡骰",
   "settings.assetPackSettings.exportSections.combinedPack": "合并包",

@@ -75,6 +75,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion),
     __GIT_SHA__: JSON.stringify(gitSha),
     __ASSET_PACK_BUILDER__: JSON.stringify(assetPackBuilder),
+    // Owner 10-31: the fork host is never baked into a PUBLIC bundle - a public build on a machine whose untracked
+    // .env.local sets VITE_FORK_SERVER_HOST must still ship without it (public runs take the host from --fork-server).
+    ...(edition === 'public' ? { 'import.meta.env.VITE_FORK_SERVER_HOST': JSON.stringify('') } : {}),
   },
   server: {
     port: 1420,

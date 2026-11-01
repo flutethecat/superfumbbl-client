@@ -509,6 +509,39 @@ mod jnlp_assoc {
 #[serde(rename_all = "camelCase")]
 struct LaunchFlags {
     skip_intro: bool,
+    /// Owner 10-31 / ruling 11-01, orchestrator 11-01: the bare `--fork-server` flag turns on the fork-play + Team
+    /// Builder surfaces in the public build. It NEVER selects a host (the page uses its baked default; the FORK edition
+    /// its own override / env / default): any `--fork-server=<value>` turns nothing on, with a warning that names no
+    /// host. SUPER_FUMBBL_FORK_SERVER=1/true/yes/on is the same bare flag. Read on COLD START only: a second launch
+    /// forwarded into a running instance (single-instance) does not change it.
+    fork_server_enabled: bool,
+}
+
+/// Parse the fork-server flag (argument wins over the env var; the last argument decides). Only the bare form counts.
+fn fork_server_requested<I: IntoIterator<Item = String>>(args: I, env: Option<String>) -> bool {
+    // Some(true) = bare flag; Some(false) = an `=value` form (ignored)
+    let mut seen: Option<bool> = None;
+    for a in args {
+        if a == "--fork-server" {
+            seen = Some(true);
+        } else if a.starts_with("--fork-server=") {
+            seen = Some(false);
+        }
+    }
+    let bare = match seen {
+        Some(bare) => bare,
+        None => match env {
+            Some(e) if !e.trim().is_empty() => {
+                let v = e.trim().to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes" || v == "on"
+            }
+            _ => return false,
+        },
+    };
+    if !bare {
+        eprintln!("[launch] ignoring a --fork-server value: only the bare --fork-server flag is accepted");
+    }
+    bare
 }
 
 fn skip_intro_requested<I: IntoIterator<Item = String>>(args: I, env: Option<String>) -> bool {
@@ -525,12 +558,13 @@ fn skip_intro_requested<I: IntoIterator<Item = String>>(args: I, env: Option<Str
 fn launch_flags() -> LaunchFlags {
     LaunchFlags {
         skip_intro: skip_intro_requested(std::env::args(), std::env::var("SUPER_FUMBBL_SKIP_INTRO").ok()),
+        fork_server_enabled: fork_server_requested(std::env::args(), std::env::var("SUPER_FUMBBL_FORK_SERVER").ok()),
     }
 }
 
 #[cfg(test)]
 mod launch_flag_tests {
-    use super::skip_intro_requested;
+    use super::{fork_server_requested, skip_intro_requested};
     fn a(v: &[&str]) -> Vec<String> { v.iter().map(|s| s.to_string()).collect() }
     #[test]
     fn flag_and_env() {
@@ -539,6 +573,27 @@ mod launch_flag_tests {
         assert!(skip_intro_requested(a(&["app"]), Some("1".into())));
         assert!(!skip_intro_requested(a(&["app"]), Some("0".into())));
         assert!(!skip_intro_requested(a(&["app"]), None));
+    }
+    #[test]
+    fn fork_server_bare_flag_only() {
+        let f = |args: &[&str], env: Option<&str>| fork_server_requested(a(args), env.map(String::from));
+        assert!(f(&["app", "--fork-server"], None));
+        assert!(f(&["app", "--fork-server", "C:/games/x.jnlp"], None)); // a following argument is not a host
+        assert!(f(&["app"], Some("1")));
+        assert!(f(&["app"], Some("ON")));
+        // any value form turns nothing on - in every edition (the flag never selects a host)
+        assert!(!f(&["app", "--fork-server=fork.example.test"], None));
+        assert!(!f(&["app", "--fork-server=superfumbbltest.duckdns.org"], None));
+        assert!(!f(&["app", "--fork-server="], None));
+        assert!(!f(&["app"], Some("fork.example.test")));
+        // the last argument decides; the argument wins over the env var
+        assert!(!f(&["app", "--fork-server", "--fork-server=x.example.test"], None));
+        assert!(f(&["app", "--fork-server=x.example.test", "--fork-server"], None));
+        assert!(!f(&["app", "--fork-server=x.example.test"], Some("1")));
+        // absent
+        assert!(!f(&["app"], None));
+        assert!(!f(&["app", "--skip-intro"], Some("  ")));
+        assert!(!f(&["app"], Some("0")));
     }
 }
 
@@ -685,6 +740,23 @@ fn merge_settings_patch(contents: &str, patch: &str, retire: &[String], on_disk:
     serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())
 }
 
+/// The official FUMBBL game server (settings.ts FUMBBL_WS_URL): the only url a public build ever persists.
+const FUMBBL_WS_URL: &str = "ws://fumbbl.com:22223/command";
+
+/// Owner 10-31 (Sol r4): a PUBLIC build persists nothing about the fork, whatever the merge started from. Applied to
+/// the FINAL text under the lock (patch merges keep unmentioned disk keys another edition wrote): target forced to
+/// 'fumbbl', url to the official one, forkHost / botConfigUrl / forkUrlCustom removed. A non-object final value is refused.
+fn public_sanitized_settings(text: &str) -> Result<String, String> {
+    use serde_json::{Map, Value};
+    let mut map: Map<String, Value> = serde_json::from_str(text).map_err(|e| format!("settings blob not an object: {e}"))?;
+    map.insert("activeServerTarget".into(), Value::String("fumbbl".into()));
+    map.insert("url".into(), Value::String(FUMBBL_WS_URL.into()));
+    map.remove("forkHost");
+    map.remove("botConfigUrl");
+    map.remove("forkUrlCustom"); // Sol r22: the FORK edition's "typed fork url" flag never persists in a public build
+    serde_json::to_string_pretty(&Value::Object(map)).map_err(|e| e.to_string())
+}
+
 /// The settings text at `path` when it parses as a JSON object; None = absent / unreadable / not an object.
 fn read_settings_object_text(path: &Path) -> Option<String> {
     read_settings_text(path).filter(|t| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(t).is_ok())
@@ -719,6 +791,19 @@ fn save_settings_in(
     retire: &[String],
     restore: Option<&str>,
 ) -> Result<SettingsSaveOutcome, String> {
+    save_settings_with(dir, contents, refresh_backup, patch, retire, restore, cfg!(public_edition))
+}
+
+/// save_settings_in with the edition explicit (`public` = this shell is the public build: build.rs public_edition).
+fn save_settings_with(
+    dir: &Path,
+    contents: &str,
+    refresh_backup: bool,
+    patch: Option<&str>,
+    retire: &[String],
+    restore: Option<&str>,
+    public: bool,
+) -> Result<SettingsSaveOutcome, String> {
     let too_big = |t: Option<&str>| t.is_some_and(|p| p.len() as u64 > MAX_SETTINGS_BYTES);
     if contents.len() as u64 > MAX_SETTINGS_BYTES || too_big(patch) || too_big(restore) {
         return Err("settings blob too large".into());
@@ -743,6 +828,9 @@ fn save_settings_in(
             None => contents.to_string(),
         }
     };
+    // Sol r4: every branch (full replace, patch, both backup recoveries) ends here, so the primary AND the .bak written
+    // below carry the sanitised value in a public build.
+    let text = if public { public_sanitized_settings(&text)? } else { text };
     atomic_write(dir, SETTINGS_FILE, &text)?;
     let backup = if !refresh_backup {
         "skipped"
@@ -1295,6 +1383,96 @@ mod tests {
         save_settings_in(dir2.path(), "{\"volume\":5}", true, Some("{}"), &[], Some("{}")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&read_settings_text(&dir2.path().join(SETTINGS_FILE)).unwrap()).unwrap();
         assert_eq!(v, serde_json::json!({"volume": 5}));
+    }
+
+    /// A fork-edition window's values in the shared file (or backup).
+    const FORK_FIELDS: &str = "\"activeServerTarget\":\"fork\",\"url\":\"ws://fork.example.test:22227/command\",\"forkHost\":\"fork.example.test\",\"botConfigUrl\":\"https://cfg.example.test\",\"forkUrlCustom\":true";
+
+    fn assert_public_clean(v: &serde_json::Value) {
+        assert_eq!(v["activeServerTarget"], "fumbbl", "{v}");
+        assert_eq!(v["url"], FUMBBL_WS_URL, "{v}");
+        assert!(v.get("forkHost").is_none(), "{v}");
+        assert!(v.get("botConfigUrl").is_none(), "{v}");
+        assert!(v.get("forkUrlCustom").is_none(), "{v}");
+        assert!(!v.to_string().contains("example.test"), "{v}");
+    }
+
+    #[test]
+    fn public_patch_save_never_keeps_another_editions_fork_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |name: &str| serde_json::from_str::<serde_json::Value>(&read_settings_text(&dir.path().join(name)).unwrap()).unwrap();
+        // the fork-edition window updated the shared file; the public window then changes only logOpacity
+        std::fs::write(dir.path().join(SETTINGS_FILE), format!("{{{FORK_FIELDS},\"volume\":60}}")).unwrap();
+        let out = save_settings_with(dir.path(), "{\"logOpacity\":0.42}", true, Some("{\"logOpacity\":0.42}"), &[], None, true).unwrap();
+        assert_eq!(out.backup, "ok");
+        for name in [SETTINGS_FILE, SETTINGS_BAK] {
+            let v = parse(name);
+            assert_public_clean(&v);
+            assert_eq!(v["logOpacity"], 0.42);
+            assert_eq!(v["volume"], 60, "unrelated disk keys survive");
+        }
+        // a full replace carrying fork fields is sanitised too
+        save_settings_with(dir.path(), &format!("{{{FORK_FIELDS}}}"), false, None, &[], None, true).unwrap();
+        assert_public_clean(&parse(SETTINGS_FILE));
+    }
+
+    #[test]
+    fn public_backup_recovery_sanitises_both_branches() {
+        // primary still unreadable: the backup (fork fields) + restore patch -> primary and .bak, both clean
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |d: &Path, name: &str| serde_json::from_str::<serde_json::Value>(&read_settings_text(&d.join(name)).unwrap()).unwrap();
+        std::fs::write(dir.path().join(SETTINGS_BAK), format!("{{{FORK_FIELDS},\"volume\":20}}")).unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), "{\"volu").unwrap();
+        let out = save_settings_with(dir.path(), "{\"volume\":20}", false, Some("{}"), &[], Some("{\"version\":35}"), true).unwrap();
+        assert_eq!(out.backup, "ok");
+        for name in [SETTINGS_FILE, SETTINGS_BAK] {
+            let v = parse(dir.path(), name);
+            assert_public_clean(&v);
+            assert_eq!(v["version"], 35);
+        }
+        // primary repaired by another window (with fork fields): own patch merged onto it, still clean; .bak untouched
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(dir2.path().join(SETTINGS_BAK), "{\"volume\":20}").unwrap();
+        std::fs::write(dir2.path().join(SETTINGS_FILE), format!("{{{FORK_FIELDS},\"fromB\":1}}")).unwrap();
+        let out = save_settings_with(dir2.path(), "{\"badge\":false}", true, Some("{\"badge\":false}"), &[], Some("{\"badge\":false}"), true).unwrap();
+        assert_eq!(out.backup, "skipped");
+        let v = parse(dir2.path(), SETTINGS_FILE);
+        assert_public_clean(&v);
+        assert_eq!(v["fromB"], 1);
+        assert_eq!(v["badge"], false);
+        assert_eq!(read_settings_text(&dir2.path().join(SETTINGS_BAK)).unwrap(), "{\"volume\":20}");
+    }
+
+    #[test]
+    fn fork_window_adds_fork_url_custom_then_a_public_patch_merge_drops_it() {
+        // Sol r22: two windows sharing one file - a FORK-edition window's patch adds forkUrlCustom (and its fork url);
+        // the PUBLIC window's later patch (an unrelated key) merges onto that file under the lock and drops it.
+        let dir = tempfile::tempdir().unwrap();
+        let parse = |name: &str| serde_json::from_str::<serde_json::Value>(&read_settings_text(&dir.path().join(name)).unwrap()).unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), "{\"volume\":60}").unwrap();
+        save_settings_with(dir.path(), &format!("{{{FORK_FIELDS},\"volume\":60}}"), false, Some(&format!("{{{FORK_FIELDS}}}")), &[], None, false).unwrap();
+        assert_eq!(parse(SETTINGS_FILE)["forkUrlCustom"], true); // the fork window wrote it
+        save_settings_with(dir.path(), "{\"logOpacity\":0.42}", true, Some("{\"logOpacity\":0.42}"), &[], None, true).unwrap();
+        for name in [SETTINGS_FILE, SETTINGS_BAK] {
+            let v = parse(name);
+            assert_public_clean(&v);
+            assert_eq!(v["volume"], 60);
+            assert_eq!(v["logOpacity"], 0.42);
+        }
+    }
+
+    #[test]
+    fn fork_edition_save_keeps_its_fork_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SETTINGS_FILE), format!("{{{FORK_FIELDS}}}")).unwrap();
+        save_settings_with(dir.path(), "{\"logOpacity\":0.5}", false, Some("{\"logOpacity\":0.5}"), &[], None, false).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&read_settings_text(&dir.path().join(SETTINGS_FILE)).unwrap()).unwrap();
+        assert_eq!(v["activeServerTarget"], "fork");
+        assert_eq!(v["forkHost"], "fork.example.test");
+        assert_eq!(v["botConfigUrl"], "https://cfg.example.test");
+        assert_eq!(v["forkUrlCustom"], true); // the FORK edition keeps its own flag
+        // and a public build refuses a non-object final value rather than writing it
+        assert!(save_settings_with(dir.path(), "[1]", false, None, &[], None, true).is_err());
     }
 
     #[test]

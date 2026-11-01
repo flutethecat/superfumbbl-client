@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "Crios ama",
   "settings.account.accountCard.scheduling.to": "go dtí",
   "settings.allServerTargets.officialFumbbl": "FUMBBL oifigiúil",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — forc ({FORK_SERVER_HOST})",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — forc",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — forbairt áitiúil",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "Dísle bloc amháin",
   "settings.assetPackSettings.exportSections.combinedPack": "Pacáiste comhcheangailte",

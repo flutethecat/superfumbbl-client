@@ -2117,7 +2117,7 @@
   "settings.account.accountCard.scheduling.timeZone": "Zeitzone",
   "settings.account.accountCard.scheduling.to": "bis",
   "settings.allServerTargets.officialFumbbl": "Offizielles FUMBBL",
-  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — Fork ({FORK_SERVER_HOST})",
+  "settings.allServerTargets.superFumbblForkFork": "Super FUMBBL — Fork",
   "settings.allServerTargets.superFumbblLocalDev": "Super FUMBBL — lokale Entwicklung",
   "settings.assetPackSettings.exportSections.blockDiceOnly": "Nur Blockwürfel",
   "settings.assetPackSettings.exportSections.combinedPack": "Kombiniertes Pack",

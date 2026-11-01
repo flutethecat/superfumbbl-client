@@ -14,6 +14,7 @@ import {
 import { coachPassword } from './credentials';
 import { authorizeForkRequest, shouldRetryAfterUnauthorized } from './configWebAuth';
 import { t, liveSet, disposeLive } from '../i18n';
+import { requireForkBaseUrl } from './forkBase';
 
 export type ForkPayload = Record<string, unknown>;
 export type ForkTransport = (input: string, init?: RequestInit) => Promise<Response>;
@@ -92,6 +93,7 @@ export async function botGet(
   transport: ForkTransport = defaultTransport,
   baseUrl = botConfigBaseUrl(),
 ): Promise<ForkPayload> {
+  requireForkBaseUrl(baseUrl); // owner 10-31 (Sol r2): never a relative request without a fork host
   let retried = false;
   for (;;) {
     const auth = await authorizeForkRequest(path, params, forkCreds(), transport, baseUrl);
@@ -118,6 +120,7 @@ export async function botPost(
   transport: ForkTransport = defaultTransport,
   baseUrl = botConfigBaseUrl(),
 ): Promise<ForkPayload> {
+  requireForkBaseUrl(baseUrl);
   const url = `${baseUrl}/api/fork/${path}`;
   let retried = false;
   for (;;) {
@@ -148,6 +151,7 @@ export async function botRequest(
   transport: ForkTransport = defaultTransport,
   baseUrl = botConfigBaseUrl(),
 ): Promise<ForkPayload> {
+  requireForkBaseUrl(baseUrl);
   const url = `${baseUrl}/api/fork/${path}`;
   let retried = false;
   for (;;) {
@@ -178,6 +182,7 @@ export async function botDownloadText(
   transport: ForkTransport = defaultTransport,
   baseUrl = botConfigBaseUrl(),
 ): Promise<ForkTextDownload> {
+  requireForkBaseUrl(baseUrl);
   let retried = false;
   for (;;) {
     const auth = await authorizeForkRequest(path, {}, forkCreds(), transport, baseUrl);
