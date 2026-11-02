@@ -18,7 +18,7 @@ import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/
 import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
-import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, swarmingWaitingFromGame, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
+import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, swarmingWaitingFromGame, quickSnapWaitingFromGame, usablePlayerCount, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
@@ -849,6 +849,11 @@ const legacyState = reactive({
     /** Owner 09-15: the skill was USED and its follow-up choice (Side Step's push square) is still open — the passive
      *  card reads "<Coach> is using <Skill>" until the server clears the push-back squares. */
     using?: boolean;
+    /** Owner 11-01: a passive card the server already answered, kept up to its viewer-visible read floor (display only). */
+    lingering?: boolean;
+    /** Owner 11-01 (Sol r2): the passive card's dialog OCCURRENCE (passiveDialogOccurrence) - a fresh, identical dialog
+     *  is another card, never the lingering / held one. */
+    occurrence?: number;
     declarationSeq?: number;
     roll?: number;
     result?: PassReRollResult;
@@ -1411,6 +1416,9 @@ const legacyState = reactive({
   /** Owner 10-30 (BB2025 Swarming): every seat but the team placing its Swarming players (turn mode `swarming`) is told
    *  who is placing, with the latched D3 when known (swarmingWaitingFromGame). Re-derived every frame, never held. */
   swarmingWaiting: null as { title: string; message: string } | null,
+  /** Owner 11-01 (BB2025 Quick Snap): every seat but the receiving team moving its players (turn mode `quickSnap`) is told
+   *  who is moving, with the latched `quickSnapRoll` count when known (quickSnapWaitingFromGame). Re-derived every frame. */
+  quickSnapWaiting: null as { title: string; message: string } | null,
   /** Owner 10-02 (S99): "<who> is selecting players for Pick-Me-Up" for every seat but the choosing coach. */
   pickMeUpWaiting: null as { message: string } | null,
   /** Owner 10-05: "Waiting for <Coach> to choose a push direction" for every seat but the choosing coach. */
@@ -1540,8 +1548,9 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     touchbackWaiting: passive.touchbackWaiting,
     kickoffWaiting: passive.kickoffWaiting,
     keywordWaiting: passive.keywordWaiting,
-    solidDefenceWaiting: passive.solidDefenceWaiting,
+    solidDefenceWaiting: solidDefenceWaitingFromGame(position.checkpoint.model, null, solidDefenceAmountByTeam), // owner 11-01: + the latched roll
     swarmingWaiting: swarmingWaitingFromGame(position.checkpoint.model, null, swarmingAmountByTeam), // the publication latched this position's roll
+    quickSnapWaiting: quickSnapWaitingFromGame(position.checkpoint.model, null, quickSnapAmountByTeam), // owner 11-01: likewise
     pickMeUpWaiting: passive.pickMeUpWaiting,
     pushWaiting: passive.pushWaiting,
     reRollWaiting: passive.reRollWaiting,
@@ -1597,9 +1606,10 @@ const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
     if (position) {
-      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'keywordWaiting' || key === 'solidDefenceWaiting' || key === 'swarmingWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
+      if ((key === 'chargeWaiting' || key === 'touchbackWaiting' || key === 'kickoffWaiting' || key === 'keywordWaiting' || key === 'solidDefenceWaiting' || key === 'swarmingWaiting' || key === 'quickSnapWaiting' || key === 'pickMeUpWaiting' || key === 'pushWaiting' || key === 'reRollWaiting' || key === 'onTheBallWaiting' || key === 'useInducementWaiting') && spectatorNoticesRetiredFor.value === position) return null;
       if (key === 'keywordWaiting' && !offerTransportAlive) return null; // Sol r1: a position drained after the socket closed never re-raises it
       if (key === 'swarmingWaiting' && !offerTransportAlive) return null; // Sol r2 P2-2: likewise
+      if (key === 'quickSnapWaiting' && !offerTransportAlive) return null; // owner 11-01: likewise
       if (key === 'log') return composeLogLanes<LogEntry>({
         connection: visibleLogLanes.connection, chat: visibleLogLanes.chat,
         match: position.checkpoint.durableProjection.log.map((row) => ({ order: row.ingressOrder, receivedWallAt: row.receivedWallAt,
@@ -1620,6 +1630,16 @@ const state = new Proxy(legacyState, {
       // Settings > UI > Blitz target marker is a display choice, so it is applied here and never cached in the HUD.
       if (key === 'blitzTokens') { const view = blitzTokenView(position.checkpoint.durableProjection.blitz, settings.blitzTargetMarker); return view && { ...view, seq: position.epoch }; }
       const hud = spectatorHud(position);
+      // Owner 11-01 (Sol r1 P1): the passive skill card waits behind its own event's injury presentation; a card the
+      // server answered inside its read window lingers to the floor (publishedSkillCardHold).
+      if (key === 'skillChoice') {
+        const held = publishedSkillCardHold.value;
+        const card = hud.skillChoice ?? null;
+        if (!modernInjuryTiming()) return card; // Sol r4 P2: Classic keeps its old timing
+        if (card && held && card.playerId === held.playerId && card.skill === held.skill
+          && publishedDecisionOccurrence(position.checkpoint) === held.occurrence) return null;
+        return card ?? publishedSkillCardLinger.value;
+      }
       // Owner 10-13: a failed TTM landing's (read-only) reroll card waits for the landing die's read beat, as the coach's.
       if (key === 'reRollPrompt') {
         void ttmLandingHoldRev.value; // reactive: the card shows when the hold releases
@@ -3225,7 +3245,7 @@ const swarmingAmountByTeam = new Map<string, number>();
 function noteSwarmingGameAdopted(model: GameJson | null | undefined): void {
   if (!model) return; // a disconnect is not a game change: a same-game reconnect keeps the keys
   const gameId = String((model as { gameId?: unknown }).gameId ?? 'unknown');
-  if (swarmingSplashSeenGameId !== null && swarmingSplashSeenGameId !== gameId) { swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); }
+  if (swarmingSplashSeenGameId !== null && swarmingSplashSeenGameId !== gameId) { swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); clearPlayerCountLatches(); }
   swarmingSplashSeenGameId = gameId;
 }
 function latchSwarmingAmounts(reports: readonly Record<string, unknown>[], g: GameJson | null): void {
@@ -3237,6 +3257,33 @@ function pruneSwarmingAmounts(g: GameJson): void {
   if (!swarmingAmountByTeam.size) return;
   const placing = g.turnMode === 'swarming' ? String((g.homePlaying ? g.teamHome : g.teamAway)?.teamId ?? '') : '';
   for (const teamId of [...swarmingAmountByTeam.keys()]) if (teamId !== placing) swarmingAmountByTeam.delete(teamId);
+}
+/** Owner 11-01: the server's player counts for the Solid Defence / Quick Snap waiting cards, per team - the
+ *  `solidDefenceRoll` / `quickSnapRoll` report's nrOfPlayers (min(D3+3, eligible) / D3+3). A latch only adds the number
+ *  to a card the model already raises; it never raises or holds anything. Latched only while the transport is alive;
+ *  cleared with the Swarming latch (game change, snapshot adoption, transport loss) and pruned once the phase ends. */
+const solidDefenceAmountByTeam = new Map<string, number>();
+const quickSnapAmountByTeam = new Map<string, number>();
+function clearPlayerCountLatches(): void { solidDefenceAmountByTeam.clear(); quickSnapAmountByTeam.clear(); }
+function latchPlayerCounts(reports: readonly Record<string, unknown>[], g: GameJson | null): void {
+  if (!offerTransportAlive || !g) return; // a frame drained after the socket closed latches nothing (a file replay resets it alive)
+  for (const report of reports) {
+    const id = report?.reportId;
+    if (id !== 'solidDefenceRoll' && id !== 'quickSnapRoll') continue;
+    const teamId = String(report.teamId ?? '');
+    const n = usablePlayerCount(report.nrOfPlayers);
+    if (!teamId || n === null || ![g.teamHome, g.teamAway].some((t) => String(t?.teamId ?? '') === teamId)) continue;
+    (id === 'quickSnapRoll' ? quickSnapAmountByTeam : solidDefenceAmountByTeam).set(teamId, n);
+  }
+}
+/** Quick Snap: a count lives only while its team is the one moving (turn mode `quickSnap`, the playing side). Solid
+ *  Defence: the roll arrives in turn mode `kickoff` (with the pick dialog) and serves the `solidDefence` re-set after it. */
+function prunePlayerCounts(g: GameJson): void {
+  if (quickSnapAmountByTeam.size) {
+    const moving = g.turnMode === 'quickSnap' ? String((g.homePlaying ? g.teamHome : g.teamAway)?.teamId ?? '') : '';
+    for (const teamId of [...quickSnapAmountByTeam.keys()]) if (teamId !== moving) quickSnapAmountByTeam.delete(teamId);
+  }
+  if (solidDefenceAmountByTeam.size && g.turnMode !== 'kickoff' && g.turnMode !== 'solidDefence') solidDefenceAmountByTeam.clear();
 }
 /** The not-yet-seen splashes of this frame (marks each seen; catch-up marks them without presenting). */
 /** Sol r1 P2-5: the occurrence of a frame - its wire command number, else a stable identity of the command object (a
@@ -4267,6 +4314,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
   // Sol r2 P2-3: the frame's RAW reports (the review route reads them raw too), so a report's index is the same on both.
   const swarmingReports = (cmd?.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? reports;
   latchSwarmingAmounts(swarmingReports, g);
+  latchPlayerCounts(swarmingReports, g); // owner 11-01: Solid Defence / Quick Snap counts for the waiting cards
   surfaceSwarmingSplash(swarmingReports, g, swarmingOccurrence(cmd));
   // B9-13: enforce pregame ORDER Fan Factor → Weather → Coin Toss via the queue (one frame or spread out).
   // Brilliant Coaching and Cheering Fans are held for their following authoritative winner report.
@@ -4632,6 +4680,7 @@ function planInjuryTokenHoldTimer(): void {
     const expired = state.injuryTokenHolds.filter((hold) => injuryTokenHoldDeadline(hold.playerId) <= now).map((hold) => hold.playerId);
     if (expired.length > 0) state.injuryTokenHolds = state.injuryTokenHolds.filter((hold) => !expired.includes(hold.playerId));
     planInjuryTokenHoldTimer();
+    if (expired.length > 0) wakeDeferredPassiveSkillCard(); // owner 11-01: an expired hold ends the injury presentation too
   }, Math.max(0, next - Date.now()));
 }
 /** The injury pump moved (a pill went up / a slot ended): that is progress for the holds whose own event is the one
@@ -4664,6 +4713,7 @@ function releaseInjuryTokenHold(playerId: string): void {
   if (!state.injuryTokenHolds.some((hold) => hold.playerId === playerId)) return;
   state.injuryTokenHolds = state.injuryTokenHolds.filter((hold) => hold.playerId !== playerId);
   planInjuryTokenHoldTimer();
+  wakeDeferredPassiveSkillCard(); // owner 11-01: a passive skill card held behind his injury
 }
 function clearInjuryTokenHolds(): void {
   if (state.injuryTokenHolds.length > 0) state.injuryTokenHolds = [];
@@ -4671,6 +4721,218 @@ function clearInjuryTokenHolds(): void {
   // Owner 10-12: every path that voids the injury pump (model replaced, snapshot / seek, catch-up, board reset, game
   // end, pacing reset) also means no pill is coming for a deferred stun decoration / injury sound: resolve them now.
   settleAllInjuryPillBeats();
+}
+
+/** Owner 11-01 ("When a player stabs and has Hit and Run, the 'is deciding whether to use Hit and Run' dialog appears
+ *  and obscures the armor roll"): the server (StepEndBlocking) raises the Hit and Run / Vomit-after-block skillUse
+ *  dialog in the SAME sync as the action's armour / injury reports. The PASSIVE card (the other coach, spectators)
+ *  waits behind that injury presentation instead of covering it. Any passive skillUse card that arrives while an
+ *  injury presentation runs is held - no skill name is special-cased.
+ *  GATE (injuryPresentationRunning): an injury event queued or in its slot (the slot covers the armour dice's read
+ *  beat and the pill), an injury pill on screen, or a held injury token.
+ *  WAKES (every hold needs one): the injury slot's end, a pill taken down, a token hold released / expired, and every
+ *  applied frame (re-derived in applyFrame). At arm time the same dialog instance must still be live, not mine and
+ *  not answered. FAIL OPEN: PASSIVE_SKILL_CARD_INJURY_WAIT_MAX_MS after it was held, it arms anyway.
+ *  DROPPED: the dialog goes away / is answered / is replaced, the game changes, catch-up starts, the transport closes,
+ *  a presentation reset. The deciding coach's own prompt (resolvePlayFollowups) is untouched.
+ *  Presentation only: nothing is sent, nothing is answered. */
+const PASSIVE_SKILL_CARD_INJURY_WAIT_MAX_MS = INJURY_TOKEN_HOLD_CAP_MS;
+/** Owner 11-01 (Sol r2 P2): one number per server dialog OBJECT (each gameSetDialogParameter brings a new one; a frame
+ *  that leaves the dialog standing keeps it), so the passive card is bound to its occurrence, not player + skill. */
+const passiveDialogOccurrences = new WeakMap<object, number>();
+let passiveDialogOccurrenceSeq = 0;
+function passiveDialogOccurrence(dialog: object): number {
+  const raw = toRaw(dialog);
+  let occurrence = passiveDialogOccurrences.get(raw);
+  if (occurrence === undefined) { occurrence = ++passiveDialogOccurrenceSeq; passiveDialogOccurrences.set(raw, occurrence); }
+  return occurrence;
+}
+type PassiveSkillCard = NonNullable<typeof state.skillChoice>;
+let deferredPassiveSkillCard: {
+  dialog: object; instanceKey: string | null; gameId: string; card: Omit<PassiveSkillCard, 'seq'>; capTimer: ReturnType<typeof setTimeout>;
+} | null = null;
+function injuryPresentationRunning(): boolean {
+  return injuryQueue.length > 0 || injuryPresentingSet.size > 0 || state.injuryPills.length > 0 || state.injuryTokenHolds.length > 0;
+}
+function dropDeferredPassiveSkillCard(): void {
+  if (!deferredPassiveSkillCard) return;
+  clearTimeout(deferredPassiveSkillCard.capTimer);
+  deferredPassiveSkillCard = null;
+}
+/** Is the held card's dialog instance still the live, unanswered, not-mine skillUse dialog of the same game? */
+function deferredPassiveSkillCardLive(): boolean {
+  const held = deferredPassiveSkillCard;
+  const g = game.value;
+  if (!held || !g || playback.catchingUp || !offerTransportAlive || state.connectionClosed) return false;
+  if (String((g as { gameId?: unknown }).gameId ?? '') !== held.gameId) return false;
+  const dp = g.dialogParameter as { dialogId?: string; playerId?: string; skill?: string } | null;
+  if (!dp || dp !== held.dialog || dp.dialogId !== 'skillUse' || skillDialogAnswered(dp)) return false;
+  if (String(dp.playerId ?? '') !== held.card.playerId || String(dp.skill ?? '') !== held.card.skill) return false;
+  if (held.instanceKey !== null && !dialogInstanceLive(held.instanceKey)) return false;
+  return !(play.active && myPlayIds(g).has(held.card.playerId));
+}
+/** Hold a passive card behind the running injury presentation (a re-hold of the same instance keeps its clock). */
+function deferPassiveSkillCard(g: GameJson, dialog: object, card: Omit<PassiveSkillCard, 'seq'>): void {
+  if (deferredPassiveSkillCard?.dialog === dialog && deferredPassiveSkillCard.card.playerId === card.playerId
+    && deferredPassiveSkillCard.card.skill === card.skill) return;
+  dropDeferredPassiveSkillCard();
+  let instanceKey: string | null = null;
+  try { instanceKey = dialogInstanceKey(g); } catch { instanceKey = null; }
+  // A plain timer (as the injury token hold's): it fires with the frame loop asleep and survives clearAllGameTimeouts.
+  const capTimer = setTimeout(() => wakeDeferredPassiveSkillCard(true), PASSIVE_SKILL_CARD_INJURY_WAIT_MAX_MS);
+  deferredPassiveSkillCard = { dialog, instanceKey, gameId: String((g as { gameId?: unknown }).gameId ?? ''), card, capTimer };
+}
+/** An injury-presentation end hook (or the cap): arm the held card once nothing of the injury is left on screen. */
+function wakeDeferredPassiveSkillCard(capReached = false): void {
+  wakePublishedSkillCardHold(); // Sol r3: the same end hooks release the published route's hold
+  const held = deferredPassiveSkillCard;
+  if (!held) return;
+  if (!deferredPassiveSkillCardLive()) { dropDeferredPassiveSkillCard(); return; }
+  if (!capReached && injuryPresentationRunning()) return;
+  dropDeferredPassiveSkillCard();
+  clearPassiveSkillCardLinger();
+  const seq = (state.skillChoice?.seq ?? 0) + 1;
+  state.skillChoice = { ...held.card, seq };
+  deferredPassiveSkillCardShown = { seq, at: Date.now() }; // its read window starts now, when it actually appears
+}
+/** Owner 11-01 (450 ms viewer-visible rule, Sol r1 P2): a passive card armed late, behind an injury, reads at least
+ *  this long from the moment it appeared - an answer that lands right after the injury beat does not flash it.
+ *  Measured with presentationMs (the presentation pace). No game frame is held: the server's answer is applied as it
+ *  arrives, only the passive card's retirement waits (`lingering`, which the planner ignores). An answer after the
+ *  window retires it at once. A plain timer, dropped with every reset. */
+const PASSIVE_SKILL_CARD_MIN_VISIBLE_MS = 450;
+let deferredPassiveSkillCardShown: { seq: number; at: number } | null = null;
+let passiveSkillCardLingerTimer: ReturnType<typeof setTimeout> | null = null;
+function clearPassiveSkillCardLinger(): void {
+  if (passiveSkillCardLingerTimer) { clearTimeout(passiveSkillCardLingerTimer); passiveSkillCardLingerTimer = null; }
+  deferredPassiveSkillCardShown = null;
+}
+/** Take the passive card down - after the rest of its read window when it was armed from an injury hold. */
+function retirePassiveSkillCard(): void {
+  const card = state.skillChoice;
+  if (!card || card.mine) return;
+  const shown = deferredPassiveSkillCardShown;
+  const remaining = shown && shown.seq === card.seq ? presentationMs(PASSIVE_SKILL_CARD_MIN_VISIBLE_MS) - (Date.now() - shown.at) : 0;
+  if (remaining <= 0 || playback.catchingUp || !offerTransportAlive || !modernInjuryTiming()) { // Sol r4 P2: Classic retires at once
+    clearPassiveSkillCardLinger();
+    state.skillChoice = null;
+    return;
+  }
+  if (card.lingering) return; // its retirement is already scheduled
+  state.skillChoice = { ...card, lingering: true }; // same seq: the view keeps the mounted card
+  if (passiveSkillCardLingerTimer) clearTimeout(passiveSkillCardLingerTimer);
+  passiveSkillCardLingerTimer = setTimeout(() => {
+    passiveSkillCardLingerTimer = null;
+    deferredPassiveSkillCardShown = null;
+    if (state.skillChoice?.seq === card.seq && !state.skillChoice.mine) state.skillChoice = null;
+  }, remaining);
+}
+
+/** Owner 11-01 (Sol r1 P1): the PUBLISHED spectator route (live review, Pause -> Go Live, a retained-history
+ *  reconnect) reads the card from the position's HUD (spectatorHud skillChoice), never from applyFrame. A played
+ *  event whose own reports present an injury holds that position's passive card from its publication until that
+ *  event's injury presentation is over in present() (occurrence = the event's command, as the apothecary card's pill
+ *  hold), so it never covers the armour roll there either.
+ *  Released: that event's present() reaches its injury idle; a later publication with another card / none, a snapshot
+ *  or seek; the injury pump voided (settleAllInjuryPillBeats: reset, catch-up, presentation cancel, game change);
+ *  the cap (PASSIVE_SKILL_CARD_INJURY_WAIT_MAX_MS, plain timer). A transport loss keeps it suppressed (no card on a
+ *  board frozen by a close) until a publication changes the card.
+ *  Read floor: a card released from this hold reads PASSIVE_SKILL_CARD_MIN_VISIBLE_MS before a publication that drops
+ *  it takes it down (a display copy, publishedSkillCardLinger). */
+/** `occurrence` = the decision's history occurrence (JSON of pendingDecision.source: a fresh dialog push gets its own
+ *  cursor, a dialog left standing keeps it); `command` = the played event whose present() releases the hold. */
+type PublishedSkillCardId = { playerId: string; skill: string; occurrence: string };
+/** `commandDone` = that event's present() has finished; the card then waits only for whatever injury presentation is
+ *  still on screen (an earlier event's pill / token hold included: Sol r3). */
+const publishedSkillCardHold = shallowRef<(PublishedSkillCardId & { command: object; commandDone: boolean; suppressed: boolean; timer: ReturnType<typeof setTimeout> | null }) | null>(null);
+let publishedSkillCardShown: (PublishedSkillCardId & { at: number }) | null = null;
+/** The published position's decision occurrence key (Sol r2 P2). */
+function publishedDecisionOccurrence(checkpoint: { durableProjection: { pendingDecision: { source: unknown } | null } }): string {
+  return JSON.stringify(checkpoint.durableProjection.pendingDecision?.source ?? null);
+}
+const publishedSkillCardLinger = shallowRef<NonNullable<typeof state.skillChoice> | null>(null);
+let publishedSkillCardLingerTimer: ReturnType<typeof setTimeout> | null = null;
+function holdPublishedSkillCard(card: PublishedSkillCardId, command: object): void {
+  releasePublishedSkillCardHold(false);
+  const timer = setTimeout(() => releasePublishedSkillCardHold(), PASSIVE_SKILL_CARD_INJURY_WAIT_MAX_MS);
+  publishedSkillCardHold.value = { playerId: card.playerId, skill: card.skill, occurrence: card.occurrence, command, commandDone: false, suppressed: false, timer };
+}
+/** Sol r3: the hold ends once its event's present() is done AND no injury presentation is left (queued / presenting /
+ *  pill / token hold - the live path's predicate). Woken from present()'s end and every injury end hook. */
+function wakePublishedSkillCardHold(): void {
+  const held = publishedSkillCardHold.value;
+  if (!held || held.suppressed || !held.commandDone || injuryPresentationRunning()) return;
+  releasePublishedSkillCardHold();
+}
+/** End the hold; `shows` = the card becomes visible now (its read window starts). */
+function releasePublishedSkillCardHold(shows = true): void {
+  const held = publishedSkillCardHold.value;
+  if (!held) return;
+  if (held.timer) clearTimeout(held.timer);
+  publishedSkillCardHold.value = null;
+  if (shows && !held.suppressed) publishedSkillCardShown = { playerId: held.playerId, skill: held.skill, occurrence: held.occurrence, at: Date.now() };
+}
+function suppressPublishedSkillCardOnTransportLoss(): void {
+  const held = publishedSkillCardHold.value;
+  if (!held || held.suppressed) return;
+  if (held.timer) clearTimeout(held.timer);
+  publishedSkillCardHold.value = { ...held, suppressed: true, timer: null };
+}
+function clearPublishedSkillCardLinger(): void {
+  if (publishedSkillCardLingerTimer) { clearTimeout(publishedSkillCardLingerTimer); publishedSkillCardLingerTimer = null; }
+  if (publishedSkillCardLinger.value) publishedSkillCardLinger.value = null;
+}
+function dropPublishedSkillCardPresentation(): void {
+  releasePublishedSkillCardHold(false);
+  clearPublishedSkillCardLinger();
+  publishedSkillCardShown = null;
+}
+/** Sol r4 P2: the hold / read floor are Modern presentation. Switching to Classic releases a held card at once (live:
+ *  armed now if its dialog is still live; published: the HUD card shows) and drops any lingering copy. */
+watch(() => settings.uiMode, (mode) => {
+  if (mode !== 'classic') return;
+  if (deferredPassiveSkillCard) wakeDeferredPassiveSkillCard(true);
+  if (state.skillChoice?.lingering && !state.skillChoice.mine) { clearPassiveSkillCardLinger(); state.skillChoice = null; }
+  else clearPassiveSkillCardLinger();
+  dropPublishedSkillCardPresentation();
+}, { flush: 'sync' });
+/** Run before a position is published. `card` = the new position's passive card, `shownCard` = the card on screen
+ *  before it (the previous HUD read), `played` = the event this position is the result of (null on a snapshot / seek /
+ *  multi-step jump). */
+function notePublishedSkillCard(
+  card: PublishedSkillCardId | null,
+  shownCard: NonNullable<typeof state.skillChoice> | null,
+  played: { command: object; injury: boolean; sameDialogBefore: boolean } | null,
+): void {
+  // Sol r2 P2: one card = one decision occurrence (player + skill + pendingDecision.source)
+  const sameCard = (a: PublishedSkillCardId | null, b: PublishedSkillCardId | null) =>
+    !!a && !!b && a.playerId === b.playerId && a.skill === b.skill && a.occurrence === b.occurrence;
+  // the read floor of a card released from the hold: a publication that drops it keeps a display copy to the floor
+  const shown = publishedSkillCardShown;
+  if (shown && !sameCard(card, shown)) {
+    publishedSkillCardShown = null;
+    const remaining = presentationMs(PASSIVE_SKILL_CARD_MIN_VISIBLE_MS) - (Date.now() - shown.at);
+    // (the card on screen is the HUD's, which carries no occurrence: matched on player + skill; a new card of this
+    // position supersedes the copy below anyway)
+    if (shownCard && shownCard.playerId === shown.playerId && shownCard.skill === shown.skill && remaining > 0 && played && !playback.catchingUp && offerTransportAlive && modernInjuryTiming()) {
+      clearPublishedSkillCardLinger();
+      const copy = { ...shownCard, lingering: true };
+      publishedSkillCardLinger.value = copy;
+      publishedSkillCardLingerTimer = setTimeout(() => {
+        publishedSkillCardLingerTimer = null;
+        if (publishedSkillCardLinger.value === copy) publishedSkillCardLinger.value = null;
+      }, remaining);
+    }
+  }
+  if (card) clearPublishedSkillCardLinger(); // a card of this position supersedes any lingering copy
+  const held = publishedSkillCardHold.value;
+  if (held && (!played || !sameCard(card, held))) releasePublishedSkillCardHold(false);
+  // Sol r3: an injury of THIS event, or one still on screen from an earlier event (a pill persisted for an apothecary
+  // decision, a token hold) - the card never mounts over either.
+  if (card && played && modernInjuryTiming() && (played.injury || injuryPresentationRunning()) && !played.sameDialogBefore && !playback.catchingUp && offerTransportAlive
+    && !sameCard(card, publishedSkillCardHold.value)) {
+    holdPublishedSkillCard(card, played.command);
+  }
 }
 
 /** Owner 10-12 ("Can we also wait to apply the Stunned player decoration until the stunned pill token pops?" and
@@ -4915,6 +5177,7 @@ function settleInjuryPillBeatOf(event: InjuryEvent): void {
 }
 function settleAllInjuryPillBeats(withSound = true): void {
   clearApothecaryCardHolds(); // owner 10-13: no pill is coming for a held apothecary card either
+  if (publishedSkillCardHold.value && !publishedSkillCardHold.value.suppressed) releasePublishedSkillCardHold(); // owner 11-01: nor for a held published skill card
   for (const playerId of [...injuryPillBeats.keys()]) settleInjuryPillBeat(playerId, withSound);
 }
 /** The pill of `event` popped: its beat resolves now (decoration on, sound played). */
@@ -5387,6 +5650,7 @@ function hideInjuryPill(shown: InjuryEvent): void {
   if (state.injurySplash === shown) state.injurySplash = rest.at(-1) ?? null;
   // Astra r2 P3-5: the pop timestamp goes with his pill (whoever takes it down: its beat, the answer, the toast)
   if (!rest.some((pill) => pill.playerId === shown.playerId)) { pillPoppedAt.delete(shown.playerId); apothecaryElectionsSeen.delete(shown.playerId); }
+  wakeDeferredPassiveSkillCard(); // owner 11-01: a passive skill card held behind the pill
 }
 function clearInjuryPills(): void {
   if (state.injuryPills.length) state.injuryPills = [];
@@ -5600,6 +5864,7 @@ function presentInjuryEvent(event: InjuryEvent) {
       pumpInjuries();
       plannerOnInjuryBeatReleased(); // the injury slot holds the planner's Animal Savagery resend: every hold needs a wake
       if (apothecaryFixUpQueue.length) pumpApothecaryFixUps(); // owner 10-18: a Regeneration line waiting behind this pill
+      wakeDeferredPassiveSkillCard(); // owner 11-01: the injury slot is over - a passive skill card held behind it
     }, slotMs);
   };
   // Owner 10-13: a crowd push no longer waits on a fans cinematic first (it never ran: the server has him off the pitch
@@ -5854,7 +6119,7 @@ const game = customRef<GameJson | null>((track, trigger) => ({
     if (spectatorPublication.position.value) throw new Error('Cannot mutate the published spectator position');
     // Owner 10-10: a replaced model (reconnect snapshot, replay seek, game change) is drawn as it is - no held injury token.
     if (value !== legacyGame.value) { clearInjuryTokenHolds(); injuryEscorts.clear(); }
-    if (value !== legacyGame.value) swarmingAmountByTeam.clear(); // Sol r1 P2-2: a replaced model (reconnect snapshot) brings no roll; the plain line shows
+    if (value !== legacyGame.value) { swarmingAmountByTeam.clear(); clearPlayerCountLatches(); } // Sol r1 P2-2: a replaced model (reconnect snapshot) brings no roll; the plain line shows
     noteGettingEvenGameAdopted(value); // Sol r2: a new gameId restarts the Getting Even splash dedup
     noteSwarmingGameAdopted(value); // owner 10-30: and the Swarming splash dedup + amount latch
     legacyGame.value = value; trigger();
@@ -6309,14 +6574,48 @@ async function pauseSpectatorView(): Promise<void> {
       noteSwarmingGameAdopted(position.model);
       // Owner 10-30: latch the played event's Swarming roll BEFORE publishing (this position's HUD reads it); a seek /
       // snapshot keeps none (the plain waiting line), and a team that no longer places drops its amount.
-      if (snap || !previous) swarmingAmountByTeam.clear();
+      if (snap || !previous) { swarmingAmountByTeam.clear(); clearPlayerCountLatches(); }
       else if (previous.cursor.sequence !== position.cursor.sequence) {
         const played = history.eventAfter(previous.cursor);
         if (played && played.cursor.sequence === position.cursor.sequence) {
-          latchSwarmingAmounts((played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [], position.model);
+          const playedReports = (played.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
+          latchSwarmingAmounts(playedReports, position.model);
+          latchPlayerCounts(playedReports, position.model); // owner 11-01: likewise the Solid Defence / Quick Snap counts
         }
       }
       pruneSwarmingAmounts(position.model);
+      prunePlayerCounts(position.model);
+      // Owner 11-01 (Sol r1 P1): hold a passive skill card that arrives with this event's injury behind its presentation.
+      {
+        // the card's identity as the passive projection derives it (passiveSpectatorProjection: the skillUse dialog of an
+        // OFFERED decision). Sol r4 P1: a skillUse report can answer it while the raw dialog stays standing - the decision is
+        // then 'resolved', the HUD drops the card, and so does this identity (the read floor's lingering copy takes over).
+        const dialogNow = position.model.dialogParameter as { dialogId?: unknown; playerId?: unknown; skill?: unknown } | null | undefined;
+        const offeredNow = position.durableProjection.pendingDecision?.state === 'offered';
+        const passiveCard = offeredNow && dialogNow?.dialogId === 'skillUse' && dialogNow.playerId && dialogNow.skill
+          ? { playerId: String(dialogNow.playerId), skill: String(dialogNow.skill), occurrence: publishedDecisionOccurrence(position) } : null;
+        const shownCard = spectatorPublication.position.value ? (state.skillChoice ?? null) : null;
+        let played: { command: object; injury: boolean; sameDialogBefore: boolean } | null = null;
+        if (!snap && previous && previous.cursor.sequence !== position.cursor.sequence) {
+          const event = history.eventAfter(previous.cursor);
+          if (event && event.cursor.sequence === position.cursor.sequence) {
+            const reports = (event.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
+            const injury = reports.some((report) => {
+              const pid = String(report.defenderId ?? report.playerId ?? '');
+              return String(report.reportId) === 'injury' && !!pid
+                && !!injuryPresentation(report, position.model, coordinates.get(pid) ?? position.model.fieldModel.playerDataArray.find((d) => d.playerId === pid)?.playerCoordinate, false);
+            });
+            // Sol r2 P2: the same decision OCCURRENCE was already standing (pendingDecision.source unchanged) - a fresh,
+            // identical replacement dialog has its own source and is held like any new card.
+            const before = previous.model.dialogParameter as { dialogId?: unknown; playerId?: unknown; skill?: unknown } | null | undefined;
+            const sameDialogBefore = !!passiveCard && before?.dialogId === 'skillUse'
+              && String(before.playerId ?? '') === passiveCard.playerId && String(before.skill ?? '') === passiveCard.skill
+              && !!previous.durableProjection.pendingDecision && publishedDecisionOccurrence(previous) === passiveCard.occurrence;
+            played = { command: event.command, injury, sameDialogBefore };
+          }
+        }
+        notePublishedSkillCard(passiveCard, shownCard, played);
+      }
       spectatorPublication.publish(position, snap);
       // Beefee 10-26 (g1956976, "No ball marker shown on Quick Snap event"): a played kickoffScatter reveals its landing
       // marker HERE, in the synchronous publication boundary, as applyFrame does on the live path. present() runs a
@@ -7002,6 +7301,12 @@ async function pauseSpectatorView(): Promise<void> {
       // abort, and only this presentation's own occurrence - a cancelled presentation must never release a hold that a
       // later one armed; the cancellation itself already cleared this one's holds).
       for (const pid of [...apothecaryCardPillHolds.value]) if (apothecaryCardPillHoldOccurrence.get(pid) === event.command) releaseApothecaryCardHold(pid);
+      // Owner 11-01 (Sol r1 P1): this event's injury presentation is over - the passive skill card it held shows now.
+      // Sol r3: only once nothing of any injury presentation is left (else the pill-clear / token-release hooks wake it).
+      if (publishedSkillCardHold.value?.command === event.command && !publishedSkillCardHold.value.suppressed) {
+        publishedSkillCardHold.value = { ...publishedSkillCardHold.value, commandDone: true };
+        wakePublishedSkillCardHold();
+      }
       if (apothecaryOutcome) {
         state.apothecaryAnim = {
           playerId: apothecaryOutcome.playerId, square: apothecaryOutcome.square,
@@ -7454,6 +7759,8 @@ const CATCHUP_GAP_MS = 4; // near-instant drain while catching up
 /** Drop transient cine state set by fast-forwarded historical frames — nothing stale flashes at the live tail. */
 let blastinNoticeKey: string | null = null; // S46: the beat instance the picker notice already fired for
 function clearCatchupTransients(): void {
+  dropDeferredPassiveSkillCard(); // owner 11-01: a passive skill card held behind a fast-forwarded injury
+  clearPassiveSkillCardLinger();
   state.blockTargetCue = null; state.foulTargetCue = null; state.pushArrows = null;
   clearActionDice(); state.rollModal = null; clearInjuryPills(); state.turnover = null;
   clearInjuryTokenHolds(); // owner 10-10: nothing of the fast-forwarded history stays held on the live board
@@ -8683,6 +8990,8 @@ const modalOfferHoldTeardown = ref(0);
  *  snapshot re-establishes any live dialog, and the normal hold logic applies from there. */
 function retireOfferHoldsOnTransportLoss(): void {
   offerTransportAlive = false;
+  dropDeferredPassiveSkillCard(); // owner 11-01: a passive skill card held behind an injury never shows after a close
+  suppressPublishedSkillCardOnTransportLoss(); // owner 11-01 (Sol r1 P1): likewise on the published route
   modalOfferHoldTeardown.value++;
   clearPassResolvedLatch();
 }
@@ -8703,12 +9012,15 @@ export function installOfferTransportTestHarness(): { lose(): void; alive(): boo
 function teardownPassiveSurfacesOnTransportClose(): void {
   retireOfferHoldsOnTransportLoss(); // Astra r3: a dropped socket never echoes the offer's end (auto-reconnect too)
   state.waitingForMatch = null; // connection ended — drop the waiting modal
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   clearSendOffWaiting();
   clearGettingEvenSplash(); clearSwarmingSplash(); // Sol r1: no toast timer / queued splash outlives the socket
-  swarmingAmountByTeam.clear(); // Sol r1 P2-2: a latched Swarming amount never outlives the socket
+  swarmingAmountByTeam.clear(); clearPlayerCountLatches(); // Sol r1 P2-2: a latched Swarming amount (or pick count) never outlives the socket
 }
 function resetPresentation(): void {
+  dropDeferredPassiveSkillCard(); // owner 11-01
+  clearPassiveSkillCardLinger();
+  dropPublishedSkillCardPresentation();
   modalOfferHoldTeardown.value++;
   flushPendingUpstreamLogs(); // FUMBBL-only rows waiting behind a fireball beat keep their content
   dropSpectatorBlockCardHold(); // owner 10-22: teardown drops a spectator block card held behind a walk
@@ -12034,9 +12346,17 @@ function applyFrameContents(frame: QueuedFrame) {
       && normSkill(state.skillChoice.skill) === normSkill(PRIMAL_SAVAGERY_SKILL)) {
       state.skillChoice = null;
     }
+    // Owner 11-01: a held passive card whose dialog is no longer this live, unanswered, not-mine instance never shows.
+    if (deferredPassiveSkillCard && !deferredPassiveSkillCardLive()) dropDeferredPassiveSkillCard();
     if (isSu && notMyDialog && !suAnswered && !deferredPrimalSavagery) {
       const rawSkill = String(dp!.skill);
-      if (state.skillChoice?.playerId !== suPid || state.skillChoice?.skill !== rawSkill) {
+      // Owner 11-01 (Sol r1 P2): a frame drained after the socket closed never arms a passive card (held or not).
+      // Owner 11-01 (Sol r2 P2): the card on screen is THIS dialog occurrence only - a fresh, identical dialog (same
+      // player + skill) arriving while the old card lingers is a new card: it arms (or is held) on its own.
+      const suOccurrence = passiveDialogOccurrence(dp as object);
+      const shownOccurrence = !!state.skillChoice && !state.skillChoice.mine && !state.skillChoice.lingering
+        && state.skillChoice.playerId === suPid && state.skillChoice.skill === rawSkill && state.skillChoice.occurrence === suOccurrence;
+      if (offerTransportAlive && !shownOccurrence) {
         const minimumRoll = Number(dp!.minimumRoll ?? 0);
         const armCard = () => {
           state.skillChoice = {
@@ -12046,12 +12366,28 @@ function applyFrameContents(frame: QueuedFrame) {
             minimumRoll,
             mine: false,
             seq: (state.skillChoice?.seq ?? 0) + 1,
+            occurrence: suOccurrence,
             ...skillDecisionCardData(skillUseGame, suPid, rawSkill, reports),
           };
         };
         // The authoritative passCoordinate marker was synchronized before this block. The renderer watcher
         // consumes it synchronously, so the read-only destination is painted when the card mounts.
-        armCard();
+        // Owner 11-01 (Hit and Run after a Stab): the server raises the dialog in the same sync as the armour /
+        // injury reports - the passive card waits behind that injury presentation (wakes + cap: deferPassiveSkillCard).
+        if (deferredPassiveSkillCard?.dialog === dp && deferredPassiveSkillCard.card.playerId === suPid
+          && deferredPassiveSkillCard.card.skill === rawSkill) {
+          wakeDeferredPassiveSkillCard(); // held already: this frame re-checks it (armed once the injury beat is over)
+        } else if (!playback.catchingUp && modernInjuryTiming() && injuryPresentationRunning()) { // Sol r4 P2: Modern only
+          if (state.skillChoice && !state.skillChoice.mine) { clearPassiveSkillCardLinger(); state.skillChoice = null; } // an older passive card is superseded
+          deferPassiveSkillCard(skillUseGame, dp as object, {
+            playerId: suPid, skill: rawSkill, label: prettySkillName(rawSkill), minimumRoll, mine: false, occurrence: suOccurrence,
+            ...skillDecisionCardData(skillUseGame, suPid, rawSkill, reports),
+          });
+        } else {
+          dropDeferredPassiveSkillCard();
+          clearPassiveSkillCardLinger();
+          armCard();
+        }
       }
     } else if (!isSu) {
       autoFiredSkillDialog = null; // dialog gone → re-arm the auto-fire latch for the next prompt
@@ -12063,7 +12399,7 @@ function applyFrameContents(frame: QueuedFrame) {
         && normSkill(r.skill) === normSkill(passive.skill) && (r as { used?: unknown }).used !== false);
       if (passive && skillUseHasFollowup(passive.skill) && skillUseFollowupPending(skillUseGame) && (passive.using || usedNow)) {
         if (!passive.using) state.skillChoice = { ...passive, using: true, seq: passive.seq + 1 };
-      } else if (state.skillChoice && !state.skillChoice.mine) state.skillChoice = null; // spectator drop
+      } else if (state.skillChoice && !state.skillChoice.mine) retirePassiveSkillCard(); // spectator drop (owner 11-01: after its read floor)
       // R-A6: retire an OWNED card whose armed instance is gone — the dialog moved on (turnover/injury frames),
       // so R-E1 would refuse its send anyway; without this the surface persisted (Wrestle decline, owner 08-18).
       else if (state.skillChoice?.mine && state.skillChoice.origin === 'shotToNothing') {
@@ -12072,8 +12408,9 @@ function applyFrameContents(frame: QueuedFrame) {
             || !shotToNothingElectionStillLive(correlation)) clearShotToNothingElection();
       } else if (state.skillChoice?.mine && !dialogInstanceLive(state.skillChoice.instanceKey)) state.skillChoice = null;
     } else if (state.skillChoice && !state.skillChoice.mine) {
-      // Clear answered or superseded passive skill cards without clearing the owned prompt.
-      state.skillChoice = null;
+      // Clear answered or superseded passive skill cards without clearing the owned prompt (owner 11-01: after its
+      // read floor when it was armed late, behind an injury).
+      retirePassiveSkillCard();
     }
   }
   // Prayer rolls may publish an interactive dialog in the same model sync. The choice surface is held behind
@@ -13276,7 +13613,7 @@ function pumpPlayback() {
   if (playback.timer || playback.queue.length === 0) return;
   // Fast-forward join/switch backlog with presentation suppressed so historical holds cannot delay live state.
   if (playback.queue.length > CATCHUP_FRAMES) {
-    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); } // Astra 10-20 (P2-3)
+    if (!playback.catchingUp) { playback.catchingUp = true; setSoundsSuppressed(true); dropDeferredPassiveSkillCard(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); } // Astra 10-20 (P2-3)
     releaseSpectatorBlockCardHold(spectatorBlockCardHold, true); // owner 10-22: catch-up never waits on a walk for the block card
     retireLandingRerollHoldForCatchup(); // Astra round 2: a historical landing-reroll hold never outlives the fast-forward
     playback.timer = scheduleGameTimeout(() => {
@@ -14297,6 +14634,9 @@ function resetPlayback() {
 
 /** Owner 2026-07-04: flush EVERY transient cinematic/animation state + its timers + the injury queue on a game change, so the previous game's queued splashes and animations never play on the new game. The renderer clears its own effect layer (echoes/flash rings/on-pitch dice) via setGame → clearEffects on the same event. */
 function clearCinematics(hardGameBoundary = false) {
+  dropDeferredPassiveSkillCard(); // owner 11-01: game change / resync - a held passive skill card never shows
+  clearPassiveSkillCardLinger();
+  dropPublishedSkillCardPresentation();
   dodgySnackGen += 1;
   state.blockTargetCue = null; state.foulTargetCue = null; state.pushArrows = null;
   // Preserve the active coin-reveal cluster across same-game resync; clear it only outside that window.
@@ -14369,7 +14709,7 @@ function clearCinematics(hardGameBoundary = false) {
   clearPlayerPick(); clearYesNo(); clearInjuryInteraction(); // Phase 3c: drop a stale injury gate
   state.followupChoice = null; state.followupIndicator = null; state.followupFlash = null;
   state.onTheBallMover = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   pendingFollowup = null; lastPushFrom.clear(); armourAfterFollow = null; // 08-19: drop withheld armour dice
   pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null; armourRevealScheduled = 0; armourRevealGeneration++; // owner 10-13
   armourPublishPending = 0; armourPublishGeneration++; armourPublishedWakes.clear(); // owner 10-20
@@ -14520,7 +14860,7 @@ function clearLeaveGameResidualState(): void {
   state.rollModal = null;
   state.opponentReviewingDice = false;
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null; state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null;
-  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+  state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
   state.stallerDetected = null;
   state.bncScatter = null;
   state.armorDice = null;
@@ -16027,7 +16367,7 @@ function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): bool
   if ((g as Record<string, unknown> | undefined)?.waitingForOpponent) return true;
   if (((g?.fieldModel?.pushbackSquareArray ?? []) as unknown[]).length > 0) return true;
   const pick = opts.ignoreKickEmPicker && state.playerPick?.key.startsWith('kickEmTarget:') ? null : state.playerPick;
-  return !!(state.reRollPrompt || state.skillChoice || state.followupChoice || pick
+  return !!(state.reRollPrompt || (state.skillChoice && !state.skillChoice.lingering) || state.followupChoice || pick
     || state.pushChoice || state.blockPartial || state.multiBlockResolution || state.opponentBlockSelection || state.reRollForTargets
     || state.injuryInteraction || state.yesNo
     || state.blitzBlockChoice || state.foulChoiceHold); // S42 + #111: a held blitz block-commit flavor choice pauses the queue + exempts the watchdog
@@ -17695,6 +18035,16 @@ export function installSkillUseClearTestHarness(
 ): {
   /** Apply one sync frame. `dialog` = new dialogParameter; `'keep'` leaves it unchanged (server holds the dialog live). */
   applySync(dialog: Record<string, unknown> | null | 'keep', reports: Record<string, unknown>[], commandNr: number): void;
+  /** Owner 11-01: apply one whole server command (model changes + reports + dialog in one sync). */
+  applyCommand(cmd: Record<string, unknown>): void;
+  /** Owner 11-01: an injury presentation is queued / presenting / on screen (the passive skill card waits behind it). */
+  injuryPresentationRunning(): boolean;
+  /** Owner 11-01: a passive skill card is held behind the injury presentation. */
+  passiveCardDeferred(): boolean;
+  /** Owner 11-01: cancel every game timeout (the injury slot / pill clocks) - a presentation that never ends. */
+  freezeInjuryPresentation(): void;
+  /** Owner 11-01 (Sol r1 P2): the socket drops under the client (retireOfferHoldsOnTransportLoss). */
+  transportLoss(): void;
   card(): typeof state.skillChoice;
   /** Owner 08-19: the used/declined skill TOAST arm (a declined Stand Firm must ride this, never a card). */
   skillUsed(): typeof state.skillUsed;
@@ -17726,6 +18076,13 @@ export function installSkillUseClearTestHarness(
   const priorSkillOccurrence = visibleSkillOccurrence;
 
   const priorPendingRailCommands = new Map(pendingRailCommands);
+  // Owner 11-01: no injury slot / pill / held passive card of an earlier case leaks into this one.
+  const resetInjuryPresentation = () => {
+    dropDeferredPassiveSkillCard(); clearPassiveSkillCardLinger();
+    offerTransportAlive = true;
+    injuryQueue.length = 0; injuryPlaying = false; injuryPresentingSet.clear(); clearInjuryPills(); clearInjuryTokenHolds();
+  };
+  resetInjuryPresentation();
 
   answeredSkillDialog = null;
   clearPendingRailCommands();
@@ -17760,6 +18117,13 @@ export function installSkillUseClearTestHarness(
         },
       });
     },
+    applyCommand(cmd) {
+      applyFrame({ receivedAt: Date.now(), cmd } as Parameters<typeof applyFrame>[0]);
+    },
+    injuryPresentationRunning,
+    passiveCardDeferred: () => deferredPassiveSkillCard !== null,
+    freezeInjuryPresentation: () => clearAllGameTimeouts(),
+    transportLoss: () => retireOfferHoldsOnTransportLoss(),
     card: () => state.skillChoice,
     skillUsed: () => state.skillUsed,
     armorDice: () => state.armorDice,
@@ -17787,6 +18151,7 @@ export function installSkillUseClearTestHarness(
       visibleSkillDecisionProjection = priorSkillDecisionProjection;
       visibleSkillDialog = priorSkillDialog;
       visibleSkillOccurrence = priorSkillOccurrence;
+      resetInjuryPresentation();
 
       clearPendingRailCommands();
       for (const [rail, pending] of priorPendingRailCommands) pendingRailCommands.set(rail, pending);
@@ -20377,6 +20742,11 @@ export function installSwarmingSplashTestHarness(
   apply(command: Record<string, unknown>): void;
   splash(): typeof state.swarmingSplash;
   waiting(): typeof state.swarmingWaiting;
+  /** Owner 11-01: the Quick Snap / Solid Defence waiting cards over the same production applyFrame. */
+  quickSnapWaiting(): typeof state.quickSnapWaiting;
+  solidDefenceWaiting(): typeof state.solidDefenceWaiting;
+  /** The socket-close teardown (the production close handler's passive-surface reset). */
+  transportClose(): void;
   kickoffCine(): typeof state.kickoffCine;
   /** Labels of the #67 FIFO cines, the presenting one first. */
   fifoCines(): string[];
@@ -20412,7 +20782,7 @@ export function installSwarmingSplashTestHarness(
   offerTransportAlive = true;
   const resetSwarming = () => {
     resetPresentation(); clearPregameCine();
-    swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); swarmingSplashSeenGameId = null;
+    swarmingSplashSeen.clear(); swarmingAmountByTeam.clear(); clearPlayerCountLatches(); swarmingSplashSeenGameId = null;
     lastReportSig = null; lastReportCommandNr = null;
   };
   resetSwarming();
@@ -20440,6 +20810,9 @@ export function installSwarmingSplashTestHarness(
     splash: () => state.swarmingSplash,
     kickoffCine: () => state.kickoffCine,
     waiting: () => state.swarmingWaiting,
+    quickSnapWaiting: () => state.quickSnapWaiting,
+    solidDefenceWaiting: () => state.solidDefenceWaiting,
+    transportClose: () => teardownPassiveSurfacesOnTransportClose(),
     fifoCines: () => [
       ...(presentation.presenting?.kind === 'cine' ? [presentation.presenting.id] : []),
       ...presentation.queue.flatMap((event) => event.kind === 'cine' ? [event.label] : []),
@@ -25986,9 +26359,12 @@ function syncOnTheBallWaiting(g: GameJson): void {
   state.kickoffWaiting = playback.catchingUp ? null : kickoffWaitingFromGame(g, myTeamId);
   // Sol r1: frames still draining after a socket close never re-raise it (offerTransportAlive: false from close to the next session).
   state.keywordWaiting = playback.catchingUp || !offerTransportAlive ? null : keywordWaitingFromGame(g, myTeamId);
-  state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId);
+  prunePlayerCounts(g);
+  state.solidDefenceWaiting = playback.catchingUp ? null : solidDefenceWaitingFromGame(g, myTeamId, solidDefenceAmountByTeam);
   pruneSwarmingAmounts(g);
   state.swarmingWaiting = playback.catchingUp || !offerTransportAlive ? null : swarmingWaitingFromGame(g, myTeamId, swarmingAmountByTeam); // Sol r2 P2-2
+  // Owner 11-01: Quick Snap - same gate as Swarming (a frame drained after the socket closed never re-raises it).
+  state.quickSnapWaiting = playback.catchingUp || !offerTransportAlive ? null : quickSnapWaitingFromGame(g, myTeamId, quickSnapAmountByTeam);
   state.pickMeUpWaiting = playback.catchingUp ? null : pickMeUpWaitingFromGame(g, myTeamId);
   state.pushWaiting = playback.catchingUp ? null : pushWaitingFromGame(g, myTeamId);
   state.reRollWaiting = playback.catchingUp ? null : reRollWaitingFromGame(g, myTeamId);
@@ -26033,7 +26409,7 @@ export function installOnTheBallWaitingTestHarness(
     setSeat(seat: typeof currentSeat) { currentSeat = seat; syncSeat(); },
     setTurnMode(turnMode: string) { fixture.turnMode = turnMode; syncSeat(); },
     setCatchingUp(catchingUp: boolean) { playback.catchingUp = catchingUp; syncSeat(); },
-    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
+    disconnect() { play.active = false; state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; },
     dispose() {
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -26394,7 +26770,7 @@ function drivePregameStep() {
   // (ownership, a dialog, the ball in play, a phase change, the setting off), ABOVE every early-return branch below.
   if (state.kickConfirm && !gameStore.kickConfirmLive()) state.kickConfirm = null;
   const g = game.value;
-  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
+  if (!g) { state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; clearSendOffWaiting(); return; }
   syncOnTheBallWaiting(g);
   syncOpponentSendOffWaiting(g);
   if (!play.active || !play.autoPregame) return;
@@ -27619,7 +27995,7 @@ function replayPresentationReset(_controllerEpoch: number): void {
   replayPresentationEpoch += 1;
   resetPlayback();
   clearCinematics(true);
-  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
+  state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null; // S48: a seek drops the notice; the next applied frame re-derives it
 }
 
 async function waitForReplayPresentation(epoch: number): Promise<void> {
@@ -29612,11 +29988,11 @@ export const gameStore = {
       if (pendingSpectatorGoLive?.transport === spectatorTransport) settlePendingSpectatorGoLive(false);
       log('system', `connection closed (${code}${reason ? ` "${reason}"` : ''})`);
       state.waitingForMatch = null; // connection ended — drop the waiting modal
-      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+      state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
       retireSpectatorNotices(); // the published HUD value shadows the writes above while the frozen board stands
       clearSendOffWaiting();
       clearGettingEvenSplash(); clearSwarmingSplash(); // Sol r1: no toast timer / queued splash outlives the socket
-      swarmingAmountByTeam.clear(); // Sol r1 P2-2: a latched Swarming amount never outlives the socket
+      swarmingAmountByTeam.clear(); clearPlayerCountLatches(); // Sol r1 P2-2: a latched Swarming amount (or pick count) never outlives the socket
       // SERVER_STATUS owns the useful rejection. Its normal code-1000 close is
       // transport cleanup, not a second error and must not overwrite that status.
       if (spectatorStatusTerminal) return;
@@ -32694,8 +33070,8 @@ export const gameStore = {
     play.active = false;
     withdrawConnectDeclaredSeat(); // owner 10-08: the seat declaration belongs to one connection
     state.waitingForMatch = null; // drop any "waiting for the other coach" modal
-    swarmingAmountByTeam.clear(); // Sol r1 P2-2
-    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
+    swarmingAmountByTeam.clear(); clearPlayerCountLatches(); // Sol r1 P2-2
+    state.onTheBallWaiting = null; state.chargeWaiting = null; state.touchbackWaiting = null; state.kickoffWaiting = null; state.keywordWaiting = null; state.solidDefenceWaiting = null; state.swarmingWaiting = null; state.quickSnapWaiting = null; state.pickMeUpWaiting = null; state.pushWaiting = null; state.reRollWaiting = null; state.useInducementWaiting = null;
     clearSendOffWaiting();
     play.coach = '';
     pregameHandled.clear();

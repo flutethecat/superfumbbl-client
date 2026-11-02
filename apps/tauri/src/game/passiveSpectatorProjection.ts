@@ -137,6 +137,21 @@ export function interceptionWaitFromGame(g: GameJson, rolls: ActionRollProjectio
   };
 }
 
+/** Owner 11-01: a server-sent player count usable in a waiting line - a positive integer, else null. */
+export function usablePlayerCount(value: unknown): number | null {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+/** Owner 11-01: the one rule every "coach is picking players" card shares - the counted line when the server sent a
+ *  usable count, else the plain fallback line ("Waiting for <subject>" unless the card names its own). */
+export function playerCountLine(
+  subject: string, count: unknown, countedKey: string, plainKey = 'hud.waiting.text.waitingForSubject',
+): string {
+  const n = usablePlayerCount(count);
+  return n !== null ? $t(countedKey, { subject, n }) : $t(plainKey, { subject });
+}
+
 /** S48: the standing `playerChoice` dialog with mode `charge` belongs to the kicking team; every seat that is NOT that team
  *  (the other coach, spectators, replay) is told who is choosing. Pure read of the model; the choosing seat gets the pick rail instead.
  *  The wire (corpus-charge cmd 43) leaves the answered dialog in the model and only flips the turn mode to blitz, so the notice also ends with `kickoff`. */
@@ -147,13 +162,17 @@ export function chargeWaitingFromGame(g: GameJson, myTeamId: string | null): { m
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
-  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07: the red title names the action; the line just names the coach
+  // Owner 11-01: name how many players the coach may pick - the dialog's own maxSelects (server: min(D3+3, eligible)).
+  // A dialog without a usable count keeps the plain line.
+  return { message: playerCountLine(subject, dialog.maxSelects, 'hud.waiting.text.selectingUpToPlayers') }; // owner 10-07: the red title names the action
 }
 
 /** Owner 10-01 (S62): Solid Defence - the kicking coach first PICKS up to D3+3 players (`playerChoice` mode `solidDefence`,
  *  teamId = the kicking team; corpus-soliddefence cmd 41), then RE-SETS them in turn mode `solidDefence` (cmd 42-49; the
  *  answered dialog stays in the model until cmd 51). Every other seat is told who is choosing / repositioning. */
-export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
+export function solidDefenceWaitingFromGame(
+  g: GameJson, myTeamId: string | null, amountByTeam?: ReadonlyMap<string, number> | null,
+): { message: string } | null {
   const dialog = g.dialogParameter as Record<string, unknown> | null;
   const pickDialog = dialog?.dialogId === 'playerChoice' && dialog.playerChoiceMode === 'solidDefence';
   const repositioning = g.turnMode === 'solidDefence';
@@ -164,7 +183,12 @@ export function solidDefenceWaitingFromGame(g: GameJson, myTeamId: string | null
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
-  return { message: repositioning ? $t('hud.waiting.text.waitingForSubjectRepositioning', { subject }) : $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
+  // Owner 11-01: name how many players - the dialog's maxSelects (server: min(D3+3, eligible)); while repositioning the
+  // answered dialog usually lingers, else the store's latched `solidDefenceRoll.nrOfPlayers` for this team (none on a reconnect).
+  if (!repositioning) return { message: playerCountLine(subject, pickDialog ? dialog!.maxSelects : null, 'hud.waiting.text.selectingUpToPlayers') };
+  const lingering = pickDialog && String(dialog!.teamId ?? '') === teamId ? usablePlayerCount(dialog!.maxSelects) : null;
+  return { message: playerCountLine(subject, lingering ?? amountByTeam?.get(teamId) ?? null,
+    'hud.waiting.text.repositioningUpToPlayers', 'hud.waiting.text.waitingForSubjectRepositioning') };
 }
 
 /** Owner 10-30 (BB2025 Swarming): StepSwarming sets turn mode `swarming` for the team placing its Swarming players
@@ -182,10 +206,24 @@ export function swarmingWaitingFromGame(
   const amount = amountByTeam?.get(teamId);
   return {
     title: $t('hud.swarming'),
-    message: amount != null
-      ? $t('hud.waiting.text.waitingForSubjectSwarming', { subject, n: amount })
-      : $t('hud.waiting.text.waitingForSubject', { subject }),
+    message: playerCountLine(subject, amount, 'hud.waiting.text.waitingForSubjectSwarming'),
   };
+}
+
+/** Owner 11-01 (BB2025 Quick Snap): StepApplyKickoffResult.handleQuickSnap sets turn mode `quickSnap` with the RECEIVING
+ *  team as the playing side (corpus-quicksnap commandNr 44: homePlaying flips true with the turn mode, and the frame's
+ *  `quickSnapRoll` names that home team) and opens no dialog. Every other seat is told who is moving; the moving seat has
+ *  the Quick Snap surface instead. The count is the latched `quickSnapRoll.nrOfPlayers` (D3+3, fixed for the phase;
+ *  store-side, so a reconnect mid-phase shows the plain line). */
+export function quickSnapWaitingFromGame(
+  g: GameJson, myTeamId: string | null, amountByTeam?: ReadonlyMap<string, number> | null,
+): { title: string; message: string } | null {
+  if (g.turnMode !== 'quickSnap') return null;
+  const team = g.homePlaying ? g.teamHome : g.teamAway;
+  const teamId = String(team?.teamId ?? '');
+  if (!team || !teamId || (myTeamId !== null && myTeamId === teamId)) return null;
+  const subject = String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.yourOpponent');
+  return { title: $t('hud.quickSnap'), message: playerCountLine(subject, amountByTeam?.get(teamId), 'hud.waiting.text.movingUpToPlayers') };
 }
 
 /** Owner 09-30 (S57): the standing `touchback` dialog (turn mode `touchback`, corpus-block-hatred cmd 41-42) is answered by the
@@ -229,7 +267,8 @@ export function pickMeUpWaitingFromGame(g: GameJson, myTeamId: string | null): {
   const team = [g.teamHome, g.teamAway].find((t) => String(t?.teamId ?? '') === teamId);
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
   const subject = myTeamId !== null ? $t('hud.waiting.subject.yourOpponent') : (String(team.coach ?? '').trim() || String(team.teamName ?? '').trim() || $t('hud.waiting.subject.theOtherCoach'));
-  return { message: $t('hud.waiting.text.waitingForSubject', { subject }) }; // owner 10-07 copy
+  // Owner 11-01: the dialog's maxSelects (server: the number of eligible prone players); plain line without one.
+  return { message: playerCountLine(subject, dialog.maxSelects, 'hud.waiting.text.selectingUpToPlayers') };
 }
 
 /** Owner g1957941 (1.0.296): BB2025 Getting Even - the server's `selectKeyword` dialog (playerId = the casualtied player,
@@ -363,6 +402,7 @@ export function passiveSpectatorProjection(checkpoint: SpectatorCheckpoint) {
     kickoffWaiting: kickoffWaitingFromGame(g, null),
     solidDefenceWaiting: solidDefenceWaitingFromGame(g, null),
     swarmingWaiting: swarmingWaitingFromGame(g, null), // no report latch in a closed checkpoint projection: the store HUD adds it
+    quickSnapWaiting: quickSnapWaitingFromGame(g, null), // likewise: the store HUD adds the latched roll
     pickMeUpWaiting: pickMeUpWaitingFromGame(g, null),
     pushWaiting: pushWaitingFromGame(g, null),
     reRollWaiting: reRollWaitingFromGame(g, null),

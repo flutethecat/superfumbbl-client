@@ -6,7 +6,7 @@
  * MutationObserver on the pane) and the pane scrolls only when the coach types or steps (a new message never moves it).
  */
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
-import { applyPaneSearch, clearPaneSearch, paneSearchCounter, paneSearchMatches, paneSearchOrder, paneSearchRowText, paneSearchStep, revealPaneRow } from './paneSearch';
+import { applyPaneSearch, clearPaneSearch, paneSearchCounter, paneSearchMatches, paneSearchOrder, paneRowsHost, paneSearchRowText, paneSearchStep, revealPaneRow } from './paneSearch';
 
 export function usePaneSearch(opts: { keys: () => readonly unknown[]; container: () => HTMLElement | null }) {
   const query = ref('');
@@ -37,7 +37,7 @@ export function usePaneSearch(opts: { keys: () => readonly unknown[]; container:
       return;
     }
     marked = container;
-    const texts = container ? Array.from(container.children, (row) => paneSearchRowText(row)) : [];
+    const texts = container ? Array.from(paneRowsHost(container).children, (row) => paneSearchRowText(row)) : [];
     order.value = paneSearchOrder(paneSearchMatches(texts, query.value));
     const keys = opts.keys();
     if (mode === 'restart') current.value = 0;

@@ -105,9 +105,9 @@ const textStyle = computed(() => ({
 
 <template>
   <div class="setup-log-panel" role="img" :aria-label="$t('setupWizard.logStyle.example')" :data-log-style="logStyle">
-    <pre class="log" :class="{ 'log-graphical': graphical, 'log-fumbbl': fumbbl }" :style="textStyle" aria-hidden="true"><template v-if="fumbbl"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><template v-for="(s, j) in upstreamLogSegments(row.line)" :key="j"><span v-if="s.team" class="log-name" :class="s.styles.map((st) => 'log-u-' + st)" :style="nameStyle(s.team)">{{ upstreamText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamText(s) }}</span><template v-else>{{ upstreamText(s) }}</template></template>
+    <pre class="log" :class="{ 'log-graphical': graphical, 'log-fumbbl': fumbbl }" :style="textStyle" aria-hidden="true"><div class="log-rows"><template v-if="fumbbl"><span v-for="(row, i) in upstreamRows" :key="'u' + i" class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><template v-for="(s, j) in upstreamLogSegments(row.line)" :key="j"><span v-if="s.team" class="log-name" :class="s.styles.map((st) => 'log-u-' + st)" :style="nameStyle(s.team)">{{ upstreamText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamText(s) }}</span><template v-else>{{ upstreamText(s) }}</template></template>
 </span></template><template v-else><span v-for="(entry, i) in entries" :key="i" :data-kind="entry.kind" :data-row-side="graphical ? logRowSide(entry.action?.side, null) : undefined"><LogActionPlate v-if="graphical" :plate="plates[i]" /><span class="log-text" :data-indent="rowIndent(entry)"><template v-for="(s, j) in segmentsFor(entry)" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="displayDiceSide(s.dteam ?? null, null)" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side" class="log-name" :style="nameStyle(s.side)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
-</span></span></template></pre>
+</span></span></template></div></pre>
   </div>
 </template>
 
@@ -188,16 +188,16 @@ const textStyle = computed(() => ({
 }
 .log-d6 { --d6-size: 1.45em; margin: -0.15em 0.1em; vertical-align: middle; }
 .log-block-die { --block-die-size: 1.4em; margin: -0.15em 0.08em; vertical-align: middle; }
-.log.log-fumbbl > .log-u { display: block; white-space: pre-wrap; }
-.log.log-fumbbl > .log-u[data-indent='1'] { padding-left: 12px; }
-.log.log-fumbbl > .log-u[data-indent='2'] { padding-left: 24px; }
-.log.log-fumbbl > .log-u[data-indent='3'] { padding-left: 36px; }
-.log.log-fumbbl > .log-u[data-indent='4'] { padding-left: 48px; }
-.log.log-fumbbl > .log-u[data-indent='5'] { padding-left: 60px; }
-.log.log-fumbbl > .log-u[data-indent='6'] { padding-left: 72px; }
-.log.log-fumbbl > .log-u[data-space='above'] { margin-top: 4px; }
-.log.log-fumbbl > .log-u[data-space='below'] { margin-bottom: 4px; }
-.log.log-fumbbl > .log-u[data-space='aboveBelow'] { margin: 4px 0; }
+.log.log-fumbbl > .log-rows > .log-u { display: block; white-space: pre-wrap; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='1'] { padding-left: 12px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='2'] { padding-left: 24px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='3'] { padding-left: 36px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='4'] { padding-left: 48px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='5'] { padding-left: 60px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='6'] { padding-left: 72px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='above'] { margin-top: 4px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='below'] { margin-bottom: 4px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='aboveBelow'] { margin: 4px 0; }
 .log.log-fumbbl .log-u-bold, .log.log-fumbbl .log-u-roll, .log.log-fumbbl .log-u-turn { font-weight: 700; }
 .log.log-fumbbl .log-u-explanation { font-style: italic; }
 .log.log-graphical {
@@ -214,7 +214,7 @@ const textStyle = computed(() => ({
   padding-right: 0;
 }
 .log.log-graphical { --log-indent: 0; }
-.log.log-graphical > span[data-kind] {
+.log.log-graphical > .log-rows > span[data-kind] {
   display: grid;
   grid-template-columns: var(--log-action-col) auto minmax(0, 1fr);
   align-items: center;
@@ -228,12 +228,13 @@ const textStyle = computed(() => ({
 .log.log-graphical .log-d6, .log.log-graphical .log-block-die { filter: drop-shadow(0 0 1.5px rgb(255 255 255 / 0.9)) drop-shadow(0 0 3px rgb(255 255 255 / 0.45)); }
 .log.log-graphical .log-armour { width: var(--log-icon-size); height: var(--log-icon-size); margin: 0.04em 0.06em; vertical-align: middle; }
 .log.log-graphical .log-hidden, .log.log-graphical .log-armour-glyph, .log.log-graphical .log-stat-down-copy, .log.log-graphical :deep(.block-die-result), .log.log-graphical :deep(.d6-face-value:not(.visible)) { text-shadow: none; }
-.log.log-graphical > span[data-row-side='home'] { background: var(--log-row-home); }
-.log.log-graphical > span[data-row-side='home']:nth-child(even) { background: var(--log-row-home-alt); }
-.log.log-graphical > span[data-row-side='away'] { background: var(--log-row-away); }
-.log.log-graphical > span[data-row-side='away']:nth-child(even) { background: var(--log-row-away-alt); }
-.log.log-graphical > span[data-row-side='neutral'] { background: var(--log-row-neutral); }
-.log.log-graphical > span[data-row-side='neutral']:nth-child(even) { background: var(--log-row-neutral-alt); }
-.log.log-graphical > span[data-row-side='away'] .log-fail { color: #ff8f7a; }
+.log.log-graphical > .log-rows > span[data-row-side='home'] { background: var(--log-row-home); }
+.log.log-graphical > .log-rows > span[data-row-side='home']:nth-child(even) { background: var(--log-row-home-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='away'] { background: var(--log-row-away); }
+.log.log-graphical > .log-rows > span[data-row-side='away']:nth-child(even) { background: var(--log-row-away-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='neutral'] { background: var(--log-row-neutral); }
+.log.log-graphical > .log-rows > span[data-row-side='neutral']:nth-child(even) { background: var(--log-row-neutral-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='away'] .log-fail { color: #ff8f7a; }
+.log-rows { display: block; }
 /* ---- MIRROR END ---- */
 </style>

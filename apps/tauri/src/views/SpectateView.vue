@@ -79,6 +79,7 @@ import ChatBubbleRows from '../components/ChatBubbleRows.vue';
 import ChatEmojiText from '../components/ChatEmojiText.vue';
 import PaneSearch from '../components/PaneSearch.vue';
 import { usePaneSearch } from '../game/usePaneSearch';
+import { createPaneFollower, paneAtBottom } from '../game/paneFollow';
 import { bindBallOutCue, modernScatterCue, modernThrowOrigin } from '../game/ballOutView';
 import CoachCornerCounts from '../components/CoachCornerCounts.vue';
 import { teamBoxCounts } from '../game/dugoutCounts';
@@ -604,6 +605,11 @@ function growChatInput() {
   el.style.height = 'auto';
   // Empty → back to the one-row rule (Chrome counts a WRAPPED placeholder in scrollHeight, which grew an empty box).
   el.style.height = el.value ? `${el.scrollHeight}px` : '';
+  // Owner 11-02: the auto-height measurement above briefly resizes the Log / Chat pane, which can clamp its offset up
+  // without changing its final size (no ResizeObserver call): a following pane goes back to its end right here, before
+  // that clamp's scroll event arrives (Sol 11-02 round 4).
+  logFollow.settle();
+  chatFollow.settle();
 }
 function onChatKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(); }
@@ -1082,6 +1088,19 @@ const logAtBottom = ref(true);
 const chatAtBottom = ref(true);
 const logNewEvents = ref(false);
 const chatNewEvents = ref(false);
+// Owner 11-02: the panes keep following through resizes (the chat entry box growing shrinks them); only the reader's
+// own scroll stops the follow (game/paneFollow.ts). The panes are v-if'd per tab: attach / detach as they mount.
+const logFollow = createPaneFollower({ isFollowing: () => logAtBottom.value });
+const chatFollow = createPaneFollower({ isFollowing: () => chatAtBottom.value });
+watch(logEl, (el) => logFollow.attach(el), { flush: 'post', immediate: true });
+watch(chatEl, (el) => chatFollow.attach(el), { flush: 'post', immediate: true });
+onBeforeUnmount(() => { logFollow.detach(); chatFollow.detach(); });
+/** Our own scroll of a pane to its newest line (attaches first, in case the pane mounted this very tick). */
+function pinPane(which: 'log' | 'chat'): void {
+  const follow = which === 'log' ? logFollow : chatFollow;
+  follow.attach(which === 'log' ? logEl.value : chatEl.value);
+  follow.pin();
+}
 // Owner 2026-07-08: unread chat count → a badge on the CHAT tab (shown when toasts
 // are disabled, so a missed line is still surfaced). Reset when the tab is opened.
 const chatUnread = computed(() => gameStore.spectatorReview.value.chatUnread);
@@ -1559,7 +1578,18 @@ function clampUiToViewport() {
 
 function onLogScroll(which: 'log' | 'chat', event: Event) {
   const el = event.target as HTMLElement;
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8;
+  const atBottom = paneAtBottom(el);
+  const follow = which === 'log' ? logFollow : chatFollow;
+  // Owner 11-02: only the reader moving the pane UP stops the follow; anything else (our own pin, the browser
+  // re-clamping a resized pane, rows growing) sends a following pane straight back to its end. Every scroll event is
+  // classified, at the end too (Sol 11-02). Search stepping (matches shown) keeps its rules: its reveal scroll stops
+  // the follow as before. A pane that is not following keeps the old rules (its flag follows the offset).
+  const stopsFollow = follow.scrollStopsFollow();
+  const following = which === 'log' ? logAtBottom.value : chatAtBottom.value;
+  if (following && !atBottom && !stopsFollow && !paneSearch.active.value) {
+    follow.pin();
+    return;
+  }
   if (which === 'log') {
     logAtBottom.value = atBottom;
     if (atBottom) logNewEvents.value = false;
@@ -1621,8 +1651,7 @@ function paneSearchEscape(): void {
 watch(panelSettingsOpen, (open) => { if (!open) paneSearch.clear(); });
 
 function jumpToBottom(which: 'log' | 'chat') {
-  const el = which === 'log' ? logEl.value : chatEl.value;
-  if (el) el.scrollTop = el.scrollHeight;
+  pinPane(which);
   if (which === 'log') logNewEvents.value = false;
   else chatNewEvents.value = false;
 }
@@ -1636,7 +1665,7 @@ watch(
   async () => {
     await nextTick();
     if (!logEl.value) return;
-    if (logAtBottom.value) logEl.value.scrollTop = logEl.value.scrollHeight;
+    if (logAtBottom.value) pinPane('log');
     else logNewEvents.value = true;
   },
 );
@@ -1645,7 +1674,7 @@ watch(
   async () => {
     await nextTick();
     if (!chatEl.value) return;
-    if (chatAtBottom.value) chatEl.value.scrollTop = chatEl.value.scrollHeight;
+    if (chatAtBottom.value) pinPane('chat');
     else chatNewEvents.value = true;
   },
 );
@@ -1654,7 +1683,7 @@ watch(
   () => settings.chatStyle,
   async () => {
     await nextTick();
-    if (chatEl.value && chatAtBottom.value) chatEl.value.scrollTop = chatEl.value.scrollHeight;
+    if (chatEl.value && chatAtBottom.value) pinPane('chat');
   },
 );
 // Owner 09-08: the log/chat <pre> is v-if'd per tab, so jumping to the tab (or un-collapsing onto it) mounts a
@@ -15575,9 +15604,9 @@ function sendChat() {
                    rows and plates, logRowStability.ts) are unchanged, so Vue skips it, and the row's own render tracks the
                    settings / tint / view it reads. The slot reads only its slot props, never the v-for variables (that keeps
                    the slot STABLE; a v-for variable read inside it would re-render every row again). -->
-              <pre ref="logEl" v-memo="[logEntries, upstreamRows, logRowPlateList, settings.logStyle, settings.logTimestamps, settings.logDiceAsNumbers, settings.logNeededAsNumbers, gameStore.mySeat.value, seatTint, appliedPitchView.orientation, appliedPitchView.flipped, logTextStyle]" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><template v-if="settings.logStyle === 'fumbbl'"><LogRow v-for="(urow, i) in upstreamRows" :key="upstreamRowKeyList[i]" :entry="urow" v-slot="{ entry: row }"><span class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
+              <pre ref="logEl" v-memo="[logEntries, upstreamRows, logRowPlateList, settings.logStyle, settings.logTimestamps, settings.logDiceAsNumbers, settings.logNeededAsNumbers, gameStore.mySeat.value, seatTint, appliedPitchView.orientation, appliedPitchView.flipped, logTextStyle]" class="log" :class="{ 'log-graphical': settings.logStyle === 'graphical', 'log-fumbbl': settings.logStyle === 'fumbbl' }" :style="logTextStyle" @scroll="onLogScroll('log', $event)" tabindex="-1"><div class="log-rows" data-pane-rows><template v-if="settings.logStyle === 'fumbbl'"><LogRow v-for="(urow, i) in upstreamRows" :key="upstreamRowKeyList[i]" :entry="urow" v-slot="{ entry: row }"><span class="log-u" :data-kind="row.entry.kind" :data-indent="row.line.indent || undefined" :data-space="row.line.space"><span v-if="settings.logTimestamps && row.first" class="log-time">{{ row.entry.time }}  </span><template v-for="(s, j) in upstreamSegmentsFor(row.line)" :key="j"><span v-if="s.team && logNameColor(s.team)" class="log-name" :class="[{ 'log-name-link': !!s.playerId }, ...s.styles.map((st) => 'log-u-' + st)]" :style="logNameStyle(s.team)" @click="onLogNameClick(s.playerId)" @dblclick="onLogNameDblClick(s.playerId)">{{ upstreamSegText(s) }}</span><span v-else-if="s.styles.length" :class="s.styles.map((st) => 'log-u-' + st)">{{ upstreamSegText(s) }}</span><template v-else>{{ upstreamSegText(s) }}</template></template>
 </span></LogRow></template><template v-else><LogRow v-for="(row, i) in logEntries" :key="logRowKeyList[i]" :entry="row" :plate="logRowPlateList[i]" v-slot="{ entry, plate }"><span :data-kind="entry.kind" :data-row-side="settings.logStyle === 'graphical' ? logRowSide(entry.action?.side, gameStore.mySeat.value) : undefined"><LogActionPlate v-if="settings.logStyle === 'graphical'" :plate="plate" /><span class="log-text" :data-indent="logRowIndent(entry)"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-for="(s, j) in logSegmentsFor(logRowLine(entry))" :key="j"><span v-if="s.tk === 'dienum'" class="log-dienum">{{ s.t }}</span><D6Face v-else-if="s.face" class="log-d6" :value="s.face" variant="black" :side="diceSideOfServerSide(s.dteam)" :label="`${s.kind === 'target' ? 'Needed' : 'Rolled'} ${s.face}`" /><BlockDieFace v-else-if="s.blockFace && s.result" class="log-block-die" :value="s.blockFace" :result="s.result" /><span v-else-if="s.tk === 'title'" class="log-title">{{ s.t }}</span><span v-else-if="s.tk === 'armour'" class="log-armour" role="img" :aria-label="s.title ?? 'armour'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="breastplateIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'apothecary'" class="log-armour log-apothecary" role="img" :aria-label="s.title ?? 'Injury roll'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="apothecaryLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'stat-down-ni'" class="log-stat-down" role="img" aria-label="Niggling injury"><span class="log-stat-down-copy">{{ s.t }}</span><img :src="niStatDownIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'ko'" class="log-armour log-ko" role="img" :aria-label="s.title ?? 'Knocked out'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img v-if="koLogLetteringUrl" :src="koLogLetteringUrl" alt="" aria-hidden="true" /><span v-else class="log-ko-fallback" aria-hidden="true">KO</span></span><span v-else-if="s.tk === 'stun'" class="log-armour log-stun" role="img" :aria-label="s.title ?? 'Stunned'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="stunnedLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'dead'" class="log-armour log-dead" role="img" :aria-label="s.title ?? 'Killed'" :title="s.title"><span class="log-armour-glyph">{{ s.t }}</span><img :src="deadLogIconUrl" alt="" aria-hidden="true" /></span><span v-else-if="s.tk === 'direction'" class="log-direction" :title="s.title ? `Field direction: ${s.title}` : undefined">{{ logDirectionText(s.title) }}</span><span v-else-if="s.tk === 'hidden'" class="log-hidden">{{ s.t }}</span><span v-else-if="s.tk === 'fail'" class="log-fail">{{ s.t }}</span><span v-else-if="s.side && logNameColor(s.side)" class="log-name" :class="{ 'log-name-link': !!s.pid }" :style="logNameStyle(s.side)" @click="onLogNameClick(s.pid)" @dblclick="onLogNameDblClick(s.pid)">{{ s.t }}</span><template v-else>{{ s.t }}</template></template>
-</span></span></LogRow></template></pre>
+</span></span></LogRow></template></div></pre>
               <button v-if="logNewEvents" class="new-events" @click="jumpToBottom('log')">
                 {{ $t('hud.logPanel.log.newEvents') }}
               </button>
@@ -15622,8 +15651,8 @@ function sendChat() {
                    08-19 line markup below (message words through ChatEmojiText: :shortcode: emoji, display only). -->
               <!-- Owner 08-19: chat — muted HH:MM stamp, coach NAME seat-coloured (logNameColor),
                    spectator LINES pale green, names in Nuffle over sans-serif message text. -->
-              <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" :keys="chatRowKeyList" /><template v-else><span v-for="(entry, i) in chatEntries" :key="chatRowKeyList[i]" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
-</span></template></pre>
+              <pre ref="chatEl" class="log chat-log" :class="{ 'chat-bubbles': settings.chatStyle === 'bubbles' }" :style="logTextStyle" @scroll="onLogScroll('chat', $event)" tabindex="-1"><div class="log-rows" data-pane-rows><ChatBubbleRows v-if="settings.chatStyle === 'bubbles'" :rows="chatBubbleList" :timestamps="settings.logTimestamps" :times="chatBubbleTimes" :keys="chatRowKeyList" /><template v-else><span v-for="(entry, i) in chatEntries" :key="chatRowKeyList[i]" data-kind="talk" :data-side="entry.side ?? 'unknown'" :style="entry.side === 'spectator' ? { color: '#9fd49f' } : undefined"><span v-if="settings.logTimestamps" class="log-time">{{ entry.time }}  </span><template v-if="chatParts(entry).name && (entry.side === 'home' || entry.side === 'away') && logNameColor(entry.side)"><span class="log-name" :style="logNameStyle(entry.side)">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else-if="chatParts(entry).name"><span class="log-name">{{ chatParts(entry).name }}</span>{{ ': ' }}<ChatEmojiText :text="chatParts(entry).rest" /></template><template v-else><ChatEmojiText :text="entry.text" /></template>
+</span></template></div></pre>
               <button v-if="chatNewEvents" class="new-events" @click="jumpToBottom('chat')">
                 {{ $t('hud.logPanel.newMessages') }}
               </button>
@@ -16700,6 +16729,12 @@ function sendChat() {
              choosing coach has the placement surface instead). The roll's splash reads first. -->
         <OnTheBallWaitingModal v-if="gameStore.state.swarmingWaiting && !gameStore.state.swarmingSplash" :title="gameStore.state.swarmingWaiting.title" notice-id="swarming-waiting"
           :message="gameStore.state.swarmingWaiting.message"
+          :position-style="onTheBallWaitingStyle" draggable
+          @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
+        <!-- Owner 11-01 (BB2025 Quick Snap): the receiving coach moving up to N players; every other seat waits on them (the
+             moving coach has the Quick Snap confirmation panel instead). -->
+        <OnTheBallWaitingModal v-if="gameStore.state.quickSnapWaiting" :title="gameStore.state.quickSnapWaiting.title" notice-id="quick-snap-waiting"
+          :message="gameStore.state.quickSnapWaiting.message"
           :position-style="onTheBallWaitingStyle" draggable
           @drag-start="startReactivePromptDrag('onTheBallWaiting', $event)" />
         <!-- S99 (owner 10-02): Pick-Me-Up - the coach with prone players is choosing who stands; every other seat waits on them. -->
@@ -22018,6 +22053,12 @@ function sendChat() {
   padding-bottom: 0.5rem;
 }
 .chat-log.chat-bubbles > :deep(:first-child) { margin-top: auto; }
+/* Owner 11-02: every row of the Log / Chat pane sits in ONE block, .log-rows (data-pane-rows), so a single ResizeObserver
+   on it sees any row grow (game/paneFollow.ts) and pane search indexes its children. It is a plain block in the pre
+   (literal whitespace inherited); in Bubbles it is the bottom-anchored first child and lays the bubbles out as the
+   pre's own flex column did. */
+.log-rows { display: block; }
+.chat-log.chat-bubbles > .log-rows { display: flex; flex-direction: column; flex: none; }
 /* (Owner 08-19: the 07-08 full-line side colours are retired — the seat colour rides the
    coach-name span only, spectators/unknown senders stay plain.) */
 .log [data-kind='system'] { color: var(--ui-muted); }
@@ -22034,16 +22075,16 @@ function sendChat() {
    serves every UI theme. */
 /* Owner 10-16 (FUMBBL log style): upstream's ChatLogDocument - 12 px per indent level, 4 px of space around the
    SPACE_ABOVE / SPACE_BELOW paragraphs; ROLL and TURN bold, EXPLANATION italic. */
-.log.log-fumbbl > .log-u { display: block; white-space: pre-wrap; }
-.log.log-fumbbl > .log-u[data-indent='1'] { padding-left: 12px; }
-.log.log-fumbbl > .log-u[data-indent='2'] { padding-left: 24px; }
-.log.log-fumbbl > .log-u[data-indent='3'] { padding-left: 36px; }
-.log.log-fumbbl > .log-u[data-indent='4'] { padding-left: 48px; }
-.log.log-fumbbl > .log-u[data-indent='5'] { padding-left: 60px; }
-.log.log-fumbbl > .log-u[data-indent='6'] { padding-left: 72px; }
-.log.log-fumbbl > .log-u[data-space='above'] { margin-top: 4px; }
-.log.log-fumbbl > .log-u[data-space='below'] { margin-bottom: 4px; }
-.log.log-fumbbl > .log-u[data-space='aboveBelow'] { margin: 4px 0; }
+.log.log-fumbbl > .log-rows > .log-u { display: block; white-space: pre-wrap; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='1'] { padding-left: 12px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='2'] { padding-left: 24px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='3'] { padding-left: 36px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='4'] { padding-left: 48px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='5'] { padding-left: 60px; }
+.log.log-fumbbl > .log-rows > .log-u[data-indent='6'] { padding-left: 72px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='above'] { margin-top: 4px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='below'] { margin-bottom: 4px; }
+.log.log-fumbbl > .log-rows > .log-u[data-space='aboveBelow'] { margin: 4px 0; }
 .log.log-fumbbl .log-u-bold, .log.log-fumbbl .log-u-roll, .log.log-fumbbl .log-u-turn { font-weight: 700; }
 .log.log-fumbbl .log-u-explanation { font-style: italic; }
 .log.log-graphical {
@@ -22061,7 +22102,7 @@ function sendChat() {
   padding-left: 0;
   padding-right: 0;
 }
-.log.log-graphical > span[data-kind] {
+.log.log-graphical > .log-rows > span[data-kind] {
   display: grid;
   grid-template-columns: var(--log-action-col) auto minmax(0, 1fr);
   align-items: center;
@@ -22097,14 +22138,14 @@ function sendChat() {
    coloured shadow - the row outline must not paint through the dice, armour and NI artwork. */
 .log.log-graphical .log-hidden, .log.log-graphical .log-armour-glyph, .log.log-graphical .log-stat-down-copy,
 .log.log-graphical :deep(.block-die-result), .log.log-graphical :deep(.d6-face-value:not(.visible)) { text-shadow: none; }
-.log.log-graphical > span[data-row-side='home'] { background: var(--log-row-home); }
-.log.log-graphical > span[data-row-side='home']:nth-child(even) { background: var(--log-row-home-alt); }
-.log.log-graphical > span[data-row-side='away'] { background: var(--log-row-away); }
-.log.log-graphical > span[data-row-side='away']:nth-child(even) { background: var(--log-row-away-alt); }
-.log.log-graphical > span[data-row-side='neutral'] { background: var(--log-row-neutral); }
-.log.log-graphical > span[data-row-side='neutral']:nth-child(even) { background: var(--log-row-neutral-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='home'] { background: var(--log-row-home); }
+.log.log-graphical > .log-rows > span[data-row-side='home']:nth-child(even) { background: var(--log-row-home-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='away'] { background: var(--log-row-away); }
+.log.log-graphical > .log-rows > span[data-row-side='away']:nth-child(even) { background: var(--log-row-away-alt); }
+.log.log-graphical > .log-rows > span[data-row-side='neutral'] { background: var(--log-row-neutral); }
+.log.log-graphical > .log-rows > span[data-row-side='neutral']:nth-child(even) { background: var(--log-row-neutral-alt); }
 /* scarlet "fails" on a red row: a lighter red keeps it legible (with the outline above) */
-.log.log-graphical > span[data-row-side='away'] .log-fail { color: #ff8f7a; }
+.log.log-graphical > .log-rows > span[data-row-side='away'] .log-fail { color: #ff8f7a; }
 .chat { flex: none; } /* owner 09-23: the entry keeps its grown height; the log above yields */
 .chat textarea {
   display: block;

@@ -156,12 +156,21 @@ export function clearPaneSearch(container: Element | null): void {
  * data-search-hit and the current one data-search-current; the matched runs go to the CSS highlight registry when the
  * engine has one. Returns the ranges (all, current) so callers and tests can see what was marked.
  */
+/**
+ * The element whose children are the pane's rows: the pane's single row block (`data-pane-rows`, owner 11-02, the block
+ * the follow observer sizes) when it has one, else the pane itself.
+ */
+export function paneRowsHost(container: Element): Element {
+  const first = container.firstElementChild;
+  return first && first.hasAttribute('data-pane-rows') ? first : container;
+}
+
 export function applyPaneSearch(container: Element | null, hitRows: readonly number[], currentRow: number | null, query: string): { all: Range[]; current: Range[] } {
   const reg = highlightRegistry();
   const all: Range[] = [];
   const current: Range[] = [];
   if (container) {
-    const rows = container.children;
+    const rows = paneRowsHost(container).children;
     for (let i = 0; i < rows.length; i++) {
       rows[i]!.removeAttribute('data-search-hit');
       rows[i]!.removeAttribute('data-search-current');
@@ -189,7 +198,7 @@ export function applyPaneSearch(container: Element | null, hitRows: readonly num
  */
 export function revealPaneRow(container: HTMLElement | null, rowIndex: number | null, match?: Range | null): void {
   if (!container || rowIndex == null) return;
-  const row = container.children[rowIndex] as HTMLElement | undefined;
+  const row = paneRowsHost(container).children[rowIndex] as HTMLElement | undefined;
   if (!row) return;
   const rowRect = row.getBoundingClientRect();
   const box = container.getBoundingClientRect();

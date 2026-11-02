@@ -87,8 +87,9 @@ defineExpose({ focus: () => input.value?.focus() });
 /* Owner 10-16: search marks in the Log / Chat pane (global: the rows belong to several components). A matching row
    gets a thin outline, the current one a stronger one; the matched run is painted through the CSS highlight registry
    (game/paneSearch.ts), which leaves the row markup untouched in every log and chat style. */
-.log > [data-search-hit] { outline: 1px solid rgb(255 214 102 / 0.55); outline-offset: -1px; }
-.log > [data-search-current] { outline: 2px solid #ffd666; outline-offset: -2px; }
+/* the rows sit in the pane's row block (.log-rows, owner 11-02) */
+.log > .log-rows > [data-search-hit] { outline: 1px solid rgb(255 214 102 / 0.55); outline-offset: -1px; }
+.log > .log-rows > [data-search-current] { outline: 2px solid #ffd666; outline-offset: -2px; }
 /* a matched emoji / fallback die number: not paintable text, so the element itself is marked */
 .log [data-search-mark] { background-color: rgb(255 214 102 / 0.45); border-radius: 3px; }
 .log [data-search-mark='current'] { background-color: #ffb300; }
