@@ -1,0 +1,86 @@
+/* Modern in-game look (owner 11-03: "commission a redesign of all [in-game panels] onto the new design language";
+   "These do not replace the current UI style but is a new path"). Settings > In-game style: Modern puts
+   `.sf-lm.lm-game` on the game view root (SpectateView `.spectate`, game/lmTheme.ts lmGameRootClass); Retro (the
+   default) adds nothing, so none of these rules apply and the game looks exactly as before.
+
+   Spec: docs/artifact-orchestration/spec-ingame-modern-2026-11-03.md. Files, one owner each:
+     base.css      foundation: fonts, shared paint, accessibility restatements (this file)
+     hud.css       coach corner panels, scoreboard + End Turn, turn timer, quick bar, live list, rank panel
+     dock.css      log / chat / roster dock, chat toasts, popped-out chat, pane search
+     prompts.css   decision cards: yes/no, confirm panels, skill choice, apothecary, send-off, setup, pickers
+     dice.css      block / reroll / multi-block panels, block-alt, injury gate, context menu, system modals
+     splashes.css  toasts, splashes, banners, cinematics, cues
+     panels.css    post-game, inducements, player card, roster window, end-game picks, replay bar, telestrator
+
+   Rules for every file (test/lmGame.test.ts enforces them):
+   - Every selector starts with `.sf-lm.lm-game` (or `html.sf-high-contrast .sf-lm.lm-game`).
+   - Paint only. No position, size, margin, padding, inset, transform, display, grid/flex layout, z-index, animation or
+     transition timing, and no border WIDTH changes: the HUD is measured in JS (hudGeometry, syncHudTopClearance),
+     prompts are positioned by the view, and the owner-ruled timings live in the store.
+   - Colours only through tokens (--ui-*, --sf-*, --seat-*, or a token block of this file's own).
+   - Text sizes only as max(var(--ui-min-text-size, 12px), ...) or max(var(--ui-min-primary-text-size, 16px), ...). */
+
+/* ---- fonts: the retro display faces map to the League Manager sans inside the game view, so DisplayCaps, Nuffle
+   titles and stencils draw in the sans (the band title face stays for band headings). */
+.sf-lm.lm-game {
+  --font-display: var(--font-heading);
+  --font-graduate: var(--font-heading);
+  --ui-font: var(--font-body);
+}
+/* ---- secondary ink (final review): the League Manager dark --ui-muted (#848689) reads 4.25:1 on the raised faces the
+   game view is full of (--ui-surface-2, the panel gradient), under the 4.5:1 its small labels need. Inside the game root
+   the dark scheme lifts it to #9a9da1 (about 5.6:1 there). The light scheme keeps the League Manager's own value
+   (lm-theme.css's light block outranks this rule) and high contrast still maps it to the text colour. */
+.sf-lm.lm-game { --ui-muted: #9a9da1; }
+/* ---- "done / passed" ink (owner 11-04: "The brighter green text from Retro looks better than the light green here"):
+   text that reports a met condition or a gain takes Retro's bright green (#7ee59a) in dark; the light scheme keeps the
+   League Manager's dark success green, which reads on the light faces. Fills and lines keep --ui-success. */
+.sf-lm.lm-game { --lmg-done-ink: #7ee59a; }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game { --lmg-done-ink: var(--ui-success); }
+/* ---- panel headers (owner 11-04: "Header text is too small across all the panels ... Did we increase their size?"):
+   every in-game panel, card, dialog, notice and waiting-modal header that the skins draw in the band faces is 20px
+   (the League Manager band heading size) through the primary text-size floor, and a long title wraps (balanced)
+   instead of clipping. The selectors are the lane skins' own header selectors, so they outrank the Retro sizes the
+   same way the skins' face changes do. Splash and cinematic headlines (already large) and the measured scoreboard
+   half label are not panel headers and keep their sizes. */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .pitch-confirm-title,
+.sf-lm.lm-game .skill-choice .sc-title,
+.sf-lm.lm-game .skill-choice.bloodlust-card .bl-title,
+.sf-lm.lm-game .skill-choice.bloodlust-card > .sc-title,
+.sf-lm.lm-game .on-the-ball-waiting h2,
+.sf-lm.lm-game .setup-panel.setup-card .setup-title,
+.sf-lm.lm-game .setup-template-panel .setup-template-title,
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-title,
+.sf-lm.lm-game .sendoff-waiting h2,
+.sf-lm.lm-game .mbr-title,
+.sf-lm.lm-game .multi-block-resolution .mbr-title,
+.sf-lm.lm-game .block-alt-title,
+.sf-lm.lm-game .bp-uphill-title,
+.sf-lm.lm-game .block-partial.reroll-bar .rr-ctx-label,
+.sf-lm.lm-game .rr-ctx-label,
+.sf-lm.lm-game .conn-closed-card h2,
+.sf-lm.lm-game .conn-closed-card .waiting-card-title,
+.sf-lm.lm-game .concede-card h2,
+.sf-lm.lm-game .shutdown-card h2,
+.sf-lm.lm-game .cg-menu .cg-head h2,
+.sf-lm.lm-game .mn-card .mn-head,
+.sf-lm.lm-game .unknown-call .uc-head,
+.sf-lm.lm-game .admin-message .admin-message-head,
+.sf-lm.lm-game .kick-aim-modal-title,
+.sf-lm.lm-game .pg-title,
+.sf-lm.lm-game.chat-dock .chat-dock-title {
+  font-size: max(var(--ui-min-primary-text-size, 16px), 20px);
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+/* DisplayCaps' lead letter is a Nuffle capital 25% larger; in the sans it is an ordinary capital. */
+.sf-lm.lm-game .display-caps-lead { font-size: 1em; }
+
+/* ---- high contrast (Settings > Accessibility): the .sf-lm root declares its own tokens, which shadow the html-level
+   overrides in accessibilityModes.css, so the game root restates them. */
+html.sf-high-contrast .sf-lm.lm-game {
+  --ui-muted: var(--ui-text);
+  --ui-text-dim: color-mix(in srgb, var(--ui-text) 82%, var(--ui-surface));
+  --ui-border: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+  --sf-panel-line: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+}

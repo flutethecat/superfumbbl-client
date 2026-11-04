@@ -20,7 +20,8 @@ export type ChatBubbleRow = {
   side: ChatAuthorSide;
   /** Same speaker as the bubble above: the name label collapses. */
   chained: boolean;
-  /** Inline CSS custom properties: the bubble's dark shades and edge colour. */
+  /** Inline CSS custom properties: the bubble's dark shades and edge colour, plus the speaker's raw seat colour
+   *  (--chat-bubble-seat, read only by the Modern in-game skin's side bar; Retro does not use it). */
   style: Record<string, string>;
   /** The dark shade at the bottom of the bubble (also the --chat-bubble-deep value). */
   deep: string;
@@ -84,7 +85,7 @@ export function chatBubbleRows(
       side,
       chained,
       deep: shades.deep,
-      style: { '--chat-bubble-deep': shades.deep, '--chat-bubble-mid': shades.mid, '--chat-bubble-edge': shades.edge },
+      style: { '--chat-bubble-deep': shades.deep, '--chat-bubble-mid': shades.mid, '--chat-bubble-edge': shades.edge, '--chat-bubble-seat': seat },
     });
     prev = { name, side };
   }

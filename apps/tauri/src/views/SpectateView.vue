@@ -514,6 +514,7 @@ import refereeIconUrl from '../assets/resources/biased_ref.png';
 import { useSuperFumbblLogoMip } from '../game/logoMips';
 import { useDelayedPresence } from '../game/delayedPresence';
 import { blitzTokenView } from '../game/blitzProjection';
+import { lmGameRootClass } from '../game/lmTheme';
 import { activeServerTarget, applyServerTarget, flushSettingsFile, forkServerUrl, forkJnlpUrl, FUMBBL_SITE, keyLabel, resolveJoinCreds, settings, turfCatalog, type AppSettings } from '../game/settings';
 import { FONT_DISPLAY_FAMILY } from '../game/fontStacks';
 import { nextSpectatorTackleZoneMode, rendererSpectatorTackleZoneMode as spectatorTzForRenderer, spectatorTackleZoneTitle, usesSpectatorTackleZones, type SpectatorTackleZoneMode } from '../game/tackleZoneQuickBar';
@@ -8715,6 +8716,9 @@ function playerSideById(playerId: string | null | undefined): { player: PlayerJs
 // Race-prefixed position name (dedupes when the position already bakes in the race).
 /** Owner 09-05: the send-off surfaces (prompt + waiting modal) show the player's position under the name. */
 const sendOffPositionName = computed(() => { const e = playerSideById(gameStore.state.sendOff?.playerId); return e ? positionNameFor(e) : ''; });
+// Owner 11-04: the Spotted by the Ref card shows the player's portrait and name, like the apothecary card (an off-pitch
+// secret weapon has no square to point at, so the card itself must say who the bribe is for).
+const sendOffPortrait = computed(() => { void rendererReady.value; const id = gameStore.state.sendOff?.playerId; return id && renderer ? renderer.playerPortrait(id) : null; });
 const sendOffWaitingPositionName = computed(() => { const e = playerSideById(gameStore.state.sendOffWaiting?.playerId); return e ? positionNameFor(e) : ''; });
 function positionNameFor(entry: { player: PlayerJson; side: 'home' | 'away' }): string {
   const game = gameStore.game.value;
@@ -14621,10 +14625,23 @@ const prayerBoardTitle = computed(() => {
 // candidate can still be visually hard to hit. Offer the same guaranteed-reachable roster
 // list used by Classic as a fallback disclosure beside the ordinary pick bar — same wire
 // (resolvePlayerPick/confirmPlayerPick), never a second source of truth for eligibility.
+// Owner 11-04 (option 1): offer the list only when an eligible player has NO click target on the pitch or in the
+// dugout (renderer.unreachablePickIds), checked after the renderer has drawn the frame. Fail open: with no renderer
+// the list is offered, so a coach can never be left unable to pick.
+const rosterPickUnreachable = ref(true);
+function refreshRosterPickReach(): void {
+  const pp = gameStore.state.playerPick;
+  if (!pp) { rosterPickUnreachable.value = true; return; }
+  rosterPickUnreachable.value = renderer ? renderer.unreachablePickIds(pp.eligibleIds).length > 0 : true;
+}
+watch(() => [gameStore.state.playerPick?.key, gameStore.state.appliedFrameSeq, rendererReady.value] as const, () => {
+  void nextTick(() => requestAnimationFrame(refreshRosterPickReach));
+}, { immediate: true });
 const rosterPickFallback = computed(() => {
   const pp = gameStore.state.playerPick;
   if (!pp || mvpPick.value || assignPick.value || dwarfenWisdomPick.value || prayerBoardPick.value) return null;
   if (!hasOffPitchCandidate(gameStore.game.value, pp.eligibleIds)) return null;
+  if (!rosterPickUnreachable.value) return null;
   return {
     prompt: pp.prompt, min: pp.minPicks, max: pp.maxPicks, picked: pp.picked, declinable: pp.declinable,
     candidates: resolveRosterPickCandidates(gameStore.game.value, pp.eligibleIds),
@@ -15466,7 +15483,10 @@ watch(() => [
 </script>
 
 <template>
-  <div class="spectate" :style="presentationCssVars">
+  <!-- Owner 11-03 (in-game redesign, Settings > In-game style): Modern puts the League Manager root on the whole game
+       view (styles/lm-game/*.css); Retro (default) adds nothing and the view is exactly as before. -->
+  <!-- The pitch host below keeps the default (minimalist) HUD geometry under Modern and adds `hud-lm` for the paint. -->
+  <div class="spectate" :class="lmGameRootClass(settings)" :style="presentationCssVars">
     <!-- Owner 10-06: live panel-layout mode (entered from Settings > Customize UI Layout) ends with this centred button. -->
     <div v-if="settings.uiCustomize" class="ui-customize-bar" role="toolbar" :aria-label="$t('hud.uiCustomizeBar.panelLayout')">
       <span class="ui-customize-hint">{{ $t('hud.uiCustomizeBar.dragTheGripsTo') }}</span>
@@ -15776,7 +15796,7 @@ watch(() => [
 
     <div class="main">
       <div ref="pitchHost" class="pitch-host"
-        :class="settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
+        :class="lmGameRootClass(settings).length ? ['hud-minimalist', 'hud-lm'] : settings.modernHudStyle === 'minimalist' ? 'hud-minimalist' : 'hud-chrome'"
         :style="hudAccessibilityStyle">
         <div v-if="precisionHint" class="crosshair-precision-hint" data-testid="crosshair-precision-hint"
           :style="{ left: `${precisionHint.x}px`, top: `${precisionHint.y}px` }">{{ $t('hud.precision') }}</div>
@@ -16014,7 +16034,7 @@ watch(() => [
                  header, names below (upstream spectatorNames on serverJoin / serverLeave). Teleported to body so no parent
                  overflow can clip it; fixed-positioned in the direction that has room. -->
             <Teleport to="body">
-              <div v-if="liveSpectatorsExpanded && gameStore.state.spectatorCount > 0" ref="liveList" class="quick-live-list"
+              <div v-if="liveSpectatorsExpanded && gameStore.state.spectatorCount > 0" ref="liveList" class="quick-live-list" :class="lmGameRootClass(settings)"
                    role="dialog" :aria-label="$t('hud.configBar.spectators')" :style="liveListStyle"
                    @pointerenter="liveListPointer(true)" @pointerleave="liveListPointer(false)" @keydown.esc.stop="closeLiveSpectators">
                 <div class="quick-live-header">
@@ -16744,6 +16764,7 @@ watch(() => [
           :can-argue="gameStore.state.sendOff.canArgue"
           :can-bribe="gameStore.state.sendOff.canBribe"
           :referee-icon-url="refereeIconUrl" :coin-icon-url="coinSkullUrl" :position-name="sendOffPositionName"
+          :portrait="sendOffPortrait"
           :position-style="reactivePromptStyle('sendOff')"
           @drag-start="startReactivePromptDrag('sendOff', $event)"
           @argue="gameStore.sendOffArgue()" @bribe="gameStore.sendOffBribe()" @pass="gameStore.sendOffPass()" />
@@ -17104,6 +17125,10 @@ watch(() => [
                own line, then "Reroll?" + the source buttons + the X decline (replacing the old "Keep" text
                button, matching the ✕-decline idiom used by the generic reroll card's rr-decline-chip).
                Decision/bite beats keep the original title + button-row layout untouched. -->
+          <!-- Owner 11-04: "Move 'Reroll' to the top left of this panel." The question is a kicker at the card's top-left,
+               in both in-game styles ("the text deletes and position changes can match between retro and modern"); the
+               source buttons' row no longer carries it. -->
+          <div v-if="gameStore.state.bloodlust.stage === 'reroll'" class="bl-reroll-kicker">{{ $t('hud.rerollBar.reroll') }}</div>
           <div v-if="gameStore.state.bloodlust.stage === 'reroll'" class="sc-title bl-title">
             <span class="bl-marker" aria-hidden="true">🩸</span> {{ $t('hud.rerollBar.vampireFailedBloodlust', { vampire: gameStore.state.bloodlust.vampire }) }}
           </div>
@@ -17118,7 +17143,6 @@ watch(() => [
                 {{ TASTY_MORSEL_AVAILABLE_COPY }}
               </div>
               <div class="rr-prompt-line rr-question bl-reroll-row">
-                <span>{{ $t('hud.rerollBar.reroll') }}</span>
                 <button v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source" class="bl-opt"
                   :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
                   <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
@@ -17418,7 +17442,6 @@ watch(() => [
 
         <PitchConfirmationPanel v-if="gameStore.state.onTheBallMover" :title="$t('hud.onTheBall')"
           :label="$t('hud.onTheBallMovement')" test-id="on-the-ball-confirmation" compact>
-          {{ $t('hud.finishTheReactionMovement') }}
           <template #actions><button class="pick-confirm" @click="guardConfirmCard() || gameStore.endActivation()">{{ $t('hud.endMove') }}</button></template>
         </PitchConfirmationPanel>
 
@@ -18101,7 +18124,7 @@ watch(() => [
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
           <div class="mbr-title">{{ gameStore.state.reRollForTargets.reRolledAction.toUpperCase() }}</div>
           <div class="rr-prompt-line rr-question">{{ $t('hud.rerollTheFailedRerolledaction', { reRolledAction: gameStore.state.reRollForTargets.reRolledAction, p1: gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }) }}</div>
-          <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">{{ $t('hud.lonerTheRerollIs') }}</div>
+          <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">{{ $t('hud.thisPlayerHasLoner') }}</div>
           <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
             <span class="mbr-name">{{ $t('hud.mbrRow.theRollAgainstTarget', { target: t.target }) }}<template v-if="t.minimumRoll != null">{{ $t('hud.mbrRow.needsMinimumroll', { minimumRoll: t.minimumRoll }) }}</template></span>
             <div class="mbr-actions">
@@ -23377,6 +23400,8 @@ watch(() => [
   text-shadow: 0 2px 5px #000;
 }
 .bloodlust-card .rr-prompt-line { justify-content: center; }
+/* Owner 11-04: the "Reroll?" kicker at the card's top-left (both styles; Modern restyles it in lm-game/dice.css) */
+.bloodlust-card .bl-reroll-kicker { align-self: flex-start; color: var(--ui-heading); font-weight: 800; }
 .bloodlust-card .bl-special-available {
   width: 100%;
   color: #f2ce68;

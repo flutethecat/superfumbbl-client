@@ -19,6 +19,7 @@ import { ROSTER_POPOUT_DEFAULT_ROWS, ROSTER_POPOUT_ROWS, rosterPopoutHeightFor, 
 import type { PostGameSide, Side } from '../game/postGameProjection';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import { settings } from '../game/settings';
+import { lmGameRootClass } from '../game/lmTheme';
 import { $t } from '../i18n';
 
 const props = withDefaults(defineProps<{
@@ -210,7 +211,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-show="!suppressed" ref="panelEl" class="roster-popout" role="dialog" :aria-label="$t('cards.rosterPopout.roster')" data-testid="roster-popout" :style="frameStyle">
+    <div v-show="!suppressed" ref="panelEl" class="roster-popout" :class="lmGameRootClass(settings)" role="dialog" :aria-label="$t('cards.rosterPopout.roster')" data-testid="roster-popout" :style="frameStyle">
       <div ref="headEl" class="roster-popout-head" @pointerdown="startDrag">
         <span class="roster-popout-grip" :title="$t('cards.rosterPopout.dragToMove')" aria-hidden="true">⠿</span>
         <span class="roster-popout-title"><img class="roster-popout-icon" :src="helmetIcon" alt="" />{{ $t('cards.rosterPopout.roster2') }}</span>

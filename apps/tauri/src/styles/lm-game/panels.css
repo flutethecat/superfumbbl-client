@@ -1,0 +1,813 @@
+/* Modern in-game look: panels. See base.css for the file map and the rules.
+   Surfaces (spec-ingame-modern-2026-11-03, lane "panels"): the live end-game PostGamePanel (result window, tabs, MVP
+   cards, statistics, roster, the teleported Dice modal and its popovers, the exit bar), PostGameRoster, EndGamePickPane
+   (assign touchdown / MVP), InducementsPhase (owner-designed: paint only), RosterPopout (teleported), the player card
+   with PlayerDetailSkillList and its teleported skill tooltip, ReplayControls and the ReplayTelestrator toolbar.
+   The blade embeds of PostGamePanel (ReplayLauncherView, PlayView) sit outside the game root, so they keep their look.
+   Paint only: colours, faces, case, letter-spacing, radii, shadows, outlines. Every border keeps its width and style
+   (only the colour moves), every box keeps its size, every timing stays (MVP roulette, role blink, round pop-in). */
+
+/* ==== tokens ==================================================================================================== */
+/* The seat ink a band header's accent bar takes (set per seat below). */
+.sf-lm.lm-game .pg-roster-team-tab,
+.sf-lm.lm-game .pg-mvp-team,
+.sf-lm.lm-game .mvp-nominate-roster { --lmg-seat: var(--ui-heading); }
+.sf-lm.lm-game .pg-mvp-team[data-side='home'],
+.sf-lm.lm-game .mvp-nominate-roster[data-side='home'],
+.sf-lm.lm-game .pg-roster-team-toggle:not(.pg-roster-team-toggle--fixed) .pg-roster-team-tab:nth-child(1),
+.sf-lm.lm-game [data-side='home'] .pg-roster-team-toggle--fixed .pg-roster-team-tab { --lmg-seat: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-mvp-team[data-side='away'],
+.sf-lm.lm-game .mvp-nominate-roster[data-side='away'],
+.sf-lm.lm-game .pg-roster-team-toggle:not(.pg-roster-team-toggle--fixed) .pg-roster-team-tab:nth-child(2),
+.sf-lm.lm-game [data-side='away'] .pg-roster-team-toggle--fixed .pg-roster-team-tab { --lmg-seat: var(--sf-seat-away); }
+/* The inducement phase reads the client theme's gold / eggshell; inside it they follow the League Manager inks, so
+   the light scheme stays readable (scoped to the phase, never the whole game root). */
+.sf-lm.lm-game .ind-grid {
+  --ui-gold: var(--sf-gold);
+  --ui-gold-bright: var(--sf-gold);
+  --ui-eggshell: var(--ui-text);
+}
+/* Owner 10-11: the inducement side panels stay DEEP seat colours top to bottom in both schemes, so in the light scheme
+   they keep the dark inks (an island of the dark palette; the values are lm-theme.css's dark tokens). */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .ind-summary,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .ind-dock {
+  --ui-text: #e6e9ef;
+  --ui-muted: #a3a6ab;
+  --ui-text-dim: #8a8d91;
+  --ui-success: #3fb463;
+  --lmg-done-ink: #7ee59a;
+  --ui-heading: #ff3b3b;
+  --sf-gold: #e8a33d;
+  --ui-gold: #e8a33d;
+  --ui-gold-bright: #ffd23d;
+  --sf-panel-line: #353b44;
+  --sf-panel-top: rgb(35 39 45 / 0.9);
+  --sf-panel-bottom: rgb(10 12 15 / 0.9);
+  --sf-panel-hi: #626b77;
+  --sf-panel-drop: #050607;
+  --ui-surface: #0d0d0d;
+  --ui-surface-2: #242424;
+  --ui-hover: #250a0b;
+}
+/* (custom properties resolve where they are declared, so the caption ink is re-derived inside the dark island) */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .ind-summary,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .ind-dock { --lmg-panels-caption: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text)); }
+
+/* The roster pop-out's frame fill is an inline rgba(20, 22, 26, <opacity setting>) the view writes, so it is dark in both
+   schemes. To keep the opacity setting, the pop-out stays a dark-ink island in the light scheme instead of painting a light
+   ground over that fill (lm-theme.css's dark values). */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game.roster-popout {
+  --ui-text: #e6e9ef;
+  --ui-muted: #a3a6ab;
+  --ui-text-dim: #8a8d91;
+  --ui-success: #3fb463;
+  --lmg-done-ink: #7ee59a;
+  --ui-heading: #ff3b3b;
+  --ui-hover: #250a0b;
+  --ui-surface: #0d0d0d;
+  --ui-surface-2: #242424;
+  --sf-gold: #e8a33d;
+  --sf-seat-home: #4a86fe;
+  --sf-seat-away: #fe6666;
+  --sf-panel-line: #353b44;
+  --sf-panel-top: rgb(35 39 45 / 0.9);
+  --sf-panel-bottom: rgb(10 12 15 / 0.9);
+  --sf-panel-hi: #626b77;
+  --sf-panel-drop: #050607;
+  --sf-bevel: inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(0 0 0 / 0.4);
+}
+/* High contrast (Settings > Accessibility) over those dark-ink islands: they declare their own tokens after base.css's
+   high-contrast restatement, so they restate it from their local inks (heavier selectors than the light islands). */
+html.sf-high-contrast .sf-lm.lm-game .ind-summary[data-role],
+html.sf-high-contrast .sf-lm.lm-game .ind-dock.ind-actions,
+html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
+  --ui-muted: var(--ui-text);
+  --ui-text-dim: color-mix(in srgb, var(--ui-text) 82%, var(--ui-surface));
+  --ui-border: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+  --sf-panel-line: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+}
+/* Skill category inks (the client theme's, tuned for dark grounds: yellow Agility, white Passing) on the light panels:
+   the same hues, darkened to read on the light scheme. Not inside the deep inducement side panels or the roster pop-out,
+   which stay dark islands and keep the theme's own values. */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .postgame,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .player-card,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .mvp-nominate-card,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .ind-picker,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .apothecary-prompt {
+  --ui-skill-general: #1f56b8;
+  --ui-skill-agility: #7a5a00;
+  --ui-skill-strength: #b3161b;
+  --ui-skill-passing: #3d3f44;
+  --ui-skill-mutation: #1d6b1d;
+  --ui-skill-trait: #6b4a1f;
+  --ui-skill-extraordinary: #6b4a1f;
+}
+
+/* Small captions on raised faces (stat labels, roster sub-lines and counts, positions): --ui-muted reads just under
+   4.5:1 on --ui-surface-2 in dark (final review), so captions take an ink halfway to the text colour, in both schemes. */
+.sf-lm.lm-game { --lmg-panels-caption: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text)); }
+
+/* ==== end-game result window + Stats/MVP window (PostGamePanel) =================================================== */
+.sf-lm.lm-game .pg-window,
+.sf-lm.lm-game.pg-dice-modal .pg-dice-card {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pg-head { border-bottom-color: var(--sf-panel-line); box-shadow: inset 4px 0 0 var(--ui-heading); }
+.sf-lm.lm-game .pg-head.pg-head-tabs { box-shadow: none; }
+.sf-lm.lm-game .pg-title {
+  font-family: var(--sf-band-title-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+}
+/* the raised blocks of the end screen (team cards, score, winnings strip, MVP cards, stat columns) */
+.sf-lm.lm-game .pg-bevel {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pg-team-box.pg-bevel { background: var(--ui-surface-2); box-shadow: var(--sf-bevel); }
+/* the winner: a heading-red edge and a top bar (was an accent wash and outline) */
+.sf-lm.lm-game .pg-team.winner {
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 26%, var(--sf-panel-top)), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--ui-heading);
+  outline-color: transparent;
+  box-shadow: inset 0 3px 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pg-team-name { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .pg-team-coach { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-score { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .pg-score span { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-endstat-gold { color: var(--sf-gold); }
+.sf-lm.lm-game .pg-endstat-fans { color: var(--ui-text); }
+.sf-lm.lm-game .pg-endstat-fans.muted { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-defectors { border-top-color: var(--sf-panel-line); color: var(--ui-danger); }
+.sf-lm.lm-game .pg-defector-names { color: var(--ui-text); }
+
+/* tabs (MVP / Statistics / Roster / Dice): the League Manager tab face, the current one on the primary */
+.sf-lm.lm-game .pg-tabs button {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--lmg-panels-caption);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .pg-tabs button:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .pg-tabs button[data-active='true'] {
+  font-weight: 400;
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+}
+.sf-lm.lm-game .pg-tabs button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* MVP-pending placeholder */
+.sf-lm.lm-game .pg-mvp-pending { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-mvp-pending-dot { background: var(--sf-gold); }
+
+/* MVP tab: the column header is the roster's team band (below); the awarded player's card */
+.sf-lm.lm-game .pg-star { color: var(--sf-gold); }
+.sf-lm.lm-game .pg-mvp-spin { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-mvp-none { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-mvp-awaiting { color: var(--ui-text); }
+.sf-lm.lm-game .pg-mvp-card-name { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .pg-mvp-card-name[data-side='home'] { color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-mvp-card-name[data-side='away'] { color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-mvp-card-pos { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-mvp-card-value { color: var(--ui-text); }
+.sf-lm.lm-game .pg-mvp-advance { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-mvp-card { box-shadow: inset 4px 0 0 var(--lmg-seat), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop); }
+/* the portrait well (MVP card and player card): a dark well in the panel line, the sprite untouched */
+.sf-lm.lm-game .card-portrait {
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--ui-success) 16%, var(--ui-surface-2)) 0%, var(--ui-surface) 85%);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .portrait-missing { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .card-spp-gain { color: var(--lmg-done-ink); }
+
+/* Statistics: three lifted columns, seat-coloured heads, League Manager inks (as the Modern Game Menu's grid) */
+.sf-lm.lm-game .pg-stat-col-head { border-bottom-color: var(--sf-panel-line); box-shadow: none; }
+.sf-lm.lm-game .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top-color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-stat-col[data-side='label'] .pg-stat-col-head { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-stat-col-side { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-stat-cell { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-stat-cell.pg-h { color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-stat-cell.pg-a { color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-stat-cell.pg-stat-label { font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .08em; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-stat-cell[data-lead='true'] { color: var(--ui-heading); }
+
+/* Exit bar (slot from the view): a panel holding League Manager buttons */
+.sf-lm.lm-game .pg-action,
+.sf-lm.lm-game .mvp-nominate-confirm,
+.sf-lm.lm-game .ind-btn,
+.sf-lm.lm-game .pg-luck-chart-btn,
+.sf-lm.lm-game .pg-luck-close,
+.sf-lm.lm-game .pg-dice-close,
+.sf-lm.lm-game .open-recent-history {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+  text-shadow: none;
+}
+.sf-lm.lm-game .pg-action:hover,
+.sf-lm.lm-game .mvp-nominate-confirm:hover:not(:disabled),
+.sf-lm.lm-game .ind-btn:hover:not(:disabled),
+.sf-lm.lm-game .pg-luck-chart-btn:hover,
+.sf-lm.lm-game .pg-luck-close:hover,
+.sf-lm.lm-game .pg-dice-close:hover {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover);
+  border-color: var(--ui-heading);
+  filter: none;
+}
+/* primary: the League Manager primary gradient */
+.sf-lm.lm-game .pg-action.pg-action-primary,
+.sf-lm.lm-game .mvp-nominate-confirm,
+.sf-lm.lm-game .ind-btn.ind-btn-primary {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 6px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pg-action.pg-action-primary:hover,
+.sf-lm.lm-game .mvp-nominate-confirm:hover:not(:disabled),
+.sf-lm.lm-game .ind-btn.ind-btn-primary:hover:not(:disabled) {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  filter: brightness(1.06);
+}
+/* disabled: flat and readable (muted ink on the panel face, no lift), never a dimmed blob */
+.sf-lm.lm-game .mvp-nominate-confirm:disabled,
+.sf-lm.lm-game .ind-btn:disabled,
+.sf-lm.lm-game .ind-btn.ind-btn-primary:disabled {
+  opacity: 1;
+  filter: none;
+  color: var(--lmg-panels-caption);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: none;
+}
+.sf-lm.lm-game .pg-action:focus-visible,
+.sf-lm.lm-game .mvp-nominate-confirm:focus-visible,
+.sf-lm.lm-game .ind-btn:focus-visible,
+.sf-lm.lm-game .ind-blade:focus-visible,
+.sf-lm.lm-game .ind-x:focus-visible,
+.sf-lm.lm-game .pg-luck-chart-btn:focus-visible,
+.sf-lm.lm-game .pg-luck-close:focus-visible,
+.sf-lm.lm-game .pg-dice-close:focus-visible,
+.sf-lm.lm-game .pg-dice-switch button:focus-visible,
+.sf-lm.lm-game .pg-roster-team-toggle button.pg-roster-team-tab:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+/* ==== PostGameRoster (Roster tab, MVP column heads, pick panes, the Helmet pop-out) =============================== */
+.sf-lm.lm-game .pg-roster-team-toggle .pg-roster-team-tab {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  color: var(--lmg-panels-caption);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-bottom-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pg-roster-team-toggle button.pg-roster-team-tab:hover { color: var(--ui-text); }
+.sf-lm.lm-game .pg-roster-team-toggle .pg-roster-team-tab[data-active='true'] {
+  color: var(--ui-text);
+  background: linear-gradient(color-mix(in srgb, var(--lmg-seat) 18%, var(--sf-panel-top)), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-bottom-color: var(--lmg-seat);
+  box-shadow: inset 4px 0 0 var(--lmg-seat), inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pg-roster-team-sub { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-roster-team-count { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-roster-team-toggle .pg-roster-team-tab[data-active='true'] .pg-roster-team-count { color: var(--ui-text); }
+.sf-lm.lm-game .pg-roster-list li { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-roster-pos { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-roster-value { color: var(--ui-text); }
+.sf-lm.lm-game .pg-roster-spp { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-roster-spp[data-zero='true'] { color: var(--ui-text-dim); }
+.sf-lm.lm-game .pg-roster-spp.pg-roster-spp--bank { color: var(--ui-text); }
+.sf-lm.lm-game .pg-roster-spp-gain { color: var(--lmg-done-ink); }
+/* skill icon frames (the gold added-skill ring keeps its own rule: only the plain frames move) */
+.sf-lm.lm-game .pg-roster-skill-icon { background: var(--ui-surface-2); border-radius: 2px; }
+.sf-lm.lm-game .pg-roster-skill-icon:not([data-added='true']) { border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-roster-skill-icon:focus-visible { outline-color: var(--ui-focus); }
+.sf-lm.lm-game .pg-roster-team-tag {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .pg-roster-mvp { color: var(--sf-gold); }
+/* selectable rows, the awarded MVP and the picked row: a heading-red accent bar */
+.sf-lm.lm-game .pg-roster-list li[data-eligible='true']:hover { background: var(--ui-hover); }
+.sf-lm.lm-game .pg-roster-list li[data-checked='true'] { background: var(--ui-hover); box-shadow: inset 4px 0 0 var(--ui-heading); }
+.sf-lm.lm-game .pg-roster-list li[data-mvp='true'] {
+  background: color-mix(in srgb, var(--sf-gold) 14%, transparent);
+  box-shadow: inset 4px 0 0 var(--sf-gold);
+}
+.sf-lm.lm-game .pg-roster-list li:has(.pg-roster-check:focus-visible) { background: var(--ui-hover); outline-color: var(--ui-focus); }
+.sf-lm.lm-game .pg-roster-check {
+  background-color: var(--ui-surface);
+  border-color: color-mix(in srgb, var(--ui-text) 70%, transparent);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pg-roster-check:checked { background-color: var(--ui-primary); border-color: var(--ui-heading); }
+.sf-lm.lm-game .pg-roster-check:focus-visible { outline-color: var(--ui-focus); }
+.sf-lm.lm-game .pg-roster-innate { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-roster-innate:hover { color: var(--ui-text); }
+.sf-lm.lm-game .pg-roster-innate input { accent-color: var(--ui-primary); }
+.sf-lm.lm-game .pg-roster-innate input:focus-visible { outline-color: var(--ui-focus); }
+
+/* ==== Dice modal (teleported to body: it carries the root classes itself) ======================================== */
+.sf-lm.lm-game .pg-dice-head { border-bottom-color: var(--sf-panel-line); box-shadow: inset 4px 0 0 var(--ui-heading); }
+.sf-lm.lm-game .pg-dice-coverage { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-dice-coverage:not([data-coverage='whole']) {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-left-color: var(--ui-warn);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pg-dice-switch { background: var(--ui-surface-2); border-color: var(--sf-panel-line); border-radius: 2px; box-shadow: var(--sf-bevel); }
+.sf-lm.lm-game .pg-dice-switch button {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--lmg-panels-caption);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pg-dice-switch button:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .pg-dice-switch button[aria-selected='true'] {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+}
+.sf-lm.lm-game .pg-dice-switch button[aria-selected='true'][data-side='home'] { border-bottom-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-switch button[aria-selected='true'][data-side='away'] { border-bottom-color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-dice-grid h3 {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+}
+.sf-lm.lm-game .pg-dice-block h4 {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-text);
+}
+.sf-lm.lm-game .pg-dice-n { font-family: var(--font-body); text-transform: none; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-dice-n b { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-dice-block { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-block .pg-dodge-legend + h4 { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-col-single .pg-dice-block { border-top-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-col-single[data-side='away'] .pg-dice-block { border-top-color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-dice-right-bottom .pg-dice-col-single .pg-dice-block { border-top-color: transparent; }
+.sf-lm.lm-game .pg-dice-right-bottom > .pg-dice-cols { border-top-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-right-bottom > .pg-dice-cols:has([data-side='away']) { border-top-color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-dice-bar { fill: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-col[data-side='away'] .pg-dice-bar { fill: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-dice-label { font-family: var(--sf-band-font); fill: var(--ui-muted); }
+.sf-lm.lm-game .pg-dice-count { fill: var(--ui-text); }
+.sf-lm.lm-game .pg-dice-expected { stroke: var(--ui-text); }
+.sf-lm.lm-game .pg-dice-curve, .sf-lm.lm-game .pg-dice-mean { stroke: var(--ui-muted); }
+.sf-lm.lm-game .pg-dice-marker { stroke: var(--ui-heading); }
+/* the dodge chart's outside counts: the same meanings (passed / after reroll / failed), inks that read on the light panel */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-first { fill: var(--ui-success); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-reroll { fill: var(--sf-seat-home); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-fail { fill: var(--ui-danger); }
+.sf-lm.lm-game .pg-dice-gauge-label { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .pg-dice-gauge-value { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-dice-gauge-value b { color: var(--ui-text); }
+.sf-lm.lm-game .pg-dice-gauge-row + .pg-dice-gauge-row,
+.sf-lm.lm-game .pg-dice-fact { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-fact:first-child { border-top-color: transparent; }
+.sf-lm.lm-game .pg-dice-fact-label { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .pg-dice-fact-value { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-dice-fact-detail,
+.sf-lm.lm-game .pg-dice-empty,
+.sf-lm.lm-game .pg-dodge-legend { color: var(--lmg-panels-caption); }
+/* the "i" rings keep their round face (a help glyph, not a button), in the panel line */
+.sf-lm.lm-game .pg-dice-info { color: var(--lmg-panels-caption); background: var(--ui-surface-2); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-info:hover,
+.sf-lm.lm-game .pg-dice-info[data-open='true'] { color: var(--ui-text); border-color: var(--ui-heading); }
+.sf-lm.lm-game .pg-dice-info:focus-visible { color: var(--ui-text); border-color: var(--ui-heading); outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .pg-dice-info[data-pinned='true'] { background: color-mix(in srgb, var(--ui-primary) 35%, var(--ui-surface-2)); }
+/* the help popover, the Luck chart pane and its hover tip: League Manager panels */
+.sf-lm.lm-game .pg-dice-help-pop,
+.sf-lm.lm-game .pg-luck-pane,
+.sf-lm.lm-game .pg-luck-tip {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pg-luck-tip { box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop); }
+.sf-lm.lm-game .pg-luck-title { font-family: var(--sf-band-font); font-weight: 400; text-transform: uppercase; letter-spacing: .06em; color: var(--ui-heading); }
+.sf-lm.lm-game .pg-luck-head { box-shadow: 0 2px 0 var(--sf-panel-line); }
+.sf-lm.lm-game .pg-luck-legend, .sf-lm.lm-game .pg-luck-empty { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-luck-key[data-side='home'] line, .sf-lm.lm-game .pg-luck-line[data-side='home'] { stroke: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-luck-key[data-side='away'] line, .sf-lm.lm-game .pg-luck-line[data-side='away'] { stroke: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-luck-tip-line[data-side='home'] { color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-luck-tip-line[data-side='away'] { color: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-luck-zero { stroke: var(--ui-muted); }
+.sf-lm.lm-game .pg-luck-divider { stroke: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-luck-ytick, .sf-lm.lm-game .pg-luck-xtick { fill: var(--ui-muted); }
+.sf-lm.lm-game .pg-luck-col[data-hover='true'] { fill: color-mix(in srgb, var(--ui-text) 8%, transparent); }
+.sf-lm.lm-game .pg-luck-col:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+
+/* ==== the teleported bubbles: the skill tooltip and the dice row tip (each carries the root classes itself) ========= */
+.sf-lm.lm-game.skill-tip {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 18px var(--sf-discord-drop);
+}
+.sf-lm.lm-game.skill-tip .skill-tip-icon { background: var(--ui-surface-2); border-color: var(--sf-panel-line); border-radius: 2px; box-shadow: var(--sf-bevel); }
+.sf-lm.lm-game.skill-tip .skill-tip-name { font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .06em; color: var(--ui-heading); }
+.sf-lm.lm-game.skill-tip .pg-dice-tip-label { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game.skill-tip .pg-dice-tip-name:hover,
+.sf-lm.lm-game.skill-tip .pg-dice-tip-name[data-open='true'] { color: var(--sf-gold); }
+.sf-lm.lm-game.skill-tip .pg-dice-tip-name:focus-visible { outline-color: var(--ui-focus); }
+
+/* ==== player card (SpectateView .player-card) + PlayerDetailSkillList ============================================ */
+.sf-lm.lm-game .player-card {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .player-card .card-grip,
+.sf-lm.lm-game .player-card .close { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .player-card .card-grip:hover,
+.sf-lm.lm-game .player-card .close:hover { color: var(--ui-text); }
+.sf-lm.lm-game .player-card .close:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .player-card .card-name {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ui-heading);
+  box-shadow: 0 2px 0 var(--sf-panel-line);
+}
+.sf-lm.lm-game .player-card .card-name[data-side='home'] { color: var(--sf-seat-home); box-shadow: 0 2px 0 var(--sf-seat-home); }
+.sf-lm.lm-game .player-card .card-name[data-side='away'] { color: var(--sf-seat-away); box-shadow: 0 2px 0 var(--sf-seat-away); }
+.sf-lm.lm-game .player-card .card-position { color: var(--ui-text); }
+.sf-lm.lm-game .player-card .card-keywords { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+/* status: a League Manager notice strip (tone bar + tint) in the status colour */
+.sf-lm.lm-game .player-card .card-status {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-muted) 16%, transparent);
+  border-radius: 2px;
+  box-shadow: inset 3px 0 0 var(--ui-muted);
+}
+.sf-lm.lm-game .player-card .card-status[data-status="KO'd"] {
+  color: var(--sf-gold);
+  background: color-mix(in srgb, var(--sf-gold) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--sf-gold);
+}
+.sf-lm.lm-game .player-card .card-status[data-status='Badly Hurt'],
+.sf-lm.lm-game .player-card .card-status[data-status='Seriously Hurt'],
+.sf-lm.lm-game .player-card .card-status[data-status='Dead'] {
+  color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-danger) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--ui-danger);
+}
+.sf-lm.lm-game .player-card .card-injuries { color: var(--ui-danger); }
+.sf-lm.lm-game .player-card .card-stat {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .player-card .card-stat em { font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .08em; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .player-card .card-stat span[data-reduced='true'] { color: var(--ui-danger); }
+.sf-lm.lm-game .player-card .card-stat span[data-increased='true'] { color: var(--lmg-done-ink); }
+/* skill chips: the 48px frames keep their size; the gold added-skill ring keeps its own rules (plain frames only) */
+.sf-lm.lm-game .card-skills { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .card-skills .skill-chip { background: var(--ui-surface-2); border-radius: 2px; }
+.sf-lm.lm-game .card-skills .skill-chip:not([data-added='true']) { border-color: var(--sf-panel-line); box-shadow: var(--sf-bevel); }
+.sf-lm.lm-game .card-skills .skill-chip:not([data-added='true']):hover { border-color: var(--ui-heading); }
+.sf-lm.lm-game .card-skills .skill-chip:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.sf-lm.lm-game .card-skills .chip-subtext { font-family: var(--sf-band-font); }
+
+/* ==== RosterPopout (teleported to body, z 215: carries the root classes itself) ================================== */
+.sf-lm.lm-game.roster-popout { color: var(--ui-text); border-color: var(--sf-panel-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop); }
+.sf-lm.lm-game .roster-popout-head {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-bottom-color: var(--sf-panel-line);
+  box-shadow: inset 4px 0 0 var(--ui-heading);
+}
+.sf-lm.lm-game .roster-popout-title { font-family: var(--sf-band-font); font-weight: 400; text-transform: uppercase; color: var(--ui-heading); }
+.sf-lm.lm-game .roster-popout-grip, .sf-lm.lm-game .roster-popout-btn { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .roster-popout-grip:hover, .sf-lm.lm-game .roster-popout-btn:hover { color: var(--ui-text); }
+.sf-lm.lm-game .roster-popout-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+.sf-lm.lm-game .roster-popout-empty { color: var(--lmg-panels-caption); }
+
+
+/* ==== EndGamePickPane (Assign Touchdown + MVP nomination) and its banner slot ===================================== */
+.sf-lm.lm-game .mvp-nominate-card {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .mvp-nominate-head { border-bottom-color: var(--sf-panel-line); box-shadow: inset 4px 0 0 var(--ui-heading); }
+.sf-lm.lm-game .mvp-nominate-title {
+  font-family: var(--sf-band-title-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 20px);
+}
+.sf-lm.lm-game .mvp-nominate-count { font-family: var(--sf-band-font); color: var(--ui-heading); text-shadow: none; }
+.sf-lm.lm-game .mvp-nominate-count[data-complete='true'] { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .mvp-nominate-foot { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .mvp-waiting {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-info), var(--sf-bevel);
+}
+.sf-lm.lm-game .mvp-screen-result { border-bottom-color: var(--sf-panel-line); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .mvp-screen-final { font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .08em; color: var(--ui-heading); }
+.sf-lm.lm-game .mvp-screen-team { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .mvp-screen-chip {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .mvp-screen-chip-team { font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .06em; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .mvp-screen-mvp-lbl { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .mvp-screen-mvp-x { font-family: var(--sf-band-font); color: var(--ui-heading); border-color: var(--ui-heading); border-radius: 2px; }
+
+/* ==== InducementsPhase (owner-designed 10-11: paint only; seat tints deep, role blink, rank art and portraits kept) == */
+.sf-lm.lm-game .ind-grid { background: linear-gradient(160deg, color-mix(in srgb, var(--ui-primary) 14%, var(--ui-surface)) 0%, var(--ui-surface) 45%, var(--ui-surface) 100%); }
+/* DisplayCaps-style lead capitals become ordinary capitals in the sans (as base.css does for DisplayCaps) */
+.sf-lm.lm-game .ind-grid .cap { font-size: 1em; }
+.sf-lm.lm-game .ind-tournament-banner {
+  font-family: var(--sf-band-title-font);
+  color: var(--ui-heading);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+  text-shadow: none;
+}
+.sf-lm.lm-game .ind-picker {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .ind-picker-head {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-bottom-color: var(--sf-panel-line);
+  box-shadow: inset 4px 0 0 var(--ui-heading);
+}
+.sf-lm.lm-game .ind-title { font-family: var(--sf-band-title-font); font-size: max(var(--ui-min-primary-text-size, 16px), 20px); text-transform: uppercase; color: var(--ui-heading); }
+/* the role stencil keeps its blink and its colours; the flat League Manager ink drops the glow */
+.sf-lm.lm-game .ind-stencil { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .ind-stencil[data-role='overdog'] { color: var(--ui-heading); text-shadow: none; }
+.sf-lm.lm-game .ind-stencil[data-role='underdog'] { color: var(--sf-gold); text-shadow: none; }
+/* the blades: a League Manager tab strip (the current blade on the primary) over the 3px primary rule */
+.sf-lm.lm-game .ind-blades { background: var(--ui-surface-2); border-bottom-color: var(--ui-primary); }
+.sf-lm.lm-game .ind-blade { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-blade + .ind-blade { box-shadow: inset 2px 0 0 var(--sf-panel-line); }
+.sf-lm.lm-game .ind-blade:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .ind-blade[data-active='true'],
+.sf-lm.lm-game .ind-blade + .ind-blade[data-active='true'] { color: var(--ui-text-on-primary); background: var(--ui-primary); box-shadow: none; }
+/* picker cards and the side panels' selection cards */
+.sf-lm.lm-game .ind-card,
+.sf-lm.lm-game .ind-sum-card {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .ind-card[data-live='true']:hover {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover);
+  border-color: var(--ui-heading);
+}
+.sf-lm.lm-game .ind-card[data-pad-focus]:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .ind-card-name { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .ind-card-count { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-card-cost { font-family: var(--sf-band-font); color: var(--sf-gold); }
+.sf-lm.lm-game .ind-icon { background: var(--ui-surface-2); border-color: var(--sf-panel-line); border-radius: 2px; }
+/* sprite tiles: only the colour under the sprite moves (the sheet crop lives on background-size / -position) */
+.sf-lm.lm-game .ind-portrait { background-color: var(--ui-surface); border-color: var(--sf-panel-line); border-radius: 2px; color: var(--sf-gold); }
+.sf-lm.lm-game .ind-stat { background: var(--ui-surface-2); border-color: var(--sf-panel-line); border-radius: 2px; box-shadow: var(--sf-bevel); }
+.sf-lm.lm-game .ind-stat-v { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .ind-stat-k { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-sep { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-special { color: var(--sf-gold); }
+.sf-lm.lm-game .ind-empty { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-watch { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--sf-gold); }
+.sf-lm.lm-game .ind-preset-copy { color: var(--ui-text); }
+.sf-lm.lm-game .ind-lock-text { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--ui-text); }
+.sf-lm.lm-game .ind-lock-tick { text-shadow: none; }
+.sf-lm.lm-game .ind-lock-note { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+/* side panels: the deep seat gradient stays (owner 10-11); the line, radius and inner heads follow the League Manager */
+.sf-lm.lm-game .ind-summary.ind-seat-blue,
+.sf-lm.lm-game .ind-summary.ind-seat-red { color: var(--ui-text); border-radius: 2px; }
+.sf-lm.lm-game .ind-sum-head { border-bottom-color: color-mix(in srgb, var(--ind-seat-accent) 55%, var(--sf-panel-line)); box-shadow: 0 2px 0 var(--sf-panel-drop), inset 0 1px 0 var(--sf-panel-hi); }
+.sf-lm.lm-game .ind-team-name { font-family: var(--sf-band-title-font); text-transform: uppercase; text-shadow: none; }
+.sf-lm.lm-game .ind-team-coach { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-staff-heading { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-res {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .ind-res-qty { font-family: var(--sf-band-font); border-radius: 2px; text-shadow: none; }
+.sf-lm.lm-game .ind-res-qty[data-known='false'] { color: var(--lmg-panels-caption); background: var(--ui-surface-2); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .ind-status {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  color: var(--ui-warn-contrast);
+  background: var(--ui-warn);
+  border-color: var(--ui-warn);
+  border-left-color: var(--ui-warn);
+  box-shadow: var(--sf-bevel);
+  text-shadow: none;
+}
+.sf-lm.lm-game .ind-cash-line { border-bottom-color: var(--sf-panel-line); color: var(--ui-text); text-shadow: none; }
+.sf-lm.lm-game .ind-cash-k { font-family: var(--sf-band-font); text-transform: uppercase; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-cash-line > :last-child { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .ind-cash-gold { color: var(--sf-gold); }
+.sf-lm.lm-game .ind-cash-green { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .ind-cash-unknown, .sf-lm.lm-game .ind-cash-est { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .ind-sum-note {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-surface) 70%, transparent);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 2px 6px var(--sf-discord-drop);
+  text-shadow: none;
+}
+.sf-lm.lm-game .ind-badge {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .ind-kind { font-family: var(--sf-band-font); text-transform: uppercase; }
+.sf-lm.lm-game .ind-kind[data-kind='stars'] { color: var(--sf-gold); }
+.sf-lm.lm-game .ind-x {
+  color: var(--lmg-panels-caption);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .ind-x:hover { color: var(--ui-text); border-color: var(--ui-heading); }
+.sf-lm.lm-game .ind-foot { box-shadow: inset 0 1px 0 var(--sf-panel-hi); }
+.sf-lm.lm-game .ind-btn.ind-rosters-btn { text-transform: uppercase; }
+/* a coach who has confirmed: the League Manager "ok" chip, button-sized (a status, not a control) */
+.sf-lm.lm-game .ind-btn.ind-confirmed,
+.sf-lm.lm-game .ind-btn.ind-confirmed:hover:not(:disabled) {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-success) 26%, var(--ui-surface-2));
+  border-color: var(--ui-success);
+  box-shadow: var(--sf-bevel);
+  filter: none;
+}
+
+/* ==== ReplayControls (transport toolbar) and the ReplayTelestrator toolbar ======================================== */
+.sf-lm.lm-game .replay-controls,
+.sf-lm.lm-game .telestrator-tools {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 8px 18px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .replay-controls button,
+.sf-lm.lm-game .replay-speed select,
+.sf-lm.lm-game .replay-turn-select select,
+.sf-lm.lm-game .telestrator-tools button {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .replay-controls button,
+.sf-lm.lm-game .telestrator-tools button { font-family: var(--sf-band-font); text-transform: uppercase; }
+.sf-lm.lm-game .replay-controls button:hover:not(:disabled),
+.sf-lm.lm-game .replay-speed select:hover:not(:disabled),
+.sf-lm.lm-game .telestrator-tools button:hover { border-color: var(--ui-heading); filter: none; }
+.sf-lm.lm-game .replay-controls button:disabled,
+.sf-lm.lm-game .replay-speed select:disabled,
+.sf-lm.lm-game .replay-turn-select select:disabled {
+  opacity: 1;
+  color: var(--ui-text-dim);
+  background: var(--ui-surface-2);
+  box-shadow: none;
+}
+.sf-lm.lm-game .replay-controls button:focus-visible,
+.sf-lm.lm-game .replay-speed select:focus-visible,
+.sf-lm.lm-game .replay-turn-select select:focus-visible,
+.sf-lm.lm-game .replay-scrubber input:focus-visible,
+.sf-lm.lm-game .telestrator-tools button:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ui-focus-halo);
+}
+/* Play / Pause: the primary; playing (pressed) reads as the active red */
+.sf-lm.lm-game .replay-controls .transport-primary,
+.sf-lm.lm-game .telestrator-tools button[aria-pressed='true'] {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), 0 2px 0 color-mix(in srgb, var(--ui-primary) 45%, black);
+}
+.sf-lm.lm-game .replay-controls .transport-primary[aria-pressed='true'] {
+  color: var(--ui-text-on-primary);
+  background: var(--ui-active);
+  border-color: var(--ui-heading);
+}
+.sf-lm.lm-game .replay-controls .transport-primary:disabled {
+  color: var(--ui-text-dim);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: none;
+}
+.sf-lm.lm-game .replay-turn-select select option,
+.sf-lm.lm-game .replay-speed select option { color: var(--ui-text); background: var(--ui-surface); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .replay-turn-select select,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .replay-speed select { color-scheme: light; }
+.sf-lm.lm-game .replay-speed { font-family: var(--sf-band-font); color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .replay-position {
+  font-family: var(--sf-band-font);
+  color: var(--lmg-panels-caption);
+  background: var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .replay-position strong { color: var(--ui-text); }
+.sf-lm.lm-game .replay-position i { color: var(--ui-text-dim); }
+.sf-lm.lm-game .replay-scrubber input { accent-color: var(--ui-heading); }
+.sf-lm.lm-game .control-separator { background: var(--sf-panel-line); box-shadow: 1px 0 0 var(--sf-panel-hi); }
+.sf-lm.lm-game .replay-grip, .sf-lm.lm-game .replay-resizer { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .review-notice { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .replay-failure { color: var(--ui-danger); border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .replay-failure b { color: var(--ui-on-danger); background: var(--ui-danger); }
+/* the telestrator flyouts and the limit notice (the drawing layer and its stroke colours are not touched) */
+.sf-lm.lm-game .toolbar-popover,
+.sf-lm.lm-game .shape-flyout {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .telestrator-limit-notice {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--ui-warn);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-warn), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .telestrator-tools[data-dragging='true'] .telestrator-collapsed-trigger { filter: none; border-color: var(--ui-heading); }
+/* the weight samples on a pressed (primary) picker button follow its ink, not the panel text colour */
+.sf-lm.lm-game .telestrator-tools button[aria-pressed='true'] line { stroke: currentColor; }

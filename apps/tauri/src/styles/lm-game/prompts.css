@@ -1,0 +1,615 @@
+/* Modern in-game look: prompts. See base.css for the file map and the rules.
+
+   The decision cards (spec-ingame-modern-2026-11-03, lane "prompts") on the League Manager design language:
+   panels in the .hm-panel paint, titles in the band face, buttons as .sf-btn (primary / danger / plain / disabled),
+   chips in the .sf-chip paint, seat inks from --sf-seat-home / --sf-seat-away. Paint only: every card keeps the
+   geometry, position, timing and border widths the view and the components give it.
+
+   Button roles (owner rulings kept):
+   - primary: the answer that carries the action (Confirm, Use, Follow up, Argue, Receive / Heads, Yes, Done);
+   - danger: destructive answers (Concede, Use Chainsaw, the block-attack confirm, Delete a saved setup) and the two
+     declines the owner ruled red (owner 07-04: the pick bar's "RED, clearly visible Decline"; owner 10-21: the
+     apothecary decline reads red, the use green);
+   - plain: declines, cancels, Go back, Stay, Pass, Tails / Kick, option lists.
+
+   Surfaces that share a selector with another lane are fenced off: the bloodlust card is `.skill-choice.reroll-bar`
+   (dice lane), the prayer wait card is `.yesno-card.prayer-choice-wait` (splashes lane) and the inducements lock panel
+   is `.pitch-confirm-panel.ind-lock-panel` (panels lane). */
+
+/* ---- lane tokens (the only raw colours in this file). The shortcut chip of the confirm bar keeps its dark well
+   and yellow key ink in both schemes, so the key reads on the primary face (owner: keep the kbd chip). */
+.sf-lm.lm-game {
+  --lmg-kbd-well: #15130e;
+  --lmg-kbd-ink: #ffd166;
+  --lmg-kbd-off: #8a8577;
+  /* secondary ink: the muted grey lifted toward the text ink so small labels on the panel faces keep 4.5:1 (Sol) */
+  --lmg-ink-2: color-mix(in srgb, var(--ui-muted) 60%, var(--ui-text));
+}
+
+/* ================================================================================================================
+   PANELS: the .hm-panel paint (gradient face, panel line, 2px radius, top highlight, drop) on every card shell.
+   The heading accent is drawn as an inset 4px bar on the card's left edge (never a border width).
+   ================================================================================================================ */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait),
+.sf-lm.lm-game .skill-choice:not(.reroll-bar),
+.sf-lm.lm-game .setup-panel.setup-card,
+.sf-lm.lm-game .setup-template-panel,
+.sf-lm.lm-game .player-pick-bar,
+.sf-lm.lm-game .pickmeup-splash,
+.sf-lm.lm-game .roster-pick-fallback-panel,
+.sf-lm.lm-game .on-the-ball-waiting {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop);
+}
+/* Small head-mounted chips and the follow-up card: the panel paint without the heading bar. */
+.sf-lm.lm-game .followup-chip {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 16px var(--sf-discord-drop);
+}
+/* A decision the other coach (or the server) is still making: the pill takes the gold line. */
+.sf-lm.lm-game .followup-chip.reactive-decision-pill { border-color: var(--sf-gold); }
+/* The apothecary cards carry the deciding seat's 4px left border (inline, from the component): no heading bar. */
+.sf-lm.lm-game .pitch-confirm-panel.apothecary-prompt,
+.sf-lm.lm-game .pitch-confirm-panel.apo-result-choice {
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop);
+}
+
+/* ---- band titles: the band title face in the heading ink, uppercase; no retro drop shadow. */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .pitch-confirm-title,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-title,
+.sf-lm.lm-game .on-the-ball-waiting h2,
+.sf-lm.lm-game .setup-panel.setup-card .setup-title,
+.sf-lm.lm-game .setup-template-panel .setup-template-title,
+.sf-lm.lm-game .pickmeup-splash {
+  color: var(--ui-heading);
+  font-family: var(--sf-band-title-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  text-shadow: none;
+}
+/* Owner 10-05: the setup title stays on one line in its 270 px card, so it takes the narrower band sans. */
+.sf-lm.lm-game .setup-panel.setup-card .setup-title { font-family: var(--sf-band-font); letter-spacing: .04em; }
+/* A DisplayCaps label under a band title or a button follows the host's uppercase (the lettering itself opts out). */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .display-caps-art,
+.sf-lm.lm-game .sendoff-result-panel .display-caps-art,
+.sf-lm.lm-game .sendoff-waiting .display-caps-art { text-transform: inherit; }
+/* ... and draws in the host's face (the band title face on a title, the band sans on a button). */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .display-caps-art > span,
+.sf-lm.lm-game .sendoff-result-panel .display-caps-art > span,
+.sf-lm.lm-game .sendoff-waiting .display-caps-art > span { font-family: inherit; }
+
+/* ---- body copy */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .pitch-confirm-body,
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .yesno-text,
+.sf-lm.lm-game .pitch-confirm-panel.action-modal .yesno-text,
+.sf-lm.lm-game .on-the-ball-waiting p { color: var(--ui-text); text-shadow: none; }
+.sf-lm.lm-game .pitch-confirm-panel.opponent-setup-notice:not(.ind-lock-panel) .pitch-confirm-body { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .pick-count,
+.sf-lm.lm-game .player-pick-bar .pick-count { color: var(--lmg-ink-2); font-family: var(--sf-band-font); letter-spacing: .06em; }
+.sf-lm.lm-game .player-pick-bar .pick-prompt { color: var(--ui-heading); }
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .setup-confirm-referee { color: var(--ui-danger); }
+
+/* ================================================================================================================
+   BUTTONS: the .sf-btn paint. A plain face on every button of these cards (zero-specificity :where so each role
+   below wins), then primary, danger, a success face for the apothecary use, a gold face for the bribe, hover,
+   focus and the flat disabled face. The confirm bar (ConfirmActionButton) has its own block further down.
+   ================================================================================================================ */
+.sf-lm.lm-game .pitch-confirm-actions :where(button:not(.confirm-action)),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) :where(button),
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) :where(button),
+.sf-lm.lm-game .followup-chip :where(button),
+.sf-lm.lm-game .player-pick-bar :where(button),
+.sf-lm.lm-game .setup-panel.setup-card :where(button),
+.sf-lm.lm-game .setup-template-panel :where(button),
+.sf-lm.lm-game .setup-reopen-tabs :where(button),
+.sf-lm.lm-game .apothecary-prompt :where(button),
+.sf-lm.lm-game .apo-result-choice :where(button) {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  text-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+.sf-lm.lm-game .pitch-confirm-actions :where(button:not(.confirm-action)):hover:not(:disabled),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) :where(button):hover:not(:disabled),
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) :where(button):hover:not(:disabled),
+.sf-lm.lm-game .followup-chip :where(button):hover:not(:disabled),
+.sf-lm.lm-game .player-pick-bar :where(button):hover:not(:disabled),
+.sf-lm.lm-game .setup-panel.setup-card :where(button):hover:not(:disabled),
+.sf-lm.lm-game .setup-template-panel :where(button):hover:not(:disabled),
+.sf-lm.lm-game .setup-reopen-tabs :where(button):hover:not(:disabled),
+.sf-lm.lm-game .apothecary-prompt :where(button):hover:not(:disabled),
+.sf-lm.lm-game .apo-result-choice :where(button):hover:not(:disabled) {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover);
+  border-color: var(--ui-heading);
+}
+
+/* ---- primary: the --ui-primary gradient */
+.sf-lm.lm-game .pitch-confirm-actions .rr-options .rr-use,
+.sf-lm.lm-game .pitch-confirm-actions button.rr-use,
+.sf-lm.lm-game .pitch-confirm-actions button.pick-confirm,
+.sf-lm.lm-game .pitch-confirm-actions button.charge-confirm,
+.sf-lm.lm-game .pitch-confirm-actions .sendoff-btn.argue,
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .sendoff-btn.argue,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-actions .sc-yes,
+.sf-lm.lm-game .followup-chip .fu-btn.follow,
+.sf-lm.lm-game .player-pick-bar button.pick-confirm,
+.sf-lm.lm-game .setup-panel.setup-card .setup-btn.done,
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn.erp-confirm {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 6px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pitch-confirm-actions .rr-options .rr-use:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions button.rr-use:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions button.pick-confirm:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions button.charge-confirm:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions .sendoff-btn.argue:hover:not(:disabled),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .sendoff-btn.argue:hover:not(:disabled),
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-actions .sc-yes:hover:not(:disabled),
+.sf-lm.lm-game .followup-chip .fu-btn.follow:hover:not(:disabled),
+.sf-lm.lm-game .player-pick-bar button.pick-confirm:hover:not(:disabled),
+.sf-lm.lm-game .setup-panel.setup-card .setup-btn.done:hover:not(:disabled),
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn.erp-confirm:hover:not(:disabled) {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  filter: brightness(1.06);
+}
+
+/* ---- danger: --ui-scarlet. Concede (offer), Use Chainsaw, the block-attack confirm, the setup Concede, Delete a
+   saved setup, and the two owner-ruled red declines (the pick bar's Decline, the apothecary decline). The pick card's
+   "Pick from roster" toggle shares the pick-decline class but is no decline (type="button"): it stays plain. */
+.sf-lm.lm-game .pitch-confirm-panel[data-testid="concede-offer"] .pitch-confirm-actions button.rr-use,
+.sf-lm.lm-game .pitch-confirm-actions button.danger,
+.sf-lm.lm-game .pitch-confirm-panel.block-attack-confirm .pitch-confirm-actions button.confirm,
+.sf-lm.lm-game .pitch-confirm-actions button.pick-decline:not([type="button"]),
+.sf-lm.lm-game .player-pick-bar button.pick-decline,
+.sf-lm.lm-game .apothecary-prompt .pitch-confirm-actions button.apo-decline,
+.sf-lm.lm-game .setup-panel.setup-card .setup-btn.concede,
+.sf-lm.lm-game .setup-template-panel .setup-btn.saved-setup-delete {
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-scarlet) 45%, black);
+}
+.sf-lm.lm-game .pitch-confirm-panel[data-testid="concede-offer"] .pitch-confirm-actions button.rr-use:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions button.danger:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-panel.block-attack-confirm .pitch-confirm-actions button.confirm:hover:not(:disabled),
+.sf-lm.lm-game .pitch-confirm-actions button.pick-decline:not([type="button"]):hover:not(:disabled),
+.sf-lm.lm-game .player-pick-bar button.pick-decline:hover:not(:disabled),
+.sf-lm.lm-game .apothecary-prompt .pitch-confirm-actions button.apo-decline:hover:not(:disabled),
+.sf-lm.lm-game .setup-panel.setup-card .setup-btn.concede:hover:not(:disabled),
+.sf-lm.lm-game .setup-template-panel .setup-btn.saved-setup-delete:hover:not(:disabled) {
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+  filter: brightness(1.08);
+}
+
+/* ---- the apothecary use (owner 10-21: reads green) and the bribe (gold coin): League Manager tones on the
+   .sf-btn shape. */
+.sf-lm.lm-game .apothecary-prompt .apo-option-row button.apo-use,
+.sf-lm.lm-game .apothecary-prompt .apo-option-row button.apo-use:hover {
+  color: var(--ui-on-danger);
+  background: linear-gradient(color-mix(in srgb, var(--ui-success) 72%, black), color-mix(in srgb, var(--ui-success) 50%, black));
+  border-color: color-mix(in srgb, var(--ui-success) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-success) 45%, black);
+}
+.sf-lm.lm-game .apothecary-prompt .apo-option-row button.apo-use:hover { filter: brightness(1.08); }
+.sf-lm.lm-game .pitch-confirm-actions .sendoff-btn.bribe,
+.sf-lm.lm-game .pitch-confirm-actions .sendoff-btn.bribe:hover:not(:disabled),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .sendoff-btn.bribe {
+  color: var(--ui-warn-contrast);
+  background: linear-gradient(color-mix(in srgb, var(--ui-warn) 82%, white), var(--ui-warn) 55%, color-mix(in srgb, var(--ui-warn) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-warn) 55%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-warn) 40%, black);
+}
+
+/* ---- focus: the League Manager ring */
+.sf-lm.lm-game .pitch-confirm-actions button:focus-visible,
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) button:focus-visible,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) button:focus-visible,
+.sf-lm.lm-game .followup-chip button:focus-visible,
+.sf-lm.lm-game .player-pick-bar button:focus-visible,
+.sf-lm.lm-game .setup-panel.setup-card button:focus-visible,
+.sf-lm.lm-game .setup-template-panel button:focus-visible,
+.sf-lm.lm-game .setup-template-panel .setup-template-card:focus-visible,
+.sf-lm.lm-game .setup-template-panel .saved-setup-input:focus-visible,
+.sf-lm.lm-game .setup-reopen-tabs button:focus-visible,
+.sf-lm.lm-game .apothecary-prompt button:focus-visible,
+.sf-lm.lm-game .apo-result-choice button:focus-visible,
+.sf-lm.lm-game .erp-root[data-theme="modern"] button:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+/* ---- disabled: flat, muted ink, a dashed line (drawn as an inset outline: the border style stays the card's). */
+.sf-lm.lm-game .pitch-confirm-actions button:disabled:not(.confirm-action),
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) button:disabled,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) button:disabled,
+.sf-lm.lm-game .player-pick-bar button:disabled,
+.sf-lm.lm-game .setup-panel.setup-card button:disabled,
+.sf-lm.lm-game .setup-template-panel button:disabled,
+.sf-lm.lm-game .apo-result-choice button:disabled,
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn:disabled,
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn.erp-confirm:disabled,
+.sf-lm.lm-game .setup-panel.setup-card .setup-btn.done:disabled {
+  color: var(--ui-muted);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+  outline: 1px dashed var(--sf-panel-line);
+  outline-offset: -4px;
+}
+/* The apothecary result buttons are disabled for the waiting seat (a read-only view of the choice), not unavailable:
+   they keep their face, only without the lift. */
+.sf-lm.lm-game .apo-result-choice .apo-results button.apo-result:disabled {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  outline: none;
+}
+
+/* ================================================================================================================
+   SURFACES, one block each
+   ================================================================================================================ */
+
+/* ---- generic yes/no family: option lists (skill, weather, position, inducement use, keyword) and card buying */
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .skill-select-opt,
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .card-buy-opt { text-transform: none; letter-spacing: .02em; }
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .card-buy-opt .card-buy-name { color: var(--ui-text); }
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .card-gold { color: var(--ui-heading); }
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .card-buy-opt .card-buy-desc { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .card-buy-budget,
+.sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .setup-empty { color: var(--lmg-ink-2); }
+/* coin call and kick / receive: the coin art stays; the winner line reads in the heading ink */
+.sf-lm.lm-game .yesno-card.coin-choice-card .toss-winner-splash { color: var(--ui-heading); text-shadow: none; }
+.sf-lm.lm-game .yesno-card.coin-wait-card .coin-wait-sub { color: var(--lmg-ink-2); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .yesno-card.coin-wait-card .coin-wait-spinner {
+  border-color: color-mix(in srgb, var(--ui-heading) 22%, transparent);
+  border-top-color: var(--ui-heading);
+}
+
+/* ---- skill-use choice card (owner: Nuffle yes/no; the display faces map to the sans here) and its silhouette,
+   which stays the 5% player shape */
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-name,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-needed,
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-pass-result { color: var(--ui-heading); text-shadow: none; }
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-subtext { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .skill-choice:not(.reroll-bar) .sc-glyph {
+  color: var(--ui-heading);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+  font-family: var(--sf-band-font);
+  text-shadow: none;
+}
+
+/* ---- follow up / stay chip and the passive head-mounted pills */
+.sf-lm.lm-game .followup-chip .fu-title { color: var(--ui-heading); font-family: var(--sf-band-font); text-transform: uppercase; letter-spacing: .06em; }
+.sf-lm.lm-game .followup-chip.passive .fu-title { color: var(--ui-text); text-transform: none; letter-spacing: .02em; }
+/* The chip is a fixed 160 px wide (owner 07-04): its two answers keep their own case so "Follow up" stays on one line. */
+.sf-lm.lm-game .followup-chip .fu-btn { text-transform: none; letter-spacing: .02em; }
+/* The wide-rail special list sits in a 260 px row: tighter tracking keeps its long decline on one line. */
+.sf-lm.lm-game .pitch-confirm-actions .rr-options button { letter-spacing: .03em; }
+
+/* ---- pick bar, roster pick fallback and the blitz cost note (a chip) */
+.sf-lm.lm-game .roster-pick-fallback-panel .erp-root[data-theme="modern"] { color: var(--ui-text); }
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-title { color: var(--ui-heading); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-list {
+  background: color-mix(in srgb, var(--ui-surface) 60%, transparent);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-cand {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-cand:hover { background: var(--ui-hover); border-color: var(--ui-heading); }
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-cand[data-sel="true"] {
+  background: color-mix(in srgb, var(--ui-primary) 30%, var(--ui-surface-2));
+  border-color: var(--ui-heading);
+  box-shadow: inset 0 0 0 1px var(--ui-heading);
+}
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-pos,
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-count,
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-empty { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-check { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.sf-lm.lm-game .erp-root[data-theme="modern"] .erp-btn:hover:not(:disabled) { background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover); border-color: var(--ui-heading); }
+.sf-lm.lm-game .blitz-confirm-cost {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop);
+}
+
+/* ---- charge / Dwarfen Wisdom / prayer pick, block-attack confirm, action target confirm */
+.sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .charge-roll { color: var(--ui-heading); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .pitch-confirm-panel.block-attack-confirm .attack-target { color: var(--ui-heading); }
+.sf-lm.lm-game .pitch-confirm-panel.block-attack-confirm .attack-detail { color: var(--lmg-ink-2); }
+
+/* ---- apothecary prompt: wells for the player card and the injury rows, seat inks, injury tones */
+.sf-lm.lm-game .apothecary-prompt .apo-icon-frame,
+.sf-lm.lm-game .apo-result-choice .apo-result-icon,
+.sf-lm.lm-game .sendoff-prompt .sendoff-ref-frame,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-ref-frame,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-portrait-frame,
+.sf-lm.lm-game .sendoff-result-panel .sendoff-logo-frame {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .apothecary-prompt .apo-player-card,
+.sf-lm.lm-game .apothecary-prompt .apo-injury {
+  background: color-mix(in srgb, var(--ui-surface-2) 70%, transparent);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .apothecary-prompt .apo-portrait-fallback,
+.sf-lm.lm-game .apothecary-prompt .apo-wait { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .apothecary-prompt .apo-kicker,
+.sf-lm.lm-game .apo-result-choice .apo-result-kicker { color: var(--sf-seat-home); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .apothecary-prompt.seat-opposition .apo-kicker,
+.sf-lm.lm-game .apo-result-choice.seat-opposition .apo-result-kicker { color: var(--sf-seat-away); }
+.sf-lm.lm-game .apothecary-prompt .apo-status { color: var(--ui-danger); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .apothecary-prompt .apo-injury.ko .apo-status { color: var(--sf-gold); }
+.sf-lm.lm-game .apothecary-prompt .apo-spp-gain,
+.sf-lm.lm-game .apo-result-choice .apo-result-spp-gain { color: var(--lmg-done-ink); }
+
+/* ---- apothecary result choice: Original (gold line) and Rerolled (green line) as League Manager panel buttons */
+.sf-lm.lm-game .apo-result-choice .apo-results button.apo-result { text-transform: none; letter-spacing: normal; font-family: var(--font-body); }
+.sf-lm.lm-game .apo-result-choice .apo-results button.apo-result.original { border-color: var(--sf-gold); }
+.sf-lm.lm-game .apo-result-choice .apo-results button.apo-result.rerolled { border-color: var(--ui-success); }
+.sf-lm.lm-game .apo-result-choice .apo-results button.apo-result:hover:not(:disabled) { border-color: var(--ui-heading); }
+.sf-lm.lm-game .apo-result-choice .apo-result .apo-result-label { color: var(--sf-gold); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .apo-result-choice .apo-result.rerolled .apo-result-label { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .apo-result-choice .apo-result strong { color: var(--ui-text); }
+.sf-lm.lm-game .apo-result-choice .apo-result-help { color: var(--lmg-ink-2); }
+
+/* ---- send-off prompt (Argue = primary, Bribe = gold, Pass = plain) */
+.sf-lm.lm-game .sendoff-prompt .sendoff-kicker { color: var(--ui-heading); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .sendoff-prompt .sendoff-position,
+.sf-lm.lm-game .sendoff-prompt .sendoff-instruction { color: var(--lmg-ink-2); }
+
+/* ---- send-off result: the verdict stays loud through colour (scarlet sent off, green overturned); the deciding
+   seat's left border takes the League Manager seat ink. */
+.sf-lm.lm-game section.sendoff-result-panel {
+  color: var(--ui-text);
+  background: linear-gradient(color-mix(in srgb, var(--ui-scarlet) 24%, var(--ui-surface)), var(--ui-surface) 70%);
+  border-color: var(--ui-scarlet);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 12px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game section.sendoff-result-panel.success {
+  background: linear-gradient(color-mix(in srgb, var(--ui-success) 24%, var(--ui-surface)), var(--ui-surface) 70%);
+  border-color: var(--ui-success);
+}
+.sf-lm.lm-game section.sendoff-result-panel.side-home { border-left-color: var(--sf-seat-home); }
+.sf-lm.lm-game section.sendoff-result-panel.side-away { border-left-color: var(--sf-seat-away); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-header {
+  background: color-mix(in srgb, var(--ui-surface) 55%, transparent);
+  border-bottom-color: var(--sf-panel-line);
+}
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-kicker { color: var(--ui-heading); font-family: var(--sf-band-title-font); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-side,
+.sf-lm.lm-game .sendoff-result-panel .sendoff-coach { color: var(--lmg-ink-2); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-semantic-mark,
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-title { color: var(--ui-danger); }
+.sf-lm.lm-game .sendoff-result-panel.success .sendoff-semantic-mark,
+.sf-lm.lm-game .sendoff-result-panel.success .sendoff-result-title { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-title { font-family: var(--sf-band-title-font); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-verdict { text-shadow: none; }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-result-text { color: var(--ui-text); }
+.sf-lm.lm-game .sendoff-result-panel .sendoff-reroll-mark { color: var(--sf-gold); background: var(--ui-surface); border-color: var(--sf-gold); }
+
+/* ---- send-off waiting modal: both faces in the panel paint. Owner 10-30: the two faces, the Y flip and the typing
+   caret are untouched (their timing is coupled to the store's reveal hold); only ink and fill change. */
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-face {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-face.back.overturned {
+  background: linear-gradient(color-mix(in srgb, var(--ui-success) 22%, var(--ui-surface)), var(--ui-surface) 70%);
+  border-color: var(--ui-success);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-head {
+  background: color-mix(in srgb, var(--ui-surface) 55%, transparent);
+  border-bottom-color: var(--sf-panel-line);
+  border-radius: 2px 2px 0 0;
+}
+.sf-lm.lm-game .sendoff-waiting h2 { color: var(--ui-heading); font-family: var(--sf-band-title-font); letter-spacing: .06em; }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-face.back.overturned h2,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-face.back.overturned .sendoff-waiting-result strong { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-player-name { color: var(--ui-text); }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-position,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-team,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-die-label { color: var(--lmg-ink-2); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-spotted {
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+  font-family: var(--sf-band-font);
+  text-shadow: none;
+}
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-steps li,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-result { color: var(--ui-text); font-family: var(--font-body); }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-mark,
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-steps li[data-tone='pending'] { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-steps li[data-tone='failure'],
+.sf-lm.lm-game .sendoff-waiting .sendoff-waiting-steps li[data-tone='failure'] .sendoff-waiting-mark { color: var(--ui-danger); }
+
+/* ---- Intensive Training (inside its yes/no card) */
+.sf-lm.lm-game .intensive-training-choice .intensive-portrait {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .intensive-training-choice .intensive-player-copy strong { color: var(--ui-text); }
+.sf-lm.lm-game .intensive-training-choice .intensive-player-copy span { color: var(--ui-heading); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .intensive-training-choice .intensive-empty { color: var(--lmg-ink-2); }
+
+/* ---- setup card (and the swarming card), checklist, pad hints, reopen tabs */
+.sf-lm.lm-game .setup-panel.setup-card .setup-conditions li { color: var(--ui-danger); }
+.sf-lm.lm-game .setup-panel.setup-card .setup-conditions li.ok { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .setup-panel.setup-card .setup-selected {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-heading) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ui-heading) 45%, transparent);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .setup-panel.setup-card .setup-selected b { color: var(--ui-heading); }
+.sf-lm.lm-game .setup-panel.setup-card .setup-pad-hints { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .setup-panel.setup-card .setup-close-button,
+.sf-lm.lm-game .setup-template-panel .setup-close-button,
+.sf-lm.lm-game .setup-template-panel .setup-collapse-button { text-transform: none; letter-spacing: normal; }
+.sf-lm.lm-game .setup-panel.setup-card .setup-close-button:hover,
+.sf-lm.lm-game .setup-template-panel .setup-close-button:hover { color: var(--ui-text); }
+
+/* ---- Formations / Saved setups window. The mini pitch and its token dots are data colours and stay. */
+.sf-lm.lm-game .setup-template-panel::after {
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--sf-panel-line) 3px 5px);
+}
+.sf-lm.lm-game .setup-template-panel .setup-template-grip { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .setup-template-panel .setup-template-tab {
+  color: var(--lmg-ink-2);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 2px;
+  box-shadow: none;
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+}
+.sf-lm.lm-game .setup-template-panel .setup-template-tab:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-hover); border-color: transparent; }
+.sf-lm.lm-game .setup-template-panel .setup-template-tab.active,
+.sf-lm.lm-game .setup-template-panel .setup-template-tab.active:hover:not(:disabled) {
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .setup-template-panel .setup-template-card {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .setup-template-panel .setup-template-card:hover { border-color: var(--ui-heading); }
+.sf-lm.lm-game .setup-template-panel .setup-template-card.active {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), color-mix(in srgb, var(--ui-primary) 35%, var(--ui-surface-2));
+  border-color: var(--ui-heading);
+  box-shadow: inset 0 0 0 1px var(--ui-heading), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .setup-template-panel .setup-template-mirror,
+.sf-lm.lm-game .setup-template-panel .saved-setup-help,
+.sf-lm.lm-game .setup-template-panel .setup-empty { color: var(--lmg-ink-2); }
+.sf-lm.lm-game .setup-template-panel .setup-template-mirror input { accent-color: var(--ui-primary); }
+.sf-lm.lm-game .setup-template-panel .saved-setup-save { border-bottom-color: var(--sf-panel-line); }
+.sf-lm.lm-game .setup-template-panel .saved-setup-input {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .setup-template-panel .saved-setup-status { color: var(--sf-gold); }
+.sf-lm.lm-game .setup-template-panel .saved-setup-status.saved { color: var(--lmg-done-ink); }
+.sf-lm.lm-game .setup-template-panel .saved-setup-status.failed { color: var(--ui-danger); }
+.sf-lm.lm-game .setup-template-panel .setup-template-preview.saved-setup-placeholder {
+  color: var(--lmg-ink-2);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+}
+
+/* ================================================================================================================
+   CONFIRM BAR (ConfirmActionButton: Confirm Move / Block / Blitz / Foul, the inline Confirm Punt): a League Manager
+   primary bar (danger for the aggressive tone). The label well goes flat into the face; the shortcut chip keeps its
+   dark well and yellow key so it stays readable on either face and in both schemes.
+   ================================================================================================================ */
+.sf-lm.lm-game button.confirm-action {
+  --confirm-well: transparent;
+  --confirm-border: transparent;
+  --confirm-key: var(--lmg-kbd-ink);
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 6px 14px var(--sf-discord-drop);
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  text-shadow: none;
+}
+.sf-lm.lm-game button.confirm-action.tone-aggressive {
+  background: var(--ui-scarlet);
+  color: var(--ui-scarlet-contrast);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-scarlet) 45%, black), 0 6px 14px var(--sf-discord-drop);
+}
+.sf-lm.lm-game button.confirm-action:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 6px 16px var(--sf-discord-drop);
+}
+.sf-lm.lm-game button.confirm-action.tone-aggressive:hover:not(:disabled) {
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-scarlet) 45%, black), 0 6px 16px var(--sf-discord-drop);
+}
+.sf-lm.lm-game button.confirm-action:focus-visible { outline-color: var(--ui-focus); }
+.sf-lm.lm-game button.confirm-action .confirm-action-label { border-color: transparent; border-radius: 2px; box-shadow: none; }
+.sf-lm.lm-game button.confirm-action .confirm-action-key {
+  color: var(--lmg-kbd-ink);
+  background: var(--lmg-kbd-well);
+  border-color: color-mix(in srgb, var(--lmg-kbd-ink) 70%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game button.confirm-action:disabled {
+  color: var(--ui-muted);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+  outline: 1px dashed var(--sf-panel-line);
+  outline-offset: -4px;
+}
+.sf-lm.lm-game button.confirm-action:disabled .confirm-action-key { color: var(--lmg-kbd-off); border-color: var(--sf-panel-line); }

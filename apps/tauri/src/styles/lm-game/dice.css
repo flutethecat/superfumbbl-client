@@ -1,0 +1,672 @@
+/* Modern in-game look: dice. See base.css for the file map and the rules.
+
+   Lane "dice" (spec-ingame-modern-2026-11-03): the block / reroll choice panels, multi-block, the failed-action reroll
+   bar, the bloodlust card, the block alternative modal, the injury / KO gate, the right-click context menu, and the
+   system modals (join error, connection closed / reconnect, waiting for match, concede, shutdown, game browser,
+   Create game, MatchNoticeCard, the in-game BugReportModal, the unknown-call dialog and chip, admin / server notices).
+
+   Paint only. The die FACE stays as it is (cream face, dark pips / KrisB art, which is functional); only the frame
+   around it changes. Chosen / selected / armed states stay loud: gold (--sf-gold) for the pick and the selection, the
+   heading red for an armed reroll. The 3D dice canvas, the die art, its image-rendering and the uphill silhouette are
+   untouched. Scoped SpectateView / component rules are beaten by specificity (the component's own class chain under
+   .sf-lm.lm-game); `!important` appears only where the Retro rule already uses it (noted at each). */
+
+/* ---- tokens (raw colours live only here) */
+.sf-lm.lm-game {
+  /* the unknown-call dialog is a developer / diagnostic surface: it keeps its own orange warning line */
+  --lmg-dice-diag: #e07a1e;
+  --lmg-dice-diag-ink: #ffd98a;
+  --lmg-dice-diag-wash: rgb(224 122 30 / 0.16);
+  /* the cream die face (unchanged from Retro) and its dark edge */
+  --lmg-dice-face: #f4f1e8;
+  --lmg-dice-edge: #1a1a1a;
+}
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game {
+  --lmg-dice-info-ink: #1d4f86;
+  --lmg-dice-warn-ink: #7a4a00;
+  --lmg-dice-diag: #a84f00;
+  --lmg-dice-diag-ink: #6b3300;
+  --lmg-dice-diag-wash: rgb(168 79 0 / 0.12);
+}
+/* foreground inks for info / warning text: the fixed --ui-info / --ui-warn read on the dark panel; the light scheme
+   (above) and high contrast (below) take darker / text inks */
+.sf-lm.lm-game { --lmg-dice-info-ink: var(--ui-info); --lmg-dice-warn-ink: var(--ui-warn); }
+/* (the doubled .sf-lm lifts this over the light-scheme token block, so high contrast wins in both schemes) */
+html.sf-high-contrast .sf-lm.lm-game.sf-lm { --lmg-dice-info-ink: var(--ui-text); --lmg-dice-warn-ink: var(--ui-text); --lmg-dice-diag-ink: var(--ui-text); }
+/* muted ink on the --ui-surface-2 face (disabled controls, status chips): nudged toward the text ink so it clears 4.5:1 */
+.sf-lm.lm-game { --lmg-dice-muted-on-2: color-mix(in srgb, var(--ui-muted) 65%, var(--ui-text)); }
+/* shared paint, as tokens of tokens (resolved per scheme on the game root) */
+.sf-lm.lm-game {
+  --lmg-dice-panel-face: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  /* owner 11-04 ("The opacity is too high on these panels"): the decision panels that float over the pitch drop the
+     solid base and thin the gradient, about 74% opaque, close to Retro's translucency (system cards keep the solid face) */
+  --lmg-dice-float-face: linear-gradient(color-mix(in srgb, var(--sf-panel-top) 82%, transparent), color-mix(in srgb, var(--sf-panel-bottom) 82%, transparent));
+  --lmg-dice-panel-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 10px 28px var(--sf-discord-drop);
+  --lmg-dice-btn-face: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  --lmg-dice-btn-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+  --lmg-dice-primary-face: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  --lmg-dice-primary-line: color-mix(in srgb, var(--ui-primary) 60%, black);
+  --lmg-dice-primary-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black);
+  --lmg-dice-gold-ring: 0 0 0 2px color-mix(in srgb, var(--sf-gold) 70%, transparent);
+  --lmg-dice-gold-glow: 0 0 0 3px color-mix(in srgb, var(--sf-gold) 75%, transparent), 0 0 12px color-mix(in srgb, var(--sf-gold) 60%, transparent);
+}
+
+/* ======================================================================================================== panels */
+/* The .hm-panel look: panel gradient, panel line (each element keeps its border WIDTH), 2px radius, top highlight,
+   drop. Every choice panel and system card shares it. */
+.sf-lm.lm-game .block-partial,
+.sf-lm.lm-game .multi-block-resolution,
+.sf-lm.lm-game .block-alt-modal,
+.sf-lm.lm-game .context-menu,
+.sf-lm.lm-game .submenu,
+.sf-lm.lm-game .conn-closed-card,
+.sf-lm.lm-game .concede-card,
+.sf-lm.lm-game .shutdown-card,
+.sf-lm.lm-game .game-browser,
+.sf-lm.lm-game .cg-menu,
+.sf-lm.lm-game .cg-menu.br-menu,
+.sf-lm.lm-game .mn-backdrop .mn-card,
+.sf-lm.lm-game .unknown-call,
+.sf-lm.lm-game .admin-message {
+  color: var(--ui-text);
+  background: var(--lmg-dice-panel-face);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--lmg-dice-panel-shadow);
+}
+/* owner 11-04: the block / reroll / multi-block / block-alternative panels and the right-click / injury menus float over
+   the pitch, so they take the see-through face */
+.sf-lm.lm-game .block-partial,
+.sf-lm.lm-game .multi-block-resolution,
+.sf-lm.lm-game .block-alt-modal,
+.sf-lm.lm-game .context-menu,
+.sf-lm.lm-game .submenu { background: var(--lmg-dice-float-face); }
+/* the failed-action reroll bar and the injury gate keep a heading-red line (Retro: the gold trim) so a decision that
+   holds the game reads apart from a passive panel */
+.sf-lm.lm-game .block-partial.reroll-bar,
+.sf-lm.lm-game .context-menu.reroll-menu { border-color: var(--ui-heading); }
+
+/* ---- headings: the band title face in the heading ink, uppercase */
+.sf-lm.lm-game .mbr-title,
+.sf-lm.lm-game .block-alt-title,
+.sf-lm.lm-game .bp-uphill-title,
+.sf-lm.lm-game .conn-closed-card h2,
+.sf-lm.lm-game .conn-closed-card .waiting-card-title,
+.sf-lm.lm-game .concede-card h2,
+.sf-lm.lm-game .shutdown-card h2,
+.sf-lm.lm-game .cg-menu .cg-head h2,
+.sf-lm.lm-game .mn-card .mn-head,
+.sf-lm.lm-game .unknown-call .uc-head {
+  font-family: var(--sf-band-title-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+  text-shadow: none;
+}
+/* small band labels (the band font, not the title face) */
+.sf-lm.lm-game .rr-ctx-label,
+.sf-lm.lm-game .gb-mygames .gb-mygames-title,
+.sf-lm.lm-game .admin-message .admin-message-head,
+.sf-lm.lm-game .unknown-call .uc-sec h4,
+.sf-lm.lm-game .unknown-call .uc-args-label,
+.sf-lm.lm-game .cg-menu .cg-field,
+.sf-lm.lm-game .cg-menu .cg-field-label,
+.sf-lm.lm-game .cg-menu .cg-library-head {
+  font-family: var(--sf-band-font);
+  letter-spacing: .06em;
+}
+.sf-lm.lm-game .rr-ctx-label,
+.sf-lm.lm-game .gb-mygames .gb-mygames-title,
+.sf-lm.lm-game .admin-message .admin-message-head { text-transform: uppercase; }
+/* Band accent bars (inset box-shadows, never a border width) on the heads that have their own padding. */
+.sf-lm.lm-game .mn-card .mn-head { border-bottom-color: var(--sf-panel-line); background: var(--ui-surface-2); box-shadow: inset 4px 0 0 var(--ui-heading); }
+.sf-lm.lm-game .mn-card .mn-actions { background: var(--ui-surface-2); }
+
+/* ======================================================================================================== buttons */
+/* The .sf-btn look restated on the lane's existing buttons: band font uppercase with letter-spacing, the panel
+   gradient face, panel line, bevel and drop. Sizes and padding stay the surface's own. */
+.sf-lm.lm-game .block-partial .bp-opt,
+.sf-lm.lm-game .multi-block-resolution .bp-opt,
+.sf-lm.lm-game .bloodlust-card .bl-opt,
+.sf-lm.lm-game .block-alt-modal .block-alt-actions button,
+.sf-lm.lm-game .conn-closed-card .conn-closed-actions button,
+.sf-lm.lm-game .conn-closed-card .waiting-card-actions button,
+.sf-lm.lm-game .concede-card button,
+.sf-lm.lm-game .shutdown-card button,
+.sf-lm.lm-game .game-browser button,
+.sf-lm.lm-game .game-browser .gb-entry button.gb-demo,
+.sf-lm.lm-game .cg-menu .cg-ingest button,
+.sf-lm.lm-game .cg-menu .cg-cancel,
+.sf-lm.lm-game .cg-menu .cg-create,
+.sf-lm.lm-game .cg-menu .cg-teambtn,
+.sf-lm.lm-game .mn-card .mn-actions button,
+.sf-lm.lm-game .unknown-call .uc-btn,
+.sf-lm.lm-game .admin-message .admin-message-ack {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ui-text);
+  background: var(--lmg-dice-btn-face);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--lmg-dice-btn-shadow);
+  text-shadow: none;
+  filter: none;
+}
+/* the team picker is a value, not a command: sentence case */
+.sf-lm.lm-game .cg-menu .cg-teambtn { text-transform: none; letter-spacing: 0; font-family: var(--font-body); }
+.sf-lm.lm-game .block-partial .bp-opt:hover:not(:disabled):not([data-chosen='true']),
+.sf-lm.lm-game .multi-block-resolution .bp-opt:hover:not(:disabled):not([data-chosen='true']),
+.sf-lm.lm-game .bloodlust-card .bl-opt:hover,
+.sf-lm.lm-game .block-alt-modal .block-alt-actions button:hover:not(:disabled),
+.sf-lm.lm-game .conn-closed-card .conn-closed-actions button:hover,
+.sf-lm.lm-game .conn-closed-card .waiting-card-actions button:hover:not([aria-disabled='true']),
+.sf-lm.lm-game .concede-card button:hover,
+.sf-lm.lm-game .shutdown-card button:hover,
+.sf-lm.lm-game .game-browser button:hover:not(:disabled),
+.sf-lm.lm-game .game-browser .gb-entry button.gb-demo:hover,
+.sf-lm.lm-game .cg-menu .cg-ingest button:hover:not(:disabled),
+.sf-lm.lm-game .cg-menu .cg-cancel:hover:not(:disabled),
+.sf-lm.lm-game .cg-menu .cg-teambtn:hover,
+.sf-lm.lm-game .mn-card .mn-actions button:hover,
+.sf-lm.lm-game .unknown-call .uc-btn:hover:not(:disabled),
+.sf-lm.lm-game .admin-message .admin-message-ack:hover {
+  background: var(--lmg-dice-btn-face);
+  border-color: var(--ui-heading);
+}
+/* primary: the --ui-primary gradient */
+.sf-lm.lm-game .conn-closed-card .conn-closed-actions button.primary,
+.sf-lm.lm-game .concede-card button,
+.sf-lm.lm-game .shutdown-card button,
+.sf-lm.lm-game .game-browser .gb-join,
+.sf-lm.lm-game .game-browser .gb-rejoin-btn,
+.sf-lm.lm-game .game-browser .gb-creategame,
+.sf-lm.lm-game .cg-menu .cg-create,
+.sf-lm.lm-game .mn-card .mn-actions .mn-primary,
+.sf-lm.lm-game .unknown-call .uc-btn.coord {
+  color: var(--ui-text-on-primary);
+  background: var(--lmg-dice-primary-face);
+  border-color: var(--lmg-dice-primary-line);
+  box-shadow: var(--lmg-dice-primary-shadow);
+}
+.sf-lm.lm-game .conn-closed-card .conn-closed-actions button.primary:hover,
+.sf-lm.lm-game .concede-card button:hover,
+.sf-lm.lm-game .shutdown-card button:hover,
+.sf-lm.lm-game .game-browser .gb-join:hover:not(:disabled),
+.sf-lm.lm-game .game-browser .gb-rejoin-btn:hover:not(:disabled),
+.sf-lm.lm-game .game-browser .gb-creategame:hover:not(:disabled),
+.sf-lm.lm-game .cg-menu .cg-create:hover:not(:disabled),
+.sf-lm.lm-game .mn-card .mn-actions .mn-primary:hover,
+.sf-lm.lm-game .unknown-call .uc-btn.coord:hover:not(:disabled) {
+  background: var(--lmg-dice-primary-face);
+  border-color: var(--lmg-dice-primary-line);
+  filter: brightness(1.06);
+}
+/* danger: scarlet */
+.sf-lm.lm-game .bloodlust-card .bl-opt.bl-feed,
+.sf-lm.lm-game .block-alt-modal .block-alt-actions button.danger,
+.sf-lm.lm-game .unknown-call .uc-btn.dismiss {
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+}
+.sf-lm.lm-game .bloodlust-card .bl-opt.bl-feed:hover,
+.sf-lm.lm-game .block-alt-modal .block-alt-actions button.danger:hover:not(:disabled),
+.sf-lm.lm-game .unknown-call .uc-btn.dismiss:hover:not(:disabled) {
+  background: var(--ui-scarlet);
+  border-color: var(--ui-heading);
+  box-shadow: var(--lmg-dice-btn-shadow);
+}
+/* a "no / close" chip reads in the danger ink on the plain face */
+.sf-lm.lm-game .block-partial .bp-opt.rr-decline-chip,
+.sf-lm.lm-game .multi-block-resolution .bp-opt.rr-decline-chip,
+.sf-lm.lm-game .bloodlust-card .bl-opt.bl-decline,
+.sf-lm.lm-game .game-browser .gb-close { color: var(--ui-danger); }
+.sf-lm.lm-game .block-partial:not([data-spectator='true']) .bp-opt.rr-decline-chip:hover,
+.sf-lm.lm-game .multi-block-resolution .bp-opt.rr-decline-chip:hover,
+.sf-lm.lm-game .bloodlust-card .bl-opt.bl-decline:hover,
+.sf-lm.lm-game .game-browser .gb-close:hover { color: var(--ui-danger); border-color: var(--ui-danger); }
+/* the uphill "Decline reroll" (hands the pick to the defender) keeps a warning line */
+.sf-lm.lm-game .block-partial .bp-opt.bp-decline { color: var(--ui-text); border-color: var(--ui-warn); }
+/* disabled: flat, muted ink, never a dark blob (border style stays the element's own) */
+.sf-lm.lm-game .block-partial .bp-opt:disabled,
+.sf-lm.lm-game .multi-block-resolution .bp-opt:disabled,
+.sf-lm.lm-game .block-alt-modal .block-alt-actions button:disabled,
+.sf-lm.lm-game .conn-closed-card .waiting-card-actions button[aria-disabled='true'],
+.sf-lm.lm-game .game-browser button:disabled,
+.sf-lm.lm-game .cg-menu .cg-ingest button:disabled,
+.sf-lm.lm-game .cg-menu .cg-cancel:disabled,
+.sf-lm.lm-game .cg-menu .cg-create:disabled,
+.sf-lm.lm-game .unknown-call .uc-btn:disabled,
+.sf-lm.lm-game .unknown-call .uc-btn.coord:disabled,
+.sf-lm.lm-game .unknown-call .uc-btn.dismiss:disabled {
+  color: var(--lmg-dice-muted-on-2);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: none;
+  filter: none;
+  opacity: 1;
+}
+/* focus rings (--ui-focus) on every control of the lane */
+.sf-lm.lm-game .block-partial button:focus-visible,
+.sf-lm.lm-game .multi-block-resolution button:focus-visible,
+.sf-lm.lm-game .bloodlust-card button:focus-visible,
+.sf-lm.lm-game .block-alt-modal button:focus-visible,
+.sf-lm.lm-game .context-menu li:focus-visible,
+.sf-lm.lm-game .conn-closed-card button:focus-visible,
+.sf-lm.lm-game .concede-card button:focus-visible,
+.sf-lm.lm-game .shutdown-card button:focus-visible,
+.sf-lm.lm-game .game-browser button:focus-visible,
+.sf-lm.lm-game .game-browser summary:focus-visible,
+.sf-lm.lm-game .cg-menu button:focus-visible,
+.sf-lm.lm-game .mn-card .mn-actions button:focus-visible,
+.sf-lm.lm-game .unknown-call button:focus-visible,
+.sf-lm.lm-game .unknown-call-chip:focus-visible,
+.sf-lm.lm-game .admin-message button:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+/* ======================================================================================================== dice */
+/* The die face (cream, dark pips / face art) is functional and stays; the frame takes the League Manager radius and
+   drop, and the states read through the frame. 3D dice (transparent button over the canvas) take no drop. */
+.sf-lm.lm-game .block-partial .bp-die,
+.sf-lm.lm-game .multi-block-resolution .bp-die {
+  background: var(--lmg-dice-face);
+  border-color: var(--lmg-dice-edge);
+  border-radius: 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .block-partial .bp-die.bp-die-3d,
+.sf-lm.lm-game .multi-block-resolution .bp-die.bp-die-3d { background: transparent; box-shadow: none; }
+.sf-lm.lm-game .block-partial .bp-die:hover:not(:disabled):not([data-readonly='true']):not(.bp-die-selected):not(.bp-die-choice),
+.sf-lm.lm-game .multi-block-resolution .bp-die:hover:not(:disabled):not([data-readonly='true']):not(.bp-die-selected):not(.bp-die-choice) { border-color: var(--ui-heading); }
+/* armed (a reroll die-pick is live): the heading red */
+.sf-lm.lm-game .block-partial .bp-die[data-armed='true'],
+.sf-lm.lm-game .multi-block-resolution .bp-die[data-armed='true'] {
+  border-color: var(--ui-heading);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-heading) 40%, transparent), 0 3px 0 var(--sf-panel-drop);
+}
+/* selected (picked for a reroll) and the server's choice: gold, the choice louder */
+.sf-lm.lm-game .block-partial .bp-die.bp-die-selected,
+.sf-lm.lm-game .multi-block-resolution .bp-die.bp-die-selected { border-color: var(--sf-gold); box-shadow: var(--lmg-dice-gold-ring); }
+.sf-lm.lm-game .block-partial .bp-die.bp-die-choice,
+.sf-lm.lm-game .multi-block-resolution .bp-die.bp-die-choice { border-color: var(--sf-gold); box-shadow: var(--lmg-dice-gold-glow); }
+.sf-lm.lm-game .multi-block-resolution .bp-die.mbr-picked { outline-color: var(--sf-gold); }
+/* read-only dice keep the dark edge on hover (Retro rule restated at the higher weight) */
+.sf-lm.lm-game .block-partial .bp-die[data-readonly='true']:hover:not(.bp-die-choice),
+.sf-lm.lm-game .multi-block-resolution .bp-die[data-readonly='true']:hover:not(.bp-die-choice) { border-color: var(--lmg-dice-edge); }
+
+/* ---- skill / source options: active (die-pick armed by this option) and chosen (the coach's pick, glowing) */
+.sf-lm.lm-game .block-partial .bp-opt[data-active='true'],
+.sf-lm.lm-game .multi-block-resolution .bp-opt[data-active='true'] {
+  border-color: var(--ui-heading);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-heading) 40%, transparent), var(--lmg-dice-btn-shadow);
+}
+/* The Retro pulse (reroll-chosen-pulse) paints with --ui-accent; under Modern the pick glows gold, so the chosen
+   element re-points that token (the keyframes stay the Retro ones, untouched). */
+.sf-lm.lm-game .block-partial .bp-opt[data-chosen='true'],
+.sf-lm.lm-game .block-partial .bp-team[data-chosen='true'],
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-item[data-chosen='true'] { --ui-accent: var(--sf-gold); }
+.sf-lm.lm-game .block-partial .bp-opt[data-chosen='true'],
+.sf-lm.lm-game .block-partial .bp-team[data-chosen='true'] {
+  border-color: var(--sf-gold);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sf-gold) 22%, var(--ui-surface-2));
+}
+/* Savage Blow (reroll ALL dice): the gold outline and its ALL caption */
+.sf-lm.lm-game .multi-block-resolution .bp-opt.bp-savage { outline-color: color-mix(in srgb, var(--sf-gold) 65%, transparent); }
+.sf-lm.lm-game .multi-block-resolution .bp-savage .bp-sub { color: var(--sf-gold); }
+/* the team reroll / mascot art buttons stay transparent (the art is the button) */
+.sf-lm.lm-game .block-partial .bp-team,
+.sf-lm.lm-game .multi-block-resolution .bp-team { border-radius: 2px; }
+
+/* ---- the team-reroll count rides the die as a .sf-count */
+.sf-lm.lm-game .block-partial .rr-trr-num.bp-trr-num,
+.sf-lm.lm-game .multi-block-resolution .rr-trr-num.bp-trr-num,
+.sf-lm.lm-game .block-partial.reroll-bar .rr-trr-inline {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+  opacity: 1;
+}
+
+/* ---- captions and hints */
+.sf-lm.lm-game .block-partial .bp-sub,
+.sf-lm.lm-game .multi-block-resolution .bp-sub { color: var(--ui-muted); text-shadow: none; font-family: var(--sf-band-font); }
+.sf-lm.lm-game .block-partial .bp-hint,
+.sf-lm.lm-game .multi-block-resolution .bp-hint { color: var(--ui-muted); }
+.sf-lm.lm-game .block-partial.reroll-bar .bp-hint { color: var(--ui-heading); }
+.sf-lm.lm-game .block-partial .bp-used-caption { color: var(--ui-heading); font-family: var(--sf-band-font); letter-spacing: .04em; }
+.sf-lm.lm-game .block-partial .bp-uphill-wait { color: var(--ui-muted); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .multi-block-resolution .mbr-name { color: var(--ui-text); }
+/* BlockChooserCopy ("Your choice" / "<coach> is choosing"): a band label; a spectator sees the seat inks */
+.sf-lm.lm-game .block-partial .block-chooser-copy,
+.sf-lm.lm-game .multi-block-resolution .block-chooser-copy { font-family: var(--sf-band-font); letter-spacing: .06em; color: var(--ui-text); }
+.sf-lm.lm-game .block-chooser-copy .block-chooser-name.block-chooser-name--home { color: var(--sf-seat-home); text-shadow: none; }
+.sf-lm.lm-game .block-chooser-copy .block-chooser-name.block-chooser-name--away { color: var(--sf-seat-away); text-shadow: none; }
+
+/* ---- the failed-action reroll bar: context rows, question, fail tag */
+.sf-lm.lm-game .block-partial.reroll-bar .rr-context-row { border-bottom-color: var(--sf-panel-line); }
+.sf-lm.lm-game .block-partial.reroll-bar .rr-prompt-line { color: var(--ui-text); }
+.sf-lm.lm-game .block-partial.reroll-bar .rr-question,
+.sf-lm.lm-game .multi-block-resolution .rr-question { color: var(--ui-heading); }
+.sf-lm.lm-game .block-partial.reroll-bar .sc-needed { color: var(--ui-heading); text-shadow: none; }
+.sf-lm.lm-game .block-partial.reroll-bar .rr-ctx-label { color: var(--ui-text); }
+/* spectator: inert surface, no hover affordance (Retro rule restated at the higher weight) */
+.sf-lm.lm-game .block-partial.reroll-bar[data-spectator='true'] .bp-opt:hover:not([data-chosen='true']) { border-color: var(--sf-panel-line); }
+
+/* ======================================================================================================== bloodlust */
+.sf-lm.lm-game .skill-choice.reroll-bar.bloodlust-card {
+  color: var(--ui-text);
+  background: var(--lmg-dice-float-face);
+  border-color: var(--ui-scarlet);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-scarlet), var(--lmg-dice-panel-shadow);
+}
+.sf-lm.lm-game .skill-choice.bloodlust-card .bl-title,
+.sf-lm.lm-game .skill-choice.bloodlust-card > .sc-title {
+  border-bottom-color: var(--sf-panel-line);
+  font-family: var(--sf-band-title-font);
+  text-transform: uppercase;
+  color: var(--ui-heading);
+  text-shadow: none;
+}
+.sf-lm.lm-game .skill-choice.bloodlust-card .bl-special-available { color: var(--sf-gold); text-shadow: none; font-family: var(--sf-band-font); }
+.sf-lm.lm-game .skill-choice.bloodlust-card .rr-question { color: var(--ui-heading); }
+/* Owner 11-04 (Modern review): "Move 'Reroll' to the top left of this panel" - the question is a kicker at the card's
+   top-left (the card centres its children, so the kicker aligns itself to the start: a named exception to paint-only,
+   test/lmGame.test.ts SIZE_EXCEPTIONS) - "and increase the size of the failed bloodlust text": the headers below. */
+.sf-lm.lm-game .skill-choice.bloodlust-card .bl-reroll-kicker {
+  align-self: flex-start;
+  font-family: var(--sf-band-font);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 16px);
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ui-heading);
+}
+/* Owner 11-04: "header text needs to be bigger" on the decision panels with the small band-title header (the
+   bloodlust card in both stages, the skill-use cards, the multi-block titles): the band title face at 20px, like the
+   League Manager band headings (it was 12px). */
+.sf-lm.lm-game .skill-choice.bloodlust-card .bl-title,
+.sf-lm.lm-game .skill-choice.bloodlust-card > .sc-title,
+.sf-lm.lm-game .skill-choice .sc-title,
+.sf-lm.lm-game .multi-block-resolution .mbr-title { font-size: max(var(--ui-min-primary-text-size, 16px), 20px); }
+
+/* ======================================================================================================== block alternative */
+.sf-lm.lm-game .block-alt-modal { border-color: var(--ui-heading); }
+.sf-lm.lm-game .block-alt-modal .block-alt-preview { color: var(--ui-heading); }
+.sf-lm.lm-game .block-alt-modal .block-alt-actions small { color: var(--ui-muted); text-transform: none; letter-spacing: 0; font-family: var(--font-body); }
+.sf-lm.lm-game .block-alt-modal .block-alt-dice-label { color: var(--ui-muted); }
+
+/* ======================================================================================================== context menu + injury gate */
+.sf-lm.lm-game .context-menu,
+.sf-lm.lm-game .submenu { font-size: max(var(--ui-min-text-size, 12px), 13px); }
+.sf-lm.lm-game .context-menu li { border-radius: 2px; color: var(--ui-text); }
+.sf-lm.lm-game .context-menu li:hover { color: var(--ui-text-on-primary); background: var(--ui-primary); box-shadow: var(--sf-bevel); }
+.sf-lm.lm-game .context-menu li[data-disabled='true'],
+.sf-lm.lm-game .context-menu li[data-disabled='true']:hover { color: var(--ui-text-dim); background: transparent; box-shadow: none; }
+.sf-lm.lm-game .context-menu .submenu-arrow { color: var(--ui-muted); }
+.sf-lm.lm-game .context-menu li:hover > .submenu-arrow { color: var(--ui-text-on-primary); }
+/* the reroll-menu / injury gate rows: title as a band label (the side's seat ink on the injury gate), the glyph a chip */
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-title {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+  border-bottom-color: var(--sf-panel-line);
+  background: transparent;
+  box-shadow: none;
+}
+.sf-lm.lm-game .context-menu.reroll-menu.injury-gate .reroll-menu-title { color: var(--sf-seat-away); }
+.sf-lm.lm-game .context-menu.reroll-menu.injury-gate[data-side='home'] .reroll-menu-title { color: var(--sf-seat-home); }
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-item { color: var(--ui-text); }
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-item:hover { color: var(--ui-text-on-primary); }
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-glyph {
+  font-family: var(--sf-band-font);
+  color: var(--ui-heading);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .context-menu.reroll-menu.injury-gate .reroll-menu-glyph { color: var(--ui-danger); }
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-decline { color: var(--ui-danger); }
+/* the owner's pick glows gold (the Retro rule sets this background with !important, so this one must too) */
+.sf-lm.lm-game .context-menu.reroll-menu .reroll-menu-item[data-chosen='true'] {
+  background: color-mix(in srgb, var(--sf-gold) 30%, var(--ui-surface-2)) !important;
+  color: var(--ui-text);
+}
+.sf-lm.lm-game .context-menu.reroll-menu[data-spectator='true'] .reroll-menu-item:hover { background: transparent; color: var(--ui-text); box-shadow: none; }
+
+/* ======================================================================================================== system modals */
+/* overlays: the League Manager ground instead of the Retro blue-black */
+.sf-lm.lm-game .conn-closed-overlay,
+.sf-lm.lm-game .concede-overlay,
+.sf-lm.lm-game .shutdown-overlay {
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--ui-surface) 90%, transparent) 0%, color-mix(in srgb, var(--ui-secondary) 96%, transparent) 75%);
+}
+/* tone by the card's job, as a band-style left bar inside the card's own padding */
+.sf-lm.lm-game .conn-closed-card,
+.sf-lm.lm-game .shutdown-card { box-shadow: inset 4px 0 0 var(--ui-scarlet), var(--lmg-dice-panel-shadow); }
+.sf-lm.lm-game .conn-closed-card:has(.waiting-card-title) { box-shadow: inset 4px 0 0 var(--ui-info), var(--lmg-dice-panel-shadow); }
+.sf-lm.lm-game .concede-card { box-shadow: inset 4px 0 0 var(--ui-heading), var(--lmg-dice-panel-shadow); }
+.sf-lm.lm-game .conn-closed-card .hint,
+.sf-lm.lm-game .conn-closed-card .waiting-card-hint,
+.sf-lm.lm-game .concede-card .concede-team,
+.sf-lm.lm-game .shutdown-card .shutdown-sub { color: var(--ui-muted); }
+/* the reconnect / waiting spinners: the heading ink (border colours only; width and style stay) */
+.sf-lm.lm-game .conn-closed-card .conn-spinner,
+.sf-lm.lm-game .conn-closed-card .waiting-card-spinner {
+  border-color: color-mix(in srgb, var(--ui-heading) 30%, transparent);
+  border-top-color: var(--ui-heading);
+}
+.sf-lm.lm-game .conn-closed-card:has(.waiting-card-title) .waiting-card-spinner {
+  border-color: color-mix(in srgb, var(--ui-info) 30%, transparent);
+  border-top-color: var(--ui-info);
+}
+.sf-lm.lm-game .conn-closed-card .waiting-card-actions .waiting-card-room-toggle { text-transform: none; letter-spacing: 0; font-family: var(--font-body); }
+.sf-lm.lm-game .conn-closed-card .waiting-card-actions .waiting-card-room-toggle[aria-pressed='true'] { border-color: var(--ui-heading); }
+
+/* ---- MatchNoticeCard (beta notice, switch watcher): the client sans (the scoped rule names Arial) */
+.sf-lm.lm-game .mn-backdrop { background: color-mix(in srgb, var(--ui-secondary) 55%, transparent); }
+.sf-lm.lm-game .mn-backdrop .mn-card { font-family: var(--font-body); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .mn-card .mn-text { color: var(--ui-text); }
+
+/* ---- game browser */
+.sf-lm.lm-game .game-browser .gb-entry { border-bottom-color: var(--sf-panel-line); }
+.sf-lm.lm-game .game-browser .gb-server-label {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-success) 26%, var(--ui-surface-2));
+  border-color: var(--ui-success);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .game-browser .gb-server-label[data-server='fumbbl'] {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-info) 26%, var(--ui-surface-2));
+  border-color: var(--ui-info);
+}
+.sf-lm.lm-game .game-browser .gb-live { color: var(--lmg-done-ink); font-family: var(--sf-band-font); text-transform: uppercase; }
+.sf-lm.lm-game .game-browser .gb-filter,
+.sf-lm.lm-game .game-browser .gb-entry input,
+.sf-lm.lm-game .cg-menu .cg-field input,
+.sf-lm.lm-game .cg-menu .cg-ingest input,
+.sf-lm.lm-game .cg-menu .br-text,
+.sf-lm.lm-game .unknown-call .uc-describe textarea {
+  color: var(--ui-text);
+  background: var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 2px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .game-browser .gb-filter:focus,
+.sf-lm.lm-game .game-browser .gb-entry input:focus,
+.sf-lm.lm-game .cg-menu .cg-field input:focus,
+.sf-lm.lm-game .cg-menu .cg-ingest input:focus,
+.sf-lm.lm-game .cg-menu .br-text:focus,
+.sf-lm.lm-game .unknown-call .uc-describe textarea:focus {
+  border-color: var(--ui-focus);
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 1px;
+}
+.sf-lm.lm-game .game-browser td { border-bottom-color: var(--sf-panel-line); }
+.sf-lm.lm-game .game-browser .gb-row:hover td { background: var(--ui-hover); }
+.sf-lm.lm-game .game-browser td em,
+.sf-lm.lm-game .game-browser .gb-id,
+.sf-lm.lm-game .game-browser .gb-testbed summary,
+.sf-lm.lm-game .game-browser .hint,
+.sf-lm.lm-game .game-browser .gb-mygames-vs em { color: var(--lmg-dice-muted-on-2); }
+.sf-lm.lm-game .game-browser .gb-score { color: var(--ui-heading); font-family: var(--sf-band-font); }
+.sf-lm.lm-game .game-browser .gb-half { color: var(--ui-text); }
+.sf-lm.lm-game .game-browser .gb-mygames {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi);
+}
+.sf-lm.lm-game .game-browser .gb-mygames-err { color: var(--ui-danger); }
+.sf-lm.lm-game .game-browser .gb-mygames-status {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--lmg-dice-muted-on-2);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .game-browser .gb-mygames-status[data-inprogress='true'] {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-info) 26%, var(--ui-surface-2));
+  border-color: var(--ui-info);
+}
+.sf-lm.lm-game .game-browser .gb-fumbbl-lobby {
+  background: color-mix(in srgb, var(--ui-warn) 10%, transparent);
+  border-color: var(--ui-warn);
+  border-radius: 2px;
+}
+
+/* ---- Create game (and the in-game Report dialog, which rides the same .cg-menu shell) */
+.sf-lm.lm-game .cg-menu .cg-close,
+.sf-lm.lm-game .cg-menu .cg-refresh { color: var(--ui-muted); }
+.sf-lm.lm-game .cg-menu .cg-close:hover:not(:disabled),
+.sf-lm.lm-game .cg-menu .cg-refresh:hover { color: var(--ui-heading); }
+.sf-lm.lm-game .cg-menu .cg-field,
+.sf-lm.lm-game .cg-menu .cg-field-label { color: var(--ui-text); }
+.sf-lm.lm-game .cg-menu .hint { color: var(--ui-muted); }
+.sf-lm.lm-game .cg-menu .cg-library-head,
+.sf-lm.lm-game .cg-menu .cg-teammeta { color: var(--lmg-dice-muted-on-2); }
+.sf-lm.lm-game .cg-menu .cg-teamcard.selected .cg-teammeta { color: var(--ui-text); }
+.sf-lm.lm-game .cg-menu .cg-suggest {
+  background: var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .cg-menu .cg-suggest li:hover { background: var(--ui-hover); }
+.sf-lm.lm-game .cg-menu .cg-library {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi);
+}
+.sf-lm.lm-game .cg-menu .cg-teamcard {
+  background: var(--lmg-dice-btn-face);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .cg-menu .cg-teamcard:hover { border-color: var(--ui-heading); }
+.sf-lm.lm-game .cg-menu .cg-teamcard.selected {
+  background: color-mix(in srgb, var(--sf-gold) 18%, var(--ui-surface-2));
+  border-color: var(--sf-gold);
+  box-shadow: var(--lmg-dice-gold-ring);
+}
+.sf-lm.lm-game .cg-menu .cg-teamname { color: var(--ui-text); }
+.sf-lm.lm-game .cg-menu .cg-warn { color: var(--lmg-dice-warn-ink); }
+.sf-lm.lm-game .cg-menu .cg-status { color: var(--ui-text); }
+/* Report dialog parts (components/BugReportModal.vue + BugReportScreenshotPanel.vue, in-game instance only) */
+.sf-lm.lm-game .cg-menu.br-menu { border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .cg-menu.br-menu .br-attach {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .cg-menu.br-menu .br-attach li { color: var(--lmg-dice-muted-on-2); }
+.sf-lm.lm-game .cg-menu.br-menu .br-error {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-danger) 14%, transparent);
+  border-color: var(--ui-danger);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .cg-menu.br-menu .br-notice {
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-warn) 14%, transparent);
+  border-color: var(--ui-warn);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .cg-menu.br-menu .br-shot .br-shot-thumb {
+  background: var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+
+/* ======================================================================================================== unknown call */
+/* A developer / diagnostic surface: League Manager panel and controls, but it keeps its distinct orange warning line
+   (border, head bar, chip) so it never reads as a game decision. */
+.sf-lm.lm-game .unknown-call { border-color: var(--lmg-dice-diag); }
+.sf-lm.lm-game .unknown-call .uc-head {
+  color: var(--lmg-dice-diag-ink);
+  background: var(--lmg-dice-diag-wash);
+  border-radius: 2px 2px 0 0;
+  box-shadow: inset 4px 0 0 var(--lmg-dice-diag), inset 0 -2px 0 var(--lmg-dice-diag);
+}
+.sf-lm.lm-game .unknown-call .uc-body p,
+.sf-lm.lm-game .unknown-call .uc-row dd { color: var(--ui-text); }
+.sf-lm.lm-game .unknown-call .uc-cut,
+.sf-lm.lm-game .unknown-call .uc-args,
+.sf-lm.lm-game .unknown-call .uc-describe,
+.sf-lm.lm-game .unknown-call .uc-row dt { color: var(--ui-muted); }
+.sf-lm.lm-game .unknown-call .uc-args code,
+.sf-lm.lm-game .unknown-call .uc-row dd.uc-raw { color: var(--lmg-dice-info-ink); }
+.sf-lm.lm-game .unknown-call .uc-args-label,
+.sf-lm.lm-game .unknown-call .uc-sec h4,
+.sf-lm.lm-game .unknown-call .uc-coord-prompt { color: var(--lmg-dice-diag-ink); }
+.sf-lm.lm-game .unknown-call .uc-status { color: var(--lmg-done-ink); }
+/* the Retro note / sim / outcome inks carry !important, so these restatements must too */
+.sf-lm.lm-game .unknown-call .uc-note { color: var(--ui-muted) !important; }
+.sf-lm.lm-game .unknown-call .uc-sim { border-color: var(--lmg-dice-diag); border-radius: 2px; color: var(--lmg-dice-diag-ink) !important; }
+.sf-lm.lm-game .unknown-call .uc-confirm { background: var(--lmg-dice-diag-wash); border-color: var(--lmg-dice-diag); border-radius: 2px; }
+.sf-lm.lm-game .unknown-call .uc-outcome { color: var(--lmg-dice-diag-ink) !important; }
+.sf-lm.lm-game .unknown-call .uc-outcome[data-status='done'] { color: var(--lmg-done-ink) !important; }
+/* the chip: a .sf-chip in the warning tone */
+.sf-lm.lm-game .unknown-call-chip {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--lmg-dice-diag-ink);
+  background: linear-gradient(var(--lmg-dice-diag-wash), var(--lmg-dice-diag-wash)), var(--ui-surface-2);
+  border-color: var(--lmg-dice-diag);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .unknown-call-chip:hover {
+  background: linear-gradient(var(--lmg-dice-diag-wash), var(--lmg-dice-diag-wash)), var(--ui-hover);
+  border-color: var(--lmg-dice-diag-ink);
+}
+
+/* ======================================================================================================== admin / server notices */
+.sf-lm.lm-game .admin-message { border-color: var(--ui-admin); box-shadow: inset 4px 0 0 var(--ui-admin), var(--lmg-dice-panel-shadow); }
+.sf-lm.lm-game .admin-message .admin-message-head { color: var(--ui-heading); }
+.sf-lm.lm-game .admin-message .admin-message-body { color: var(--ui-text); }
+.sf-lm.lm-game .admin-message.server-notice { border-color: var(--ui-info); box-shadow: inset 4px 0 0 var(--ui-info), var(--lmg-dice-panel-shadow); }
+.sf-lm.lm-game .admin-message.server-notice .admin-message-head { color: var(--ui-text); }
+.sf-lm.lm-game .admin-message.server-notice .admin-message-ack:hover { border-color: var(--ui-info); }

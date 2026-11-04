@@ -98,13 +98,15 @@ defineEmits<{
             </div>
           </article>
         </div>
+        <!-- Owner 11-04: Decline sits under the treatment options, so the card ends at the bottom of the portrait panel
+             instead of carrying a separate footer row of empty space. -->
+        <div v-if="prompt.mine" class="apo-decline-row">
+          <button type="button" class="apo-decline" data-pad-cancel @pointerdown.stop @click.stop="$emit('resolve', null)">
+            {{ prompt.noneLabel }}
+          </button>
+        </div>
       </div>
     </div>
-    <template v-if="prompt.mine" #actions>
-      <button type="button" class="apo-decline" data-pad-cancel @pointerdown.stop @click.stop="$emit('resolve', null)">
-        {{ prompt.noneLabel }}
-      </button>
-    </template>
   </PitchConfirmationPanel>
 </template>
 
@@ -144,6 +146,8 @@ defineEmits<{
 .apo-injury.ko .apo-status { color: #ffb24a; }
 .apo-option-row { display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 6px; }
 .apo-option-row .apo-use { width: 100%; text-align: center; }
+.apo-decline-row { display: flex; justify-content: center; margin-top: 12px; }
+.apo-decline-row .apo-decline { min-width: 50%; text-align: center; }
 .apo-use, .apo-decline { min-height: 30px; padding: 5px 9px; color: #effff1; border: 1px solid #6aa276; border-radius: 4px; background: linear-gradient(180deg, #467951, #294b31); font: inherit; font-size: max(var(--ui-min-text-size, 12px), 0.68rem); font-weight: 900; cursor: pointer; }
 .apo-use:hover { filter: brightness(1.16); }
 .apo-decline { color: #ffe9e9; border-color: #d56a5f; background: linear-gradient(180deg, #9b3b3b, #5e2222); } /* owner 10-21: the decline reads red, the use green */

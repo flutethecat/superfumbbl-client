@@ -22,6 +22,7 @@ import {
   type CoachServerFilter, type LuckSummary,
 } from '../../../game/coachStats';
 import { t } from '../../../i18n';
+import { forkFeaturesEnabled } from '../../../game/forkAccess';
 
 const props = defineProps<{ games: readonly CoachGameRecord[]; name: string }>();
 const emit = defineEmits<{ close: [] }>();
@@ -32,7 +33,10 @@ const reduced = computed(() => motionReduced());
 const filter = ref<CoachServerFilter>('all');
 const FILTERS: CoachServerFilter[] = ['all', 'fumbbl', 'super'];
 const FILTER_LABEL: Record<CoachServerFilter, string> = { all: 'coachStats.filter.all', fumbbl: 'coachStats.filter.fumbbl', super: 'coachStats.filter.super' };
-const shown = computed(() => filterByServer(props.games, filter.value));
+// Owner 11-04: the server filter (and its Super FUMBBL label) shows only with fork features; the card already hands a
+// public run its FUMBBL games only.
+const showServerFilter = computed(() => forkFeaturesEnabled());
+const shown = computed(() => (showServerFilter.value ? filterByServer(props.games, filter.value) : props.games));
 const races = computed(() => raceRecords(shown.value));
 const vs = computed(() => matchups(shown.value));
 const avg = computed(() => perGame(shown.value));
@@ -84,7 +88,7 @@ const padHint = computed(() => padFocusControllerMode());
         </header>
 
         <div ref="body" class="cs-body" data-testid="coach-stats-body">
-          <div class="cs-filter" role="group" :aria-label="t('coachStats.filter.label')">
+          <div v-if="showServerFilter" class="cs-filter" role="group" :aria-label="t('coachStats.filter.label')">
             <span class="cs-k">{{ t('coachStats.filter.label') }}</span>
             <button v-for="f in FILTERS" :key="f" type="button" class="cs-filter-btn" :class="{ 'sf-btn small': modern }" :aria-pressed="filter === f" :data-filter="f"
               @click="filter = f">{{ t(FILTER_LABEL[f]) }}</button>

@@ -4551,6 +4551,14 @@ export class PitchRenderer {
    *  eligible set, never re-derived. Extracted from the pointerup tap handler so the resolution
    *  order is unit-testable without a WebGL/canvas harness (see renderer-o66-swallow.test.ts).
    *  Returns the picked playerId, or null when nothing eligible was hit. */
+  /** Owner 11-04 (roster-pick fallback, option 1): the given player ids that have NO click target right now, i.e.
+   *  neither a pitch square nor a dugout token hit area. The view offers "Pick from roster" only for these. */
+  unreachablePickIds(ids: readonly string[]): string[] {
+    const onPitch = new Set(this.playersBySquare.values());
+    const inDugout = new Set(this.dugoutHits.map((hit) => hit.playerId));
+    return ids.filter((id) => !onPitch.has(id) && !inDugout.has(id));
+  }
+
   resolveArmedPlayerPick(worldX: number, worldY: number): string | null {
     if (!this.playerPickIds) return null;
     const [sx, sy] = worldToSquare(worldX, worldY);

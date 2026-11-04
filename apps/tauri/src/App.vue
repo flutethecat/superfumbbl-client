@@ -55,6 +55,7 @@ import { bareAppVersion, clientVersionBlock, clientVersionBlockStillApplies } fr
 import { UI_FONTS } from './game/uiFonts';
 import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
 import DisplayCaps from './components/DisplayCaps.vue';
+import GameMenuStats from './components/GameMenuStats.vue';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
@@ -120,7 +121,7 @@ import {
   type ReplayFileImportTicket,
 } from './game/replay/replayFileImport';
 import { applyTheme, deriveTheme, resolveThemeColors, THEME_PRESETS, type ThemeId } from './game/theme';
-import { applyLmRoot, lmRootClass } from './game/lmTheme';
+import { applyLmRoot, inGameModern, lmRootClass } from './game/lmTheme';
 import { dialogDescriptor } from './game/dialogRegistry';
 import { endGameExitPlan, type EndGameExit } from './game/spectatorEndGame';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports, type InstalledAssetPack } from './game/assetMods';
@@ -1997,6 +1998,9 @@ function retrySpectate(): void {
  * mirroring upstream DialogGameStatistics' team comparison.
  */
 const statsOpen = ref(false);
+/** Owner 11-03: the Game Menu takes the Modern look from the in-game style in a game (coordinator ruling B) and from
+ *  the interface style on the menu blades. */
+const gameMenuModern = computed(() => (gameStore.game.value ? inGameModern(settings) : settings.uiStyle === 'modern'));
 
 // Owner 09-22: the Esc > Game statistics pane is the end-of-game Statistics tab — same rows, same crest columns.
 const gameStats = computed(() => {
@@ -2707,7 +2711,41 @@ onBeforeUnmount(() => {
 
     <!-- Game Menu (Esc; owner 2026-07-02 — first step toward the BB3-style shell) -->
     <div v-if="ui.gameMenuOpen" class="modal-backdrop game-menu-backdrop" @click.self="ui.gameMenuOpen = false">
-      <div class="game-menu" :data-wide="statsOpen">
+      <!-- Owner 11-03 ("the game menu surface did not get updated, let's bring that in"): under the Modern style the
+           Game Menu is a League Manager panel (band title, .sf-btn rows) over the same rows, actions and gates as the
+           Retro menu below; Retro is unchanged (v-else). Esc, the backdrop click and the controller keep their paths:
+           only the markup differs. Rows are real <button>s, so Tab and the controller cursor reach them as before. -->
+      <div v-if="gameMenuModern" :class="[lmRootClass('modern'), 'lm-game-menu']" :data-wide="statsOpen"
+        data-testid="lm-game-menu">
+        <!-- No dialog role here (as in Retro): escConsoleMenu ignores an Esc from inside a dialog-role element, so the
+             role would stop Esc closing the menu while a row has focus. -->
+        <div class="hm-band"><h2>{{ $t('escMenu.gameMenu') }}</h2></div>
+        <template v-if="!statsOpen">
+          <div class="lm-game-menu-rows">
+            <button type="button" class="sf-btn primary" @click="ui.gameMenuOpen = false">{{ $t('escMenu.resume') }}</button>
+            <button type="button" class="sf-btn" :disabled="!gameStats" :title="gameStats ? '' : $t('escMenu.noGameLoaded')"
+              @click="statsOpen = true">{{ $t('escMenu.gameStatistics') }}</button>
+            <button type="button" class="sf-btn" @click="openSettings('general')">{{ $t('escMenu.settings') }}</button>
+            <button v-if="secondClientRow" type="button" class="sf-btn" data-testid="new-client-window" @click="openSecondClient()">{{ $t('escMenu.newClientWindow') }}</button>
+            <p v-if="secondClientRow && secondClientHint" class="lm-game-menu-hint">{{ secondClientHint }}</p>
+            <button type="button" class="sf-btn" @click="ui.gameMenuOpen = false; guideOpen = true">{{ $t('escMenu.helpFieldManual') }}</button>
+            <button v-if="FORK_EDITION" type="button" class="sf-btn" @click="openConsole()">{{ $t('escMenu.protocolConsole') }}</button>
+            <button v-if="gameStore.game.value" type="button" class="sf-btn" @click="requestLeaveGame()">{{ $t('escMenu.returnToMenu') }}</button>
+            <button v-else-if="exitAppAvailable" type="button" class="sf-btn" @click="exitApp()">{{ $t('escMenu.exitGame') }}</button>
+            <button v-else type="button" class="sf-btn" disabled :title="$t('escMenu.noGameLoaded')">{{ $t('escMenu.returnToMenu') }}</button>
+            <p v-if="exitAppHint" class="lm-game-menu-hint">{{ exitAppHint }}</p>
+            <button type="button" class="sf-btn danger" :disabled="!gameStore.canConcedeGame"
+              :title="gameStore.canConcedeGame ? $t('escMenu.requestToConcedeThe') : $t('escMenu.availableOnlyAtThe')"
+              @click="gameStore.concedeGame(); ui.gameMenuOpen = false">{{ $t('escMenu.concede') }}</button>
+          </div>
+          <p class="lm-game-menu-foot sf-k">{{ $t('escMenu.escCloses') }}</p>
+        </template>
+        <template v-else-if="gameStats">
+          <GameMenuStats :stats="gameStats" />
+          <div class="lm-game-menu-rows"><button type="button" class="sf-btn" @click="statsOpen = false">{{ $t('escMenu.back') }}</button></div>
+        </template>
+      </div>
+      <div v-else class="game-menu" :data-wide="statsOpen">
         <!-- Owner 10-11 ("Graduate C"): the menu's title, buttons and hint are lettered by DisplayCaps (Nuffle lead
              letter per word, Graduate small capitals after). Each label stays plain text in its `text`. -->
         <h2><DisplayCaps :text="$t('escMenu.gameMenu')" /></h2>
@@ -2735,22 +2773,7 @@ onBeforeUnmount(() => {
           <p class="hint"><DisplayCaps :text="$t('escMenu.escCloses')" /></p>
         </template>
         <template v-else-if="gameStats">
-          <div class="pg-stats">
-            <div class="pg-stats-cols">
-              <div class="pg-stat-col pg-bevel" data-side="home">
-                <div class="pg-stat-col-head"><img :src="gameStats.home.logo" :alt="gameStats.home.team" /></div>
-                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-h" :data-lead="row.homeLead">{{ row.home }}</div>
-              </div>
-              <div class="pg-stat-col pg-bevel" data-side="label">
-                <div class="pg-stat-col-head"></div>
-                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-stat-label">{{ row.label }}</div>
-              </div>
-              <div class="pg-stat-col pg-bevel" data-side="away">
-                <div class="pg-stat-col-head"><img :src="gameStats.away.logo" :alt="gameStats.away.team" /></div>
-                <div v-for="row in gameStats.rows" :key="row.key" class="pg-stat-cell pg-a" :data-lead="row.awayLead">{{ row.away }}</div>
-              </div>
-            </div>
-          </div>
+          <GameMenuStats :stats="gameStats" />
           <button @click="statsOpen = false"><DisplayCaps :text="$t('escMenu.back')" /></button>
         </template>
       </div>
@@ -4328,6 +4351,19 @@ onBeforeUnmount(() => {
                 </span>
               </label>
               <SettingInfo :text="$t('settings.info.uiColorScheme')" :def="$t('settings.info.uiColorSchemeDefault')" :previews="SETTING_PREVIEWS.uiColorScheme" />
+            </div>
+            <!-- Owner 11-03 (in-game redesign, coordinator ruling B): the in-game look, Retro by default. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.uiStyle.inGameStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.uiGameStyle" data-testid="ui-game-style">
+                    <option value="retro">{{ $t('settings.ui.uiStyle.retro') }}</option>
+                    <option value="modern">{{ $t('settings.ui.uiStyle.modern') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.uiGameStyle')" :def="$t('settings.info.uiGameStyleDefault')" />
             </div>
             <!-- /lm-theme -->
             <div class="row theme-preset-row">

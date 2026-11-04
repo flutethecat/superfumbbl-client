@@ -27,6 +27,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { anchorPanelPosition, persistClampedPanelPosition, resizablePanelStyle, type EdgePanelPosition } from '../game/edgePanelLayout';
 import { $t } from '../i18n';
+import { lmGameRootClass } from '../game/lmTheme';
+import { settings } from '../game/settings';
 
 const props = defineProps<{
   /** true = floating (teleported to body); false = docked in place. */
@@ -234,7 +236,7 @@ defineExpose({ panelEl });
     <div
       ref="panelEl"
       class="chat-dock"
-      :class="{ 'chat-dock--float': popped }"
+      :class="[{ 'chat-dock--float': popped }, lmGameRootClass(settings)]"
       :style="floatStyle"
       @pointerdown.capture="startNativeResize"
       v-show="popped || visible"

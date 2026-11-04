@@ -5,6 +5,8 @@ import App from './App.vue';
 import './styles/lm-theme.css';
 // Owner 11-03 (lane 3): the Modern Play / Spectate / Replay blades and top bar, also scoped under .sf-lm.
 import './styles/lm-blades.css';
+import './styles/lm-game-menu.css';
+import './styles/lm-game/index.css';
 import { initCredentials } from './game/credentials';
 import { installFocusClickGuard } from './game/focusClickGuard';
 import { installFontStackVariables } from './game/fontStacks';

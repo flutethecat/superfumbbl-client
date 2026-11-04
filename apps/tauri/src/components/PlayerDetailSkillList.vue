@@ -64,13 +64,18 @@ function tooltipText(skill: PlayerDetailSkill): string {
 // the full skill name and a close-up of the icon, and is clamped inside the viewport.
 const TIP_MARGIN = 8;
 // Owner 09-09: the bubble is content-sized (a name-only tip is tight), then measured and clamped to the viewport.
-const tip = reactive<{ skill: PlayerDetailSkill | null; left: number; top: number; below: boolean }>({
-  skill: null, left: 0, top: 0, below: false,
+// Modern in-game look (owner 11-03): the teleported bubble takes the Modern game root's classes when its chip sits inside
+// that root (.sf-lm.lm-game); Retro, the blade embeds (end-game Details) and Classic keep the plain bubble. Read from the
+// DOM, so this list never reads a setting (the innate-skills roster test pins that).
+const tip = reactive<{ skill: PlayerDetailSkill | null; left: number; top: number; below: boolean; inGame: boolean }>({
+  skill: null, left: 0, top: 0, below: false, inGame: false,
 });
 const tipEl = ref<HTMLElement | null>(null);
 function showTip(skill: PlayerDetailSkill, event: Event): void {
   if (props.mode !== 'icons') return;
-  const chip = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const chipEl = event.currentTarget as HTMLElement;
+  const chip = chipEl.getBoundingClientRect();
+  tip.inGame = !!chipEl.closest('.sf-lm.lm-game');
   const below = chip.top < 200; // no room above → flip under the chip
   tip.skill = skill; tip.below = below;
   tip.top = below ? chip.bottom + 7 : chip.top - 7;
@@ -107,7 +112,7 @@ function hideTip(): void { tip.skill = null; }
     </span>
   </div>
   <Teleport to="body">
-    <div v-if="tip.skill" ref="tipEl" class="skill-tip" role="tooltip" :data-below="tip.below"
+    <div v-if="tip.skill" ref="tipEl" class="skill-tip" role="tooltip" :class="tip.inGame ? ['sf-lm', 'lm-game'] : undefined" :data-below="tip.below"
       :style="{ left: tip.left + 'px', top: tip.top + 'px' }">
       <span class="skill-tip-icon">
         <img v-if="tipIcon" :src="tipIcon.url" :class="{ 'skill-tip-icon-2x': tipIcon.size === 48 }" alt="" />

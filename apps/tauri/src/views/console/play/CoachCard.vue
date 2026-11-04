@@ -29,7 +29,8 @@ import { t } from '../../../i18n';
 import { coachProfileStatItems, coachProfileStatParts, coachTitleBadgeUrl, coachTitleSlug, type FumbblCoachProfile } from '../../../game/fumbblCoachProfile';
 import { coachHistory, ensureCoachHistoryLoaded } from '../../../game/coachGameHistory';
 import { PAD_FOCUS_PRIORITY, padFocusControllerMode, vPadFocus } from '../../../game/cardFocus';
-import { coachForm, filterByCoach, luckSummary, raceRecords, recordText, signedLuck, sparklinePoints } from '../../../game/coachStats';
+import { coachForm, filterByCoach, filterByServer, luckSummary, raceRecords, recordText, signedLuck, sparklinePoints } from '../../../game/coachStats';
+import { forkFeaturesEnabled } from '../../../game/forkAccess';
 
 const props = defineProps<{ name: string; profile: FumbblCoachProfile | null }>();
 
@@ -49,7 +50,12 @@ const ariaLabel = computed(() => [t('coachCard.ariaFumbblCoach'), displayName.va
 // ---- performance stats (local history) ----
 onMounted(() => { void ensureCoachHistoryLoaded(); });
 /** Only the games of the coach shown on this card (a second account on the machine never mixes in). */
-const games = computed(() => filterByCoach(coachHistory.games, displayName.value));
+// Owner 11-04: fork play is hidden in public runs, so without fork features the stats count FUMBBL games only and
+// the panel shows no server filter (CoachStatsPanel). The fork edition or the --fork-server switch shows everything.
+const games = computed(() => {
+  const own = filterByCoach(coachHistory.games, displayName.value);
+  return forkFeaturesEnabled() ? own : filterByServer(own, 'fumbbl');
+});
 const LUCK_GAMES = 10;
 const form = computed(() => coachForm(games.value, 5));
 const luck = computed(() => luckSummary(games.value, LUCK_GAMES, 'all'));

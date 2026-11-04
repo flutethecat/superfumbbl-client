@@ -109,3 +109,16 @@ export function applyLmRoot(state: LmRootState, root: HTMLElement | null = typeo
     else root.style.removeProperty(name);
   }
 }
+
+/** Owner 11-03 (in-game redesign; coordinator ruling B): is the game view in the Modern look? Today it reads its own
+ *  setting, `uiGameStyle` (default Retro). Folding it into the interface style later is this one line:
+ *  `return settings.uiStyle === 'modern';` */
+export function inGameModern(settings: { uiGameStyle: UiStyle; uiStyle: UiStyle }): boolean {
+  return settings.uiGameStyle === 'modern';
+}
+
+/** The classes that put a game surface in the Modern in-game look: the game view root, and any surface teleported out
+ *  of it (popped-out chat, roster window, tooltips) adds them to its own root. Empty under Retro. */
+export function lmGameRootClass(settings: { uiGameStyle: UiStyle; uiStyle: UiStyle }): string[] {
+  return inGameModern(settings) ? ['sf-lm', 'lm-game'] : [];
+}

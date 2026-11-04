@@ -552,6 +552,11 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   /** Owner 11-03: Modern's colour scheme. 'dark' (default) or 'light' (the League Manager's derived light values).
    *  Separate from `uiTheme` (the colour preset), which still recolours Modern's accents (game/lmTheme.ts). */
   uiColorScheme: 'dark' | 'light';
+  /** Owner 11-03 (in-game redesign, "a new path"; coordinator ruling B): the in-game look. 'retro' (default) = today's
+   *  HUD, panels and dialogs, unchanged; 'modern' = the League Manager look in a game (styles/lm-game/*.css under the
+   *  `.sf-lm.lm-game` root). Separate from `uiStyle` until the owner folds the two together (game/lmTheme.ts
+   *  inGameModern is the one-line switch). */
+  uiGameStyle: 'modern' | 'retro';
   /** Show the on-pitch row-number markers (2/4/6/8/10/12). */
   showRowMarkers: boolean;
   /** Show the midfield sweet-spot crosshair markers. */
@@ -989,6 +994,7 @@ const DEFAULTS: AppSettings = {
   uiMode: 'fumbbl40k', // owner 2026-07-08 (FC): current UI is the default
   uiStyle: 'modern', // owner 11-03: the League Manager look by default; Retro keeps today's look
   uiColorScheme: 'dark', // owner 11-03: dark by default, light is opt-in
+  uiGameStyle: 'retro', // owner 11-03 / coordinator ruling B: the in-game Modern look is opt-in
   modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
   classicEffects: false, // owner 2026-07-08 (FC-D3): classic is effects-off by default
   savedSetupPreviews: {},
@@ -1034,6 +1040,10 @@ export function normalizeUiStyle(value: unknown): AppSettings['uiStyle'] {
   return value === 'retro' ? 'retro' : 'modern';
 }
 /** Owner 11-03: Modern colour scheme; anything but an explicit 'light' is the dark default. */
+/** Owner 11-03: in-game style; anything but an explicit 'modern' is the Retro default (today's in-game look). */
+export function normalizeUiGameStyle(value: unknown): AppSettings['uiGameStyle'] {
+  return value === 'modern' ? 'modern' : 'retro';
+}
 export function normalizeUiColorScheme(value: unknown): AppSettings['uiColorScheme'] {
   return value === 'light' ? 'light' : 'dark';
 }
@@ -1230,6 +1240,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     );
     merged.uiStyle = normalizeUiStyle(raw.uiStyle); // owner 11-03: missing / unknown -> 'modern'
     merged.uiColorScheme = normalizeUiColorScheme(raw.uiColorScheme); // owner 11-03: missing / unknown -> 'dark'
+    merged.uiGameStyle = normalizeUiGameStyle(raw.uiGameStyle); // owner 11-03: missing / unknown -> 'retro'
     merged.spectatorView = normalizeSpectatorView(raw.spectatorView); // owner 10-11: missing / unknown -> 'drive' (today's view)
     merged.modernHudStyle = raw.modernHudStyle === 'chrome' ? 'chrome' : 'minimalist'; // owner 10-05: a stored chrome pick is kept; everything else is minimalist
     // Current-version blobs bypass migrations, so malformed video values must be

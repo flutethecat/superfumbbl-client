@@ -1,0 +1,450 @@
+/* Modern in-game look: splashes. See base.css for the file map and the rules.
+
+   Surfaces: the injury band, KO / casualty / reserves / fall toasts, the turn-boundary banners (turnover, turn start)
+   and TurnToast, the staller, Master Chef / Dodgy Snack / Riotous Rookies and the prayer splash (PrayerPresentation),
+   the opponent-left toast, the reroll toast family, the Fumblerooski banner, WatchOutToast, SppGainToast, the action
+   toast, the pitch cues (negatrait, Loner, Tentacles, blitz target, target cue, pass tip, jump / Fumblerooski badge,
+   kick aim, kick election targets, mark label, precision hint), the cinematics (coin toss, weather, kick-off event,
+   swarming, fan factor, penalty shootout, the skip hint) and the tour toast.
+
+   League Manager treatment: a splash is an emotional beat, so it stays LOUD through colour and ink weight. The seat
+   bands and seat toasts are the `.sf-btn.primary` idea in the seat colour (--sf-seat-home / --sf-seat-away mixed
+   into a dark base, white ink, a seat-tint line and the bevel), so they read the same in both schemes. Neutral cues
+   on the pitch take the `.hm-panel` face (panel gradient, panel line, 2px radius, top highlight, drop), which follows
+   the light scheme. Headings take the band faces.
+
+   Kept as they are (paint-only rule): every animation, keyframe and transition, the vertical stack offsets of the
+   reroll toast family, positions and sizes. The skew of the injury / turnover / turn-start / Master Chef bands is a
+   `transform: skewY(..)` (and the keyframes carry it), so it is geometry and STAYS; only the band's paint changes.
+   Owner rulings kept: sentence case on the turn-boundary lines (owner 10-12: no text-transform here), KO / casualty
+   red and reserves yellow (owner 07-08 / 09-15), the failed Regeneration / Pastries red (owner 10-21 / 10-26), Loner
+   in the trait colour (owner 10-20), Tentacles green / red (owner 10-21), the coin, D6 faces, kick-off banners,
+   crests, skill icons and their image-rendering. */
+
+/* ---- lane tokens (dark default). The seat bands mix the seat colour into a dark base, so the band stays dark with
+   white ink in both schemes; the light block raises the seat share because the light seat colours are already deep. */
+.sf-lm.lm-game {
+  --lmg-sp-base: #07090c;
+  --lmg-sp-share: 62%;
+  --lmg-sp-share-deep: 30%;
+  --lmg-sp-ink: #ffffff;
+  --lmg-sp-ink-soft: #ffffffd6;
+  --lmg-sp-gold: #ffd76a;
+  --lmg-sp-shadow: #000000a6;
+  --lmg-sp-glow: #00000099;
+  --lmg-sp-hi: #ffffff33;
+  --lmg-sp-lo: #00000066;
+  --lmg-sp-lift: #ffffff;
+  --lmg-sp-scrim: #000000b3;
+  --lmg-cine-ink-shadow: 0 2px 0 #000000cc, 0 0 14px #000000b3;
+  --lmg-sp-home-band: color-mix(in srgb, var(--sf-seat-home) var(--lmg-sp-share), var(--lmg-sp-base));
+  --lmg-sp-home-deep: color-mix(in srgb, var(--sf-seat-home) var(--lmg-sp-share-deep), var(--lmg-sp-base));
+  --lmg-sp-home-line: color-mix(in srgb, var(--sf-seat-home) 72%, var(--lmg-sp-lift));
+  --lmg-sp-away-band: color-mix(in srgb, var(--sf-seat-away) var(--lmg-sp-share), var(--lmg-sp-base));
+  --lmg-sp-away-deep: color-mix(in srgb, var(--sf-seat-away) var(--lmg-sp-share-deep), var(--lmg-sp-base));
+  --lmg-sp-away-line: color-mix(in srgb, var(--sf-seat-away) 72%, var(--lmg-sp-lift));
+  --lmg-sp-red-band: color-mix(in srgb, var(--ui-scarlet) 62%, var(--lmg-sp-base));
+  --lmg-sp-red-deep: color-mix(in srgb, var(--ui-scarlet) 34%, var(--lmg-sp-base));
+  --lmg-sp-red-line: color-mix(in srgb, var(--ui-scarlet) 70%, var(--lmg-sp-lift));
+  --lmg-sp-gold-band: color-mix(in srgb, var(--ui-warn) 46%, var(--lmg-sp-base));
+  --lmg-sp-gold-deep: color-mix(in srgb, var(--ui-warn) 24%, var(--lmg-sp-base));
+  --lmg-sp-gold-line: color-mix(in srgb, var(--ui-warn) 82%, var(--lmg-sp-lift));
+  --lmg-sp-info-band: color-mix(in srgb, var(--ui-info) 40%, var(--lmg-sp-base));
+  --lmg-sp-info-line: color-mix(in srgb, var(--ui-info) 72%, var(--lmg-sp-lift));
+}
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game {
+  --lmg-sp-share: 86%;
+  --lmg-sp-share-deep: 60%;
+  --lmg-sp-shadow: #00000080;
+  --lmg-sp-glow: #0000004d;
+  --lmg-sp-scrim: #e4e6e9c7;
+  --lmg-cine-ink-shadow: 0 1px 0 #ffffffd9, 0 0 12px #ffffffcc;
+}
+/* High contrast: band and cue lines take the text colour (base.css restates the panel tokens). */
+html.sf-high-contrast .sf-lm.lm-game {
+  --lmg-sp-home-line: var(--lmg-sp-ink);
+  --lmg-sp-away-line: var(--lmg-sp-ink);
+  --lmg-sp-red-line: var(--lmg-sp-ink);
+  --lmg-sp-gold-line: var(--lmg-sp-ink);
+  --lmg-sp-info-line: var(--lmg-sp-ink);
+  --lmg-sp-ink-soft: var(--lmg-sp-ink);
+}
+
+/* ================= seat bands: injury, turnover, turn start (skew kept, see the header) ================= */
+.sf-lm.lm-game .injury-splash {
+  background: linear-gradient(100deg, transparent 0%, var(--lmg-sp-away-band) 5%, color-mix(in srgb, var(--lmg-sp-away-band) 88%, var(--lmg-sp-away-line)) 50%, var(--lmg-sp-away-band) 95%, transparent 100%);
+  border-top-color: var(--lmg-sp-away-line);
+  border-bottom-color: var(--lmg-sp-away-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), inset 0 -1px 0 var(--lmg-sp-lo), 0 3px 0 var(--lmg-sp-shadow);
+}
+.sf-lm.lm-game .injury-splash[data-side='home'] {
+  background: linear-gradient(100deg, transparent 0%, var(--lmg-sp-home-band) 5%, color-mix(in srgb, var(--lmg-sp-home-band) 88%, var(--lmg-sp-home-line)) 50%, var(--lmg-sp-home-band) 95%, transparent 100%);
+  border-top-color: var(--lmg-sp-home-line);
+  border-bottom-color: var(--lmg-sp-home-line);
+}
+.sf-lm.lm-game .injury-teamname { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 1px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .injury-roll,
+.sf-lm.lm-game .injury-splash[data-side='home'] .injury-roll { font-family: var(--sf-band-font); color: var(--lmg-sp-ink-soft); text-shadow: 0 1px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .injury-type { font-family: var(--sf-band-title-font); color: var(--lmg-sp-ink); text-shadow: 0 3px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .injury-stat { font-family: var(--sf-band-font); color: var(--lmg-sp-gold); }
+.sf-lm.lm-game .injury-player,
+.sf-lm.lm-game .injury-splash[data-side='home'] .injury-player { color: var(--lmg-sp-ink); text-shadow: 0 1px 0 var(--lmg-sp-shadow); }
+
+.sf-lm.lm-game .turnover-splash,
+.sf-lm.lm-game .turnstart-splash {
+  background: linear-gradient(100deg, transparent 0%, var(--lmg-sp-away-band) 12%, var(--lmg-sp-away-deep) 50%, var(--lmg-sp-away-band) 88%, transparent 100%);
+  border-top-color: var(--lmg-sp-away-line);
+  border-bottom-color: var(--lmg-sp-away-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), inset 0 -1px 0 var(--lmg-sp-lo), 0 4px 0 var(--lmg-sp-shadow);
+}
+.sf-lm.lm-game .turnover-splash[data-side='home'],
+.sf-lm.lm-game .turnstart-splash[data-side='home'] {
+  background: linear-gradient(100deg, transparent 0%, var(--lmg-sp-home-band) 12%, var(--lmg-sp-home-deep) 50%, var(--lmg-sp-home-band) 88%, transparent 100%);
+  border-top-color: var(--lmg-sp-home-line);
+  border-bottom-color: var(--lmg-sp-home-line);
+}
+/* Owner 10-12: sentence case stays (no text-transform); only face and ink change. */
+.sf-lm.lm-game .turnover-coach { font-family: var(--sf-band-font); color: var(--lmg-sp-ink-soft); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .turnover-head,
+.sf-lm.lm-game .turnover-splash[data-side='home'] .turnover-head {
+  font-family: var(--sf-band-title-font); color: var(--lmg-sp-ink);
+  text-shadow: 0 3px 0 var(--lmg-sp-shadow), 0 0 22px var(--lmg-sp-away-line);
+}
+.sf-lm.lm-game .turnover-splash[data-side='home'] .turnover-head { text-shadow: 0 3px 0 var(--lmg-sp-shadow), 0 0 22px var(--lmg-sp-home-line); }
+.sf-lm.lm-game .turnstart-head { font-family: var(--sf-band-title-font); color: var(--lmg-sp-ink); text-shadow: 0 3px 0 var(--lmg-sp-shadow); }
+
+/* TurnToast (components/TurnToast.vue): the seat chip under the banner row. */
+.sf-lm.lm-game .turn-toast {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-away-band), var(--lmg-sp-away-deep));
+  border-color: var(--lmg-sp-away-line);
+  box-shadow: inset 4px 0 0 var(--lmg-sp-away-line), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .turn-toast[data-side='home'] {
+  background: linear-gradient(var(--lmg-sp-home-band), var(--lmg-sp-home-deep));
+  border-color: var(--lmg-sp-home-line);
+  box-shadow: inset 4px 0 0 var(--lmg-sp-home-line), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .turn-toast .turn-toast-label,
+.sf-lm.lm-game .turn-toast[data-side='home'] .turn-toast-label { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+
+/* ================= gold / amber bands and banners ================= */
+/* Master Chef, Dodgy Snack, Riotous Rookies and the prayer splash share the host class (team-neutral). */
+.sf-lm.lm-game .masterchef-splash {
+  background: linear-gradient(100deg, transparent 0%, var(--lmg-sp-gold-band) 12%, var(--lmg-sp-gold-deep) 50%, var(--lmg-sp-gold-band) 88%, transparent 100%);
+  border-top-color: var(--lmg-sp-gold-line);
+  border-bottom-color: var(--lmg-sp-gold-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), inset 0 -1px 0 var(--lmg-sp-lo), 0 4px 0 var(--lmg-sp-shadow);
+}
+.sf-lm.lm-game .masterchef-head { font-family: var(--sf-band-title-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .dodgy-snack-sentoff { color: var(--lmg-sp-gold); }
+/* PrayerPresentation.vue (scoped): beat `.prayer-announcement .masterchef-head[data-v]` with the host chain. */
+.sf-lm.lm-game .masterchef-splash.prayer-announcement .masterchef-head { font-family: var(--sf-band-title-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .masterchef-splash.prayer-announcement .prayer-effect-line { color: var(--lmg-sp-gold); }
+.sf-lm.lm-game .masterchef-splash.prayer-announcement .prayer-recipient-portrait { border-color: var(--lmg-sp-gold-line); background: var(--lmg-sp-base); }
+/* The read-only prayer-choice wait card: a League Manager panel with the gold accent bar. */
+.sf-lm.lm-game .yesno-card.prayer-choice-wait {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-warn), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .yesno-card.prayer-choice-wait .yesno-text { color: var(--ui-text); }
+.sf-lm.lm-game .yesno-card.prayer-choice-wait .coin-wait-sub { font-family: var(--sf-band-font); color: var(--ui-muted); }
+
+.sf-lm.lm-game .staller-splash,
+.sf-lm.lm-game .opponent-left-toast,
+.sf-lm.lm-game .fumblerooskie-banner {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-gold-band), var(--lmg-sp-gold-deep));
+  border-color: var(--lmg-sp-gold-line);
+  box-shadow: inset 4px 0 0 var(--ui-warn), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .staller-text { font-family: var(--sf-band-font); color: var(--lmg-sp-gold); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .staller-text b { color: var(--lmg-sp-ink); }
+.sf-lm.lm-game .opponent-left-icon { color: var(--ui-warn); }
+.sf-lm.lm-game .opponent-left-text { color: var(--lmg-sp-ink); }
+.sf-lm.lm-game .opponent-left-text b { color: var(--lmg-sp-gold); }
+.sf-lm.lm-game .fumblerooskie-banner { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+
+/* ================= token toasts: KO / casualty / reserves / fall, watch out, SPP ================= */
+/* Owner 07-08 / 09-06: KO and casualty read red (by severity, not side); 09-15: returns to reserves reads yellow. */
+.sf-lm.lm-game .ko-toast,
+.sf-lm.lm-game .ko-toast.is-casualty {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-red-band), var(--lmg-sp-red-deep));
+  border-color: var(--lmg-sp-red-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .ko-toast.is-reserves {
+  background: linear-gradient(var(--lmg-sp-gold-band), var(--lmg-sp-gold-deep));
+  border-color: var(--lmg-sp-gold-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .ko-toast-type,
+.sf-lm.lm-game .ko-toast.is-casualty .ko-toast-type { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .ko-toast-player { color: var(--lmg-sp-ink-soft); }
+.sf-lm.lm-game .ko-toast-phrase { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .ko-toast.is-reserves .ko-toast-phrase { color: var(--lmg-sp-gold); }
+
+.sf-lm.lm-game .fall-toast {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-info-band), var(--lmg-sp-base));
+  border-color: var(--lmg-sp-info-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 2px 0 var(--lmg-sp-shadow);
+}
+.sf-lm.lm-game .fall-toast-type { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 1px 0 var(--lmg-sp-shadow); }
+
+/* WatchOutToast.vue (scoped): an amber League Manager chip. */
+.sf-lm.lm-game .watch-out-toast {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-gold-band), var(--lmg-sp-gold-deep));
+  border-color: var(--lmg-sp-gold-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 4px 12px var(--lmg-sp-glow);
+  font-family: var(--sf-band-font);
+  color: var(--lmg-sp-gold);
+  text-shadow: 0 1px 0 var(--lmg-sp-shadow);
+}
+
+/* SppGainToast.vue (scoped): the pixel-art scanline banner becomes a flat League Manager gold chip. The stepped
+   pop / pulse animations (owner-timed) stay; image-rendering stays as declared. The inset purple outline is only
+   repainted (transparent), never resized. */
+.sf-lm.lm-game .spp-splash {
+  border-color: var(--sf-gold);
+  outline-color: transparent;
+  border-radius: 2px;
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 0 12px color-mix(in srgb, var(--sf-gold) 45%, transparent);
+  color: var(--ui-text);
+  font-family: var(--sf-band-font);
+}
+.sf-lm.lm-game .spp-splash::after { border-top-color: var(--sf-gold); filter: drop-shadow(0 2px 0 var(--sf-panel-drop)); }
+.sf-lm.lm-game .spp-splash .spp-copy { text-shadow: none; }
+.sf-lm.lm-game .spp-splash .spp-copy b { color: var(--ui-muted); }
+.sf-lm.lm-game .spp-splash .spp-copy strong { color: var(--sf-gold); }
+.sf-lm.lm-game .spp-splash .spp-burst { color: var(--sf-gold); text-shadow: none; }
+
+/* ================= reroll toast family (the vertical stack offsets stay) ================= */
+.sf-lm.lm-game .reroll-toast {
+  border-radius: 2px;
+  background: linear-gradient(var(--lmg-sp-away-band), var(--lmg-sp-away-deep));
+  border-color: var(--lmg-sp-away-line);
+  box-shadow: inset 4px 0 0 var(--lmg-sp-away-line), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .reroll-toast[data-side='home'] {
+  background: linear-gradient(var(--lmg-sp-home-band), var(--lmg-sp-home-deep));
+  border-color: var(--lmg-sp-home-line);
+  box-shadow: inset 4px 0 0 var(--lmg-sp-home-line), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+/* Owner 10-21 / 10-26: a failed Regeneration or Pastries reads fail red whichever side it is. */
+.sf-lm.lm-game .reroll-toast.apo-fixup-toast[data-outcome='failed'],
+.sf-lm.lm-game .reroll-toast.pastries-toast[data-outcome='failed'] {
+  background: linear-gradient(var(--lmg-sp-red-band), var(--lmg-sp-red-deep));
+  border-color: var(--lmg-sp-red-line);
+  box-shadow: inset 4px 0 0 var(--ui-scarlet), inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 18px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .reroll-toast-text { font-family: var(--sf-band-font); color: var(--lmg-sp-ink); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+.sf-lm.lm-game .pastries-toast-title { font-family: var(--sf-band-font); color: var(--lmg-sp-gold); text-shadow: 0 2px 0 var(--lmg-sp-shadow); }
+
+/* ================= pitch cues: League Manager panel chips (follow the scheme) ================= */
+.sf-lm.lm-game .o66-target-cue,
+.sf-lm.lm-game .pass-hover-tip,
+.sf-lm.lm-game .blitz-target-prompt,
+.sf-lm.lm-game .jump-toggle,
+.sf-lm.lm-game .kick-aim-modal,
+.sf-lm.lm-game .tour-toast {
+  border-radius: 2px;
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--ui-heading);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 4px 12px var(--sf-discord-drop);
+  color: var(--ui-heading);
+}
+.sf-lm.lm-game .o66-target-cue.clickable:hover,
+.sf-lm.lm-game .jump-toggle:hover { border-color: var(--ui-focus); background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover); }
+.sf-lm.lm-game .o66-target-catch-roll,
+.sf-lm.lm-game .pass-hover-tip .pht-catch { color: var(--ui-text); }
+.sf-lm.lm-game .blitz-target-prompt .blitz-cost-line { color: var(--ui-text); }
+/* The Jump badge is the engaged (server-echoed) state: the pressed League Manager tab face. */
+.sf-lm.lm-game .jump-toggle.on {
+  color: var(--ui-text-on-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, var(--lmg-sp-base));
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, var(--lmg-sp-lift)), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, var(--lmg-sp-base)));
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, var(--lmg-sp-base)), 0 4px 10px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .jump-toggle.on:hover { border-color: var(--ui-focus); }
+/* The Jump badge and the clickable target cue are click-only <div>s today (no tabindex: a coordinator hook in the view);
+   the ring is ready for when they take focus. */
+.sf-lm.lm-game .jump-toggle:focus-visible,
+.sf-lm.lm-game .o66-target-cue.clickable:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .kick-aim-modal { box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 18px var(--sf-discord-drop); }
+.sf-lm.lm-game .kick-aim-modal-title { font-family: var(--sf-band-title-font); color: var(--ui-heading); }
+.sf-lm.lm-game .kick-aim-modal-text { color: var(--ui-text); }
+
+/* Negatrait: a PASS is a muted chip, a FAIL the scarlet chip (also the opponent-reactive pill). */
+.sf-lm.lm-game .negatrait-cue {
+  border-radius: 2px;
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .negatrait-cue.fail {
+  color: var(--ui-scarlet-contrast);
+  background: linear-gradient(var(--lmg-sp-red-band), var(--lmg-sp-red-deep));
+  border-color: var(--lmg-sp-red-line);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 4px 12px var(--lmg-sp-glow);
+}
+/* Owner 10-20: Loner in the trait colour; owner 10-21: Tentacles green held / red escaped (its own tone token). */
+.sf-lm.lm-game .loner-failed-cue {
+  border-radius: 2px;
+  font-family: var(--sf-band-font);
+  color: var(--lmg-sp-ink);
+  text-shadow: 0 2px 0 var(--lmg-sp-shadow);
+  background: linear-gradient(color-mix(in srgb, var(--ui-skill-trait) 72%, var(--lmg-sp-base)), color-mix(in srgb, var(--ui-skill-trait) 42%, var(--lmg-sp-base)));
+  border-color: var(--ui-skill-trait);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 16px var(--lmg-sp-glow);
+}
+.sf-lm.lm-game .tentacles-cue {
+  border-radius: 2px;
+  font-family: var(--sf-band-font);
+  color: var(--lmg-sp-ink);
+  text-shadow: 0 2px 0 var(--lmg-sp-shadow);
+  background: linear-gradient(color-mix(in srgb, var(--tentacles-tone) 72%, var(--lmg-sp-base)), color-mix(in srgb, var(--tentacles-tone) 42%, var(--lmg-sp-base)));
+  border-color: var(--tentacles-tone);
+  box-shadow: inset 0 1px 0 var(--lmg-sp-hi), 0 3px 0 var(--lmg-sp-shadow), 0 6px 16px var(--lmg-sp-glow);
+}
+
+/* Action toast: a panel chip with the scarlet accent bar (it reports a refused / failed action). */
+.sf-lm.lm-game .action-toast {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  color: var(--ui-text);
+  border-color: var(--ui-scarlet);
+  border-radius: 2px;
+  box-shadow: inset 4px 0 0 var(--ui-scarlet), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 4px 12px var(--sf-discord-drop);
+}
+
+/* Kick election targets (today cyan): the League Manager heading tint; the reduced (kick) choice reads gold. */
+.sf-lm.lm-game .kick-election-target {
+  border-color: var(--ui-heading);
+  background: color-mix(in srgb, var(--sf-panel-bottom) 72%, var(--ui-heading));
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 0 10px color-mix(in srgb, var(--ui-heading) 70%, transparent);
+}
+.sf-lm.lm-game .kick-election-target.reduced {
+  border-color: var(--ui-warn);
+  background: color-mix(in srgb, var(--sf-panel-bottom) 70%, var(--ui-warn));
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 0 10px color-mix(in srgb, var(--ui-warn) 70%, transparent);
+}
+.sf-lm.lm-game .kick-election-target:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .kick-election-k { font-family: var(--sf-band-font); color: var(--ui-text); }
+.sf-lm.lm-game .kick-election-label { font-family: var(--sf-band-font); color: var(--ui-text); }
+
+/* Mark-label field: the League Manager input face; precision hint: a primary chip. */
+.sf-lm.lm-game .mark-label-field {
+  background: var(--ui-surface-2);
+  color: var(--ui-text);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .mark-label-field:focus { outline: 2px solid var(--ui-focus); }
+.sf-lm.lm-game .crosshair-precision-hint {
+  border-radius: 2px;
+  font-family: var(--sf-band-font);
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  box-shadow: var(--sf-bevel), 0 2px 0 color-mix(in srgb, var(--ui-primary) 45%, var(--lmg-sp-base));
+}
+
+/* Guided tour: panel toast + small League Manager button; the arrow takes the heading tint. */
+.sf-lm.lm-game .tour-toast { color: var(--ui-text); border-color: var(--sf-panel-line); box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 24px var(--sf-discord-drop); }
+.sf-lm.lm-game .tour-arrow { stroke: var(--ui-heading); filter: drop-shadow(0 2px 0 var(--sf-panel-drop)); }
+.sf-lm.lm-game .tour-skip {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .tour-skip:hover { border-color: var(--ui-heading); background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover); }
+.sf-lm.lm-game .tour-skip:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* ================= cinematics (coin, D6 faces and kick-off banners stay; cine-hold + the catcher untouched) ======== */
+.sf-lm.lm-game .coin-toss,
+.sf-lm.lm-game .weather-cine,
+.sf-lm.lm-game .fan-cine { background: radial-gradient(ellipse at center, var(--lmg-sp-scrim) 0%, transparent 62%); }
+.sf-lm.lm-game .kickoff-cine { background: radial-gradient(ellipse at center, var(--lmg-sp-scrim) 0%, transparent 66%); }
+.sf-lm.lm-game .penalty-shootout { background: radial-gradient(ellipse at center, var(--lmg-sp-scrim) 0%, color-mix(in srgb, var(--lmg-sp-scrim) 60%, transparent) 70%); }
+
+.sf-lm.lm-game .coin-call,
+.sf-lm.lm-game .coin-caption,
+.sf-lm.lm-game .wc-title,
+.sf-lm.lm-game .wc-weather,
+.sf-lm.lm-game .ko-name-big,
+.sf-lm.lm-game .fan-coach,
+.sf-lm.lm-game .fan-splash,
+.sf-lm.lm-game .ps-title,
+.sf-lm.lm-game .ps-score,
+.sf-lm.lm-game .ps-result,
+.sf-lm.lm-game .cine-dismiss-hint { color: var(--ui-heading); text-shadow: var(--lmg-cine-ink-shadow); }
+.sf-lm.lm-game .coin-call,
+.sf-lm.lm-game .coin-caption,
+.sf-lm.lm-game .wc-weather,
+.sf-lm.lm-game .fan-coach,
+.sf-lm.lm-game .fan-splash,
+.sf-lm.lm-game .ps-score,
+.sf-lm.lm-game .ps-result,
+.sf-lm.lm-game .cine-dismiss-hint { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .wc-title,
+.sf-lm.lm-game .ko-name-big,
+.sf-lm.lm-game .ps-title { font-family: var(--sf-band-title-font); }
+.sf-lm.lm-game .coin-call-side { color: var(--ui-text); }
+.sf-lm.lm-game .wc-icon { filter: drop-shadow(0 2px 0 var(--sf-panel-drop)); }
+
+/* Owner 09-24: the kick-off / swarming result line in the side's colour (League Manager seat inks). */
+.sf-lm.lm-game .ko-outcome { font-family: var(--sf-band-font); color: var(--ui-heading); text-shadow: var(--lmg-cine-ink-shadow); }
+.sf-lm.lm-game .ko-outcome[data-side='home'] { color: var(--sf-seat-home); text-shadow: var(--lmg-cine-ink-shadow); }
+.sf-lm.lm-game .ko-outcome[data-side='away'] { color: var(--sf-seat-away); text-shadow: var(--lmg-cine-ink-shadow); }
+
+/* Fan factor: each side a League Manager panel with its seat line; the leader gets the heading accent bar. */
+.sf-lm.lm-game .fan-side {
+  border-radius: 2px;
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .fan-side.home { border-color: var(--sf-seat-home); }
+.sf-lm.lm-game .fan-side.away { border-color: var(--sf-seat-away); }
+.sf-lm.lm-game .fan-side[data-leader='true'] {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), color-mix(in srgb, var(--ui-heading) 18%, var(--ui-surface));
+  box-shadow: inset 4px 0 0 var(--ui-heading), inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 0 18px color-mix(in srgb, var(--ui-heading) 35%, transparent);
+}
+.sf-lm.lm-game .fan-side .fan-coach { text-shadow: none; }
+.sf-lm.lm-game .fan-math { color: var(--ui-text); text-shadow: none; }
+.sf-lm.lm-game .fan-math b { color: var(--ui-heading); }
+.sf-lm.lm-game .fan-splash b { color: var(--ui-text); }
+
+/* Penalty shootout: the rounds list is a League Manager panel; Confirm is the primary button. */
+.sf-lm.lm-game .ps-team { color: var(--ui-text); }
+.sf-lm.lm-game .ps-team.ps-win { color: var(--ui-heading); }
+.sf-lm.lm-game .ps-tally { color: var(--ui-text); }
+.sf-lm.lm-game .ps-rounds {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .ps-round { color: var(--ui-text); }
+.sf-lm.lm-game .ps-round-label { font-family: var(--sf-band-font); color: var(--ui-muted); }
+.sf-lm.lm-game .ps-vs { color: var(--ui-muted); }
+.sf-lm.lm-game .ps-round-win { color: var(--ui-heading); }
+.sf-lm.lm-game .ps-roll-win { filter: drop-shadow(0 0 5px var(--ui-success)); }
+.sf-lm.lm-game .ps-confirm {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, var(--lmg-sp-lift)), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, var(--lmg-sp-base)));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, var(--lmg-sp-base));
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, var(--lmg-sp-base)), 0 4px 6px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .ps-confirm:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }

@@ -1,0 +1,536 @@
+/* Modern in-game look: hud. See base.css for the file map and the rules.
+   Surfaces (views/SpectateView.vue unless noted): the coach corner panels (crest well, coach name, team title,
+   inducement chips, the Current Player tag, the Prayers to Nuffle tag, components/CoachCornerCounts.vue), the
+   scoreboard (half, score, weather, turn pills, End Turn, the pitch-flip / Auto Director badges, the flat-HUD line),
+   the turn timer and Call time out, the opponent-reviewing-dice pill, the quick bar (components/QuickBarButton.vue,
+   Report, skill display, spectator pause / go live, the live chip and its teleported list), the UI customise bar and
+   the panel grips, and the game-load rank panel (components/GameLoadRankPanel.vue + WaitingVsBanner.vue).
+
+   Paint only: colour, gradient, bevel, radius, ink and lettering. Every box keeps its Retro geometry (the HUD is
+   measured in JS: hudGeometry.ts, syncHudTopClearance, centerPanelBox). Accent bars are inset box-shadows, the League
+   Manager disabled "dashed line" is an outline drawn over the unchanged border, and the rank bar keeps its fonts,
+   weights and tracking (game/rankBarLayout.ts measures them). QuickBarPopTip is left alone (owner: it mimics the
+   native tooltip). Scoped component rules carry a [data-v-*] attribute; these rules win by specificity (the
+   component's own class chain under .sf-lm.lm-game), never by !important. */
+
+/* ---- tokens. The panel gradients follow the HUD opacity settings (Settings > UI > Element opacity), which the pitch
+   host sets as --hud-*-opacity: the vendored --sf-panel-top / --sf-panel-bottom colours with the setting in place of
+   their fixed 0.9 alpha. Seat fills carry white lettering (the Current Player tag, the active turn pill). */
+.sf-lm.lm-game .pitch-host {
+  --lmg-coach-top: rgb(35 39 45 / var(--hud-coach-opacity, 0.9));
+  --lmg-coach-bottom: rgb(10 12 15 / var(--hud-coach-opacity, 0.9));
+  --lmg-board-top: rgb(35 39 45 / var(--hud-scoreboard-opacity, 0.9));
+  --lmg-board-bottom: rgb(10 12 15 / var(--hud-scoreboard-opacity, 0.9));
+  --lmg-bar-top: rgb(35 39 45 / var(--hud-quickbar-opacity, 0.9));
+  --lmg-bar-bottom: rgb(10 12 15 / var(--hud-quickbar-opacity, 0.9));
+}
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .pitch-host {
+  --lmg-coach-top: rgb(218 221 225 / var(--hud-coach-opacity, 0.9));
+  --lmg-coach-bottom: rgb(208 209 212 / var(--hud-coach-opacity, 0.9));
+  --lmg-board-top: rgb(218 221 225 / var(--hud-scoreboard-opacity, 0.9));
+  --lmg-board-bottom: rgb(208 209 212 / var(--hud-scoreboard-opacity, 0.9));
+  --lmg-bar-top: rgb(218 221 225 / var(--hud-quickbar-opacity, 0.9));
+  --lmg-bar-bottom: rgb(208 209 212 / var(--hud-quickbar-opacity, 0.9));
+}
+.sf-lm.lm-game {
+  --lmg-seat-home-fill: color-mix(in srgb, var(--sf-seat-home) 66%, #000000);
+  --lmg-seat-away-fill: color-mix(in srgb, var(--sf-seat-away) 62%, #000000);
+  --lmg-on-seat: #ffffff;
+  --lmg-on-gold: #1a1200;
+  /* small captions on the HUD panels: the muted ink brightened toward the text ink (4.5:1 and above on the panels) */
+  --lmg-caption: color-mix(in srgb, var(--ui-text) 72%, var(--ui-muted));
+  /* the flat-HUD line has no panel behind it: it reads over the pitch grass in either scheme */
+  --lmg-flat-ink: #f2f4f7;
+  --lmg-flat-home: #7aa8ff;
+  --lmg-flat-away: #ff8a8a;
+  --lmg-flat-shadow: #000000e0;
+}
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game {
+  --lmg-seat-home-fill: var(--sf-seat-home);
+  --lmg-seat-away-fill: var(--sf-seat-away);
+  --lmg-on-gold: #ffffff;
+}
+
+/* ======================================================================== coach corner panels */
+.sf-lm.lm-game .pitch-host .coach-panel.ui-panel {
+  background: linear-gradient(var(--lmg-coach-top), var(--lmg-coach-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop), inset 0 1px 0 var(--sf-panel-hi);
+}
+/* the seat accent bar on the outer edge (home left, away right), as in the League Manager band */
+.sf-lm.lm-game .pitch-host .coach-panel.home.ui-panel {
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop), inset 0 1px 0 var(--sf-panel-hi), inset 4px 0 0 var(--sf-seat-home);
+}
+.sf-lm.lm-game .pitch-host .coach-panel.away.ui-panel {
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop), inset 0 1px 0 var(--sf-panel-hi), inset -4px 0 0 var(--sf-seat-away);
+}
+/* the coach on the move: the whole frame takes the seat colour */
+.sf-lm.lm-game .pitch-host .coach-panel.home.ui-panel[data-playing='true'] { border-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pitch-host .coach-panel.away.ui-panel[data-playing='true'] { border-color: var(--sf-seat-away); }
+
+/* crest well (the crest art and its drop shadow are untouched) */
+.sf-lm.lm-game .pitch-host .coach-panel .logo-col {
+  background: var(--ui-surface);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 3px var(--sf-panel-drop), inset 0 0 0 1px var(--sf-panel-line);
+}
+
+/* coach name: the League Manager caption (bold sans, muted capitals); team title: the band heading in the seat ink */
+.sf-lm.lm-game .pitch-host .coach-panel .coach-name {
+  font-family: var(--sf-band-font);
+  letter-spacing: .06em;
+  color: var(--lmg-caption);
+  background: none;
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pitch-host .coach-panel .team-title {
+  font-family: var(--sf-band-font);
+  letter-spacing: .02em;
+  background: color-mix(in srgb, var(--ui-surface) 55%, transparent);
+  border-radius: 2px;
+  text-shadow: none;
+}
+.sf-lm.lm-game .pitch-host .coach-panel.home .team-title { color: var(--sf-seat-home); box-shadow: inset 2px 0 0 var(--sf-seat-home); }
+.sf-lm.lm-game .pitch-host .coach-panel.away .team-title { color: var(--sf-seat-away); box-shadow: inset -2px 0 0 var(--sf-seat-away); }
+
+/* resources: a sunken well of League Manager chips; the quantity is the .sf-count badge on the primary */
+.sf-lm.lm-game .pitch-host .coach-panel .inducements {
+  background: color-mix(in srgb, var(--ui-surface) 70%, transparent);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 2px 4px var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .coach-panel .inducement {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 1px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .coach-panel .inducement[data-pool='drive'],
+.sf-lm.lm-game .pitch-host .coach-panel .inducement[data-chip='cheering_fans'] { border-color: var(--sf-gold); }
+.sf-lm.lm-game .pitch-host .coach-panel .inducement[data-pool='single-use'] { border-color: var(--ui-info); }
+.sf-lm.lm-game .pitch-host .coach-panel .inducement-fans {
+  font-family: var(--sf-band-font);
+  color: var(--sf-gold);
+  text-shadow: none;
+}
+.sf-lm.lm-game .pitch-host .coach-panel .inducement .inducement-quantity {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  text-shadow: none;
+  box-shadow: var(--sf-bevel), 0 1px 2px var(--sf-discord-drop);
+}
+
+/* Current Player tag (owner 10-07 / 10-08: hangs off the outer side, CURRENT over PLAYER): a seat-filled chip in
+   band capitals. DisplayCaps paints the words from data attributes with text-transform none, so the capitals are
+   set on its art layer here; its lead letter is an ordinary capital (base.css) on this tag too. */
+.sf-lm.lm-game .pitch-host .coach-panel.home .active-indicator { background: var(--lmg-seat-home-fill); }
+.sf-lm.lm-game .pitch-host .coach-panel.away .active-indicator { background: var(--lmg-seat-away-fill); }
+.sf-lm.lm-game .pitch-host .coach-panel .active-indicator { box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop); }
+.sf-lm.lm-game .pitch-host .coach-panel.home .active-indicator { border-radius: 0 2px 2px 0; }
+.sf-lm.lm-game .pitch-host .coach-panel.away .active-indicator { border-radius: 2px 0 0 2px; }
+.sf-lm.lm-game .pitch-host .coach-panel .active-label {
+  font-family: var(--sf-band-font);
+  letter-spacing: .06em;
+  color: var(--lmg-on-seat);
+  text-shadow: none;
+}
+.sf-lm.lm-game .pitch-host .coach-panel .active-label .display-caps-art { text-transform: uppercase; }
+.sf-lm.lm-game .pitch-host .coach-panel .active-label .display-caps-lead { font-size: 1em; }
+
+/* Prayers to Nuffle tag (owner 09-06: hangs under the panel's other corner): a gold League Manager chip */
+.sf-lm.lm-game .pitch-host .coach-panel .prayer-tag-row {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--sf-gold) 30%, var(--ui-surface-2));
+  border-color: var(--sf-gold);
+  border-radius: 0 0 2px 2px;
+  text-shadow: none;
+  box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .coach-panel .prayer-tag-row + .prayer-tag-row { border-top-color: var(--sf-gold); border-radius: 2px; }
+
+/* RES / OUT tab (components/CoachCornerCounts.vue, owner 10-06 / 10-08) */
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts {
+  font-family: var(--sf-band-font);
+  background: linear-gradient(var(--lmg-coach-top), var(--lmg-coach-bottom));
+  border-color: var(--sf-panel-line);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts[data-side='home'] { border-radius: 0 2px 2px 0; }
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts[data-side='away'] { border-radius: 2px 0 0 2px; }
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts .ccc-n { color: var(--ui-text); text-shadow: none; }
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts .ccc-label { letter-spacing: .06em; color: var(--lmg-caption); text-shadow: none; }
+.sf-lm.lm-game .pitch-host .coach-panel .coach-corner-counts .ccc-row[data-kind='out'] .ccc-label { color: var(--ui-danger); }
+
+/* ======================================================================== scoreboard */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard:not(.flat-hud) {
+  background: linear-gradient(var(--lmg-board-top), var(--lmg-board-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop), inset 0 1px 0 var(--sf-panel-hi);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-half {
+  font-family: var(--sf-band-title-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score { font-family: var(--font-heading); color: var(--ui-text); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score .score-home { color: var(--sf-seat-home); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score .score-away { color: var(--sf-seat-away); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-weather small {
+  font-family: var(--sf-band-font);
+  letter-spacing: .08em;
+  color: var(--lmg-caption);
+}
+
+/* turn pills: League Manager chips. The coach on the move is the seat-filled chip; the other is the flat chip with
+   its seat bar (no fade, so it stays readable in the light scheme). The Retro opacity / filter / shadow ease is
+   kept (owner 08-18: 260 ms with the token cross-fade). */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn[data-active='false'] {
+  opacity: 1;
+  filter: none;
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.home[data-active='false'] { box-shadow: var(--sf-bevel), inset 3px 0 0 var(--sf-seat-home); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.away[data-active='false'] { box-shadow: var(--sf-bevel), inset -3px 0 0 var(--sf-seat-away); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn[data-active='true'] { opacity: 1; filter: none; color: var(--lmg-on-seat); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.home[data-active='true'] {
+  background: var(--lmg-seat-home-fill);
+  border-color: color-mix(in srgb, var(--sf-seat-home) 55%, black);
+  box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop), 0 0 8px color-mix(in srgb, var(--sf-seat-home) 45%, transparent);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.away[data-active='true'] {
+  background: var(--lmg-seat-away-fill);
+  border-color: color-mix(in srgb, var(--sf-seat-away) 55%, black);
+  box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop), 0 0 8px color-mix(in srgb, var(--sf-seat-away) 45%, transparent);
+}
+
+/* End Turn: the League Manager primary button (.sf-btn.primary), the one commit control on the screen. Ready = the
+   primary gradient with a heading-coloured halo; Confirm Setup = the same primary ringed in gold; a disabled
+   own-turn button (a reaction is pending) = the League Manager disabled face, muted ink and a dashed line (drawn as an
+   outline over the unchanged border); the opponent's turn = a sunken, quiet plate with no dashes. Geometry, the press
+   transform and the timings stay Retro. */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  text-shadow: 0 1px 0 color-mix(in srgb, var(--ui-primary) 40%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 6px var(--sf-discord-drop),
+    0 0 0 1px color-mix(in srgb, var(--ui-heading) 70%, transparent), 0 0 14px color-mix(in srgb, var(--ui-heading) 60%, transparent);
+}
+/* Confirm Setup: the same primary commit, ringed in gold so the setup step reads apart from End Turn */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn[data-setup='true']:not(:disabled) {
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 6px var(--sf-discord-drop),
+    0 0 0 2px var(--sf-gold), 0 0 12px color-mix(in srgb, var(--sf-gold) 55%, transparent);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn:active:not(:disabled) {
+  box-shadow: var(--sf-bevel), 0 1px 0 color-mix(in srgb, var(--ui-primary) 45%, black);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn:disabled {
+  opacity: 1;
+  filter: none;
+  color: var(--ui-muted);
+  background: var(--ui-surface-2);
+  border-color: var(--ui-surface-2);
+  text-shadow: none;
+  box-shadow: none;
+  outline: 2px dashed var(--sf-panel-line);
+  outline-offset: -2px;
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .end-turn[data-opponent='true']:disabled {
+  font-style: italic;
+  color: var(--ui-muted);
+  background: var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  outline: none;
+  box-shadow: inset 0 2px 4px var(--sf-panel-drop);
+}
+/* the PadGlyph hint inside the button keeps its art */
+
+/* pitch-flip / Auto Director badges (owner 10-13 / 10-30): a band-lettered tab under the panel */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .pitch-flip-badge {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text);
+  background: linear-gradient(var(--lmg-board-top), var(--lmg-board-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 0 0 2px 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 5px 10px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .pitch-flip-badge .pfb-glyph { color: var(--sf-gold); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .pitch-flip-badge.auto-director-badge .pfb-glyph { color: inherit; }
+/* Owner 11-04 (review of the Modern look): "The pitch flipped and auto director tags look cluttered at this size.
+   Let's reduce them by about 30%." Text, glyph, padding, gap and tracking at about 70% of Retro's. The one sanctioned
+   exception to the paint-only rule (test/lmGame.test.ts SIZE_EXCEPTIONS): the tags are measured live as scoreboard
+   overhangs (data-panel-overhang), so a smaller tag only shrinks the HUD's footprint. The text follows the UI text size
+   slider at the same 70%. */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard .pitch-flip-badge {
+  font-size: max(calc(var(--ui-min-text-size, 12px) * 0.7), 8px);
+  padding: 1px 6px 1px;
+  gap: 3px;
+  letter-spacing: 0.08em;
+}
+
+/* flat (top-down) HUD (owner 2026-07-07): no panel, thin text over the pitch, so the ink stays light on the grass in
+   both schemes; the pills and End Turn keep their own faces from the rules above. */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-half,
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-score,
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-weather {
+  color: var(--lmg-flat-ink);
+  text-shadow: 0 1px 3px var(--lmg-flat-shadow), 0 0 6px var(--lmg-flat-shadow);
+}
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-weather small { color: var(--lmg-flat-ink); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-score .score-home { color: var(--lmg-flat-home); }
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard.flat-hud .sb-score .score-away { color: var(--lmg-flat-away); }
+
+/* ======================================================================== turn timer, Call time out */
+.sf-lm.lm-game .pitch-host .turn-timer {
+  color: var(--ui-text);
+  background: linear-gradient(var(--lmg-board-top), var(--lmg-board-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .turn-timer[data-timeout='true'] {
+  color: var(--ui-danger);
+  border-color: var(--ui-scarlet);
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop), inset 0 0 0 1px var(--ui-scarlet);
+}
+/* Call time out forces the clock on the opponent: the League Manager danger button */
+.sf-lm.lm-game .pitch-host .turn-timer .call-timeout {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-color: color-mix(in srgb, var(--ui-scarlet) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 2px 0 color-mix(in srgb, var(--ui-scarlet) 40%, black);
+}
+.sf-lm.lm-game .pitch-host .turn-timer .call-timeout:hover:not(:disabled) { filter: brightness(1.08); }
+.sf-lm.lm-game .pitch-host .turn-timer .call-timeout:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .pitch-host .turn-timer .call-timeout:disabled {
+  opacity: 1;
+  color: var(--ui-muted);
+  background: var(--ui-surface-2);
+  border-color: var(--ui-surface-2);
+  box-shadow: none;
+  outline: 1px dashed var(--sf-panel-line);
+  outline-offset: -1px;
+}
+.sf-lm.lm-game .pitch-host .turn-timer .call-timeout-note { color: var(--ui-text); }
+
+/* ======================================================================== opponent reviewing dice (#18a) */
+.sf-lm.lm-game .pitch-host .opp-reviewing-dice {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .opp-reviewing-dice .ord-dot { background: var(--ui-heading); }
+
+/* ======================================================================== quick bar */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel {
+  background: linear-gradient(var(--lmg-bar-top), var(--lmg-bar-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop), inset 0 1px 0 var(--sf-panel-hi);
+}
+/* every quick-bar button (QuickBarButton.vue roots, the spectator pause, the live chip): the .sf-btn face */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+/* hover lifts the plain face only; a pressed toggle and GO TO LIVE keep their primary fill (their own hover below) */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button:not([data-active='true']):not(.go-live-action):hover:not(:disabled) {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover);
+  border-color: var(--ui-heading);
+  filter: none;
+}
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button:focus-visible {
+  outline-color: var(--ui-focus);
+  border-color: var(--ui-focus-halo);
+}
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button:disabled {
+  opacity: 1;
+  filter: none;
+  color: var(--ui-muted);
+  background: var(--ui-surface-2);
+  border-color: var(--ui-surface-2);
+  box-shadow: none;
+  outline: 1px dashed var(--sf-panel-line);
+  outline-offset: -1px;
+}
+/* a toggle that is on (data-active, aria-pressed / aria-expanded): the League Manager pressed tab, the primary face */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button[data-active='true'] {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), inset 0 -2px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button[data-active='true']:hover:not(:disabled) {
+  border-color: var(--ui-heading);
+  filter: brightness(1.08);
+}
+/* Report an issue: band capitals in the heading ink */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button.report-btn {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-heading);
+}
+/* skill display: the Markings / Icons short label in band capitals (the Icons emoji keeps its own face) */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button.skill-mode-btn:not([data-skill-mode='icons']) { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel button.skill-mode-btn[data-active='false'] { color: var(--ui-heading); }
+/* spectator pause / GO TO LIVE */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-spectator-pause.go-live-action:not(:disabled) {
+  font-family: var(--sf-band-font);
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), 0 2px 0 color-mix(in srgb, var(--ui-primary) 45%, black);
+}
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-spectator-pause.go-live-action:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--ui-heading); }
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-spectator-pause:focus-visible { outline-color: var(--ui-focus); }
+/* the live chip (spectators connected): a scarlet-toned League Manager chip */
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-live {
+  font-family: var(--sf-band-font);
+  color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-scarlet) 22%, var(--ui-surface-2));
+  border-color: var(--ui-scarlet);
+  box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-live.expanded { border-color: var(--ui-danger); }
+.sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-live b { color: var(--ui-text); }
+/* the Super FUMBBL logo plate (the logo art is untouched) */
+.sf-lm.lm-game .pitch-host .config-bar .quick-super-logo {
+  background: linear-gradient(var(--lmg-bar-top), var(--lmg-bar-bottom));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: 0 3px 0 var(--sf-panel-drop), inset 0 1px 0 var(--sf-panel-hi);
+}
+
+/* the live-spectator list is teleported to body (z 2600), outside the game root: these rules apply once the list
+   carries lmGameRootClass(settings) on its root (a SpectateView hook, reported to the coordinator). */
+.sf-lm.lm-game.quick-live-list {
+  color: var(--ui-danger);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 14px var(--sf-discord-drop);
+}
+.sf-lm.lm-game.quick-live-list .quick-live-header {
+  font-family: var(--sf-band-font);
+  border-bottom-color: var(--sf-panel-line);
+  box-shadow: inset 4px 0 0 var(--ui-scarlet);
+}
+.sf-lm.lm-game.quick-live-list .quick-live-header b { color: var(--ui-text); }
+.sf-lm.lm-game.quick-live-list .quick-live-detail {
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ui-muted);
+}
+.sf-lm.lm-game.quick-live-list .quick-live-names { color: var(--ui-text); }
+
+/* ======================================================================== UI customise bar and panel grips */
+.sf-lm.lm-game .ui-customize-bar {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .ui-customize-bar .ui-customize-hint { color: var(--ui-muted); }
+.sf-lm.lm-game .ui-customize-bar .ui-customize-confirm {
+  font-family: var(--sf-band-font);
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 6px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .ui-customize-bar .ui-customize-confirm:hover { filter: brightness(1.06); }
+.sf-lm.lm-game .ui-customize-bar .ui-customize-confirm:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game .pitch-host .ui-panel.ui-customizing { outline-color: var(--ui-heading); }
+.sf-lm.lm-game .pitch-host .ui-panel .ui-grip,
+.sf-lm.lm-game .pitch-host .ui-panel .ui-resizer,
+.sf-lm.lm-game .pitch-host .ui-panel .ui-reset {
+  color: var(--ui-heading);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--ui-heading);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop), 0 3px 8px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .pitch-host .ui-panel .ui-grip:hover,
+.sf-lm.lm-game .pitch-host .ui-panel .ui-resizer:hover,
+.sf-lm.lm-game .pitch-host .ui-panel .ui-reset:hover {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-hover);
+}
+.sf-lm.lm-game .pitch-host .ui-panel .ui-reset:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* ======================================================================== game-load rank panel
+   Paint only: the bar's fit is font-measured (game/rankBarLayout.ts reads the rendered fonts), so no family, weight,
+   size, case or tracking changes here. */
+.sf-lm.lm-game .rank-panel .vs-banner {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ui-primary) 30%, transparent), transparent 32%, transparent 68%, color-mix(in srgb, var(--ui-primary) 30%, transparent)),
+    linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 28px var(--sf-discord-drop);
+  color: var(--ui-text);
+}
+.sf-lm.lm-game .rank-panel .vs-banner .vs-crest {
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  box-shadow: inset 0 1px 3px var(--sf-panel-drop);
+}
+.sf-lm.lm-game .rank-panel .vs-banner .vs-team { color: var(--ui-text); text-shadow: none; }
+.sf-lm.lm-game .rank-panel .vs-banner .vs-coach { color: var(--ui-heading); }
+.sf-lm.lm-game .rank-panel .vs-banner .vs-initials { color: var(--ui-heading); }
+.sf-lm.lm-game .rank-panel .vs-banner .vs-meta { color: var(--ui-muted); }
+.sf-lm.lm-game .rank-panel .vs-banner .vs-mark {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 10px var(--sf-discord-drop);
+  text-shadow: 0 1px 0 color-mix(in srgb, var(--ui-primary) 40%, black);
+}
+.sf-lm.lm-game .rank-panel .rank-title-chip {
+  color: var(--lmg-on-gold);
+  background: var(--sf-gold);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}

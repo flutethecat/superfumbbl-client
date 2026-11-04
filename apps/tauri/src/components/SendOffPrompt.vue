@@ -2,7 +2,7 @@
 import { computed, type CSSProperties } from 'vue';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
 import DisplayCaps from './DisplayCaps.vue';
-import { $t, terms } from '../i18n';
+import { $t } from '../i18n';
 
 const props = defineProps<{
   playerName: string;
@@ -11,6 +11,8 @@ const props = defineProps<{
   refereeIconUrl: string;
   /** Owner 09-05: the player's position, as a subtext line under the name. */
   positionName?: string;
+  /** Owner 11-04: the spotted player's portrait (renderer.playerPortrait), shown with the name like the apothecary card. */
+  portrait?: string | null;
   coinIconUrl: string;
   positionStyle?: CSSProperties;
 }>();
@@ -40,11 +42,12 @@ defineEmits<{
       <span class="sendoff-ref-frame" aria-hidden="true">
         <img :src="refereeIconUrl" class="sendoff-ref" alt="" />
       </span>
-      <span class="sendoff-copy">
-        <span class="sendoff-kicker"><DisplayCaps :text="$t('dialogs.sendOffPrompt.refereeDecision')" /></span>
-        <strong class="sendoff-player">{{ playerName }}</strong>
-        <span v-if="positionName" class="sendoff-position">{{ terms(positionName) }}</span>
-        <span class="sendoff-instruction">{{ $t('dialogs.sendOffPrompt.chooseHowToAnswer') }}</span>
+      <!-- Owner 11-04: no "Referee decision" kicker, position or "Choose how to answer the call" line; the spotted player
+           shows as a portrait and name, like the apothecary card, so it is always clear who the bribe is for. -->
+      <span class="sendoff-player-card" data-testid="sendoff-player">
+        <img v-if="portrait" class="sendoff-player-portrait" :src="portrait" alt="" />
+        <span v-else class="sendoff-player-portrait sendoff-player-portrait-fallback" aria-hidden="true">👤</span>
+        <strong class="sendoff-player-name">{{ playerName }}</strong>
       </span>
     </div>
     <template #actions>
@@ -70,9 +73,14 @@ defineEmits<{
   min-width: 0;
   padding: 11px 14px 13px;
 }
+.sendoff-player-card { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid #39434f; border-radius: 5px; background: linear-gradient(180deg, #171d25, #080b0f); }
+.sendoff-player-portrait { width: 56px; height: 56px; flex: 0 0 56px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 3px 2px #000b); }
+.sendoff-player-portrait-fallback { display: grid; place-items: center; color: #7e8b99; font-size: 1.8rem; }
+.sendoff-player-name { min-width: 0; color: var(--ui-text); font-size: max(var(--ui-min-primary-text-size, 16px), 0.83rem); line-height: 1.14; overflow-wrap: anywhere; }
 .sendoff-summary {
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
+  justify-content: center;
   align-items: center;
   gap: 12px;
   width: 100%;

@@ -1,0 +1,54 @@
+/* Game Menu (Esc), Modern style (owner 11-03: "the game menu surface did not get updated, let's bring that in").
+   A League Manager panel (lm-theme.css tokens, .hm-band, .sf-btn) under the opt-in .sf-lm root; the Retro menu keeps
+   App.vue's .game-menu rules (the Modern panel never carries that class). Colours come only from tokens. */
+.sf-lm.lm-game-menu {
+  box-sizing: border-box; display: flex; flex-direction: column; width: min(320px, 92vw); max-height: 88vh; overflow-y: auto; overflow-x: hidden;
+  padding: 0 0 14px; color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border: 2px solid var(--sf-panel-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 4px 0 var(--sf-panel-drop), 0 10px 30px var(--sf-discord-drop);
+}
+.sf-lm.lm-game-menu[data-wide='true'] { width: min(520px, 94vw); }
+.sf-lm.lm-game-menu > .hm-band { margin-bottom: 14px; }
+.sf-lm.lm-game-menu > :not(.hm-band) { margin-left: 16px; margin-right: 16px; }
+.sf-lm .lm-game-menu-rows { display: flex; flex-direction: column; gap: 10px; }
+/* full-width rows; a long translated label wraps instead of widening the panel */
+.sf-lm .lm-game-menu-rows .sf-btn { width: 100%; white-space: normal; padding-top: 6px; padding-bottom: 6px; }
+.sf-lm .lm-game-menu-hint { margin: -4px 0 0; line-height: 1.35; color: var(--ui-muted); text-align: center; }
+.sf-lm .lm-game-menu-foot { margin-top: 12px; text-align: center; }
+/* Game statistics: the shared grid (components/GameMenuStats.vue, App.vue .pg-stats rules) on League Manager columns,
+   with the League Manager seat inks so the home / away numbers stay readable in the light scheme too. */
+.sf-lm.lm-game-menu .pg-stats { margin-bottom: 10px; }
+.sf-lm.lm-game-menu .pg-bevel {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border: 2px solid var(--sf-panel-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game-menu .pg-stat-col-head { border-bottom-color: var(--sf-panel-line); box-shadow: none; }
+.sf-lm.lm-game-menu .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top-color: var(--sf-seat-home); }
+.sf-lm.lm-game-menu .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top-color: var(--sf-seat-away); }
+.sf-lm.lm-game-menu .pg-stat-cell { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-h { color: var(--sf-seat-home); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-a { color: var(--sf-seat-away); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-stat-label { font-family: var(--sf-band-font); letter-spacing: .08em; color: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text)); }
+/* A disabled Concede reads as disabled: the vendored .sf-btn.danger rule follows .sf-btn:disabled at equal weight and
+   would keep the scarlet face, so the menu restates the League Manager disabled face for it. */
+.sf-lm .lm-game-menu-rows .sf-btn.danger:disabled {
+  cursor: not-allowed; transform: none; filter: none; color: var(--ui-muted);
+  background: var(--ui-surface-2); border: 2px dashed var(--sf-panel-line); box-shadow: none;
+}
+/* Text size (Settings > UI text size, --ui-min-text-size, 12px by default): the menu's small capitals follow the
+   slider like the Retro menu's labels do, never below the League Manager sizes. */
+.sf-lm .lm-game-menu-rows .sf-btn { font-size: max(var(--ui-min-text-size, 12px), 12px); }
+.sf-lm.lm-game-menu > .hm-band h2 { font-size: max(var(--ui-min-text-size, 12px), 20px); }
+.sf-lm .lm-game-menu-hint, .sf-lm .lm-game-menu-foot { font-size: max(var(--ui-min-text-size, 12px), 12px); }
+.sf-lm.lm-game-menu .pg-stat-cell { font-size: max(var(--ui-min-text-size, 12px), 0.98rem); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-stat-label { font-size: max(var(--ui-min-text-size, 12px), 11px); }
+/* High contrast (Settings > Accessibility): the .sf-lm root declares its own tokens, which shadow the html-level
+   overrides in accessibilityModes.css, so the menu restates them: muted text reads as text, lines take the text colour,
+   and the panel gets the high-contrast outline the Retro modal gets. */
+html.sf-high-contrast .sf-lm.lm-game-menu {
+  --ui-muted: var(--ui-text);
+  --ui-text-dim: color-mix(in srgb, var(--ui-text) 82%, var(--ui-surface));
+  --ui-border: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+  --sf-panel-line: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+  outline: 2px solid var(--sf-panel-line); outline-offset: -2px;
+}

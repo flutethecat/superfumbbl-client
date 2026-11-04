@@ -13,6 +13,7 @@ import PostGameRoster from './PostGameRoster.vue';
 import RosterBadge from './RosterBadge.vue';
 import { formatPlayerValue } from '../game/playerValue';
 import { settings } from '../game/settings';
+import { lmGameRootClass } from '../game/lmTheme';
 import { DICE_EXPECTED_HELP, DICE_EXPECTED_HELP_LABEL } from '../game/diceExpectedHelp';
 import { luckChart } from '../game/luckChart';
 import { gameStatRows } from '../game/gameStatRows';
@@ -497,7 +498,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 
     <!-- Owner 09-17: DICE pane — distributions left, likelihood graphs top right, fun facts bottom right. -->
     <Teleport to="body">
-      <div v-if="diceModalOpen && showStats" class="pg-dice-modal" role="dialog" aria-modal="true" :aria-label="$t('cards.postGamePanel.pgDiceModal.diceStatistics')" @click.self="diceModalOpen = false">
+      <div v-if="diceModalOpen && showStats" class="pg-dice-modal" :class="embedded ? undefined : lmGameRootClass(settings)" role="dialog" aria-modal="true" :aria-label="$t('cards.postGamePanel.pgDiceModal.diceStatistics')" @click.self="diceModalOpen = false">
         <div class="pg-dice-card pg-bevel">
           <header class="pg-dice-head">
             <span class="pg-dice-heading">
@@ -657,7 +658,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
         </div>
       </div>
       <!-- Owner 10-10: the open row's numbers. A sibling of the pane (not inside its scrolling block), fixed to the viewport. -->
-      <div v-if="diceModalOpen && showStats && diceTipRow" :id="diceTipId(diceTipRow.key)" ref="diceTipEl" class="skill-tip pg-dice-tip" role="tooltip"
+      <div v-if="diceModalOpen && showStats && diceTipRow" :id="diceTipId(diceTipRow.key)" ref="diceTipEl" class="skill-tip pg-dice-tip" :class="embedded ? undefined : lmGameRootClass(settings)" role="tooltip"
         :data-row="diceTipRow.key" :data-below="diceTip.below" :style="{ left: diceTip.left + 'px', top: diceTip.top + 'px', maxHeight: diceTip.maxHeight != null ? diceTip.maxHeight + 'px' : undefined, overflowY: diceTip.maxHeight != null ? 'auto' : undefined }"
         @pointerenter="onDiceTipPointerEnter" @pointerleave="onDiceTipPointerLeave">
         <b class="skill-tip-name">{{ diceTipRow.label }}</b>

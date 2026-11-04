@@ -48,7 +48,8 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
         <strong>{{ choice.newInjury }}</strong>
       </button>
     </div>
-    <div class="apo-result-help">{{ choice.mine ? $t('dialogs.apothecaryResultChoice.chooseWhichAuthoritativeInjury') : $t('dialogs.apothecaryResultChoice.waitingForTheInjured') }}</div>
+    <!-- Owner 11-04: the deciding coach's helper line is gone (the two result buttons say it); the other coach keeps the waiting line. -->
+    <div v-if="!choice.mine" class="apo-result-help">{{ $t('dialogs.apothecaryResultChoice.waitingForTheInjured') }}</div>
   </PitchConfirmationPanel>
 </template>
 

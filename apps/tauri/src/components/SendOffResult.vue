@@ -28,11 +28,12 @@ const resultText = computed(() => {
     if (r.sentOff) return r.coachBanned
       ? t('dialogs.sendOffResult.resultText.playernameIsSentOff', { playerName: r.playerName })
       : t('dialogs.sendOffResult.resultText.playernameIsSentOff2', { playerName: r.playerName });
-    return t('dialogs.sendOffResult.resultText.argueSucceedsThePlayer');
+    // Owner 11-04: no "Argue succeeds!" / "Bribe succeeds!" prefix; the CALL OVERTURNED title already says it.
+    return t('dialogs.sendOffResult.resultText.playerStaysOnPitch');
   }
   return r.sentOff
     ? t('dialogs.sendOffResult.resultText.theBribeFailsPlayername', { playerName: r.playerName })
-    : t('dialogs.sendOffResult.resultText.bribeSucceedsThePlayer');
+    : t('dialogs.sendOffResult.resultText.playerStaysOnPitch');
 });
 
 const surfaceStyle: CSSProperties = {
@@ -50,8 +51,8 @@ const surfaceStyle: CSSProperties = {
     :style="surfaceStyle" data-testid="sendoff-result" aria-live="polite" :aria-label="$t('dialogs.sendOffResult.sendoffResultPanel.refereeDecisionResult')">
     <header class="sendoff-result-header">
       <img v-if="refereeIconUrl" :src="refereeIconUrl" class="sendoff-result-ref" alt="" aria-hidden="true" />
-      <span class="sendoff-result-kicker"><DisplayCaps :text="result.rerolled ? $t('dialogs.sendOffResult.sendoffResultPanel.briberyCorruptionReroll') : result.kind === 'bribe' ? $t('dialogs.sendOffResult.sendoffResultPanel.bribeResult') : $t('dialogs.sendOffResult.sendoffResultPanel.argueTheCall')" /></span>
-      <span class="sendoff-result-side">{{ result.side }}</span>
+      <!-- Owner 11-04: the header's kicker (Argue / Bribe result, B&C reroll) and the HOME/AWAY tag are gone; the reroll
+           still shows as the ↻ mark beside the verdict. -->
     </header>
     <div class="sendoff-result-body">
       <div class="sendoff-team">

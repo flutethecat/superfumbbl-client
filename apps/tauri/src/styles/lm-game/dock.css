@@ -1,0 +1,366 @@
+/* Modern in-game look: dock. See base.css for the file map and the rules.
+
+   Surfaces: the Log / Chat / Roster dock (SpectateView .log-panel: tab bar, grip, pop-out / settings / collapse buttons,
+   the unread badge, the settings strip, PaneSearch, the log in its three styles, the new-events pill, the roster
+   sub-view, the chat form and bubbles), the popped-out chat (ChatDock, teleported to body: its root carries
+   lmGameRootClass), the chat toast stack (ChatToast) with the interceptor-wait and player-cards notices that reuse the
+   .chat-toast look, and the induce-chat button.
+
+   The dock stays DARK in both colour schemes. Its contents are tuned for a dark pane by values the CSS cannot reach:
+   the log and chat names are tinted inline with the renderer's seat colours (#157, the pitch-token source), spectator
+   chat lines carry an inline pale green (owner 08-19), the Graphical rows' owner-tuned tints (10-15) assume a dark
+   pane, and the popped-out chat writes its own dark background inline (ChatDock floatStyle). So under the light
+   scheme the dock and the chat dock pin the League Manager DARK tokens (copied from lm-theme.css's dark block; the
+   lane test keeps them in step), and the chat toasts, notices and the induce-chat button follow the scheme. */
+
+/* ---- dark pin for the dock under the light scheme (values = lm-theme.css dark block) */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game .log-panel,
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game.chat-dock {
+  --ui-primary: var(--lm-accent-primary, #790004);
+  --ui-secondary: #000000;
+  --ui-surface: #0d0d0d;
+  --ui-surface-2: #242424;
+  --ui-accent: #a55456;
+  --ui-text-on-accent: #ffffff;
+  --ui-hover: #250a0b;
+  --ui-active: #790004;
+  --ui-border: #3d0002;
+  --ui-focus: #ff3b3b;
+  --ui-focus-halo: #ffffff;
+  --ui-heading: var(--lm-accent-heading-dark, #ff3b3b);
+  --ui-text-on-primary: var(--lm-accent-on-primary, #ffffff);
+  --ui-text-on-secondary: #ffffff;
+  --ui-text: #e6e9ef;
+  --ui-muted: #9a9da1;
+  --ui-text-dim: #5f6163;
+  --ui-coach-led: #4cff6a;
+  --ui-danger: #ff4d4d;
+  --ui-success: #3fb463;
+  --sf-seat-home: #4a86fe;
+  --sf-seat-away: #fe6666;
+  --sf-gold: #e8a33d;
+  --sf-panel-top: rgb(35 39 45 / 0.9);
+  --sf-panel-bottom: rgb(10 12 15 / 0.9);
+  --sf-panel-line: #353b44;
+  --sf-panel-drop: #050607;
+  --sf-panel-hi: #626b77;
+  --sf-bevel: inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 -1px 0 rgb(0 0 0 / 0.4);
+}
+/* high contrast over the pin (base.css restates these on the game root; the pin above would shadow them) */
+html.sf-high-contrast .sf-lm.lm-game .log-panel.log-panel,
+html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
+  --ui-muted: var(--ui-text);
+  --ui-text-dim: color-mix(in srgb, var(--ui-text) 82%, var(--ui-surface));
+  --ui-border: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+  --sf-panel-line: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface));
+}
+
+/* ---- the dock window: the .hm-panel face (gradient, line, 2px radius, top highlight, drop), at the coach's opacity
+   (Settings: the dock's Opacity slider writes --log-panel-opacity). Border width stays 3px. */
+.sf-lm.lm-game .log-panel {
+  color: var(--ui-text);
+  background: linear-gradient(
+    color-mix(in srgb, var(--sf-panel-top) calc(var(--log-panel-opacity, 0.79) * 100%), transparent),
+    color-mix(in srgb, var(--sf-panel-bottom) calc(var(--log-panel-opacity, 0.79) * 100%), transparent));
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .log-panel .log-resizer {
+  color: var(--ui-muted);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px 0 0;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .log-panel .log-resizer:hover,
+.sf-lm.lm-game .log-panel .log-resizer:focus-visible { color: var(--ui-text); border-color: var(--ui-heading); filter: none; }
+
+/* ---- tab bar: the joined .sf-tabs strip. The tabs were outlined Nuffle stencils with a red bloom; here they are
+   League Manager tabs: band face, uppercase, muted ink, the active tab on the primary fill. */
+.sf-lm.lm-game .log-panel .tabs {
+  background: var(--ui-surface-2);
+  border-bottom-color: var(--sf-panel-line);
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab {
+  /* inactive tab ink: the muted ink half-way to the text colour (plain --ui-muted read 4.25:1 on the raised tab bar) */
+  color: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text));
+  background: transparent;
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: none;
+}
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab:hover:not(:disabled):not([data-active='true']) { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab[data-active='true'] {
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab:disabled { color: var(--ui-text-dim); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .log-panel .tabs .tab-stencil {
+  font-family: var(--sf-band-font);
+  letter-spacing: 0.08em;
+  color: inherit;
+  text-shadow: none;
+}
+.sf-lm.lm-game .log-panel .tabs button.stencil-tab[data-active='true'] .tab-stencil { color: inherit; text-shadow: none; }
+/* the unread count: the .sf-count face on the scarlet (urgent) chip tone */
+.sf-lm.lm-game .log-panel .tabs .chat-badge {
+  font-family: var(--sf-band-font);
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .log-panel .tabs .drag-grip { color: var(--ui-muted); }
+.sf-lm.lm-game .log-panel .tabs .drag-grip:hover { color: var(--ui-heading); }
+/* pop-out, settings and collapse: bare icon buttons on the strip (hover takes the tab hover face) */
+.sf-lm.lm-game .log-panel .tabs button.popout-btn,
+.sf-lm.lm-game .log-panel .tabs button.collapse { color: var(--ui-muted); background: transparent; border-radius: 2px; }
+.sf-lm.lm-game .log-panel .tabs button.popout-btn:hover,
+.sf-lm.lm-game .log-panel .tabs button.collapse:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .log-panel .tabs button.popout-btn:focus-visible,
+.sf-lm.lm-game .log-panel .tabs button.collapse:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+
+/* ---- settings strip: muted captions (the .sf-k ink; the face, case and tracking stay, since the strip wraps by the
+   captions' width and a wider caption would cost the log a row) and square themed inputs */
+.sf-lm.lm-game .log-panel .panel-settings {
+  color: var(--ui-text);
+  font-family: var(--font-body);
+  background: color-mix(in srgb, var(--ui-surface-2) 55%, transparent);
+  border-bottom-color: var(--sf-panel-line);
+}
+.sf-lm.lm-game .log-panel .panel-settings label { color: var(--ui-muted); }
+.sf-lm.lm-game .log-panel .panel-settings input[type='range'] { accent-color: var(--ui-primary); }
+.sf-lm.lm-game .log-panel .panel-settings select {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .log-panel .panel-settings :is(input, select):focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+/* PaneSearch (scoped): square field, .sf-btn small steppers. Its global hit highlights (amber) stay: they read on the
+   dark pane in both schemes. */
+.sf-lm.lm-game .pane-search .pane-search-input {
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+}
+.sf-lm.lm-game .pane-search .pane-search-input::placeholder { color: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text)); }
+.sf-lm.lm-game .pane-search .pane-search-input:focus { outline: 2px solid var(--ui-focus); outline-offset: 0; }
+.sf-lm.lm-game .pane-search .pane-search-step {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .pane-search .pane-search-step:hover { border-color: var(--ui-heading); }
+.sf-lm.lm-game .pane-search .pane-search-step:focus-visible { border-color: var(--ui-heading); outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.sf-lm.lm-game .pane-search .pane-search-count { color: var(--ui-muted); opacity: 1; }
+
+/* ---- the log (all three styles). Paint only: the rows, the v-memo'd markup, the pre whitespace and the selectable
+   text are untouched. The Graphical style keeps its owner-tuned row tints (10-15), divider and outline. */
+/* timestamps: muted ink at full strength (the Retro 0.55 opacity over muted ink reads near 2.3:1 on the pane) */
+.sf-lm.lm-game .log .log-time { color: var(--ui-muted); opacity: 1; }
+.sf-lm.lm-game .log [data-kind='system'] { color: var(--ui-muted); }
+/* the "Block" / "Uphill Block" title: gold kept (owner 08-19), the retro emboss flattened */
+.sf-lm.lm-game .log .log-title { color: var(--sf-gold); text-shadow: 0 1px 0 var(--sf-panel-drop); }
+/* "fails" in the League Manager danger red; on an away (red) row a lighter cut of it (the Retro rule does the same) */
+.sf-lm.lm-game .log .log-fail { color: var(--ui-danger); }
+.sf-lm.lm-game .log.log-graphical > .log-rows > span[data-row-side='away'] .log-fail { color: color-mix(in srgb, var(--ui-danger) 55%, white); }
+/* seat-tinted names: the colour stays inline (renderer seat colours); the Nuffle-style black outline becomes one soft
+   drop. The Graphical rows keep their own outline (the row rule), so names there keep a dark edge too. */
+.sf-lm.lm-game .log:not(.log-graphical) .log-name { text-shadow: 0 1px 1px var(--sf-panel-drop); }
+.sf-lm.lm-game .log.log-graphical .log-name { text-shadow: 0 1px 1px var(--sf-panel-drop), 0 0 2px var(--sf-panel-drop); }
+.sf-lm.lm-game .log.log-graphical .log-icon-ko-text { font-family: var(--sf-band-font); }
+/* the "new events" / "new messages" pill: an .sf-btn primary chip. Its text keeps its face, case and tracking: the pill
+   shrinks to fit, and wider copy would wrap it to two lines in a narrow popped-out chat. */
+.sf-lm.lm-game .log-holder .new-events {
+  color: var(--ui-text-on-primary);
+  background: linear-gradient(color-mix(in srgb, var(--ui-primary) 82%, white), var(--ui-primary) 55%, color-mix(in srgb, var(--ui-primary) 80%, black));
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel), 0 3px 0 color-mix(in srgb, var(--ui-primary) 45%, black), 0 4px 8px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .log-holder .new-events:hover { filter: brightness(1.06); }
+.sf-lm.lm-game .log-holder .new-events:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* ---- roster sub-view: team tabs as small .sf-tab chips (the team names keep their face and case: the chips size to
+   them), rows as .sf-table zebra rows */
+.sf-lm.lm-game .log-panel .subtabs button {
+  color: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text));
+  background: var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
+.sf-lm.lm-game .log-panel .subtabs button:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game .log-panel .subtabs button[data-active='true'] {
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  border-color: color-mix(in srgb, var(--ui-primary) 60%, black);
+}
+.sf-lm.lm-game .log-panel .subtabs button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 1px; }
+.sf-lm.lm-game .log-panel .roster li:nth-child(even) { background: color-mix(in srgb, var(--ui-surface-2) 50%, transparent); }
+.sf-lm.lm-game .log-panel .roster li.roster-row:hover { background: var(--ui-hover); }
+.sf-lm.lm-game .log-panel .roster .nr { color: var(--ui-muted); }
+.sf-lm.lm-game .log-panel .roster .acquired { color: var(--sf-gold); }
+.sf-lm.lm-game .log-panel .roster .pos { color: var(--ui-muted); }
+/* status: on the pitch muted green, KO amber, casualties / sent off red, reserves info blue (owner 07-04f tones) */
+.sf-lm.lm-game .log-panel .roster .loc { color: color-mix(in srgb, var(--ui-success) 70%, var(--ui-muted)); }
+.sf-lm.lm-game .log-panel .roster .loc[data-status="KO'd"] { color: var(--ui-warn); }
+.sf-lm.lm-game .log-panel .roster .loc:is([data-status='Badly Hurt'], [data-status='Seriously Hurt'], [data-status='Dead'], [data-status='Sent off']) { color: var(--ui-danger); }
+.sf-lm.lm-game .log-panel .roster .loc[data-status='Reserves'] { color: var(--ui-info); }
+
+/* ---- chat (docked or popped out: no .log-panel in these selectors, the popped chat lives under body) */
+.sf-lm.lm-game .chat-log .log-name { font-family: var(--sf-band-font); }
+/* bubbles (ChatBubbleRows, scoped): an .hm-panel face; the speaker's seat rides the 5px left edge and a soft wash of
+   the seat's dark shade (game/chatBubbles.ts writes --chat-bubble-mid / -edge inline) */
+.sf-lm.lm-game .chat-log .chat-bubble {
+  color: var(--ui-text);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--chat-bubble-mid, transparent) 55%, transparent), transparent 75%),
+    linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-left-color: var(--chat-bubble-edge, var(--sf-panel-line));
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-name {
+  font-family: var(--sf-band-font);
+  color: var(--chat-bubble-edge, var(--ui-text));
+  text-shadow: none;
+}
+.sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-time { color: var(--ui-muted); opacity: 1; }
+/* Owner 11-04 (Modern review): "The side bars should match the color of the team." The 5px side bar and the wash take
+   the speaker's own seat colour (--chat-bubble-seat, written by game/chatBubbles.ts), not its pale edge tint.
+   "The red is too muted here and should move toward scarlet": the away seat is pulled toward --ui-scarlet.
+   "Spectators should be green": spectator bubbles take Retro's spectator-chat green. Names stay a light tint of the
+   bar so they read on the dark dock in both schemes. */
+.sf-lm.lm-game { --lmg-chat-spectator: #9fd49f; }
+.sf-lm.lm-game .chat-log .chat-bubble { --lmg-bubble-bar: var(--chat-bubble-seat, var(--sf-panel-line)); }
+.sf-lm.lm-game .chat-log .chat-bubble[data-side='away'] { --lmg-bubble-bar: color-mix(in srgb, var(--chat-bubble-seat, var(--ui-scarlet)) 35%, var(--ui-scarlet)); }
+.sf-lm.lm-game .chat-log .chat-bubble[data-side='spectator'] { --lmg-bubble-bar: var(--lmg-chat-spectator); }
+.sf-lm.lm-game .chat-log .chat-bubble[data-side] {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--lmg-bubble-bar) 34%, transparent), transparent 80%),
+    linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-left-color: var(--lmg-bubble-bar);
+}
+.sf-lm.lm-game .chat-log .chat-bubble[data-side] .chat-bubble-name { color: color-mix(in srgb, var(--lmg-bubble-bar) 55%, white); }
+.sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-text { color: var(--ui-text); }
+/* the entry: a square themed field on the dock's strip colour */
+.sf-lm.lm-game form.chat textarea {
+  font-family: var(--font-body);
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-surface-2) 70%, transparent);
+  border-top-color: var(--sf-panel-line);
+}
+.sf-lm.lm-game form.chat textarea::placeholder { color: var(--ui-muted); }
+.sf-lm.lm-game form.chat textarea:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+.sf-lm.lm-game form.chat textarea:disabled { color: var(--ui-muted); }
+/* Live-chat opt-in during a spectator review: an .sf-btn face (its sentence keeps its face and case) */
+.sf-lm.lm-game button.live-chat-opt-in {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm.lm-game button.live-chat-opt-in:hover { border-color: var(--ui-heading); }
+.sf-lm.lm-game button.live-chat-opt-in:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* ---- popped-out chat (ChatDock, teleported to body; its root carries .sf-lm.lm-game). The float keeps its own
+   inline background (the dock opacity) and bounds; the drag header becomes a band heading. */
+.sf-lm.lm-game.chat-dock.chat-dock--float {
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 22px var(--sf-discord-drop);
+}
+.sf-lm.lm-game.chat-dock .chat-dock-head {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom));
+  border-bottom-color: var(--sf-panel-line);
+  box-shadow: inset 4px 0 0 var(--ui-heading);
+}
+.sf-lm.lm-game.chat-dock .chat-dock-title {
+  font-family: var(--sf-band-title-font);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-heading);
+}
+.sf-lm.lm-game.chat-dock .chat-dock-grip { color: var(--ui-muted); }
+.sf-lm.lm-game.chat-dock .chat-dock-grip:hover { color: var(--ui-text); }
+.sf-lm.lm-game.chat-dock .chat-dock-btn { color: var(--ui-muted); border-radius: 2px; }
+.sf-lm.lm-game.chat-dock .chat-dock-btn:hover { color: var(--ui-text); background: var(--ui-hover); }
+.sf-lm.lm-game.chat-dock .chat-dock-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+
+/* ---- chat toasts (ChatToast): the Final Fantasy seat frames become League Manager panels with the author's colour on
+   the 5px left edge and the sender name; four roles (seat-relative blue / red, spectator green, neutral). The
+   component's root rule is `button.chat-toast[data-author-role][data-author-role]`, so these rules add the game root
+   to that chain. The toasts follow the colour scheme (they sit over the pitch, not in the dock). */
+.sf-lm.lm-game button.chat-toast[data-author-role='blue'] { --lmg-toast-author: var(--sf-seat-home); }
+.sf-lm.lm-game button.chat-toast[data-author-role='red'] { --lmg-toast-author: var(--sf-seat-away); }
+.sf-lm.lm-game button.chat-toast[data-author-role='green'] { --lmg-toast-author: var(--ui-success); }
+.sf-lm.lm-game button.chat-toast[data-author-role='neutral'] { --lmg-toast-author: var(--ui-muted); }
+.sf-lm.lm-game button.chat-toast[data-author-role][data-author-role] {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-left-color: var(--lmg-toast-author, var(--ui-heading));
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 20px var(--sf-discord-drop);
+}
+.sf-lm.lm-game button.chat-toast[data-author-role][data-author-role]:hover {
+  border-color: var(--ui-heading);
+  border-left-color: var(--lmg-toast-author, var(--ui-heading));
+  filter: none;
+}
+.sf-lm.lm-game button.chat-toast[data-author-role][data-author-role]:focus-visible { outline-color: var(--ui-focus); }
+.sf-lm.lm-game button.chat-toast[data-author-role]::before { border-color: transparent; }
+/* the sender keeps its case and tracking: the toast sizes to its content, so wider copy would wrap a long name */
+.sf-lm.lm-game button.chat-toast[data-author-role] .chat-toast-sender {
+  font-family: var(--sf-band-font);
+  color: var(--lmg-toast-author, var(--ui-heading));
+  text-shadow: none;
+}
+.sf-lm.lm-game button.chat-toast[data-author-role] .chat-toast-text { color: var(--ui-text); }
+/* the interceptor-wait and player-cards notices (SpectateView's own .chat-toast, no author): the same panel, info edge */
+.sf-lm.lm-game .chat-toast-stack > div.chat-toast {
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-left-color: var(--ui-info);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 8px 20px var(--sf-discord-drop);
+}
+.sf-lm.lm-game .chat-toast-stack > div.chat-toast:hover {
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border-color: var(--sf-panel-line);
+  border-left-color: var(--ui-info);
+}
+.sf-lm.lm-game .chat-toast-stack > div.chat-toast .chat-toast-text { color: var(--ui-text); }
+
+/* ---- induce-chat button (the way back to a dock hidden behind an inducement pane): an .sf-btn face, band face */
+.sf-lm.lm-game button.induce-chat-btn {
+  font-family: var(--sf-band-font);
+  letter-spacing: 0.1em;
+  color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface-2);
+  border-color: var(--sf-panel-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop), 0 6px 16px var(--sf-discord-drop);
+}
+.sf-lm.lm-game button.induce-chat-btn:hover { border-color: var(--ui-heading); filter: none; }
+.sf-lm.lm-game button.induce-chat-btn:focus-visible { border-color: var(--ui-heading); filter: none; outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm.lm-game button.induce-chat-btn .induce-chat-btn-badge {
+  font-family: var(--sf-band-font);
+  color: var(--ui-scarlet-contrast);
+  background: var(--ui-scarlet);
+  border-radius: 2px;
+  box-shadow: var(--sf-bevel);
+}
