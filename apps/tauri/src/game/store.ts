@@ -117,7 +117,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -695,14 +695,17 @@ const legacyState = reactive({
   blockDownTrailClear: null as { seq: number; playerIds: string[] } | null,
   /** #111 option-B / spec-207 D-4: HELD block-commit awaiting the flavor choice. Blitz holds its planner act; a standalone block holds before its direct send. */
   // Owner 09-28 (Sol review round 3, item 2): armedAction (optional) is the acting player's playerAction recorded
-  // at arm time — present only on a hold armed via holdBlitzBlockChoice; absent (undefined) on the standalone
-  // Block chooser below, which blitzBlockChoiceOnModelApplied never reads (it only processes origin: 'blitz').
-  blitzBlockChoice: null as { blitzerId: string; targetId: string; offers: { kind: string; label: string }[]; origin: 'blitz' | 'block'; armedAction?: string | null } | null,
-  /** Owner 10-12: a left-click Blitz plan reached its target and STOPPED instead of sending the block, because the
-   *  blitzer has a special attack that lives on the context menu (Stab, Projectile Vomit, Breathe Fire, Chomp). The
-   *  plan is gone; the view arms its ordinary Blitz confirm stage for this target (the hand-walked blitz's own). A
-   *  one-shot signal (seq), never a hold: nothing is sent until the coach confirms. */
-  blitzContactChoice: null as { blitzerId: string; targetId: string; seq: number } | null,
+  // at arm time; the stale-hold retirement drops the hold once the live action differs from it.
+  // Owner 11-03 (option A): everyAlternative = the offers are EVERY block alternative the attacker has against this
+  // target (Stab, Chainsaw, Projectile Vomit, Breathe Fire, Chomp, plus Gored on a Blitz), the Modern "Stab or
+  // Block?" chooser; absent = the older Chainsaw / Gored-only set Classic still arms. turnKey (block origin) retires
+  // the hold when the turn changes.
+  blitzBlockChoice: null as { blitzerId: string; targetId: string; offers: { kind: string; label: string }[]; origin: 'blitz' | 'block'; armedAction?: string | null; everyAlternative?: boolean; turnKey?: string;
+    /** Owner 11-03 (Sol r4): the card's OWN acknowledgement state, independent of the send latch. Set when a plain-Block
+     *  card is armed before its Block declaration is applied (e.g. Move -> Block confirmed before the echo):
+     *  awaitingAction = the requested action, priorAction = the attacker's applied action at arm time (null = the
+     *  attacker was not acting), ackDeadline = wall-clock limit (fail-open), ackToken = this arm's identity. */
+    awaitingAction?: string; priorAction?: string | null; ackDeadline?: number; ackToken?: number } | null,
   /** S42: a Chainsaw carrier is in the Foul state with NO remembered Foul / Chainsaw choice (reconnect, activation
    *  declared by another path) and clicked a victim. Nothing is sent until the coach picks a kind on the block-kind chooser
    *  card; Esc / right-click dismisses it with no wire and the activation stays. Client-held, never rebuilt from a snapshot. */
@@ -12920,6 +12923,7 @@ function applyFrameContents(frame: QueuedFrame) {
     // ORDER 66 (#6.4): advance/flush the planner command-queue AFTER the model + follow-ups + setup are fully applied for this command (leg-2a: evaluate terminals only after a complete apply). `cmd` carries this frame's resolution reports (leg-2a resolution-wait). No-op when no plan runs.
     plannerOnModelApplied(cmd);
     foulChoiceHoldOnModelApplied(); // S42: retire a stale Foul / Chainsaw chooser hold
+    consumeDeclarationIntent(); // Sol r5: an applied model that shows the requested declaration has answered it
     blitzBlockChoiceOnModelApplied(); // Owner 09-28 (S6 follow-up): retire a stale NO-PLAN blitz-commit hold (plan-owned holds are the planner's own job, just above)
     multiBlockOnModelApplied(); // #58 (ML-7): clear the multi-block selection once the server's state-change lands
     maybeAutoEndOnTimeout(); // #14b (TB-1…TB-4): client-side timeout auto-end, re-evaluated per model-apply (never a timer)
@@ -15613,6 +15617,7 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   srvActingAction = ap?.playerAction ?? null;
   srvTurnMode = typeof g?.turnMode === 'string' ? g.turnMode : null; // owner 10-16: a snapshot seeds the turn-mode mirror too
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; noteDeclarationLatchChange(); // a snapshot is the server's whole answer (owner 10-15)
+  declarationIntent = null; // Sol r5: a snapshot answers any requested declaration too
   setCancelInFlight(false); serverClearedActor = !srvActingId; // P0 #2
   if (!srvActingId) wakeActorClearWaiters();
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null; // never rebuilt from a snapshot (first action / reconnect)
@@ -15740,6 +15745,9 @@ function afterActivationCleared(cb: () => void, maxWaitMs = 30000, onGiveUp?: ()
     onGiveUp?.();
   }, maxWaitMs);
 }
+/** g1960010: one Cancel Hit and Run per server frame (fails open: the next applied frame or this cap releases it). */
+const HIT_AND_RUN_CANCEL_LATCH_MS = 2000;
+let hitAndRunCancelLatch: { commandNr: number; sentAt: number } | null = null;
 function blitzEndConfirmationRequired(g: GameJson): boolean {
   const turnMode = String(g.turnMode ?? '');
   const playerAction = String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
@@ -15867,9 +15875,6 @@ interface PlannerPlan {
   targetPlayerId: string | null;               // foul (defender) / hand-off (catcher)
   blockKind: string | null;                    // #34: a BLITZ's optional special block-kind (stab/chainsaw/vomit/breatheFire/chomp) — rides sendBlock's flavor flags
   blockChoiceResolved: boolean;
-  /** Owner 10-12: set only by the left-click (stored route) Blitz. At contact the plan stops for the coach's own
-   *  choice when a context-menu special attack is available (see blitzContactChoiceKinds). */
-  contactChoice?: boolean;
   goredCommit: boolean;
   terminalSent: boolean;
   phase: 'declaring' | 'moving' | 'acting';
@@ -15910,39 +15915,52 @@ function blockChooserOffers(g: GameJson, playerId: string) {
 const GORED_OFFER_KIND = 'gored';
 /** Blitz-commit chooser offers: the flavor offers plus the Gored by the Bull alternative when the server's
  *  decorations carry it (upstream surfaces Gored only at the blitz block window — isGoredAvailable && pDoBlitz). */
-function blitzBlockCommitOffers(g: GameJson, blitzerId: string, targetId: string): { kind: string; label: string }[] {
-  const offers: { kind: string; label: string }[] = blockChooserOffers(g, blitzerId);
+function blitzBlockCommitOffers(g: GameJson, blitzerId: string, targetId: string, everyAlternative = false): { kind: string; label: string }[] {
+  const offers: { kind: string; label: string }[] = everyAlternative
+    ? blockChoiceAlternatives(g, blitzerId, targetId)
+    : blockChooserOffers(g, blitzerId);
   if (goredByTheBullAvailable(g, blitzerId, targetId)) offers.push({ kind: GORED_OFFER_KIND, label: 'Gored by the Bull' });
   return offers;
 }
-/** Owner 10-12 ("B works for this. This should only occur on left click blitz."): the special attacks a blitzer may
- *  pick at the block point that the commit chooser does NOT carry (owner 08-05: Stab, Projectile Vomit / Putrid
- *  Regurgitation, Breathe Fire and Chomp live on the context menu). Read on the APPLIED model at contact, with the
- *  conditions the hand-walked blitz's own menu and confirm use: the server took THIS target (SELECTED), it is an
- *  adjacent standing opponent, and the offer functions themselves (stance, unused skill) still offer the kind.
- *  Chomp additionally needs this target not yet chomped by this player (FieldModel.notChomped): a Chomp that is
- *  only left against another adjacent opponent is no reason to stop a blitz on this one. */
-function blitzContactChoiceKinds(g: GameJson, blitzerId: string, targetId: string): string[] {
-  const outcome = blitzTargetOutcome(g);
-  if (outcome.kind !== 'selected' || outcome.targetId !== targetId) return [];
-  if (!adjacentStandingEnemyIds(g, blitzerId).includes(targetId)) return [];
-  const kinds: string[] = blockAlternativeOffers(g, blitzerId).map((offer) => offer.kind).filter((kind) => !CHOOSER_FLAVORS.has(kind));
-  if (chompAvailableAgainst(g, blitzerId, targetId)) kinds.push('chomp');
-  return kinds;
+/** Owner 11-03 (option A, "Stab or Block?"): EVERY block alternative the attacker has against THIS target, in the
+ *  attack menu's own order — blockAlternativeOffers (Stab, Chainsaw, Projectile Vomit, Breathe Fire) plus Chomp when
+ *  it is still available against this defender (chompAvailableAgainst, as the target's attack menu). Upstream asks
+ *  the same question: BlockLogicExtension.playerInteraction opens blockActionContext (every providesBlockAlternative
+ *  kind + Block; the bb2025 plugin adds CHOMP) whenever the attacker holds an unused block alternative. */
+function blockChoiceAlternatives(g: GameJson, attackerId: string, targetId: string): { kind: string; label: string }[] {
+  const offers = blockAlternativeOffers(g, attackerId).map((offer) => ({ kind: offer.kind as string, label: offer.label }));
+  if (chompAvailableAgainst(g, attackerId, targetId) && !offers.some((offer) => offer.kind === 'chomp')) {
+    offers.push({ kind: 'chomp', label: BLOCK_KIND_LABEL.chomp });
+  }
+  return offers;
+}
+/** The Blitz-commit chooser offers for this blitzer and target. everyAlternative (Modern, owner 11-03 option A) asks
+ *  about every block alternative, but only for an UNDECIDED Blitz (the acting action is blitz / blitzMove: an action
+ *  such as Putrid Regurgitation or The Flashing Blade is already the attack) and, like upstream
+ *  (BlockLogicExtension.isBlockable gates its chooser), only on an adjacent standing target. Otherwise the older
+ *  Chainsaw / Gored-only set (Classic's call site) decides, as before. */
+function blitzHoldOffers(g: GameJson, blitzerId: string, targetId: string, requestEveryAlternative: boolean):
+  { offers: { kind: string; label: string }[]; everyAlternative: boolean; armedAction: string | null } {
+  const armedAction = String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') || null;
+  const everyAlternative = requestEveryAlternative && (armedAction === 'blitz' || armedAction === 'blitzMove')
+    && adjacentStandingEnemyIds(g, blitzerId).includes(targetId);
+  return { offers: blitzBlockCommitOffers(g, blitzerId, targetId, everyAlternative), everyAlternative, armedAction };
 }
 /** Blitz-commit hold (planner act leg + test seam): arm the chooser card when there is anything to choose. */
-function holdBlitzBlockChoice(blitzerId: string, targetId: string): boolean {
-  const offers = game.value ? blitzBlockCommitOffers(game.value, blitzerId, targetId) : [];
-  if (offers.length >= 1 && !state.blitzBlockChoice) {
-    // Owner 09-28 (Sol review round 3, item 2): record the acting action AT ARM TIME — Classic's SAME call site
-    // (ClassicView.vue ~805) arms this hold for Putrid Regurgitation / The Flashing Blade too (their router
-    // 'block' intent, order66Interaction.ts ~1017-1037), not only ordinary `blitz`/`blitzMove`. Staleness compares
-    // against THIS recorded action rather than a fixed whitelist, so every armed-under action is covered alike.
-    const armedAction = String((game.value?.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') || null;
-    state.blitzBlockChoice = { blitzerId, targetId, offers, origin: 'blitz', armedAction };
-    return true;
-  }
-  return false;
+function holdBlitzBlockChoice(blitzerId: string, targetId: string, requestEveryAlternative = false): boolean {
+  const g = game.value;
+  if (!g || state.blitzBlockChoice) return false;
+  // Owner 09-28 (Sol review round 3, item 2): the acting action is recorded AT ARM TIME — Classic's SAME call site
+  // (ClassicView.vue ~805) arms this hold for Putrid Regurgitation / The Flashing Blade too (their router
+  // 'block' intent, order66Interaction.ts ~1017-1037), not only ordinary `blitz`/`blitzMove`. Staleness compares
+  // against THIS recorded action rather than a fixed whitelist, so every armed-under action is covered alike.
+  // Owner 11-03: the turn key too, so a turn change alone retires the card.
+  const { offers, everyAlternative, armedAction } = blitzHoldOffers(g, blitzerId, targetId, requestEveryAlternative);
+  if (offers.length < 1) return false;
+  state.blitzBlockChoice = {
+    blitzerId, targetId, offers, origin: 'blitz', armedAction, turnKey: currentTurnKey(g), ...(everyAlternative ? { everyAlternative: true } : {}),
+  };
+  return true;
 }
 /** Owner 09-28 (S6 follow-up, Sol BLOCKER 1): a NO-PLAN blitz-commit hold has no planner fail-safe watching it —
  *  plannerFlush/plannerRetireQuietly both no-op with no plan (below), so it would otherwise strand
@@ -15951,6 +15969,7 @@ function holdBlitzBlockChoice(blitzerId: string, targetId: string): boolean {
  *  advance/flush already owns its lifecycle (and Esc's #111 hold-keep still applies to it). */
 function blitzBlockChoiceOnModelApplied(): void {
   const c = state.blitzBlockChoice;
+  if (c?.origin === 'block') { blockChoiceOnModelApplied(c); return; }
   if (!c || c.origin !== 'blitz' || plannerPlan) return;
   const g = game.value;
   if (!g) { state.blitzBlockChoice = null; return; }
@@ -15963,14 +15982,101 @@ function blitzBlockChoiceOnModelApplied(): void {
   // Owner 09-28 (Sol review round 2, item 2b): re-evaluate the SAME offer builder the hold armed from — a held
   // offer kind that dropped out of the live set (Gored decoration cleared, skill marked used elsewhere, …) means
   // there is nothing left to honour that choice, even though the acting player/adjacency/selection all still hold.
-  const liveOfferKinds = new Set(blitzBlockCommitOffers(g, c.blitzerId, c.targetId).map((offer) => offer.kind));
+  const liveOfferKinds = new Set(blitzBlockCommitOffers(g, c.blitzerId, c.targetId, c.everyAlternative === true).map((offer) => offer.kind));
   const offersStillLive = c.offers.every((offer) => liveOfferKinds.has(offer.kind));
   if (blitzBlockChoiceStale({
     actingPlayerId, blitzerId: c.blitzerId, turnMode: (g.turnMode as string | null | undefined) ?? null,
     armedAction: c.armedAction ?? null, currentAction, targetAdjacent, targetSelected, offersStillLive,
-  })) {
+  }) || (c.turnKey != null && c.turnKey !== currentTurnKey(g)) || !iControlPlayer(c.blitzerId)) {
+    state.blitzBlockChoice = null; // owner 11-03: the turn changed, or this seat no longer controls the blitzer
+  }
+}
+/** Owner 11-03 (option A): the plain-Block equivalent of the stale-hold retirement above (latches fail open). The
+ *  standalone "Stab or Block?" hold retires, with no wire, once the applied model no longer names what it was armed
+ *  for: another (or no) acting player, a different action than the Block it was armed under, the turn changed, the
+ *  target no longer an adjacent standing opponent, or a held alternative no longer offered against this target. */
+function blockChoiceOnModelApplied(c: NonNullable<typeof state.blitzBlockChoice>): void {
+  const g = game.value;
+  if (!g) { state.blitzBlockChoice = null; return; }
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  let actingPlayerId = String(acting?.playerId ?? '') || null;
+  let currentAction = String(acting?.playerAction ?? '') || null;
+  // Owner 11-03 (Sol r4): the card's own acknowledgement, never the send latch. While it awaits the requested Block:
+  // the applied model still showing the PRIOR state is not a mismatch; the requested action acknowledges (buttons
+  // enable); anything else — or the deadline passing — retires as below, with no wire.
+  if (c.awaitingAction != null) {
+    if (Date.now() >= (c.ackDeadline ?? 0)) { retireUnacknowledgedBlockChoice('not acknowledged in time'); return; }
+    const attackerActing = actingPlayerId === c.blitzerId;
+    if (attackerActing && currentAction === c.awaitingAction) {
+      c.awaitingAction = undefined; c.priorAction = undefined; c.ackDeadline = undefined; c.ackToken = undefined;
+    } else if (attackerActing ? currentAction === c.priorAction : (c.priorAction === null && actingPlayerId == null)) {
+      actingPlayerId = c.blitzerId; currentAction = c.armedAction ?? null; // still the prior state: judge the rest only
+    }
+  }
+  const liveOffers = c.everyAlternative ? blockChoiceAlternatives(g, c.blitzerId, c.targetId) : blockChooserOffers(g, c.blitzerId);
+  const liveOfferKinds = new Set(liveOffers.map((offer) => offer.kind));
+  if (blitzBlockChoiceStale({
+    actingPlayerId,
+    blitzerId: c.blitzerId,
+    turnMode: (g.turnMode as string | null | undefined) ?? null,
+    armedAction: c.armedAction ?? null,
+    currentAction,
+    targetAdjacent: adjacentStandingEnemyIds(g, c.blitzerId).includes(c.targetId),
+    targetSelected: true, // a plain Block has no target selection (only a hold armed under a Blitz checks it)
+    offersStillLive: c.offers.every((offer) => liveOfferKinds.has(offer.kind)),
+  }) || (c.turnKey != null && c.turnKey !== currentTurnKey(g)) || !iControlPlayer(c.blitzerId)) {
     state.blitzBlockChoice = null;
   }
+}
+/** Owner 11-03 (Sol r5): the last declaration we sent (player, action, wall-clock time, turn), set where the
+ *  CLIENT_ACTING_PLAYER goes out and never cleared by the send latch's watchdog. */
+let declarationIntent: { playerId: string; action: string; at: number; turnKey: string } | null = null;
+/** Sol r5: the requested declaration is answered once the APPLIED model shows it (not at receive time: a received
+ *  but still queued echo must keep the request alive for a confirm in between); a later action change then never
+ *  revives it. */
+function consumeDeclarationIntent(): void {
+  const intent = declarationIntent;
+  const acting = game.value?.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  if (intent && String(acting?.playerId ?? '') === intent.playerId && String(acting?.playerAction ?? '') === intent.action) declarationIntent = null;
+}
+/** Owner 11-03 (Sol r1 #4 / r5): the action a standalone Block hold rides. The attacker's applied action, unless our own
+ *  declaration for this attacker (this turn) asked for a different one that the applied model does not show yet: then
+ *  the REQUESTED action, with its acknowledgement deadline (sent + 5 s). `expired` = that request is older than the
+ *  deadline and still not applied: nothing may be armed or sent on it (fail open, the coach clicks again). */
+function expectedAttackAction(g: GameJson, attackerId: string):
+  { action: string | null; applied: string | null; ackDeadline: number | null; expired: boolean } {
+  const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  const applied = String(acting?.playerId ?? '') === attackerId ? (String(acting?.playerAction ?? '') || null) : null;
+  const intent = declarationIntent;
+  if (intent && intent.playerId === attackerId && intent.turnKey === currentTurnKey(g) && intent.action && intent.action !== applied) {
+    const ackDeadline = intent.at + BLOCK_CHOICE_ACK_MS;
+    return { action: intent.action, applied, ackDeadline, expired: Date.now() >= ackDeadline };
+  }
+  return { action: applied, applied, ackDeadline: null, expired: false };
+}
+/** Owner 11-03 (Sol r1 #3): a Block-family action that already IS the attack. Upstream bb2025
+ *  BlockLogicModule.block:56-61 takes the clientBlock flags straight from the declared action (STAB, CHAINSAW,
+ *  PROJECTILE_VOMIT, BREATHE_FIRE, CHOMP) and sends at once: no chooser for a decided attack. */
+const DECLARED_ALTERNATIVE_KIND: Readonly<Record<string, string>> = {
+  stab: 'stab', chainsaw: 'chainsaw', projectileVomit: 'vomit', breatheFire: 'breatheFire', chomp: 'chomp',
+};
+/** A held standalone-Block card whose Block declaration the server has not acknowledged yet: its buttons wait. */
+function blockChoiceAwaitingAck(c: NonNullable<typeof state.blitzBlockChoice>): boolean {
+  return c.origin === 'block' && c.awaitingAction != null;
+}
+/** Owner 11-03 (Sol r4): how long a card armed before its Block echo waits for the acknowledgement (fail-open). */
+const BLOCK_CHOICE_ACK_MS = 5000;
+let blockChoiceAckSeq = 0;
+function retireUnacknowledgedBlockChoice(reason: string): void {
+  state.blitzBlockChoice = null;
+  log('system', `play: block choice closed — the Block was ${reason} (nothing sent)`);
+}
+/** The plain-clock half of the deadline: retires the card even when no further frame is ever applied. */
+function armBlockChoiceAckDeadline(token: number, deadline: number): void {
+  setTimeout(() => {
+    const c = state.blitzBlockChoice;
+    if (c && c.ackToken === token && c.awaitingAction != null) retireUnacknowledgedBlockChoice('not acknowledged in time');
+  }, Math.max(0, deadline - Date.now()) + 1);
 }
 // leg-2a (Echo per-touch hardening, 07-15): SINGLE entered final square carries MULTIPLE resolutions each on OWN sync (Move.java: GO_FOR_IT→MOVE_DODGE→PICK_UP each with own report); fix: enumerate final square's flagged rolls from moveSquareInfo + ball-on-final, require EACH outcome report before firing; any FAILING roll knocks prone or opens dialog, so all-resolved+standing+no-dialog ⇒ safe to fire.
 function plannerSquareResolutions(g: GameJson, square: [number, number]): Set<PlanResolution> {
@@ -16386,11 +16492,13 @@ function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): bool
  *  multiBlockDialogMine): rankPanelInputPending (game/gameLoadRankPanel.ts) adds them. Model-level holds
  *  (dialogParameter, waitingForOpponent, pushback squares) are deliberately NOT counted: the opponent's dialogs set
  *  them too. */
-function localDecisionCardOpen(): boolean {
+/** `besidesInducementBuy`: the inducement purchase itself (the panes) does not count - the chat-toast lift over the panes
+ *  asks whether any OTHER decision is up (owner 11-03). */
+function localDecisionCardOpen(opts: { besidesInducementBuy?: boolean } = {}): boolean {
   if (!play.active) return false;
   return !!(state.skillChoice?.mine || state.reRollPrompt?.mine || state.injuryInteraction?.mine
     || apothecaryCardVisible.value?.mine
-    || state.sendOff || state.opponentBlockSelection || state.inducementBuy || (state.setupPhase?.setupErrors.length ?? 0) > 0
+    || state.sendOff || state.opponentBlockSelection || (!opts.besidesInducementBuy && state.inducementBuy) || (state.setupPhase?.setupErrors.length ?? 0) > 0
     || state.coinChoicePrompt || state.receiveChoicePrompt || state.kickPlacement || state.kickSkill
     || state.yesNo || state.selectSkill || state.selectWeather || state.selectPosition || state.inducementUse
     || state.playerPick || state.followupChoice || state.pushChoice || state.reRollForTargets
@@ -16401,7 +16509,6 @@ function plannerStart(input: {
   playerId: string; actKind: PlanActKind; route: [number, number][];
   targetCoordinate?: [number, number] | null; targetPlayerId?: string | null;
   blockKind?: string | null;                   // #34: optional special block-kind for a blitz (rides sendBlock flags)
-  contactChoice?: boolean;                     // owner 10-12: left-click Blitz only, see blitzContactChoiceKinds
   declareOnly?: boolean; declareAction?: string;
 }): boolean {
   if (!play.active || !game.value) return false;
@@ -16522,7 +16629,6 @@ function plannerStart(input: {
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
-    contactChoice: input.contactChoice === true,
     goredCommit: false,
     terminalSent: false,
     phase: 'declaring', turnKey: currentTurnKey(game.value),
@@ -16661,24 +16767,20 @@ function plannerFireAct() {
   // followupChoice/reRollPrompt); the queue drives declare→target→walk then RELEASES here (Echo: don't template
   // the block sub-choices). Plain block (no flavor) — matches the retired o66BlitzExecute.
   else if (p.actKind === 'blitz' && p.targetPlayerId) {
-    // Owner 10-12: the left-click Blitz of a blitzer with a context-menu special attack STOPS AT CONTACT. Nothing is
-    // sent and nothing is held: the plan ends here exactly as a walk-only plan does, and the view arms the ordinary
-    // Blitz confirm stage on this target, so from this point it IS the hand-walked blitz (target menu, confirmation
-    // card, Chainsaw / Gored chooser on a plain confirm, cancel, End Turn). No plan = no watchdog, no sent-step state.
-    // An explicit kind, a resolved chooser or a Gored commit never reach this (they already are the coach's choice).
-    if (p.contactChoice && p.blockKind == null && !p.blockChoiceResolved && !p.goredCommit && !state.blitzBlockChoice
-        && blitzContactChoiceKinds(game.value!, p.playerId, p.targetPlayerId).length > 0) {
-      const stop = { blitzerId: p.playerId, targetId: p.targetPlayerId, seq: (state.blitzContactChoice?.seq ?? 0) + 1 };
+    // Owner 11-03 (option A, replaces the 10-12 stop-at-contact menu and the plan-owned chooser hold): when there is
+    // anything to choose (a block alternative against this target, or a server-decorated Gored by the Bull offer), every
+    // Blitz plan RETIRES at contact and arms the SAME chooser as a hand-walked Blitz, as a no-plan hold. One lifecycle
+    // for every card: right-click / Esc / pad B dismiss it back to the ordinary Blitz confirm stage with no wire, the
+    // stale-hold retirement watches it every frame, and commitBlitzBlock sends the hand-walked Blitz's own terminal.
+    // No plan = no watchdog, no sent-step state. An explicit kind, a resolved chooser or a Gored commit never reach
+    // this (they already are the coach's choice); a player with nothing to choose falls through to the plain send.
+    if (!p.blockChoiceResolved && p.blockKind == null && !p.goredCommit && !state.blitzBlockChoice
+        && blitzHoldOffers(game.value!, p.playerId, p.targetPlayerId, true).offers.length > 0) {
+      const blitzerId = p.playerId, targetId = p.targetPlayerId;
       plannerSet(null); plannerClearAbort();
-      state.blitzContactChoice = stop;
-      log('system', `plan: BLITZ ${playerName(game.value, stop.blitzerId)} stopped at contact (special attack available, your choice)`);
+      holdBlitzBlockChoice(blitzerId, targetId, true);
+      log('system', `plan: BLITZ ${playerName(game.value, blitzerId)} at contact — choose the attack (nothing sent)`);
       return;
-    }
-    // #207 + owner 08-05: an explicit menu flavor is already decided and never needs this chooser. Otherwise HOLD
-    // for a Chainsaw offer or a server-decorated Gored by the Bull offer (Star S5); a non-carrier falls through to
-    // the same plain send as a flavorless blitzer. The hold participates in plannerPromptPending (watchdog pauses).
-    if (!p.blockChoiceResolved && p.blockKind == null && holdBlitzBlockChoice(p.playerId, p.targetPlayerId)) {
-      return; // held — plan stays in 'acting'; commitBlitzBlock fires the terminal clientBlock + retires
     }
     if (p.goredCommit) {
       sendCommand({ netCommandId: NetCommandId.CLIENT_USE_SKILL, skill: 'Gored By The Bull', skillUsed: true, playerId: p.playerId });
@@ -16961,7 +17063,7 @@ export function installProFailureSplashTestHarness(
   const priorSplash = state.rerollSplash;
   const priorSkillUsed = state.skillUsed;
   clearCinematics(true);
-  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.half = Math.max(1, Number(game.value.half ?? 0));
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
@@ -17069,7 +17171,7 @@ export function installMovePlannerTestHarness(
   lastAppliedCommandNr = -1;
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear();
   declarationWatcherAskedGames.clear(); state.switchWatcherCard = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveSetup = true;
@@ -17244,7 +17346,7 @@ export function installFoulAppearanceBlockWatchTestHarness(
   const priorNotice = state.actionNotice;
   const logStart = state.log.length;
   clearBlockWatch();
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = true;
@@ -17326,7 +17428,7 @@ export function installBlitzTargetLockTestHarness(
   blockInFlight = false;
   blitzDriving = false;
   blitzAttackerId = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'owner'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -17334,7 +17436,7 @@ export function installBlitzTargetLockTestHarness(
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'spectator';
   interactiveSetup = true;
-  srvActingId = String(fixture.actingPlayer?.playerId ?? '') || null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  srvActingId = String(fixture.actingPlayer?.playerId ?? '') || null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   srvActingAction = String(fixture.actingPlayer?.playerAction ?? '') || null;
   session = {
     send(command: Record<string, unknown>) {
@@ -17358,7 +17460,7 @@ export function installBlitzTargetLockTestHarness(
       interactiveSetup = priorInteractiveSetup;
       lastAppliedCommandNr = priorCommandNr;
       sentBlitzTargetOccurrence = priorSentOccurrence;
-      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       blockInFlight = priorBlockInFlight;
       blitzDriving = priorBlitzDriving;
@@ -17407,7 +17509,7 @@ export function installGazeIntentTestHarness(
   const priorMoveOfferRevision = moveOfferRevision;
   plannerClearAbort();
   plannerSet(null);
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = true;
@@ -17543,7 +17645,7 @@ export function installApothecaryTestHarness(
   visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); gettingEvenSplashSeen.clear();
   playback.catchingUp = false;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -17686,7 +17788,7 @@ export function installSelectSkillTestHarness(
   state.selectSkill = null;
   selectPositionHandledInstanceKey = null;
   state.selectPosition = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -17769,7 +17871,7 @@ export function installUseInducementTestHarness(
   useInducementReshownKeys.clear(); useInducementAnsweredContent.clear(); consumedUseInducementDialogs = new WeakSet<object>();
   useInducementStallReshownKeys.clear(); cancelUseInducementStall(); useInducementNoticeDialog = null;
   for (const k of [...followupHandled]) if (k.startsWith('useInducement:')) followupHandled.delete(k);
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'spectator' ? 'spectator' : seat === 'away'
     ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
@@ -17857,7 +17959,7 @@ export function installPrayerPresentationTestHarness(
   state.playerPick = null;
   state.rockThrow = null;
   prayerDialogDrainArms.clear();
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat !== 'spectator';
   play.coach = seat === 'home' || seat === 'classicHome'
@@ -17966,7 +18068,7 @@ export function installWizardTargetConfirmationTestHarness(
   const teamId = fixture.teamHome.teamId;
   fixture.turnMode = 'wizard';
   fixture.dialogParameter = { dialogId: 'wizardSpell', teamId };
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'spectator' ? 'spectator' : String(fixture.teamHome.coach ?? 'home-coach');
   lastAppliedCommandNr = commandNr;
@@ -18091,7 +18193,7 @@ export function installSkillUseClearTestHarness(
   state.opponentChoicePending = null; state.opponentChoicePendingPlayerId = null;
   visibleSkillDecisionProjection = createSkillDecisionProjection();
   visibleSkillDialog = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -18179,7 +18281,7 @@ export function installWatchOutToastTestHarness(
   const priorCommandNr = lastAppliedCommandNr;
   const priorAnnouncements = new Set(watchOutAnnouncedPlayers);
 
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat === 'home' || seat === 'away';
   play.coach = seat === 'home'
@@ -18248,7 +18350,7 @@ export function installBlitzTokenReplayTestHarness(fixture: GameJson): {
   clearCinematics(true);
   visibleSkillDecisionProjection = createSkillDecisionProjection(); // frames carrying reports start from a clean skill trail
   state.hmpScatterMarks = null;
-  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   replay.active = true;
   playback.catchingUp = true;
   let commandNr = 0;
@@ -18307,7 +18409,7 @@ export function installConfirmedMovementDrainTestHarness(
   const priorCommandNr = lastAppliedCommandNr;
 
   resetPresentation();
-  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.half = Math.max(1, Number(game.value.half ?? 0));
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
@@ -18397,7 +18499,7 @@ export function installTouchdownPacingTestHarness(
   const priorInteractive = interactiveReRolls;
   resetPresentation();
   resetPlayback();
-  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   if (options.uiMode) settings.uiMode = options.uiMode;
   if (options.interactive !== undefined) interactiveReRolls = options.interactive;
   play.active = mode === 'play';
@@ -18476,7 +18578,7 @@ export function installBlockPartialTestHarness(
   followupHandled.clear();
   state.blockPartial = null;
   state.multiBlockResolution = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -18590,7 +18692,7 @@ export function installMultiBlockTargetDialogTestHarness(
   clearAnsweredDialogInstance();
   clearMultiBlockTargetDialogs();
   clearUnknownCall(); unknownDialogInstance = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home' ? String((fixture.teamHome as { coach?: string }).coach ?? '')
     : seat === 'away' ? String((fixture.teamAway as { coach?: string }).coach ?? '') : 'multi-target-spectator';
@@ -18677,7 +18779,7 @@ export function installInterceptionTestHarness(
   liveInterceptionDialog = null;
   liveInterceptionCommandNr = 0;
   interceptionSkillElection = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = seat !== 'spectator';
   // spectator = a coach on NEITHER roster (myPlayTeam's strict non-participant result, play.active false).
@@ -18837,7 +18939,7 @@ export function installPlayerChoiceTestHarness(
   clearAnsweredDialogInstance();
   state.playerPick = null;
   state.bloodlust = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = seat !== 'spectator';
@@ -19010,7 +19112,7 @@ export function installGoredBlitzTestHarness(
   followupHandled.clear();
   state.blitzBlockChoice = null;
   blockInFlight = false;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   (game.value as { homePlaying?: boolean }).homePlaying = true;
@@ -19097,6 +19199,10 @@ export function installChainsawDeclareTestHarness(
   commit(kind: string | null): void;
   blitzCommit(targetId: string, kind: string | null): void;
   apply(command: Record<string, unknown>): void;
+  /** Receive a frame (receive-time acting mirror) but leave it queued, unapplied, as a presentation hold does. */
+  receiveQueued(command: Record<string, unknown>): void;
+  /** Apply the queued frames in order. */
+  applyQueued(): void;
   reconnect(): void;
   choice(): typeof state.blitzBlockChoice;
   actionNotice(): typeof state.actionNotice;
@@ -19129,14 +19235,14 @@ export function installChainsawDeclareTestHarness(
   state.blitzBlockChoice = null;
   state.actionNotice = null;
   blockInFlight = false;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = true;
   play.coach = seat === 'opponent'
     ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
     : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   srvActingAction = null;
   session = { send } as unknown as GameSession;
   // The first frame of a game id is a fresh-game boundary (resetPlayback); take it now, so the test's frames are mid-game.
@@ -19154,6 +19260,8 @@ export function installChainsawDeclareTestHarness(
       gameStore.commitBlitzBlock(kind);
     },
     apply(command) { trackActingPlayer(command); applyFrame({ receivedAt: Date.now(), cmd: command }); },
+    receiveQueued(command) { trackActingPlayer(command); playback.queue.push({ cmd: command, receivedAt: Date.now() }); },
+    applyQueued() { while (playback.queue.length > 0) applyFrame(playback.queue.shift()!); },
     reconnect() { resetPlayback(); },
     choice: () => state.blitzBlockChoice,
     actionNotice: () => state.actionNotice,
@@ -19162,6 +19270,7 @@ export function installChainsawDeclareTestHarness(
     pending: () => chainsawDeclarePending !== null,
     dispose() {
       releaseChainsawDeclare();
+      playback.queue.length = 0;
       chainsawBlockSent = priorSent;
       chainsawDeclarePending = priorPending;
       followupHandled.clear();
@@ -19174,7 +19283,7 @@ export function installChainsawDeclareTestHarness(
       state.maximumCarnageTargeting = false;
       blockInFlight = priorBlockInFlight;
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       session = priorSession;
       game.value = priorGame;
@@ -19194,7 +19303,7 @@ export function installStarUseSkillTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat === 'player' || seat === 'opponent';
   const actingId = String(fixture.actingPlayer?.playerId ?? '');
   const actingTeam = fixture.teamHome.playerArray.some((player) => player.playerId === actingId)
@@ -19268,14 +19377,14 @@ export function installWideRailActivationTestHarness(
   const priorPendingRailCommands = new Map(pendingRailCommands);
   const priorCommandNr = lastAppliedCommandNr;
   lastAppliedCommandNr = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'player'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
     : seat === 'opponent'
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'watcher-not-on-either-roster';
-  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  srvActingId = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   srvActingAction = null;
   pendingWideRailDeclare = null;
   acknowledgedWideRailDeclare = null;
@@ -19389,7 +19498,7 @@ export function installWideRailActivationTestHarness(
       game.value = priorGame;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
-      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       pendingWideRailDeclare = priorPendingWideRailDeclare;
       acknowledgedWideRailDeclare = priorAcknowledgedWideRailDeclare;
@@ -19444,7 +19553,7 @@ export function installStarDeclareTestHarness(
   const priorPendingShotToNothingDeclare = pendingShotToNothingDeclare;
   const priorAcknowledgedShotToNothingDeclare = acknowledgedShotToNothingDeclare;
   const priorSkillChoice = state.skillChoice;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat === 'player';
   play.coach = seat === 'player'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -19481,7 +19590,7 @@ export function installStarDeclareTestHarness(
     wideUse(ruleId) { gameStore.useWideRailActivationRule(ruleId); },
     setInteractive(on) { interactiveReRolls = on; },
     dispose() {
-      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       srvActingAction = priorSrvAction;
       pendingWideRailDeclare = priorPendingWideRailDeclare;
       acknowledgedWideRailDeclare = priorAcknowledgedWideRailDeclare;
@@ -19548,7 +19657,7 @@ export function installStarTerminalTrioTestHarness(
   const priorMoveOfferOccurrences = new Map(moveOfferOccurrences);
   const priorEndTurnInFlight = endTurnInFlight;
   const priorEndTurnInFlightTurnKey = endTurnInFlightTurnKey;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   let currentSeat = seat;
   const applySeat = () => {
     const home = currentSeat === 'player' || currentSeat === 'home';
@@ -19564,7 +19673,7 @@ export function installStarTerminalTrioTestHarness(
     interactiveSetup = play.active;
   };
   applySeat();
-  srvActingId = null; // clean slate: declares fire immediately (whenPriorActivationEnded fast path) declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  srvActingId = null; // clean slate: declares fire immediately (whenPriorActivationEnded fast path) declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   settings.order66 = true;
   clearPlayerPick();
   clearYesNo();
@@ -19602,7 +19711,7 @@ export function installStarTerminalTrioTestHarness(
       game.value = priorGame;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
-      srvActingId = priorSrvActingId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvActingId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       state.demoMode = priorDemoMode;
@@ -19664,7 +19773,7 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   state.bncScatter = null;
   liveReRollDialog = null;
   liveReRollOfferEpoch = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   settings.order66 = false;
   play.active = true;
@@ -19733,7 +19842,7 @@ export function installConcedeConfirmTestHarness(
   const priorAppliedFrameSeq = state.appliedFrameSeq;
   const priorYesNo = state.yesNo;
   const priorYesNoResolver = yesNoResolver;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveReRolls = true;
@@ -19814,7 +19923,7 @@ export function installPassPickupReRollPlannerTestHarness(
   state.reRollPrompt = null;
   liveReRollDialog = null;
   liveReRollOfferEpoch = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
@@ -19902,7 +20011,7 @@ export function installServerAddPlayerTestHarness(
   const priorSetup = state.setupPhase;
   const priorPuff = state.addPlayerPuff;
 
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = mode === 'player';
   play.coach = mode === 'player' ? String((fixture.teamHome as { coach?: string }).coach ?? '') : '';
   play.autoPregame = true;
@@ -19999,13 +20108,13 @@ export function installSetupErrorRecoveryTestHarness(
   const priorSrvActing = { id: srvActingId, action: srvActingAction };
   const priorBigGuyActivate = { intent: bigGuyActivateIntent, latch: bigGuyRollEndLatch };
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null;
-  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   const logStart = state.log.length;
 
   pregameHandled.clear();
   clearAnsweredDialogInstance();
   lastAppliedCommandNr = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home'
     ? String((fixture.teamHome as { coach?: string }).coach ?? '')
@@ -20067,7 +20176,7 @@ export function installSetupErrorRecoveryTestHarness(
       clearAnsweredDialogInstance();
       if (priorAnsweredKey) latchAnsweredDialogInstance(priorAnsweredKey, priorAnsweredRef);
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvActing.id; srvActingAction = priorSrvActing.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvActing.id; srvActingAction = priorSrvActing.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       bigGuyActivateIntent = priorBigGuyActivate.intent; bigGuyRollEndLatch = priorBigGuyActivate.latch;
       session = priorSession;
       game.value = priorGame;
@@ -20115,7 +20224,7 @@ export function installIllCarryYouTestHarness(
   pregameHandled.clear();
   state.playerPick = null;
   state.squarePick = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.autoPregame = true;
   play.coach = seat === 'player'
@@ -20193,7 +20302,7 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
   const priorTurnToastKey = turnToastKey;
   const priorTurnoverArmed = turnoverArmed;
   const priorTurnoverArmedAfterInjury = turnoverArmedAfterInjury;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   state.turnStart = null;
   state.turnToast = null;
   state.turnover = null;
@@ -20377,7 +20486,7 @@ export function installSwoopCommandTestHarness(
   const priorChoice = state.skillChoice;
   const priorPendingRailCommands = new Map(pendingRailCommands);
   pendingRailCommands.clear();
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   const actingId = String(fixture.actingPlayer?.playerId ?? '');
   const actingIsHome = fixture.teamHome.playerArray.some((player) => player.playerId === actingId);
@@ -20445,7 +20554,7 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   injuryQueue.length = 0;
   injuryPlaying = false; injuryPresentingSet.clear();
   pendingFireballBeats = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = false;
@@ -20527,7 +20636,7 @@ export function installPassPacingTestHarness(fixture: GameJson): {
 
   clearPassPacing(true);
   const next = structuredClone(fixture);
-  game.value = next; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = next; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   const throwerId = String(next.teamHome.playerArray[0]?.playerId ?? '');
   const interceptorId = String(next.teamAway.playerArray[0]?.playerId ?? '');
   const place = (playerId: string, coordinate: [number, number]) => {
@@ -20662,7 +20771,7 @@ export function installCoinPresentationTestHarness(
   };
 
   resetCoinQueue(false);
-  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = structuredClone(fixture); declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   settings.clickDismissCinematics = clickDismiss;
   settings.debugLog = true;
   playback.catchingUp = false;
@@ -20787,7 +20896,7 @@ export function installSwarmingSplashTestHarness(
   };
   resetSwarming();
   playback.catchingUp = false;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = options.seat !== 'spectator';
   play.coach = options.seat === 'home' ? String(fixture.teamHome.coach ?? 'home-coach')
     : options.seat === 'away' ? String(fixture.teamAway.coach ?? 'away-coach') : 'spectator-not-seated';
@@ -20905,7 +21014,7 @@ export function installKickoffPresentationTestHarness(
   // This keeps the local-aim assertion on the real resolveKickPlacement/send lock.
   if (seat === 'home') fixture.homePlaying = true;
   else if (seat === 'away') fixture.homePlaying = false;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = seat !== 'spectator';
   play.coach = seat === 'home'
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
@@ -21014,7 +21123,7 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
   pendingFollowup = null; pushFollowWatch = null; followupResolvedWhileOpen = null; noDialogStayKey = null;
   armourAfterFollow = null; passiveFollowPillAfter = 0; passiveFollowIndicatorLanded = false; // owner 10-20: no indicator deadline of an earlier case
   lastPushFrom.clear();
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = false; // spectator/passive seat — the toast path
   settings.order66 = false;
   state.armorDice = null;
@@ -21072,7 +21181,7 @@ export function installSppPacingTestHarness(fixture: GameJson): {
   const priorInjury = state.injurySplash;
   clearCinematics(true);
   clearAllGameTimeouts();
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = false;
   playback.catchingUp = false;
   return {
@@ -21145,7 +21254,7 @@ export function installSendOffTestHarness(
   const priorSendOffKey = sendOffKey;
   const priorSendOffAnsweredKey = sendOffAnsweredKey;
 
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   game.value.dialogParameter = null;
   play.active = seat === 'home' || seat === 'away';
@@ -21535,7 +21644,7 @@ export function installPuntToCrowdTestHarness(
   yesNoResolver = null;
   clearUnknownCall(); unknownDialogInstance = 0;
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   const actingId = askedPlayerId ?? String(fixture.actingPlayer?.playerId ?? '');
   const actorHome = fixture.teamHome.playerArray.some((player) => player.playerId === actingId);
   const ownerTeam = actorHome ? fixture.teamHome : fixture.teamAway;
@@ -21615,13 +21724,13 @@ export function installUnknownDialogFrameTestHarness(
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
   interactiveSetup = true;
   lastAppliedCommandNr = 0;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   const actorHome = fixture.teamHome.playerArray.some((p) => p.playerId === String(fixture.actingPlayer?.playerId ?? ''));
   const ownerTeam = actorHome ? fixture.teamHome : fixture.teamAway;
   play.active = true;
   play.coach = String((ownerTeam as { coach?: string }).coach ?? '');
-  srvActingId = null; srvActingAction = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  srvActingId = null; srvActingAction = null; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   session = { send(command: Record<string, unknown>) { if (send(command) === false) throw new Error('test transport refusal'); } } as unknown as GameSession;
   let nr = 0;
   const sync = (changes: Record<string, unknown>[]) => applyFrame({
@@ -21640,7 +21749,7 @@ export function installUnknownDialogFrameTestHarness(
       endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
       interactiveSetup = priorInteractive;
       lastAppliedCommandNr = priorCommandNr;
-      srvActingId = priorSrvId; srvActingAction = priorSrvAction; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrvId; srvActingAction = priorSrvAction; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
@@ -21687,7 +21796,7 @@ export function installFoulChoiceTestHarness(
   const priorSrv = { id: srvActingId, action: srvActingAction };
   pendingRailCommands.clear();
   state.log = [];
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.homePlaying ? fixture.teamHome : fixture.teamAway as { coach?: string }).coach ?? '');
   session = {
@@ -21746,7 +21855,7 @@ export function installFoulChoiceTestHarness(
       pendingRailCommands.clear();
       for (const [rail, pending] of priorPending) pendingRailCommands.set(rail, pending);
       state.log = priorLog;
-      srvActingId = priorSrv.id; srvActingAction = priorSrv.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+      srvActingId = priorSrv.id; srvActingAction = priorSrv.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       session = priorSession;
       game.value = priorGame;
       settings.order66 = priorOrder66;
@@ -21774,7 +21883,7 @@ export function installFoulTargetTestHarness(
   const priorLog = [...state.log];
   pendingRailCommands.clear();
   state.log = [];
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.homePlaying ? fixture.teamHome : fixture.teamAway as { coach?: string }).coach ?? '');
   session = {
@@ -22052,6 +22161,11 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
       declarationAwaitingEcho = cmd.playerId != null; noteDeclarationLatchChange();
       declarationAwaitingEchoFor = cmd.playerId != null ? String(cmd.playerId) : null;
       declarationAwaitingEchoAction = cmd.playerId != null ? String(cmd.playerAction ?? '') : null;
+      // Owner 11-03 (Sol r5): what we asked to declare, for whom and when — kept independent of the send latch (which a
+      // watchdog may release) so a block confirmed after that release still arms the chooser for the requested Block.
+      declarationIntent = cmd.playerId != null && game.value
+        ? { playerId: String(cmd.playerId), action: String(cmd.playerAction ?? ''), at: Date.now(), turnKey: currentTurnKey(game.value) }
+        : null;
       setCancelInFlight(cmd.playerId == null);
       cancelInFlightDialog = cmd.playerId == null ? (game.value?.dialogParameter ?? null) : null;
       if (cmd.playerId != null) serverClearedActor = false;
@@ -26393,7 +26507,7 @@ export function installOnTheBallWaitingTestHarness(
   const sent: Record<string, unknown>[] = [];
   const priorSession = session;
   session = { send: (command: Record<string, unknown>) => sent.push(structuredClone(command)) } as unknown as GameSession;
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   const syncSeat = () => {
     play.active = currentSeat === 'home' || currentSeat === 'away';
     play.coach = currentSeat === 'home' ? String(fixture.teamHome.coach ?? '')
@@ -26446,7 +26560,7 @@ export function installOnTheBallActionTestHarness(
   let currentTransport = transport;
   const sent: Record<string, unknown>[] = [];
 
-  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); // owner 10-15 latches never leak across tests
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   playback.catchingUp = false;
   onTheBallAppliedPhaseIdentity = Math.max(1, onTheBallAppliedPhaseIdentity + 1);
   onTheBallAppliedModelRevision = Math.max(1, onTheBallAppliedModelRevision + 1);
@@ -28345,7 +28459,7 @@ export const gameStore = {
   /** FIX 15: one shared predicate covers every store/model decision surface. */
   interactiveDecisionSurfaceOpen: () => plannerPromptPending(),
   /** Owner 10-21: a decision card addressed to the local coach is on screen (game-load rank panel pause). */
-  localDecisionCardOpen: (): boolean => localDecisionCardOpen(),
+  localDecisionCardOpen: (opts?: { besidesInducementBuy?: boolean }): boolean => localDecisionCardOpen(opts),
   /** Owner 10-09: a confirmed step of this player is still queued or on screen (the action-dice arrival wait). */
   movementStepPendingFor: (playerId: string): boolean => movementStepsPendingFor(playerId) > 0,
   /** Owner 10-09: the view reports that it is showing published action-dice batch `seq` in `msUntilShown` ms. */
@@ -29654,6 +29768,9 @@ export const gameStore = {
   playerEndTurn() {
     const g = game.value;
     if (!g || !play.active) return;
+    // Sol r1 P1 (g1960010): in hitAndRun CLIENT_END_TURN only cancels the move-away. It goes through the one Cancel Hit
+    // and Run latch - never the End Turn latch, which would outlive the server resuming the Blitz.
+    if (String(g.turnMode ?? '') === 'hitAndRun') { gameStore.cancelHitAndRun(); return; }
     // Astra review: the scoring run is still presenting and the touchdown frame is queued behind it - the server has
     // already ended this turn, so an End Turn now would land on the setup phase. Ignore the click until it applies.
     if (touchdownResolutionQueued()) return;
@@ -29725,6 +29842,12 @@ export const gameStore = {
         const g = game.value;
         if (!play.active || !g) { say(`/${cmd} — only works while PLAYING a live game.`); return; }
         const where = (g.dialogParameter as { dialogId?: string } | undefined)?.dialogId ?? g.turnMode;
+        // Sol r2 P2 (g1960010): with no dialog up, hitAndRun's turn-ending command is the Hit and Run cancel - it goes
+        // through the one Cancel Hit and Run latch, never force-advance's direct CLIENT_END_TURN.
+        if (String(g.turnMode ?? '') === 'hitAndRun' && !g.dialogParameter) {
+          say(`/${cmd} — ${gameStore.cancelHitAndRun() ? 'Cancel Hit and Run sent' : 'Cancel Hit and Run already sent - waiting for the server'} (${where}).`);
+          return;
+        }
         const report = (outcome: ForceAdvanceOutcome) => say(`/${cmd} — ${forceAdvanceReport(outcome)} (${where}).`);
         const outcome = forceAdvanceCurrentState(g, report);
         if (outcome.status !== 'pending') report(outcome);
@@ -31378,6 +31501,8 @@ export const gameStore = {
   /** Owner 10-08: the coach has just said Yes on the client's End Activation card; the `endActivation` that follows
    *  in the same gesture carries that confirmation (see `gazeEndRequest`). Spent by that one call, whatever it sends. */
   noteEndActivationConfirmed() { endActivationConfirmedByCoach = true; },
+  /** Sol r2 P1 (read-only): a noted End Activation "Yes" not yet spent by an endActivation call. */
+  endActivationConfirmationPending(): boolean { return endActivationConfirmedByCoach; },
 
   /** Astra P2 (10-09): the coach opened an End Activation confirmation (Modern's askEndActivation calls this). The
    *  coach is ending, so the client-owned convert-to-Move question is moot: it is retired first and the two are never
@@ -31393,6 +31518,16 @@ export const gameStore = {
   },
 
   endActivation(options: { blitzConfirmed?: boolean; rollActivate?: boolean; gazeEndConfirmed?: boolean } = {}) {
+    // g1960010 (owner 11-03): in hitAndRun an End is upstream's "Cancel Hit And Run" - a cancel of the move-away only,
+    // never the activation's end. It takes none of the End machinery below (no acting-null, no End latch, no Blitz
+    // guard: the server decides whether the activation goes on).
+    // Sol r2 P1: a coach's End Activation "Yes" noted for this gesture is spent here too - it never carries over to a
+    // later End (a Gaze's server confirmation would read it as the coach's answer).
+    if (play.active && String(game.value?.turnMode ?? '') === 'hitAndRun') {
+      endActivationConfirmedByCoach = false;
+      gameStore.cancelHitAndRun();
+      return;
+    }
     priorActivationEndSeq += 1; // Astra r3 F2: an End / deselect abandons a declaration queued behind a cancel
     const coachConfirmedEnd = options.gazeEndConfirmed === true || endActivationConfirmedByCoach;
     endActivationConfirmedByCoach = false;
@@ -31448,15 +31583,7 @@ export const gameStore = {
         return;
       }
     }
-    // #116 (same #23 class): the fork's StepHitAndRun has NO CLIENT_ACTING_PLAYER case — it ends on CLIENT_END_TURN
-    // only (upstream "Cancel Hit And Run" → sendEndTurn(getTurnMode())). So ACTING_PLAYER{null} would NOT finish the
-    // move-away (the player parks). Send CLIENT_END_TURN{turnMode:hitAndRun} to conclude it (mirrors the server's own
-    // end command; a coach who declines/finishes their H&R move-away).
-    if (String(g.turnMode ?? '') === 'hitAndRun') {
-      sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: 'hitAndRun', playersAtCoordinates: {} });
-      log('system', 'play: END Hit & Run (server resolves)');
-      return;
-    }
+    // hitAndRun never reaches here: see cancelHitAndRun (the first line of endActivation).
     // Cancel thenIStartedBlastin with CLIENT_END_TURN; CLIENT_ACTING_PLAYER is unhandled there.
     if (String(g.turnMode ?? '') === 'thenIStartedBlastin') {
       sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: 'thenIStartedBlastin', playersAtCoordinates: {} });
@@ -31749,19 +31876,24 @@ export const gameStore = {
   /** S5 Classic mount (Pellaeon cross-lane ask 08-19): public arm for the blitz block-commit choice —
    *  the SAME hold Modern's planner act-leg takes. Classic's blitz path calls this before its block
    *  send; true = the card is up (render state.blitzBlockChoice, commit via commitBlitzBlock). */
-  tryHoldBlitzBlockChoice(blitzerId: string, targetId: string): boolean {
+  tryHoldBlitzBlockChoice(blitzerId: string, targetId: string, options?: { everyAlternative?: boolean }): boolean {
     if (!play.active || !game.value || !iControlPlayer(blitzerId)) return false;
-    return holdBlitzBlockChoice(blitzerId, targetId);
+    return holdBlitzBlockChoice(blitzerId, targetId, options?.everyAlternative === true);
   },
 
   /** Owner 09-28 (S6 follow-up, Sol review round 2, item 1): read-only mirror of dismissBlitzBlockChoice's
    *  refusal rule, for the view's PURE escCascadeDecision to classify Esc without a side effect. Kept
-   *  byte-identical to the guard dismissBlitzBlockChoice itself applies below. SCOPED to a no-plan BLITZ hold
-   *  only (Spec S6) — an `origin: 'block'` standalone-Block hold is NOT in scope and must keep its pre-S6
-   *  Esc/right-click hold-keep behaviour untouched (it never had a dismiss path before this feature). */
+   *  byte-identical to the guard dismissBlitzBlockChoice itself applies below. A no-plan BLITZ hold (Spec S6) and,
+   *  since owner 11-03 (option A), the standalone-Block "Stab or Block?" hold; a plan-owned hold keeps #111. */
+  /** Owner 11-03 (Sol r1 #4): the held card's Block declaration is not acknowledged yet — the view disables its buttons. */
+  blitzBlockChoiceAwaitingAck(): boolean {
+    const c = state.blitzBlockChoice;
+    return !!c && blockChoiceAwaitingAck(c);
+  },
+
   blitzBlockChoiceDismissible(): boolean {
     const c = state.blitzBlockChoice;
-    return !!c && c.origin === 'blitz' && !plannerPlan;
+    return !!c && (c.origin === 'block' || !plannerPlan);
   },
 
   /** Owner 09-28 (S6 follow-up, Sol review round 2, item 1): Esc / right-click NO-WIRE dismissal, SCOPED to a
@@ -31772,7 +31904,7 @@ export const gameStore = {
    *  returns null when there was nothing to dismiss. */
   dismissBlitzBlockChoice(): typeof state.blitzBlockChoice {
     const c = state.blitzBlockChoice;
-    if (!c || c.origin !== 'blitz' || plannerPlan) return null;
+    if (!c || (c.origin === 'blitz' && plannerPlan)) return null;
     state.blitzBlockChoice = null;
     log('system', 'play: block choice dismissed — back to the confirm stage (nothing sent)');
     return c;
@@ -31846,6 +31978,10 @@ export const gameStore = {
       log('system', 'play: block held — waiting on the opponent’s choice');
       return;
     }
+    if (blockChoiceAwaitingAck(c)) {
+      log('system', 'play: block held — waiting for the server to confirm the Block');
+      return; // Sol r1 #4: commits open once the requested Block is acknowledged (the stale-hold retirement fails it open)
+    }
     const offer = kind == null ? null : c.offers.find((candidate) => candidate.kind === kind);
     if (kind != null && !offer) return; // accept only an alternative present in the held upstream-mirrored offer set
     state.blitzBlockChoice = null;
@@ -31876,23 +32012,52 @@ export const gameStore = {
     log('system', `play: ${c.origin === 'blitz' ? 'BLITZ ' : ''}block ${kind ? `(${kind})` : '(plain)'} → ${playerName(game.value, c.targetId)} (server resolves)`);
   },
 
-  /** spec-207 D-4 + owner 08-05: a legal standalone BLOCK pauses before CLIENT_BLOCK only for a Chainsaw offer.
-   * Any explicit non-plain context-menu flavor bypasses the chooser and keeps its existing using* flag; an explicit
-   * plain pick remains chooser-eligible, while zero Chainsaw offers preserve the plain direct send. */
+  /** spec-207 D-4 + owner 11-03 (option A): a legal standalone BLOCK pauses before CLIENT_BLOCK whenever the attacker
+   * has a block alternative against this defender ("Stab or Block?"). An explicit non-plain context-menu flavor
+   * bypasses the chooser and keeps its existing using* flag; a plain Block (clicked or picked) is chooser-eligible,
+   * while zero offers preserve the plain direct send. */
   sendStandaloneBlockOrChoose(attackerId: string, defenderId: string, blockKind?: string | null) {
     if (!game.value) return;
     if (chainsawDeclareLive()) {
       log('system', 'chainsaw attack already pending — waiting for the server (ignoring re-click)');
       return; // S41: the held target stays; never raise the chooser again over a pending declare
     }
+    // The Block-family action this attack rides: the requested declaration when its echo is still out, else the applied one.
+    let expected = expectedAttackAction(game.value, attackerId);
+    if (expected.expired) {
+      // Sol r5: our requested declaration was never acknowledged within its deadline. If the applied model is itself a
+      // Block-family attack (e.g. an unanswered Chainsaw re-declare over an applied Block), that applied action stands;
+      // otherwise (e.g. still Move) show nothing and send nothing — the coach clicks again (fail open).
+      const applied = expected.applied;
+      if (applied !== 'block' && !DECLARED_ALTERNATIVE_KIND[applied ?? '']) {
+        log('system', 'play: the declared action was not acknowledged by the server — nothing sent, click again');
+        return;
+      }
+      expected = { action: applied, applied, ackDeadline: null, expired: false };
+    }
+    const expectedAction = expected.action;
+    // Sol r1 #3: an already-declared alternative (Stab, Chainsaw, Projectile Vomit, Breathe Fire, Chomp — e.g. after a
+    // reconnect, with no view-side flavour remembered) is the answer: its flag goes out at once, as upstream does.
+    if (blockKind == null) blockKind = DECLARED_ALTERNATIVE_KIND[expectedAction ?? ''] ?? null;
     if (blockKind != null) {
       if (blockKind === 'chainsaw') gameStore.sendStandaloneChainsaw(attackerId, defenderId);
       else gameStore.sendBlock(attackerId, defenderId, blockFlagsFromKind(blockKind));
       return;
     }
-    const offers = blockChooserOffers(game.value, attackerId);
+    // The chooser is for an UNDECIDED Block only (any other Block-family action is already the attack).
+    const offers = expectedAction === 'block' ? blockChoiceAlternatives(game.value, attackerId, defenderId) : [];
     if (offers.length >= 1) {
-      if (!state.blitzBlockChoice) state.blitzBlockChoice = { blitzerId: attackerId, targetId: defenderId, offers, origin: 'block' };
+      if (!state.blitzBlockChoice) {
+        // Sol r1 #4 / r4: tied to the requested Block (armedAction 'block' even while Move → Block awaits its echo). If
+        // the applied model does not show it yet, the card carries its own acknowledgement state; its commits wait for
+        // the Block to be applied (blockChoiceAwaitingAck) and it retires, with no wire, past the deadline.
+        // Sol r5: the deadline runs from the declaration's own send time, not from this confirm.
+        const awaiting = expected.ackDeadline != null
+          ? { awaitingAction: expectedAction as string, priorAction: expected.applied, ackDeadline: expected.ackDeadline, ackToken: ++blockChoiceAckSeq }
+          : {};
+        state.blitzBlockChoice = { blitzerId: attackerId, targetId: defenderId, offers, origin: 'block', armedAction: expectedAction, everyAlternative: true, turnKey: currentTurnKey(game.value), ...awaiting };
+        if (awaiting.ackToken != null) armBlockChoiceAckDeadline(awaiting.ackToken, awaiting.ackDeadline);
+      }
       return;
     }
     gameStore.sendBlock(attackerId, defenderId, blockFlagsFromKind(blockKind));
@@ -32288,6 +32453,31 @@ export const gameStore = {
     return true;
   },
 
+
+  /**
+   * g1960010 (owner 11-03): "Cancel Hit and Run" - upstream HitAndRunLogicModule.performAvailableAction(HIT_AND_RUN) ->
+   * sendEndTurn(turnMode). StepHitAndRun's resetState puts the turn mode back and re-publishes the move squares; the
+   * steps after it decide whether the activation goes on (a Blitz with movement left keeps moving; a Block ends). So
+   * this sends exactly CLIENT_END_TURN{hitAndRun} and nothing else: no acting-null, no End latch, no planner abort, no
+   * Blitz guard (the Blitz is already spent by the block). One send per server frame: a double gesture before the
+   * server answers sends nothing more; the latch opens on the next applied frame or after HIT_AND_RUN_CANCEL_LATCH_MS.
+   */
+  cancelHitAndRun(): boolean {
+    const g = game.value;
+    if (!play.active || !g || String(g.turnMode ?? '') !== 'hitAndRun') return false;
+    const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    if (!actingId || !iControlPlayer(actingId)) return false;
+    const latch = hitAndRunCancelLatch;
+    if (latch && latch.commandNr === lastAppliedCommandNr && Date.now() - latch.sentAt < HIT_AND_RUN_CANCEL_LATCH_MS) {
+      log('system', 'play: Cancel Hit & Run already sent - waiting for the server');
+      return false;
+    }
+    hitAndRunCancelLatch = null;
+    if (!sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: 'hitAndRun', playersAtCoordinates: {} })) return false;
+    hitAndRunCancelLatch = { commandNr: lastAppliedCommandNr, sentAt: Date.now() };
+    log('system', `play: CANCEL Hit & Run ${playerName(g, actingId)} (server resolves)`);
+    return true;
+  },
 
   /** From SELECT_BLITZ_TARGET, send the opponent target once; the state already confirms the acting side. */
   sendTargetSelected(defenderId: string): boolean {
@@ -32700,7 +32890,7 @@ export const gameStore = {
   /** ORDER 66 (#6.4): start a PLANNER COMMAND-QUEUE plan — declare→move→act, sequenced ONLY on server model
    *  syncs (no timers), replacing the timer-macro playerPass/playerFoul/playerHandOff. `route` excludes the
    *  start square (empty = a 0-waypoint declare→act, e.g. a standing pass). See plannerStart. */
-  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null; contactChoice?: boolean; declareAction?: string }): boolean {
+  startPlan(input: { playerId: string; actKind: PlanActKind; route: [number, number][]; targetCoordinate?: [number, number] | null; targetPlayerId?: string | null; blockKind?: string | null; declareAction?: string }): boolean {
     return plannerStart(input);
   },
   /** ORDER 66 (#6.4): is a planner command-queue plan currently in flight? (SpectateView suppresses re-entry

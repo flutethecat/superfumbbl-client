@@ -147,6 +147,8 @@ import { resolveBlockStampArt } from '../game/blockResultStampArt';
 import { hasOffPitchCandidate, resolveRosterPickCandidates } from '../game/rosterPicker';
 import { d6LogParts, d6RequirementParts } from '../game/d6Log';
 import { blockDieLogParts, type BlockDieFaceValue, type BlockDieLogToken } from '../game/blockDieLog';
+import { blockChoiceDicePreview, blockChoiceTitle } from '../game/blockAltChooser';
+import { blockDiceSpinFace, createBlockDiceSpin } from '../game/blockDiceSpin';
 import { logNameParts, logNameSeatKey, type LogNameTeam, type LogNameToken } from '../game/logNames';
 import { chatLineParts } from '../game/chatLine';
 import { chatBubbleRows } from '../game/chatBubbles';
@@ -197,8 +199,8 @@ function replayDecisionSurfaces(): void {
   for (const replay of decisionSurfaceReplays) replay();
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge } from '../game/logic/order66Interaction';
-import { actingHasBlocked, blitzContactMenuDisposition, blitzContactStopCurrent, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, refusedEndRearmsSurface, confirmationOutlivedPhase, hitAndRunInstructionVisible, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge, bombPlayerClickRoute, bombTileClickRoute } from '../game/logic/order66Interaction';
+import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -300,10 +302,10 @@ const o66PendingLeftClickBlitzPlan = ref<{
 } | null>(null);
 // The special block kind chosen for the declared Blitz's block (Stab / Chainsaw / Projectile Vomit / Breathe Fire /
 // Chomp); null = a plain block. It is picked once the blitzer stands next to the target: from the acting player's menu
-// in BLITZ, from the adjacent target's menu, or from the pad's "Block or special?" modal. confirmAggroStage sends it
-// as the clientBlock flag. A left-click Blitz carries no kind into its plan: for a blitzer who has one of these to
-// choose, the plan stops at contact and opens the target's menu (owner 10-12, store blitzContactChoice). Cleared with
-// the aggro arms and at the send.
+// in BLITZ or from the adjacent target's menu. confirmAggroStage sends it as the clientBlock flag. With no kind picked,
+// the "Stab or Block?" chooser asks at the send (owner 11-03, option A; store blitzBlockChoice) - a left-click Blitz
+// carries no kind into its plan, so its plan hands over to that chooser at contact. Cleared with the aggro arms and
+// at the send.
 const o66PendingBlitzBlockKind = ref<BlockKind | null>(null);
 const chainsawBlitzConfirm = ref(false);
 const chainsawBlitzTarget = computed(() => {
@@ -320,8 +322,35 @@ function chooseBlitzBlockAlternative(kind: BlockKind | null) {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   if (kind === 'chainsaw') { chainsawBlitzConfirm.value = true; return; }
   // SR-241: commitBlitzBlock sends the already-declared Blitz's clientBlock with this kind's existing USING_* flag.
+  const held = gameStore.state.blitzBlockChoice;
   gameStore.commitBlitzBlock(kind);
+  // A Projectile Vomit sent from the chooser hides the vomit marks for this frame, as the menu send does (o66SendBlock).
+  if (kind === 'vomit' && held && !gameStore.state.blitzBlockChoice) vomitLatchedAt.value = vomitLatchAfterSend(true, gameStore.state.appliedFrameSeq);
 }
+// Owner 11-03 (option A): the chooser card's title ("Stab or Block?" for one alternative, else the generic one) and the
+// block dice the plain Block would roll, from the server's decoration on the target square (no decoration = no row).
+const blockChoiceHeading = computed(() => {
+  const choice = gameStore.state.blitzBlockChoice;
+  return blockChoiceTitle(choice?.offers ?? [], choice?.origin ?? 'block');
+});
+const blockChoiceDice = computed(() => {
+  const choice = gameStore.state.blitzBlockChoice;
+  const preview = choice ? blockChoiceDicePreview(gameStore.game.value, choice.targetId) : null;
+  if (!preview) return null;
+  const label = preview.attackerChooses
+    ? $t('hud.blockAltModal.diceAttackerChooses', { n: preview.dice })
+    : $t('hud.blockAltModal.diceDefenderChooses', { n: preview.dice });
+  return { ...preview, uphill: !preview.attackerChooses, label };
+});
+// Owner 11-03: the preview dice cycle while the chooser card itself is on screen — the card's own v-if (a held choice
+// with no Chainsaw confirmation over it and no Foul chooser in its place) and a dice row. Back from the confirmation
+// shows the card again and restarts the clock (Sol r8).
+const blockChoiceDiceSpinning = computed(() => !!blockChoiceDice.value && !chainsawBlitzConfirm.value && !gameStore.state.foulChoiceHold);
+// Sol r1 #4: a card raised before its Block declaration is acknowledged waits (buttons disabled) for the echo.
+const blockChoiceAwaitingAck = computed(() => {
+  void gameStore.state.appliedFrameSeq; // the acting player changes in place: re-read on every applied frame
+  return gameStore.state.blitzBlockChoice ? gameStore.blitzBlockChoiceAwaitingAck() : false;
+});
 // S42: the same card, opened by a Chainsaw carrier's victim click when no Foul / Chainsaw choice is held.
 const foulChoiceChainsawTarget = computed(() => {
   const g = gameStore.game.value; const hold = gameStore.state.foulChoiceHold;
@@ -339,8 +368,10 @@ function confirmChainsawBlitz() {
 }
 watch(() => gameStore.state.blitzBlockChoice, (choice) => {
   if (!choice) { chainsawBlitzConfirm.value = false; o66ExplicitBlockChoice.value = null; return; }
-  // Owner 09-06: a Chainsaw carrier's blitz DEFAULTS to the chainsaw — open on the confirmation; Back reaches the plain-block chooser.
-  chainsawBlitzConfirm.value = choice.offers.some((offer) => offer.kind === 'chainsaw');
+  // Owner 11-03 (supersedes the 09-06 Chainsaw-blitz default): "Blitz should go to the same open flows as Block for
+  // Chainsaw. Same as Stab/PV." Every card, Blitz and plain Block alike, opens on the chooser (A = Block, X = the first
+  // alternative, B = dismiss); picking Chainsaw there opens the Chainsaw confirmation (chooseBlitzBlockAlternative).
+  chainsawBlitzConfirm.value = false;
 });
 /** Commit an explicitly menu-selected standalone block flavor through the existing chooser path without rendering that chooser. */
 /** Astra 10-12: a Chomp picked with no target chosen (the player's own rows) can still be aimed at an opponent this
@@ -356,10 +387,10 @@ function chompRefusedAgainst(attackerId: string, defenderId: string, kind: Block
 }
 function o66SendStandaloneBlock(attackerId: string, defenderId: string, kind: BlockKind | null) {
   if (chompRefusedAgainst(attackerId, defenderId, kind)) { o66ExplicitBlockChoice.value = null; return; }
-  const explicit = o66ExplicitBlockChoice.value;
   o66ExplicitBlockChoice.value = null; // consumed at the send (a 0-offer direct send clears it too — harmless)
+  // Owner 11-03 (option A): a picked alternative (kind) sends at once; a plain Block — clicked, or picked from the menu
+  // — raises the "Stab or Block?" chooser whenever the attacker has an alternative against this defender.
   gameStore.sendStandaloneBlockOrChoose(attackerId, defenderId, kind);
-  if (explicit && gameStore.state.blitzBlockChoice) chooseBlitzBlockAlternative(explicit.kind);
 }
 // Block and Blitz terminals share a 2-click confirm: first target click previews, second click/Confirm sends.
 const o66PendingBlock = ref<string | null>(null);
@@ -500,7 +531,6 @@ import { createCrosshair, createPadCancel, crosshairGate, padPristineAction, typ
 import { PAD_FOCUS_PRIORITY, padFocusOwnsInput, setPadFocusGuard, setPadFocusMandatoryPitch, vPadFocus } from '../game/cardFocus';
 import PadGlyph from '../components/PadGlyph.vue';
 import { createPadSetupHost } from '../game/padSetup';
-import { createPadBlockDeclareWatch } from '../game/padBlockDeclare';
 import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCardRules';
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
@@ -3021,6 +3051,11 @@ onMounted(() => {
   bpMotionListener();
   bpMotionQuery.addEventListener('change', bpMotionListener);
 });
+// Owner 11-03: the chooser's preview dice cycle through the faces (decorative only: never a result, never a send) on one
+// shared interval, offset per die. It runs only while the card shows its dice (blockChoiceDiceSpinning), follows the
+// live prefers-reduced-motion preference (bpReducedMotion, kept current by the media-query change listener above), and
+// stops with the view.
+const blockDiceSpin = createBlockDiceSpin({ active: () => blockChoiceDiceSpinning.value, reducedMotion: () => bpReducedMotion.value });
 onBeforeUnmount(() => {
   stopBlockTumble();
   disposeBlockDice3d();
@@ -7132,6 +7167,10 @@ const furiousOutburstInstruction = computed(() => {
   if (!g || !gameStore.isPlaying.value || !gameStore.myTurn.value) return null;
   return furiousOutburstCoordinatePrompt(g);
 });
+// g1960010 (Elyod 11-03): after Use the server waits for a Hit and Run square or the End (CLIENT_END_TURN); say so.
+const hitAndRunInstruction = computed(() => hitAndRunInstructionVisible(gameStore.game.value, o66Ctx(), {
+  playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, controlsActing: (id) => gameStore.iControl(id),
+}));
 // Owner 09-28 (UAT g992, S10 + S11): tell the coach who must throw a bomb that a throw is expected. Pure received
 // state, same surface as Furious Outburst; sends nothing and clears when the server state moves on.
 const bombThrowInstruction = computed(() => {
@@ -9269,96 +9308,10 @@ watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
   const routeDisposition = storedBlitzRouteDisposition(g, plan.targetId);
   if (routeDisposition === 'wait') return;
   if (routeDisposition === 'drop') { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
-  // Owner 10-12: contactChoice = this plan stops at contact when the blitzer has a context-menu special attack.
-  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId, contactChoice: true })) retireStoredBlitzRoute();
+  // At contact the plan hands over to the "Stab or Block?" chooser when there is anything to choose (owner 11-03,
+  // option A; store plannerFireAct).
+  if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) retireStoredBlitzRoute();
 }, { deep: true, flush: 'post' });
-// Owner 10-12 ("Players with projectile vomit are missing this action on a blitz" / "B works for this. This should
-// only occur on left click blitz."): the left-click Blitz plan walked to its target and stopped without sending the
-// block, because the blitzer has Stab / Projectile Vomit / Breathe Fire / Chomp to choose from. Arm the SAME stage a
-// first click on the adjacent target arms on a hand-walked blitz: Confirm Block on the bar, the target's right-click
-// menu (Block + each offered kind), the two-click confirmation card and confirmAggroStage's send. Nothing is sent here.
-watch(() => gameStore.state.blitzContactChoice, (stop) => {
-  const g = gameStore.game.value;
-  if (!stop || !g || !settings.order66 || !gameStore.isPlaying.value) return;
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  if (actingId !== stop.blitzerId || !gameStore.iControl(actingId) || deriveClientState(g, o66Ctx()) !== 'BLITZ'
-      || !adjacentStandingEnemyIds(g, actingId).includes(stop.targetId)) return;
-  o66AggroStage.value = { kind: 'blitz', target: stop.targetId, stage: 2 };
-  openBlitzContactMenu(stop, performance.now() + BLITZ_CONTACT_MENU_WAIT_MS);
-}, { flush: 'sync' });
-// The stop must put the choice in front of the coach (a bare "Confirm Block" would hide that Vomit was available): open
-// the target's own attack menu through openO66Menu, anchored on the target token, once the blitzer's last step is off
-// screen. It only waits for our own animation and opens a menu; it never sends and never answers anything. Skipped
-// (stage left armed) when something else owns the screen or the pad is in use: see blitzContactMenuDisposition.
-const BLITZ_CONTACT_MENU_WAIT_MS = 3000; // a stalled token fails open, like the click gates
-let blitzContactMenuFrame = 0;
-function openBlitzContactMenu(stop: { blitzerId: string; targetId: string; seq: number }, waitUntil: number) {
-  cancelAnimationFrame(blitzContactMenuFrame);
-  blitzContactMenuFrame = 0;
-  const g = gameStore.game.value;
-  const stage = o66AggroStage.value;
-  if (!g || !renderer || gameStore.state.blitzContactChoice?.seq !== stop.seq) return;
-  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-  const disposition = blitzContactMenuDisposition({
-    stageArmedForStop: stage?.kind === 'blitz' && stage.stage === 2 && stage.target === stop.targetId && blitzContactStopLive(stop),
-    sendUnanswered: gameStore.gameplaySendUnanswered(),
-    controller: activeInput.value === 'controller',
-    surfaceOpen: pitchHeldByConfirmation() || !!g.dialogParameter || gameStore.interactiveDecisionSurfaceOpenExceptKickEmPicker()
-      || !!wideRailActivationPrompt.value || ui.gameMenuOpen || reportOpen.value
-      || appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen),
-    contextMenuOpen: ctxMenu.visible,
-    tokenInFlight: renderer.movementOnScreen(actingId).inFlight && performance.now() < waitUntil,
-  });
-  if (disposition === 'wait') { blitzContactMenuFrame = requestAnimationFrame(() => openBlitzContactMenu(stop, waitUntil)); return; }
-  if (disposition !== 'open') return;
-  const square = playerSquareById(stop.targetId);
-  const at = square ? renderer.squareToCanvas(square) : null;
-  if (!square || !at) return;
-  openO66Menu({
-    playerId: stop.targetId, square, isOpposition: true, isHomeTeam: g.teamHome.playerArray.some((p) => p.playerId === stop.targetId),
-    isDown: false, activationSpent: false, isConfused: false, isHypnotized: false,
-  }, at.x, at.y);
-  if (!ctxMenu.visible || ctxMenu.playerId !== stop.targetId) return;
-  blitzContactMenuStop.value = stop;
-  // A right-click pick drops the stage and the next target click re-arms it. Here the stage was armed by the stop, so a
-  // pick keeps it: the kind's confirmation card (or, for Block, the dice preview and Confirm Block) follows at once.
-  // Astra 10-12: each row re-checks AT THE CLICK that the stop is still the live situation; a stale row does nothing.
-  ctxMenu.items = ctxMenu.items.map((item) => ({
-    ...item,
-    action: () => {
-      if (!blitzContactStopLive(stop) || gameStore.gameplaySendUnanswered()) return;
-      item.action?.();
-      o66AggroStage.value = { kind: 'blitz', target: stop.targetId, stage: 2 };
-    },
-  }));
-}
-/** The stop this view was signalled about is still current: our seat is playing and blitzContactStopCurrent holds. */
-function blitzContactStopLive(stop: { blitzerId: string; targetId: string; seq: number }): boolean {
-  const g = gameStore.game.value;
-  return !!g && gameStore.isPlaying.value && gameStore.state.blitzContactChoice?.seq === stop.seq
-    && blitzContactStopCurrent({ game: g, stop, clientState: deriveClientState(g, o66Ctx()), controlsBlitzer: gameStore.iControl(stop.blitzerId) });
-}
-// Astra 10-12: the menu this stop opened (never an ordinary right-click menu). It is retired with the stage it belongs
-// to: whenever an applied frame, the stage, the seat or the turn says the stop is no longer live (End Turn, turn change,
-// another acting player, the activation or the game ending, a reconnect), the pending opener is cancelled and this
-// menu is closed. Closed by the coach (pick, Esc, a press elsewhere) it simply stops being tracked.
-const blitzContactMenuStop = ref<{ blitzerId: string; targetId: string; seq: number } | null>(null);
-function retireBlitzContactMenu() {
-  cancelAnimationFrame(blitzContactMenuFrame);
-  blitzContactMenuFrame = 0;
-  if (blitzContactMenuStop.value && ctxMenu.visible && ctxMenu.playerId === blitzContactMenuStop.value.targetId) ctxMenu.visible = false;
-  blitzContactMenuStop.value = null;
-}
-watch(() => [gameStore.state.appliedFrameSeq, gameStore.state.blitzContactChoice?.seq, o66AggroStage.value, ctxMenu.visible,
-  gameStore.isPlaying.value, gameStore.myTurn.value, gameStore.game.value?.gameId], () => {
-  const opened = blitzContactMenuStop.value;
-  if (opened && !ctxMenu.visible) { blitzContactMenuStop.value = null; return; }
-  const pending = opened ?? (blitzContactMenuFrame ? gameStore.state.blitzContactChoice : null);
-  if (!pending) return;
-  const stage = o66AggroStage.value;
-  if (!(stage?.kind === 'blitz' && stage.stage === 2 && stage.target === pending.targetId) || !blitzContactStopLive(pending)) retireBlitzContactMenu();
-}, { flush: 'sync' });
-onBeforeUnmount(retireBlitzContactMenu);
 
 // Focus an owned off-turn prompt when it arms; never focus spectator/opponent prompts.
 const offTurnPromptActive = computed(() =>
@@ -9531,6 +9484,24 @@ function endingCancelsAction(): boolean {
 function cancelCueIfSent(cancels: boolean, sentBefore: number): void {
   if (cancels && gameStore.gameplaySendCount() !== sentBefore) playCancelCue();
 }
+/** g1960010 (latches fail open): an End that cleared the arms and then sent nothing re-arms the surface from state. */
+function rearmIfEndRefused(sentBefore: number): void {
+  const outcome = refusedEndRearmsSurface({
+    sentBefore, sentAfter: gameStore.gameplaySendCount(), cancelInFlight: gameStore.cancelInFlight(),
+    actingId: currentActingId(), serverDialogOpen: !!gameStore.game.value?.dialogParameter, pitchPromptOpen: pitchPromptOpen(),
+  });
+  refusedEndRearmFor.value = outcome === 'defer' ? currentActingId() : null;
+  if (outcome === 'rearm') rearmO66MovementSurface();
+}
+/** Sol r1 P2: a refused End whose re-arm waited behind a dialog / prompt: the acting player it belongs to. */
+const refusedEndRearmFor = ref<string | null>(null);
+/** Sol r1 P2: every prompt that owns the pitch (the covered confirmation cards, End prompts, my skill / reroll cards,
+ *  the special-ability election, a server square / player pick). Movement is never re-armed under one of them. */
+function pitchPromptOpen(): boolean {
+  return pitchHeldByConfirmation() || confirmCardLocked() || !!wideRailActivationPrompt.value
+    || !!gameStore.state.skillChoice?.mine || !!gameStore.state.reRollPrompt?.mine
+    || !!gameStore.state.squarePick || !!gameStore.state.playerPick;
+}
 /** Astra 10-19 (P2): a cancel that sends an end cues only when nothing else of mine is unanswered (a declaration still in
  *  flight is the action being backed out, so it does not count). Read BEFORE the end is sent. */
 function endCancelsNothingElseUnanswered(): boolean {
@@ -9539,14 +9510,25 @@ function endCancelsNothingElseUnanswered(): boolean {
 
 // R3: every context-menu activation end owns the same planner cleanup and guarded wire path.
 function endActivationFromMenu() {
+  // g1960010 (owner 11-03): in Hit and Run this row is "Cancel Hit and Run": it sends the cancel only and clears
+  // nothing (no arms, no plan, no selection) - the server's next frame re-arms whatever surface comes next.
+  const hitAndRunGame = gameStore.game.value;
+  if (hitAndRunGame && deriveClientState(hitAndRunGame, o66Ctx()) === 'HIT_AND_RUN') {
+    ctxMenu.visible = false;
+    gameStore.cancelHitAndRun();
+    return;
+  }
   // g1951755 (Elyod 10-09): when the end ASKS first, the prompt owns the cleanup (Confirm clears, Go back keeps the
   // selection + movement overlay). Clearing here left a blitzer with movement remaining and no way to use it.
   const endGame = gameStore.game.value;
   const endPromptKind = endActivationPromptKind({ clientState: endGame ? deriveClientState(endGame, o66Ctx()) : '', gazeIntentLive: !!gameStore.state.gazeIntent });
   // Astra 10-10: the same holds for a store plan already executing - with a prompt pending it is cancelled on Confirm only.
-  if (endRowClearsArmsBeforeEnding({ promptKind: endPromptKind, promptEnabled: !!endPromptKind && endActivationConfirmEnabled(endPromptKind, settings) })) { clearO66Arms(); gameStore.cancelPlan(); }
+  const clearsArms = endRowClearsArmsBeforeEnding({ promptKind: endPromptKind, promptEnabled: !!endPromptKind && endActivationConfirmEnabled(endPromptKind, settings) });
+  if (clearsArms) { clearO66Arms(); gameStore.cancelPlan(); }
   ctxMenu.visible = false;
+  const sentBefore = gameStore.gameplaySendCount();
   requestEndActivation();
+  if (clearsArms) rearmIfEndRefused(sentBefore); // g1960010: a refused End never leaves the picker torn down
 }
 
 const pendingFriendlyLeftClickMenu = ref<{ playerId: string; x: number; y: number } | null>(null);
@@ -9753,6 +9735,9 @@ function o66ArmPassTemplate(actingId: string) {
 }
 /** Spec S15B/S23: the hard-coded End rows say `Roll <Negatrait> & End Activation` exactly when the store will roll (same source as the availableActions row). */
 function endActivationLabel(playerId: string): string {
+  // g1960010: in Hit and Run the End row is upstream's "Cancel Hit And Run" (the move-away only, never the activation)
+  const g = gameStore.game.value;
+  if (g && deriveClientState(g, o66Ctx()) === 'HIT_AND_RUN') return $t('hud.cancelHitAndRun');
   return gameStore.bigGuyActivateRollPlayerId() === playerId ? bigGuyRollEndLabel(gameStore.game.value, playerId) : endActivationRowLabel(gameStore.game.value, playerId, gameStore.gameplaySendUnanswered());
 }
 /** R3/R4: assemble the acting-player rows (availableActions rows for MOVE/blitz-confirm, router endMove, blitz flavors,
@@ -10547,7 +10532,6 @@ function confirmCardLockInput(): ConfirmCardLockInput {
       wideRailSpecial: !!wideRailActivationPrompt.value,
       blitzToMove: !!blitzMoveModalTile.value,
       blockAttack: !!blockAttackConfirm.value,
-      padBlockDeclare: !!padBlockDeclare.value,
       chainsawBlitz: !!gameStore.state.blitzBlockChoice && chainsawBlitzConfirm.value,
       actionTarget: !!actionModal.value,
       wizardZap: !!gameStore.state.wizardTargetConfirm && liveOccurrence(gameStore.state.wizardTargetConfirm.answersInstance, 'wizardSpell'),
@@ -10857,7 +10841,7 @@ function confirmAggroStage(): boolean {
       // dismissed/declined card restores this exact stage from state.blitzBlockChoice's own blitzerId/targetId
       // (see dismissBlitzBlockChoice / escO66Cascade), so nothing needs to be kept here to "return to".
       const shouldTryHold = blitzTerminalShouldTryHold(o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value != null);
-      const holdArmed = shouldTryHold && gameStore.tryHoldBlitzBlockChoice(actingId, st.target);
+      const holdArmed = shouldTryHold && gameStore.tryHoldBlitzBlockChoice(actingId, st.target, { everyAlternative: true });
       const outcome = blitzAdjacentTerminalDecision(o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value != null, holdArmed);
       o66AggroStage.value = null;
       o66PendingBlitzBlockKind.value = null;
@@ -11031,6 +11015,7 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       const sentBefore = gameStore.gameplaySendCount();
       gameStore.endActivation();
       cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): an unconfirmed Blitz end sends nothing - no cue
+      rearmIfEndRefused(sentBefore); // g1960010: ... and leaves the surface armed
       return;
     }
     case 'cancel-kick-em-nomination':
@@ -11050,6 +11035,10 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       return;
     case 'ask-end-activation':
       askEndActivation(decision.confirmKind);
+      return;
+    case 'cancel-hit-and-run':
+      // g1960010: Esc in Hit and Run cancels the move-away only (no card, nothing cleared); the server decides what follows.
+      gameStore.cancelHitAndRun();
       return;
     case 'clear-selection':
       // Astra r1 F2: a local commit whose declaration is still in flight is backed out with its (one) cancel.
@@ -11351,48 +11340,8 @@ const padSetup = createPadSetupHost({
   deselect: (playerId) => { if (selectedSetupPlayerId.value === playerId) selectedSetupPlayerId.value = null; },
 });
 watch(() => !!setupPhase.value, (on) => { if (!on) padSetup.pending.clear(); });
-/** P2b (owner round 3): the controller-only block declaration modal - A Block / X special / B Cancel. */
-// Astra P1-2: the production watcher (game/padBlockDeclare.ts) re-runs on every applied frame — a fresh quick Block's
-// stage 2 is set before the server acknowledges the declare, so the modal opens on the ack and re-validates after.
-const padBlockDeclareWatch = createPadBlockDeclareWatch({
-  frame: () => gameStore.state.appliedFrameSeq,
-  deps: () => [gameStore.game.value, o66AggroStage.value, activeInput.value, o66PendingBlockKind.value, o66PendingBlitzBlockKind.value, o66ExplicitBlockChoice.value, gameStore.isPlaying.value],
-  input: () => {
-    const g = gameStore.game.value;
-    const st = o66AggroStage.value;
-    const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (!g || !st || !actingId || !settings.order66 || !gameStore.isPlaying.value) return null;
-    // Exactly the specials the attack menu offers on this target (openO66Menu): every flavor + Chomp.
-    const offers: string[] = blockAlternativeOffers(g, actingId).map((o) => o.kind);
-    if (chompAvailableAgainst(g, actingId, st.target)) offers.push('chomp'); // per target, like the menu (Astra 10-12)
-    return {
-      controller: activeInput.value === 'controller',
-      stage: st,
-      attackState: deriveClientState(g, o66Ctx()),
-      adjacentEnemyIds: adjacentStandingEnemyIds(g, actingId),
-      pendingKind: st.kind === 'blitz' ? o66PendingBlitzBlockKind.value : o66PendingBlockKind.value,
-      explicitChoice: o66ExplicitBlockChoice.value != null,
-      offers,
-    };
-  },
-});
-const padBlockDeclare = padBlockDeclareWatch.modal as Ref<{ target: string; kinds: BlockKind[] } | null>;
-const padBlockDeclareTargetName = computed(() => {
-  const g = gameStore.game.value;
-  const id = padBlockDeclare.value?.target;
-  if (!g || !id) return '';
-  return [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === id)?.playerName ?? id;
-});
-/** A = Block (kind null) / X = a special: the menu's own seams (pending kind + explicit choice), then the confirm. */
-function padBlockDeclareChoose(kind: BlockKind | null): void {
-  const st = o66AggroStage.value;
-  if (!padBlockDeclare.value || !st) return;
-  padBlockDeclare.value = null;
-  if (st.kind === 'blitz') o66PendingBlitzBlockKind.value = kind;
-  else o66PendingBlockKind.value = kind;
-  o66ExplicitBlockChoice.value = { kind };
-  confirmAggroStage();
-}
+/** Owner 11-03 (option A): the controller's "Block or special?" panel is retired - the pad confirms the staged block
+ *  like the mouse and gets the same "Stab or Block?" chooser card (A = Block, X = the first alternative, B = dismiss). */
 /** B on the block-kind / foul chooser: the right-click dismissal (no wire); a hold it refuses keeps B inert. */
 function padDismissBlockAlternative(): void {
   if (gameStore.dismissFoulChoice()) return;
@@ -11406,10 +11355,6 @@ const rerollOptionsShown = computed(() => {
   return activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(options) : options;
 });
 const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
-function padBlockDeclareCancel(): void {
-  padBlockDeclare.value = null;
-  o66AggroStage.value = null;
-}
 let unregisterCrosshairStick: (() => void) | null = null;
 let stopCrosshairGateWatch: (() => void) | null = null;
 /**
@@ -11925,13 +11870,11 @@ onMounted(async () => {
         // for PASS. Mirror the free-select PASS/template gate and THROW_KEG's view-side player interception:
         // derive the acting player's state, resolve the clicked token's square, and nominate on the shared
         // two-click bomb rail. The existing confirm path remains the only caller of sendBombTarget.
-        const bombActing = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-        if (bombActing && deriveClientState(g, o66Ctx()) === 'BOMB') {
-          const square = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
-            .find((d) => d.playerId === playerId)?.playerCoordinate);
-          if (square && passTargetInTemplate(g, bombActing, square)) nominateOrConfirmThrow(square, 'bomb');
-          return;
-        }
+        // Owner 11-03 (match upstream BombLogicModule.playerInteraction): the thrower's own token is the action menu,
+        // never a bomb target (a Hail Mary Bomb's any-square template included), so it falls through to the router.
+        const bombRoute = bombPlayerClickRoute(g, o66Ctx(), playerId);
+        if (bombRoute.kind === 'nominate') { nominateOrConfirmThrow(bombRoute.square, 'bomb'); return; }
+        if (bombRoute.kind === 'ignore') return;
         // A self left-click during any Blitz phase is inert. End Activation remains available from the context menu,
         // but only its explicit Blitz confirmation may authorize the terminal wire.
         const clickState = deriveClientState(g, o66Ctx());
@@ -12717,9 +12660,15 @@ onMounted(async () => {
             if (passTargetInTemplate(g, actingId, c)) nominateFreePass(c);
             return;
           }
-          // BOMB is stationary: every legal tile click nominates a bomb target before movement routing.
+          // BOMB is stationary: every legal tile click nominates a bomb target before movement routing. The thrower's
+          // own square (reachable as a tile when an empty walk reach arms an unrestricted pick) is his token upstream:
+          // it opens the action menu through the player-click route and never nominates.
           if (st === 'BOMB') {
-            if (passTargetInTemplate(g, actingId, c)) nominateOrConfirmThrow(c, 'bomb');
+            const bombTile = bombTileClickRoute(g, o66Ctx(), c);
+            if (bombTile.kind === 'actorMenu') {
+              const at = renderer?.playerScreenPos(bombTile.playerId);
+              renderer?.onPlayerClick?.(bombTile.playerId, at?.x ?? 0, at?.y ?? 0);
+            } else if (bombTile.kind === 'nominate') nominateOrConfirmThrow(bombTile.square, 'bomb');
             return;
           }
           // Owner ruling: while the end-activation dialog is open, pitch clicks cannot create, extend, or commit a
@@ -14392,6 +14341,13 @@ watch(finalPostGameVisible, (on) => { if (on) capturePostGame(); });
 // Owner 09-06: while ANY end-game surface is up (result window / MVP nominate), the log panel and the chat toasts
 // ride ABOVE it (z 57) and stay interactive in every mode — they sat under the full-screen overlay before.
 const endGameFront = computed(() => !!pgSurface.value || mvpScreenActive.value || assignScreenActive.value);
+// Owner 11-03: chat toasts ride over the inducement panes (z 48), except while another decision addressed to this coach
+// is up (its card keeps the front) and on the end-game screens (their own 57 front applies). Sol r2: a state check, not a
+// CSS card selector, so informational waits never hide the toasts and every decision family is covered.
+const chatToastsOverInducements = computed(() => inducePhaseOpen.value && !endGameFront.value
+  && !gameStore.localDecisionCardOpen({ besidesInducementBuy: true })
+  // Sol r3: the card-purchase dialogs (.yesno-card, 47) run inside the inducement phase and are not in the shared list.
+  && !gameStore.state.cardChoice && !gameStore.state.cardBuy);
 const mvpResult = computed(() => {
   const pg = endGamePublic.value; if (!pg) return null;
   return { homeTeam: pg.home.team, homeScore: pg.home.score, awayTeam: pg.away.team, awayScore: pg.away.score };
@@ -14591,6 +14547,9 @@ function endTurn() {
   // real clientEndTurn for the CURRENT turnMode (also closes kick-off mini-phases).
   if (!gameStore.isPlaying.value) { gameStore.demoEndTurn(); return; }
   if (guardConfirmCard()) return; // owner 10-15: the open confirmation card is answered first
+  // Sol r1 P1 (g1960010): in Hit and Run, End Turn is the same Cancel Hit and Run (CLIENT_END_TURN{hitAndRun} only
+  // cancels the move-away) - never an idle-player warning, a plan clean-up or the End Turn latch. One shared latch.
+  if (String(gameStore.game.value?.turnMode ?? '') === 'hitAndRun') { gameStore.cancelHitAndRun(); return; }
   // Astra pass 5 (10-04): with an End Activation prompt open (and nobody idle) End Turn sent clientEndTurn straight
   // over it. The open prompt is answered first.
   if (endActConfirm.value) return;
@@ -14676,14 +14635,23 @@ onBeforeUnmount(() => gameStore.setPlannerClientPromptHold(false));
 // be confirmed against a different player.
 const currentActingId = (): string => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
 let endActConfirmActingId = '';
-watch(endActConfirm, (now, before) => { if (now && !before) endActConfirmActingId = currentActingId(); }, { flush: 'sync' });
+let endActConfirmTurnMode = ''; // Sol r2 P1: the turn mode the End Activation card opened in
+watch(endActConfirm, (now, before) => {
+  if (now && !before) { endActConfirmActingId = currentActingId(); endActConfirmTurnMode = String(gameStore.game.value?.turnMode ?? ''); }
+}, { flush: 'sync' });
 // Astra 10-07 (P3): the End Turn warning belongs to the moment it opened too. If the acting player changes under it (a
 // Foul / Hand-off / Pass resolved, the activation ended) it retires, sending nothing, so it cannot hold the pitch.
 let endTurnWarnActingId = '';
-watch(endTurnWarnCount, (now, before) => { if (now !== null && before === null) endTurnWarnActingId = currentActingId(); }, { flush: 'sync' });
-watch(() => [currentActingId(), gameStore.myTurn.value] as const, ([actingId, mine]) => {
-  if (endActConfirm.value && (!mine || actingId !== endActConfirmActingId)) endActConfirm.value = null;
-  if (endTurnWarnCount.value !== null && confirmationOutlivedActivation(mine, actingId, endTurnWarnActingId)) {
+let endTurnWarnTurnMode = ''; // Sol r1 P1: the turn mode the End Turn warning opened in
+watch(endTurnWarnCount, (now, before) => {
+  if (now !== null && before === null) { endTurnWarnActingId = currentActingId(); endTurnWarnTurnMode = String(gameStore.game.value?.turnMode ?? ''); }
+}, { flush: 'sync' });
+watch(() => [currentActingId(), gameStore.myTurn.value, String(gameStore.game.value?.turnMode ?? '')] as const, ([actingId, mine, turnMode]) => {
+  // Sol r2/r3 P1 (g1960010): the card also retires when the server enters a phase where its answer would be wrong (an
+  // End Blitz card opened before the hitAndRun frame); an ordinary Blitz subphase flip keeps it (confirmationOutlivedPhase).
+  if (endActConfirm.value && (!mine || actingId !== endActConfirmActingId || confirmationOutlivedPhase(endActConfirmTurnMode, turnMode))) endActConfirm.value = null;
+  if (endTurnWarnCount.value !== null && (confirmationOutlivedActivation(mine, actingId, endTurnWarnActingId)
+      || confirmationOutlivedPhase(endTurnWarnTurnMode, turnMode))) {
     endTurnWarnCount.value = null; endTurnWarnBallAction.value = null; renderer?.clearUnactivatedCues();
   }
 });
@@ -14704,6 +14672,7 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
     const sentBefore = gameStore.gameplaySendCount();
     gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: direct.roll });
     cancelCueIfSent(cancels, sentBefore);
+    rearmIfEndRefused(sentBefore); // g1960010: a refused End never leaves the picker torn down
     return;
   }
   // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
@@ -14824,6 +14793,8 @@ function blitzUntouched(g: GameJson | null | undefined): boolean {
 function requestEndActivation() {
   const g = gameStore.game.value;
   const st = g ? deriveClientState(g, o66Ctx()) : '';
+  // g1960010: every End gesture in Hit and Run (a click on the acting player, the rail row) is "Cancel Hit and Run".
+  if (st === 'HIT_AND_RUN') { gameStore.cancelHitAndRun(); return; }
   const ballAction = declaredActionEndConfirmKind(st);
   if (requiresBlitzEndConfirmation(st)) askEndActivation('blitz');
   else if (st === 'PUNT') askEndActivation('punt');
@@ -14838,6 +14809,14 @@ function requestEndActivation() {
   }
 }
 function confirmEndActivation() {
+  // Sol r2 P1 (g1960010): a card that reached Hit and Run is stale: it closes, sends nothing and clears nothing (the
+  // picker stays; Cancel Hit and Run is its own gesture).
+  const confirmGame = gameStore.game.value;
+  if (confirmGame && deriveClientState(confirmGame, o66Ctx()) === 'HIT_AND_RUN') {
+    endActConfirm.value = null;
+    rearmO66MovementSurface();
+    return;
+  }
   if (endActConfirm.value && currentActingId() !== endActConfirmActingId) { endActConfirm.value = null; return; } // stale: send nothing
   const kind = endActConfirm.value?.kind;
   const roll = endActConfirm.value?.roll === true; // only a confirm opened by an explicit End gesture rolls; Esc's never does
@@ -14853,6 +14832,7 @@ function confirmEndActivation() {
   const sentBefore = gameStore.gameplaySendCount();
   gameStore.endActivation({ blitzConfirmed: kind === 'blitz', rollActivate: roll });
   cancelCueIfSent(cancelsAction, sentBefore); // Astra r3: a refused (repeat) confirm stays silent
+  rearmIfEndRefused(sentBefore); // g1960010: a refused End never leaves the picker torn down
 }
 function cancelEndActivation() {
   // Owner punt-① (08-12): Declining "End your punt?" de-escalates the punt targeting back to the walk state
@@ -14923,6 +14903,17 @@ function sendChat() {
     chatOverInduce.lower(); // owner 10-09: ...and that keyboard exit drops the dock back under an open inducement phase
   }
 }
+// Sol r1 P2: the deferred refused-End re-arm (rearmIfEndRefused) runs once the pitch is free again. Registered last:
+// its getter reads view state declared throughout this script.
+watch(() => [
+  refusedEndRearmFor.value, currentActingId(), !!gameStore.game.value?.dialogParameter, pitchPromptOpen(),
+] as const, ([pendingFor, actingId, dialogOpen, promptOpen]) => {
+  if (!pendingFor) return;
+  if (actingId !== pendingFor) { refusedEndRearmFor.value = null; return; } // the activation moved on: its frame armed it
+  if (dialogOpen || promptOpen) return;
+  refusedEndRearmFor.value = null;
+  rearmO66MovementSurface();
+});
 </script>
 
 <template>
@@ -15499,7 +15490,7 @@ function sendChat() {
              when the chat tab isn't focused; click to open chat. -->
         <!-- Owner 2026-07-07: chat toasts STACK (oldest→newest, newest at the bottom);
              a new line fills in at the bottom and pushes older ones up, capped at 3. -->
-        <div v-if="chatToasts.length && !replayerOpen" class="chat-toast-stack" :class="{ 'endgame-front': endGameFront }" :style="chatToastStyle">
+        <div v-if="chatToasts.length && !replayerOpen" class="chat-toast-stack" :class="{ 'endgame-front': endGameFront, 'over-inducements': chatToastsOverInducements }" :style="chatToastStyle">
           <ChatToast v-for="t in chatToasts" :key="t.id" :sender="t.sender" :text="t.text"
             :role="chatToastRole(t.side, gameStore.mySeat.value, gameStore.isPlaying.value)"
             :text-size="settings.chatToastTextSize" @open="openChatFromToast" />
@@ -15963,6 +15954,11 @@ function sendChat() {
         <PitchConfirmationPanel v-if="bombThrowInstruction" class="pitch-instruction" :title="$t('hud.throwBomb')"
           :label="$t('hud.bombSquareSelection')" compact>
           {{ bombThrowInstruction }}
+        </PitchConfirmationPanel>
+
+        <PitchConfirmationPanel v-if="hitAndRunInstruction" class="pitch-instruction" :label="$t('hud.hitAndRunPickSquare')"
+          test-id="hit-and-run-instruction" compact>
+          {{ $t('hud.hitAndRunPickSquare') }}
         </PitchConfirmationPanel>
 
         <!-- B8-3: fan-factor cinematic — a d3 per side, then the difference
@@ -16946,18 +16942,6 @@ function sendChat() {
         <BlockAttackConfirmModal v-if="blockAttackConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :preview="blockAttackConfirm.preview"
           :target-name="blockAttackConfirm.targetName" @confirm="confirmAggroStage()"
           @cancel="o66AggroStage = null" />
-        <!-- Controller support P2b (owner round 3): the controller-only block declaration ask - A Block, X the special,
-             B Cancel. Specials = exactly the attack menu's offers on this target; the choice rides the menu's seams. -->
-        <PitchConfirmationPanel v-if="padBlockDeclare" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.blockOrSpecial')" :label="$t('hud.blockDeclaration')"
-          test-id="pad-block-declare">
-          <span>{{ padBlockDeclareTargetName }}</span>
-          <template #actions>
-            <button data-pad-primary data-testid="pad-block-declare-block" @click="padBlockDeclareChoose(null)">{{ $t('hud.block') }}</button>
-            <button v-for="(kind, ki) in padBlockDeclare.kinds" :key="kind" :data-pad-key="ki === 0 ? 'X' : undefined"
-              :data-testid="`pad-block-declare-${kind}`" @click="padBlockDeclareChoose(kind)">{{ BLOCK_KIND_EMOJI[kind] }} {{ BLOCK_KIND_LABEL[kind] }}</button>
-            <button class="rr-decline" data-pad-cancel @click="padBlockDeclareCancel()">{{ $t('hud.cancel') }}</button>
-          </template>
-        </PitchConfirmationPanel>
         <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" v-pad-focus="{ cancel: padDismissBlockAlternative }" class="block-alt-modal"
           :style="reactivePromptStyle('blockAlternative')" :title="$t('hud.blockAltModal.dragToMove')"
           @pointerdown="startReactivePromptDrag('blockAlternative', $event)">
@@ -16973,11 +16957,22 @@ function sendChat() {
             </div>
           </template>
           <template v-else-if="gameStore.state.blitzBlockChoice">
-          <div class="block-alt-title">{{ $t('hud.blockAltModal.chooseTheP0Attack', { p0: gameStore.state.blitzBlockChoice.origin === 'blitz' ? 'blitz' : 'block' }) }}</div>
+          <div class="block-alt-title" data-testid="block-alt-title">{{ $t(blockChoiceHeading.key, blockChoiceHeading.params) }}</div>
           <div class="block-alt-actions">
-            <button data-pad-primary @click="chooseBlitzBlockAlternative(null)">{{ $t('hud.blockAltModal.block') }}</button>
+            <!-- Owner 11-03: "Dice:" and the dice the Block would roll above the label, cycling through the faces (a
+                 preview, never a roll); uphill (the opponent picks) draws each die under a red silhouette. -->
+            <button data-pad-primary data-testid="block-alt-block" :disabled="blockChoiceAwaitingAck" @click="chooseBlitzBlockAlternative(null)">
+              <span v-if="blockChoiceDice" class="block-alt-dice" data-testid="block-alt-dice" :data-dice="blockChoiceDice.dice"
+                :data-uphill="blockChoiceDice.uphill ? '' : undefined" role="img" :aria-label="blockChoiceDice.label" :title="blockChoiceDice.label">
+                <span class="block-alt-dice-label" aria-hidden="true">{{ $t('hud.blockAltModal.dice') }}</span>
+                <span v-for="n in blockChoiceDice.dice" :key="n" class="block-alt-die" :class="{ uphill: blockChoiceDice.uphill }" aria-hidden="true">
+                  <BlockDieFace :value="blockDiceSpinFace(blockDiceSpin.tick.value, n - 1)" result="" />
+                </span>
+              </span>
+              {{ $t('hud.blockAltModal.block') }}
+            </button>
             <button v-for="(offer, oi) in gameStore.state.blitzBlockChoice.offers" :key="offer.kind" :data-pad-key="oi === 0 ? 'X' : undefined"
-              @click="chooseBlitzBlockAlternative(offer.kind as BlockKind)">
+              :disabled="blockChoiceAwaitingAck" @click="chooseBlitzBlockAlternative(offer.kind as BlockKind)">
               {{ BLOCK_KIND_EMOJI[offer.kind as BlockKind] }} {{ offer.label }}
               <small v-if="blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) != null">
                 {{ $t('hud.blockAltModal.armourP0', { p0: blockAlternativeArmourTarget(gameStore.game.value!, gameStore.state.blitzBlockChoice.targetId, offer.kind as BlockKind) }) }}
@@ -20313,6 +20308,11 @@ function sendChat() {
 .block-alt-actions button:hover { border-color: var(--ui-accent); }
 .block-alt-actions button.danger { border-color: #d56a5f; }
 .block-alt-actions small { display: block; margin-top: 2px; color: var(--ui-text-dim); }
+.block-alt-dice { display: flex; align-items: center; justify-content: center; gap: 3px; margin-bottom: 4px; --block-die-size: 1.7em; }
+.block-alt-dice-label { margin-right: 3px; font-size: 0.85em; color: var(--ui-text-dim); }
+.block-alt-die { display: inline-flex; line-height: 0; }
+/* Uphill: a red silhouette over each die (the filter follows the die art's own shape), "the opponent picks". */
+.block-alt-die.uphill { filter: sepia(1) saturate(9) hue-rotate(-50deg) brightness(0.85) drop-shadow(0 0 1px #e0433a); }
 /* #157: a seat-tinted player name in the log. Colour is inline (resolved from renderer.seatColors() per game/theme
    — one source of truth with the pitch tokens); this rule only carries the weight so the name reads as a name. */
 .log-name {
@@ -21206,7 +21206,7 @@ function sendChat() {
    layer sits above the whole inducement stack. Ladder on the pitch host (one stacking context):
      42 .masterchef-splash (Master Chef, Riotous Rookies, Dodgy Snack)
      44 .induce-shader · 45-46 coin toss, .induce-reveal · 47 .induce-phase, .induce-catcher, docked log/chat, .yesno-card
-     48 .induce-chat-btn, raised log/chat (.over-inducements)
+     48 .induce-chat-btn, raised log/chat (.over-inducements), the chat toast stack while the panes are up
      49 PRAYER LAYER: the Prayers to Nuffle splash, the read-only prayer-choice wait card, the Intensive Training card
      50 .postgame · 51 block panels · 52 .prompt-front, .reroll-toast · 57 end-game front · 60-61 modal dialogs
    The splash and the wait card are informational and never take the pointer, so a pane under them stays pressable. */
@@ -21556,6 +21556,12 @@ function sendChat() {
   position: absolute;
   z-index: 13;
 }
+/* Owner 11-03 ("Chat toasts are appearing behind the inducement panes"): while the panes are on screen (47) the toasts
+   ride the raised-chat layer (48): over the panes, still under the prayer layer, prompts and modals. */
+.chat-toast-stack.over-inducements { z-index: 48; }
+/* Sol r1: over the panes the toasts are display-only (clicks fall through to the pane controls under them). While
+   another decision is up the class is off (chatToastsOverInducements), so its card keeps the front. */
+.chat-toast-stack.over-inducements, .chat-toast-stack.over-inducements * { pointer-events: none; }
 /* Owner 09-06: above the end-game result window (50) and the MVP nominate overlay (55), interactive. */
 .chat-toast-stack.endgame-front, .log-panel.endgame-front { z-index: 57; pointer-events: auto; }
 /* Owner 10-01: the config bar (Report an issue) is lifted over the end-game screens too - the button must always be clickable. */

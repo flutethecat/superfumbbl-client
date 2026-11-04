@@ -24,7 +24,6 @@ export const CONFIRM_CARD_KINDS = [
   'wideRailSpecial', // "Special Ability" election before an action continues
   'blitzToMove', // "Keep Blitz?" (convert a declared Blitz to a Move)
   'blockAttack', // the Block / Blitz attack confirmation (special attack preview)
-  'padBlockDeclare', // controller "Block or special?"
   'chainsawBlitz', // "Chainsaw Attack?"
   'actionTarget', // "Perform foul?" / hand-off / pass target confirmation
   'wizardZap', // "Cast Zap?"

@@ -1311,8 +1311,20 @@ export function fumblerooskieAvailable(game: GameJson, playerId: string): boolea
   if (String(acting?.playerId ?? '') !== playerId) return false; // LogicModule.java:580-582 — acting player's skill
   const action = acting?.playerAction;
   if (!allowsFumblerooskieAction(action)) return false; // LogicModule.java:583-584; PlayerAction.java:68-71,79-81
-  if (!hasSkill(game, playerId, 'Fumblerooski') || hasSkill(game, playerId, 'My Ball')) return false; // LogicModule.java:582; cited grantor/canceller above
+  if (!hasUncancelledCanDropBall(game, playerId)) return false; // LogicModule.java:582; cited grantor/canceller above
   return isBallCarrier(game, playerId); // LogicModule.java:585 — UtilPlayer.hasBall
+}
+
+/** Player.hasSkillProperty(canDropBall) (Player.java:353-357): raw property presence, no cancellation. Fumblerooski
+ *  is the BB2025 grantor. */
+export function hasCanDropBallProperty(game: GameJson, playerId: string): boolean {
+  return hasSkill(game, playerId, 'Fumblerooski');
+}
+
+/** UtilCards.hasUncanceledSkillWithProperty(canDropBall) (LogicModule.java:582): the raw property, minus My Ball, the
+ *  BB2025 canceller. Only the Fumblerooski row uses the cancelled form. */
+export function hasUncancelledCanDropBall(game: GameJson, playerId: string): boolean {
+  return hasCanDropBallProperty(game, playerId) && !hasSkill(game, playerId, 'My Ball');
 }
 
 /** #181 KG-6 (Meero SR-160): the LEGAL keg-target set — port of `bb2025/ThrowKegLogicModule.isValidTarget`:
@@ -2605,7 +2617,7 @@ function teamTurnFlag(game: GameJson, side: boolean | null, flag: string): boole
 }
 
 /** True when `playerId` is the standing ball carrier (on the ball, ball in play & not loose). */
-function isBallCarrier(game: GameJson, playerId: string): boolean {
+export function isBallCarrier(game: GameJson, playerId: string): boolean {
   const fm = game.fieldModel;
   if (!fm?.ballInPlay || fm.ballMoving) return false;
   const p = findPlayer(game, playerId);
@@ -3321,12 +3333,26 @@ function availableActionsRaw(
   // Star S8: KICK_EM_BLOCK joins the state-keyed list (KickEmBlockLogicModule extends the mixed BlockLogicModule —
   // its actionContext inherits the block-family extras and END_MOVE); KICK_EM_BLITZ was already present.
   const declaredActionStates = ['MOVE', 'PASS', 'PUNT', 'BOMB', 'THROW_KEG', 'FOUL', 'BLITZ', 'BLOCK', 'SYNCHRONOUS_MULTI_BLOCK', 'SELECT_BLITZ_TARGET', 'SELECT_GAZE_TARGET', 'HAND_OVER', 'THROW_TEAM_MATE', 'KICK_TEAM_MATE', 'GAZE', 'GAZE_MOVE', 'PUTRID_REGURGITATION_BLITZ', 'KICK_EM_BLITZ', 'KICK_EM_BLOCK'];
+  // bb2025 FoulLogicModule.playerInteraction (:36-38) answers the acting player's click under a failed Bloodlust roll
+  // with bloodlustActionContext (:216-220): MOVE + END_MOVE only. MOVE converts the action
+  // (performAvailableAction :121-123, sendActingPlayer(player, MOVE, isJumping)) — the generic `move` declare row,
+  // which the store sends as CLIENT_ACTING_PLAYER{playerId, move, leaping}. Read off the server's sufferingBloodlust.
+  if (state === 'FOUL' && clickedIsActing
+      && (game.actingPlayer as { sufferingBloodlust?: boolean } | undefined)?.sufferingBloodlust === true) {
+    return [
+      { action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true },
+      { action: '', label: endActivationRowLabel(game, actingId, ctx.commandUnanswered === true), kind: 'endMove', enabled: true },
+    ];
+  }
   if (declaredActionStates.includes(state)) {
     const out: CoachAction[] = clickedIsActing
       ? pristineActivationTypeTransitions(game, state, actingId, p, ctx)
       : [];
     // Native moving modules expose JUMP throughout these movement-capable states. Keep the state membership here,
     // while jumpActionOffer owns the capability/move-budget predicate and Pogo > Leap > Jump label hierarchy.
+    // GAZE stays out: upstream's inherited Move context would offer JUMP there, but this client has no GAZE jump
+    // surface (no JUMP_MOVE_STATES projection / single-hop dispatch, raw `gaze` movement converts through
+    // offerGazeToMove). A row with no working surface is a dead row, so the self-click menu shows End only.
     const jumpActionStates = new Set([
       'MOVE', 'BLITZ', 'FOUL', 'PASS', 'HAND_OVER', 'PUNT', 'THROW_TEAM_MATE', 'KICK_TEAM_MATE',
       'GAZE_MOVE', 'PUTRID_REGURGITATION_BLITZ', 'KICK_EM_BLITZ',

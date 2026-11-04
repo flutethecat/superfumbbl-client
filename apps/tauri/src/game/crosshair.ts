@@ -342,6 +342,7 @@ export interface PadCancelDeps {
 export const PAD_CANCEL_KINDS: ReadonlySet<string> = new Set([
   'abort-preview', 'close-menu', 'dismiss-foul-choice', 'dismiss-blitz-hold', 'cancel-kick-em-nomination', 'hold-keep',
   'dismiss-prompt', 'clear-selection', 'wide-rail-decline',
+  'cancel-hit-and-run', // g1960010 (Sol r1 P2): B cancels the Hit and Run move-away, as Esc does (a cancel, not an End)
 ]);
 
 /** Owner o66mh: may the pad's B deselect? Exactly when the right-click on grass deselects without asking: my turn, a

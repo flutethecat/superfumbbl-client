@@ -11,7 +11,7 @@
 
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
-import { availableActions, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
+import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 import { t } from '../../i18n';
 
@@ -65,6 +65,39 @@ export function movementSurfaceReselectsActing(input: {
 }
 export function endRowClearsArmsBeforeEnding(input: { promptKind: EndActivationConfirmKind | null; promptEnabled: boolean }): boolean {
   return !(input.promptKind !== null && input.promptEnabled);
+}
+/** g1960010 (Elyod 11-03, latches fail open): an End gesture that cleared the planner arms first (the End row, an End
+ *  confirmation, Esc's undeclare) and then sent nothing - the store refused it, no frame will follow - re-arms the
+ *  movement surface from state, so the coach is never left without the picker the server is still waiting on.
+ *  'none': something was sent (the server's frame re-arms), a cancel of ours is pending (re-armed when it settles) or
+ *  no player is acting. 'defer' (Sol r1 P2): a server dialog or a pitch-owning prompt is up - never arm movement under
+ *  it; the view re-arms once the pitch is free again for the same acting player. */
+export function refusedEndRearmsSurface(input: {
+  sentBefore: number; sentAfter: number; cancelInFlight: boolean; actingId: string;
+  serverDialogOpen: boolean; pitchPromptOpen: boolean;
+}): 'rearm' | 'defer' | 'none' {
+  if (input.sentAfter !== input.sentBefore || input.cancelInFlight || !input.actingId) return 'none';
+  return input.serverDialogOpen || input.pitchPromptOpen ? 'defer' : 'rearm';
+}
+/** Sol r3 P1 (g1960010): the turn modes whose ENTRY retires an open client End Activation / End Blitz card or End Turn
+ *  warning: phases where that card's answer would be the wrong command. In hitAndRun an End is "Cancel Hit and Run"
+ *  (CLIENT_END_TURN{hitAndRun}), never the activation's end or the turn's end. Keep this explicit and minimal: ordinary
+ *  Blitz subphase flips (selectBlitzTarget <-> regular / blitz with the same actor, e.g. the target acknowledgement in
+ *  g1951755's quick-click capture) keep the card up and the planner paused under it. */
+export const CONFIRMATION_RETIRING_TURN_MODES: ReadonlySet<string> = new Set(['hitAndRun']);
+/** True when the server moved INTO a CONFIRMATION_RETIRING_TURN_MODES phase since the card / warning opened. */
+export function confirmationOutlivedPhase(openedTurnMode: string, turnMode: string): boolean {
+  return turnMode !== openedTurnMode && CONFIRMATION_RETIRING_TURN_MODES.has(turnMode);
+}
+/** g1960010: the Hit and Run instruction is shown while my acting player is in HIT_AND_RUN with the server's squares.
+ *  Pure received state: it goes when the server leaves hitAndRun (a square stepped, or the End's CLIENT_END_TURN). */
+export function hitAndRunInstructionVisible(game: GameJson | null | undefined, ctx: ClientStateContext, input: {
+  playing: boolean; myTurn: boolean; controlsActing: (playerId: string) => boolean;
+}): boolean {
+  if (!game || !input.playing || !input.myTurn) return false;
+  const actingId = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!actingId || !input.controlsActing(actingId)) return false;
+  return deriveClientState(game, ctx) === 'HIT_AND_RUN' && serverMoveSquares(game).length > 0;
 }
 /** Astra 10-04 / 10-07 (P3): a client confirmation (End Activation prompt, End Turn warning) belongs to the activation
  *  it opened in. It is retired, sending nothing, once the turn is no longer mine or the acting player changed. */
@@ -168,9 +201,11 @@ export function requiresBlitzEndConfirmation(state: ClientStateId | '' | null | 
 // Owner 09-28 (S6): the manual walk-by-tile-clicks Blitz path reaches its adjacent terminal through
 // confirmAggroStage() with no menu-picked flavor, same as the planner's act leg — it must try the SAME
 // blitz-commit hold before sending a plain block, or a Gored/Chainsaw offer never surfaces (g987 #6).
-// An explicit flavor the coach already picked from the rail/menu must keep bypassing the chooser as today.
-export function blitzTerminalShouldTryHold(pendingBlitzBlockKind: string | null, hasExplicitBlockChoice: boolean): boolean {
-  return pendingBlitzBlockKind == null && !hasExplicitBlockChoice;
+// An explicit ALTERNATIVE the coach already picked from the rail/menu keeps bypassing the chooser. Owner 11-03
+// (option A): an explicit pick of plain Block does NOT — the "Stab or Block?" chooser still asks, so the second
+// argument no longer changes the answer (kept so every call site reads the same pair).
+export function blitzTerminalShouldTryHold(pendingBlitzBlockKind: string | null, _hasExplicitBlockChoice: boolean): boolean {
+  return pendingBlitzBlockKind == null;
 }
 
 // Owner 09-28 (S6 follow-up, Sol review): the WHOLE adjacent-terminal decision, so confirmAggroStage's blitz
@@ -417,6 +452,7 @@ export type EscCascadeDecision =
   | { level: 1; kind: 'undeclare'; wire: 'end-activation' }
   | { level: 2; kind: 'close-menu'; target: 'context' | 'game-settings' | 'popup'; wire: 'none' }
   | { level: 1 | 3; kind: 'ask-end-activation'; confirmKind: EndActivationConfirmKind; wire: 'none' }
+  | { level: 3; kind: 'cancel-hit-and-run'; wire: 'cancel-hit-and-run' }
   | { level: 3; kind: 'clear-selection'; wire: 'none' }
   | { level: 4; kind: 'game-menu'; wire: 'none' };
 
@@ -476,6 +512,11 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
     return { level: 3, kind: 'ask-end-activation', confirmKind: 'generic', wire: 'none' };
   }
 
+  // g1960010 (owner 11-03): Esc in Hit and Run is upstream's "Cancel Hit And Run" - a cancel of the move-away only,
+  // never an End Activation card (the server decides whether the activation goes on).
+  if (input.myTurn && input.actingPlayerId && input.clientState === 'HIT_AND_RUN') {
+    return { level: 3, kind: 'cancel-hit-and-run', wire: 'cancel-hit-and-run' };
+  }
   if (input.myTurn && input.actingPlayerId && input.clientState && isActiveActivation(input.clientState)) {
     // Owner 09-28 (Sol round-3 item 3): was `clientState === 'BLITZ'` only, so Esc offered "End Activation" in
     // KICK_EM_BLITZ (and SELECT_BLITZ_TARGET / PUTRID_REGURGITATION_BLITZ) generically-classified — confirming
@@ -586,6 +627,110 @@ const NON_WALK_DECLARED_ACTION_STATES = new Set<ClientStateId>([
   'KICK_EM_BLOCK', // Star S8: block-family self-click menu (KickEmBlockLogicModule inherits Block's actionContext)
 ]);
 
+/** States whose upstream logic module answers an acting-player click through MoveLogicModule.playerInteraction:
+ *  Move itself and the bb2025 Pass / HandOver / Punt / Foul / Gaze / GazeMove / ThrowTeamMate modules (each calls
+ *  `super.playerInteraction` for the acting player; KTM's KickTeamMateLikeThrowLogicModule does the same). */
+const MOVE_LOGIC_SELF_CLICK_STATES = new Set<ClientStateId>([
+  'MOVE', 'PASS', 'HAND_OVER', 'PUNT', 'FOUL', 'THROW_TEAM_MATE', 'KICK_TEAM_MATE', 'GAZE', 'GAZE_MOVE',
+]);
+/** bb2025 BombLogicModule / ThrowKegLogicModule.playerInteraction: the acting player always gets the action menu. */
+const ALWAYS_MENU_SELF_CLICK_STATES = new Set<ClientStateId>(['BOMB', 'THROW_KEG']);
+const TEAM_MATE_THROW_ACTIONS = new Set(['throwTeamMate', 'throwTeamMateMove', 'kickTeamMate', 'kickTeamMateMove']);
+
+/**
+ * Owner 11-03 (RickWreckless, client 1.0.301: "declare ttm, moved, left click thrower to bring up menu and it ended
+ * activation instead"): match upstream. True when upstream would answer a left-click on the acting player with the
+ * action menu (`InteractionResult.selectAction`) rather than `deselectActingPlayer()`.
+ *
+ * MoveLogicModule.actionAvailable, read from what the server sent:
+ *  - actingPlayer.hasActed() → actingHasActed (hasMoved/hasFouled/hasBlocked/hasPassed/hasTriggeredEffect/usedSkills/
+ *    forgone), plus hasJumped and a spent step (currentMove > 0 outside a stand-up), the End Activation row's own test;
+ *  - canJump → jumpCapabilityAvailable (bb2025 JumpMechanic.canJump: canLeap or a prone/stunned player adjacent, never
+ *    movesRandomly; no move budget), checked on its own since not every state carries a Jump row;
+ *  - canPlaceCarriedPlayer → canPlaceCarriedPlayerNow; canDropBall with the ball → hasCanDropBallProperty (raw, no
+ *    My Ball cancellation) + isBallCarrier (both read directly: their rows exist in fewer states than these hold);
+ *  - isSpecialAbilityAvailable → an enabled non-End row the menu already assembled (star rules, I'll Carry You);
+ *  - PASS_MOVE or HAND_OVER_MOVE while carrying the ball;
+ *  - any Throw / Kick Team-Mate action (always true upstream, so its thrower always gets the menu).
+ *  canGazeDuringMove is BB2016-only (HypnoticGaze bb2016) and has no BB2025 carrier.
+ * Per-state overrides: bb2025 FoulLogicModule opens the Bloodlust menu (isSufferingBloodLust) ahead of the Move check;
+ * bb2025 PuntLogicModule.actionAvailable (:48-53) replaces the Move test with hasActed, PUNT_MOVE with the ball, any
+ * PUNT action, or I'll Carry You available.
+ */
+export function actingSelfClickMenuAvailable(
+  game: GameJson | null | undefined,
+  state: ClientStateId,
+  actions: ReadonlyArray<CoachAction>,
+): boolean {
+  if (!game) return false;
+  if (ALWAYS_MENU_SELF_CLICK_STATES.has(state)) return true;
+  if (!MOVE_LOGIC_SELF_CLICK_STATES.has(state)) return false;
+  const acting = game.actingPlayer as {
+    playerId?: string | null; playerAction?: string | null; currentMove?: number; standingUp?: boolean;
+    hasJumped?: boolean; sufferingBloodlust?: boolean;
+  } | undefined;
+  const actingId = String(acting?.playerId ?? '');
+  if (!acting || !actingId) return false;
+  const action = String(acting.playerAction ?? '');
+  if (state === 'FOUL' && acting.sufferingBloodlust === true) return true;
+  const stepped = (Number(acting.currentMove) || 0) > 0 && acting.standingUp !== true;
+  const hasActed = actingHasActed(game, actingId) || acting.hasJumped === true || stepped;
+  if (state === 'PUNT') {
+    return hasActed
+      || (action === 'puntMove' && isBallCarrier(game, actingId))
+      || action === 'punt'
+      || illCarryYouAvailable(game, actingId);
+  }
+  if (hasActed || jumpCapabilityAvailable(game, actingId)) return true;
+  // canPlaceCarriedPlayer and canDropBall-with-the-ball are upstream predicates in their own right: their menu rows
+  // are narrower (Place Carried Player is a MOVE-rail row; the Fumblerooski row needs a moving action), so read the
+  // server state directly rather than through the rows. The menu may then hold End Activation only, as upstream's.
+  if (canPlaceCarriedPlayerNow(game, actingId)) return true;
+  // MoveLogicModule.java:365 reads the RAW property (Player.hasSkillProperty, no cancellation): My Ball does not
+  // suppress the menu here; it only removes the Fumblerooski row (fumblerooskieAvailable, LogicModule.java:582).
+  if (hasCanDropBallProperty(game, actingId) && isBallCarrier(game, actingId)) return true;
+  if (actions.some((a) => a.enabled && a.kind !== 'endMove')) return true;
+  if ((action === 'passMove' || action === 'handOverMove') && isBallCarrier(game, actingId)) return true;
+  return TEAM_MATE_THROW_ACTIONS.has(action);
+}
+
+/** Bomb tile clicks. The renderer dispatches an eligible TILE before the token under it, and a stationary bomber with
+ *  no walking reach arms an unrestricted tile pick, so the thrower's own square can arrive here as a tile. Upstream
+ *  that square is the thrower's token (BombLogicModule.playerInteraction → the action menu); every other square
+ *  follows BombLogicModule.fieldInteraction: a Hail Mary Bomb takes any square, a Throw Bomb needs a passing
+ *  distance (passTargetInTemplate). `actorMenu` = hand the click to the thrower's player-click route. */
+export function bombTileClickRoute(
+  game: GameJson | null | undefined,
+  ctx: ClientStateContext,
+  square: [number, number],
+): { kind: 'notBomb' } | { kind: 'actorMenu'; playerId: string } | { kind: 'nominate'; square: [number, number] } | { kind: 'ignore' } {
+  if (!game || deriveClientState(game, ctx) !== 'BOMB') return { kind: 'notBomb' };
+  const acting = actingPlayerId(game);
+  if (!acting) return { kind: 'notBomb' };
+  const actorSquare = normSquare((game.fieldModel?.playerDataArray ?? [])
+    .find((d) => (d as { playerId?: string }).playerId === acting)?.playerCoordinate);
+  if (actorSquare && sameSquare(actorSquare, square)) return { kind: 'actorMenu', playerId: acting };
+  return passTargetInTemplate(game, acting, square) ? { kind: 'nominate', square } : { kind: 'ignore' };
+}
+
+/** bb2025 BombLogicModule.playerInteraction: the acting player's own token is the action menu (`selectAction`), never
+ *  a bomb target; every other token is a square pick (`perform().with(playerCoordinate)`). The view's Bomb token
+ *  interception consults this so the actor's click reaches the router (openActionMenu) and sends nothing — for a
+ *  Hail Mary Bomb too, whose any-square template would otherwise accept the thrower's own square. */
+export function bombPlayerClickRoute(
+  game: GameJson | null | undefined,
+  ctx: ClientStateContext,
+  playerId: string,
+): { kind: 'notBomb' } | { kind: 'router' } | { kind: 'nominate'; square: [number, number] } | { kind: 'ignore' } {
+  if (!game || deriveClientState(game, ctx) !== 'BOMB') return { kind: 'notBomb' };
+  const acting = actingPlayerId(game);
+  if (!acting) return { kind: 'notBomb' };
+  if (playerId === acting) return { kind: 'router' };
+  const square = normSquare((game.fieldModel?.playerDataArray ?? [])
+    .find((d) => (d as { playerId?: string }).playerId === playerId)?.playerCoordinate);
+  return square && passTargetInTemplate(game, acting, square) ? { kind: 'nominate', square } : { kind: 'ignore' };
+}
+
 const STEP_ECHO_DEBOUNCE_MS = 350;
 const PLAYER_BASE_STANDING = 1;
 const PLAYER_BASE_MOVING = 2;
@@ -682,40 +827,6 @@ export function storedBlitzRouteDisposition(game: GameJson | null | undefined, t
   const outcome = blitzTargetOutcome(game);
   if (outcome.kind === 'pending') return 'wait';
   return outcome.kind === 'selected' && outcome.targetId === targetId ? 'start' : 'drop';
-}
-/** Owner 10-12: a left-click Blitz stopped at contact for a context-menu special attack (store blitzContactChoice) and
- *  the view armed the Blitz confirm stage. Should the target's own attack menu (Block + each offered kind, the one a
- *  right-click on the adjacent blitz target opens) now be put in front of the coach?
- *   - 'skip': the stage is not (or no longer) this stop's, the pad is in use (its "Block or special?" modal is the
- *     same choice), something else owns the screen (a server dialog, a reroll / chooser / confirmation card, the game
- *     menu, a report), or another context menu is already open. Nothing opens and nothing is sent: the stage stays
- *     armed, so Confirm Block and the target's right-click remain, exactly as on a hand-walked blitz.
- *   - 'wait': the blitzer's last step is still on screen. The caller asks again on the next frame.
- *   - 'open': open it. */
-export function blitzContactMenuDisposition(input: {
-  stageArmedForStop: boolean; controller: boolean; surfaceOpen: boolean; contextMenuOpen: boolean; tokenInFlight: boolean;
-  /** A gameplay command of ours (End Turn, End Activation, a step ...) is out and unanswered: the model may be about
-   *  to change under the menu, so it does not open (Astra 10-12). */
-  sendUnanswered?: boolean;
-}): 'open' | 'wait' | 'skip' {
-  if (!input.stageArmedForStop || input.controller || input.surfaceOpen || input.contextMenuOpen || input.sendUnanswered) return 'skip';
-  return input.tokenInFlight ? 'wait' : 'open';
-}
-/** Is a left-click Blitz's contact stop still the live situation on the APPLIED model? Our own turn's BLITZ state
- *  (`clientState`), the same blitzer still acting under blitzMove and under our control, its block not yet on the
- *  wire, and the same target still the server's SELECTED one and still an adjacent standing opponent. The pending
- *  menu opener, the auto-opened menu and each of its rows ask this; false = they are retired / inert (Astra 10-12:
- *  a row left open across an End Turn re-armed the Blitz stage on the opponent's turn). */
-export function blitzContactStopCurrent(input: {
-  game: GameJson | null | undefined; stop: { blitzerId: string; targetId: string } | null | undefined;
-  clientState: ClientStateId | '' | null | undefined; controlsBlitzer: boolean;
-}): boolean {
-  const { game, stop } = input;
-  if (!game || !stop || input.clientState !== 'BLITZ' || !input.controlsBlitzer) return false;
-  const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
-  if (String(acting?.playerId ?? '') !== stop.blitzerId || String(acting?.playerAction ?? '') !== 'blitzMove') return false;
-  if (actingHasBlocked(game) || !blitzTargetAcknowledged(game, stop.targetId)) return false;
-  return adjacentStandingEnemyIds(game, stop.blitzerId).includes(stop.targetId);
 }
 /** A stored quick-click route belongs to one activation of one player on our own turn. Every other exit (the turn
  *  passed, another player is acting, the seat stopped playing) retires it: nothing else would, and while it is held it
@@ -1197,10 +1308,9 @@ export function onPlayerClick(
   }
 
   // SR-244 RG-1/RG-4: only the ACTING player's self-click gets the missing non-WALK action menu. Preserve the
-  // state's enemy-click routing below (targetSelected / multiBlockToggle / block), and use the established WALK
-  // hasDeclare gate: a non-carrier still ends directly instead of flashing a one-item End Activation menu.
-  // Upstream SelectBlitzTarget gates its self menu the same way. Blitz/MultiBlock open theirs unconditionally;
-  // deliberately requiring a declare here is the benign UX divergence (no wire difference) requested by RG-1.
+  // state's enemy-click routing below (targetSelected / multiBlockToggle / block). Owner 11-03 (match upstream):
+  // the menu opens whenever upstream's actionAvailable (per state, actingSelfClickMenuAvailable) holds — a TTM/KTM
+  // thrower always, Bomb/Keg always, Gaze once acted — and the direct end stays only where upstream deselects.
   if (NON_WALK_DECLARED_ACTION_STATES.has(state) && clickedPlayerId === actingPlayerId(game)) {
     const actions = availableActions(game, ctx, clickedPlayerId);
     // Owner 09-28 (Spec S5 audit): a disabled "<rule> - Not Available" row must never count as a declare here —
@@ -1212,7 +1322,7 @@ export function onPlayerClick(
     const hasDeclare = actions.some((a) => a.kind === 'declare' && a.enabled);
     // Blitz self-interaction must remain a menu surface. Returning the direct endMove intent here lets a caller
     // accidentally bypass the mandatory confirmation card; the store backstop also refuses that wire.
-    if (!hasDeclare && !requiresBlitzEndConfirmation(state)) {
+    if (!hasDeclare && !requiresBlitzEndConfirmation(state) && !actingSelfClickMenuAvailable(game, state, actions)) {
       if (state === 'BLOCK' || state === 'SYNCHRONOUS_MULTI_BLOCK') { // Kick 'em block keeps its S8 upstream self-click end
         return { kind: 'targetPending', playerAction: String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? 'block') };
       }
@@ -1446,12 +1556,12 @@ export function onPlayerClick(
   }
 
   // #116 HIT_AND_RUN: a field-square click steps a server move-away square (WALK_STATES → onSquareClick). A click
-  // on the ACTING player CANCELS the move-away = end it (upstream "Cancel Hit And Run" → sendEndTurn(turnMode);
-  // the store's endActivation routes hitAndRun → CLIENT_END_TURN). No action menu here — the only choices are
-  // "step to a highlighted square" or "finish". Handled before the generic WALK_STATES menu path below.
+  // on the ACTING player is upstream's "Cancel Hit And Run" (sendEndTurn(turnMode)): the store's endActivation routes
+  // hitAndRun to cancelHitAndRun, which cancels the move-away only (g1960010). The kind stays endMove so every layout's
+  // existing End route reaches it. Handled before the generic WALK_STATES menu path below.
   if (state === 'HIT_AND_RUN') {
     if (clickedPlayerId === actingPlayerId(game)) return { kind: 'endMove' };
-    return { kind: 'ignore', reason: 'hit & run: click a highlighted square to move away, or your own player to finish' };
+    return { kind: 'ignore', reason: 'hit & run: click a highlighted square to move away, or your own player to cancel Hit and Run' };
   }
 
   // With the friendly-switch preference disabled, a different player remains inert during MOVE. With it enabled,
@@ -1467,9 +1577,16 @@ export function onPlayerClick(
     // Owner 09-28 (Spec S5 audit): same `.enabled` guard as the NON_WALK branch above — a disabled
     // "<rule> - Not Available" row must not turn this implicit deselect into a 1-item menu open.
     const hasDeclare = actions.some((a) => a.kind === 'declare' && a.enabled);
-    // Req #3: clicking the acting player with no declare available is an implicit deselect (End Move), not a
-    // 1-item menu. Once later phases add in-move declares, the same click opens the menu instead.
-    if (clickedPlayerId === actingPlayerId(game) && !hasDeclare) return { kind: 'ignore', reason: 'law 10e: own-player left-click is inert (End Activation = menu/Esc)' };
+    // Owner 11-03 (match upstream): the acting player's self-click opens the menu wherever upstream's
+    // actionAvailable holds (moved, ball carrier on Pass/Hand-off Move, Bloodlust on a Foul, an in-action row).
+    // Where upstream would deselect, law 10e keeps this click inert (End Activation = menu/Esc).
+    // bb2025 PuntLogicModule.actionAvailable is authoritative for Punt: its Jump / generic rows never open the menu.
+    const selfMenu = state === 'PUNT'
+      ? actingSelfClickMenuAvailable(game, state, actions)
+      : hasDeclare || actingSelfClickMenuAvailable(game, state, actions);
+    if (clickedPlayerId === actingPlayerId(game) && !selfMenu) {
+      return { kind: 'ignore', reason: 'law 10e: own-player left-click is inert (End Activation = menu/Esc)' };
+    }
     return { kind: 'openActionMenu', playerId: clickedPlayerId, actions };
   }
 
