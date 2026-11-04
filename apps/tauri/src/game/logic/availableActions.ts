@@ -1493,6 +1493,7 @@ export function jumpAvailable(game: GameJson, playerId: string): boolean {
   const acting = game.actingPlayer as { playerId?: string; currentMove?: number; heldInPlace?: boolean; goingForIt?: boolean } | undefined;
   if (acting?.playerId !== playerId) return false;   // isNextMovePossible reads the acting player — only it jumps
   if (acting.heldInPlace) return false;              // !isHeldInPlace() — a held player has no next move
+  if (playerPinned(game, playerId)) return false;    // hasMoveLeft: PlayerState.isAbleToMove() excludes isPinned (owner 11-03: Take Root)
   const ma = playerMovement(game, playerId);
   if (!Number.isFinite(ma)) return false;
   const used = Math.max(0, Number(acting.currentMove) || 0);
@@ -1500,6 +1501,12 @@ export function jumpAvailable(game: GameJson, playerId: string): boolean {
   if (tm === 'kickoffReturn' || tm === 'passBlock') return used < 3; // KICKOFF_RETURN/PASS_BLOCK cap (non-jumping)
   const extraMove = acting.goingForIt ? (hasSkill(game, playerId, 'sprint') ? 3 : 2) : 0; // GFI rushes, once in GFI territory
   return used < (ma + extraMove); // hasMoveLeft(false): a normal step or a rush remains
+}
+
+/** Upstream PlayerState.isPinned (rooted by a failed Take Root, or chomped): the player cannot leave its square. */
+export function playerPinned(game: GameJson, playerId: string): boolean {
+  const ps = Number(findPlayer(game, playerId)?.playerState ?? 0);
+  return (ps & (FLAG_ROOTED | FLAG_CHOMPED)) !== 0;
 }
 
 /** Shared Jump/Pogo/Leap capability gate. Ordinary Jump needs an adjacent prone/stunned player; the canLeap
@@ -1518,6 +1525,7 @@ export function jumpActivationAvailable(game: GameJson, playerId: string): boole
   const ps = Number(player?.playerState ?? 0);
   const base = baseState(ps);
   return !!player && !!(ps & FLAG_ACTIVE) && (base === BASE_STANDING || base === BASE_PRONE)
+    && !(ps & (FLAG_ROOTED | FLAG_CHOMPED)) // owner 11-03: a pinned player has no move to jump with (isAbleToMove)
     && jumpCapabilityAvailable(game, playerId);
 }
 

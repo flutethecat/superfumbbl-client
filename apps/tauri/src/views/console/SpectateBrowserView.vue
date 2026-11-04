@@ -4,7 +4,11 @@ import DisplayCaps from '../../components/DisplayCaps.vue';
 import { forkFeaturesEnabled } from '../../game/forkAccess'; // owner 10-31: runtime fork gate (public: --fork-server)
 import fumbblLogoUrl from '../../assets/resources/fumbbl-logo.png';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
-import { FUMBBL_SITE, applyServerTarget } from '../../game/settings';
+import { FUMBBL_SITE, applyServerTarget, settings } from '../../game/settings';
+import { lmRootClass } from '../../game/lmTheme';
+import { gameClockLabel } from '../../game/gameClock';
+import { lmMergeGroups } from '../../game/spectateCompetition';
+import LmResultCard from '../../components/lm/LmResultCard.vue';
 import { botGet } from '../../game/forkChallenge';
 import { deriveForkGameRows, routeForkSpectate, type ForkGameRow } from '../../game/forkGames';
 import { competitionLabel, groupByCompetition, missingCompetitionIds, type CompetitionNames } from '../../game/spectateCompetition';
@@ -54,6 +58,9 @@ async function resolveCompetitionNames(matches: readonly BrowserMatch[]): Promis
   })().finally(() => { competitionLookup = null; });
   await competitionLookup;
 }
+
+/** Modern Filter panel state (view filters only; nothing is stored). */
+const lmFilterState = { division: ref(''), hideScores: ref(false), pastKickoff: ref(false) };
 
 const emit = defineEmits<{
   spectate: [id: number];
@@ -116,7 +123,7 @@ function team(match: BrowserMatch, index: number): BrowserMatch['teams'][number]
 }
 
 function phase(match: { half: number; turn: number }): string {
-  return match.half === 0 ? 'Pre-kick' : t('spectateBrowser.text.hHalfTTurn', { half: match.half, turn: match.turn });
+  return gameClockLabel(match); // owner 11-03: the shared half / turn label (same text as before: "Pre-kick" / "H1 T3")
 }
 
 // Owner 10-01: rows mirror the Play blade's game rows - crest / name / coach / race / TV | phase over score | away.
@@ -276,6 +283,37 @@ function selectSpectateServer(target: 'fumbbl' | 'fork'): void {
   spectateSection.value = target;
 }
 
+// ---- Modern style (owner 11-03, spec-client-restyle-and-team-port lane 3) ----
+// The same list, polls and actions as above, drawn as League Manager panels: Live games (result cards), Find a game
+// (by id) and Filter (text, division, hide scores, past kick-off). Retro renders the template below.
+const modern = computed(() => settings.uiStyle === 'modern');
+const lmClass = computed(() => lmRootClass(settings.uiStyle));
+const findGameId = ref('');
+const findGameValid = computed(() => /^\d+$/.test(findGameId.value.trim()));
+function findGame(): void { if (findGameValid.value) spectate(Number(findGameId.value.trim())); }
+/** View filters: they change what this list shows, never the data. */
+const lmDivision = lmFilterState.division;
+const lmHideScores = lmFilterState.hideScores;
+const lmPastKickoff = lmFilterState.pastKickoff;
+const lmFilteredMatches = computed(() => filteredMatches.value.filter((match) => !lmPastKickoff.value || (match.half ?? 0) > 0));
+/** Division tabs: every competition group the live list has right now (the Retro list's own headings). */
+/** Owner 11-03: the competition buttons over the live list - one per group the live list has right now, with its live
+ *  count, largest first, then by name (tidy names, as the sub-band headings). */
+const lmDivisions = computed(() => lmMergeGroups(groupByCompetition(browserMatches.value, competitionNames.value))
+  .map((g) => ({ key: g.key, label: g.label, count: g.matches.length }))
+  .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)));
+/** Single-select: a button shows only its group; the selected one (or All) clears it. */
+function pickLmDivision(key: string): void { lmDivision.value = !key || lmDivision.value === key ? '' : key; }
+const lmGroups = computed(() => lmMergeGroups(groupByCompetition(lmFilteredMatches.value, competitionNames.value))
+  .filter((g) => !lmDivision.value || g.key === lmDivision.value));
+const lmShownCount = computed(() => lmGroups.value.reduce((n, g) => n + g.matches.length, 0));
+watch(lmDivisions, (list) => { if (lmDivision.value && !list.some((d) => d.key === lmDivision.value)) lmDivision.value = ''; });
+function clearLmFilters(): void { browserFilter.value = ''; lmDivision.value = ''; lmPastKickoff.value = false; }
+function lmSide(match: BrowserMatch, index: number) {
+  const side = team(match, index);
+  return { name: side?.name || '', coach: side?.coach || '', race: side?.race || undefined, tv: formatTeamValue(side?.tv), score: side?.score ?? 0 };
+}
+
 onMounted(refresh);
 watch(spectateSection, (target) => {
   if (target === 'fork') refreshForkList();
@@ -288,7 +326,90 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="spectate-browser" :class="{ 'theme-fumbbl': spectateSection === 'fumbbl' }" :aria-label="$t('spectateBrowser.spectateBrowser')">
+  <!-- Owner 11-03 (lane 3): the Modern Spectate blade - Live games as result cards, then Find a game and Filter in the
+       right column. Same data, polls and actions as the Retro template (v-else, unchanged). -->
+  <main v-if="modern" :class="[lmClass, 'lm-page', 'lm-spectate']" :aria-label="$t('spectateBrowser.spectateBrowser')" data-testid="lm-spectate">
+    <section class="lm-panel lm-grow" aria-labelledby="lm-live-h">
+      <header class="hm-band">
+        <h2 id="lm-live-h">{{ $t('lmBlades.spectate.liveGames') }}</h2>
+        <div class="lm-band-right">
+          <div v-if="forkFeaturesEnabled()" class="sf-tabs small" role="group" :aria-label="$t('spectateBrowser.spectateServer')">
+            <button class="sf-tab" type="button" :aria-pressed="spectateSection === 'fumbbl'" @click="selectSpectateServer('fumbbl')">{{ $t('spectateBrowser.fumbbl') }}</button>
+            <button class="sf-tab" type="button" :aria-pressed="spectateSection === 'fork'" @click="selectSpectateServer('fork')">{{ $t('spectateBrowser.superFumbbl') }}</button>
+          </div>
+          <span class="hm-cap lm-live"><span class="lm-dot" :data-on="spectateSection === 'fork' ? forkPolling : browserPolling" aria-hidden="true"></span>{{ $t('lmBlades.spectate.liveCount', { n: spectateSection === 'fork' ? forkGames.length : browserMatches.length }) }}</span>
+          <button class="sf-btn small" type="button" :aria-label="$t('spectateBrowser.refreshLiveGames')" :title="$t('spectateBrowser.refreshLiveGames')" @click="refreshSelected">{{ $t('lmBlades.refresh') }}</button>
+        </div>
+      </header>
+      <div v-if="spectateSection === 'fumbbl' && lmDivisions.length" class="lm-group-row" role="group" :aria-label="$t('lmBlades.spectate.division')" data-testid="lm-groups">
+        <button class="lm-group-btn" type="button" :aria-pressed="!lmDivision" @click="pickLmDivision('')">{{ $t('lmBlades.all') }} <span class="lm-group-n">{{ browserMatches.length }}</span></button>
+        <button v-for="d in lmDivisions" :key="d.key" class="lm-group-btn" type="button" :aria-pressed="lmDivision === d.key" :title="d.label" @click="pickLmDivision(d.key)"><span class="lm-group-name">{{ d.label }}</span> <span class="lm-group-n">{{ d.count }}</span></button>
+      </div>
+      <div class="lm-body lm-scroll" aria-live="polite">
+        <template v-if="spectateSection === 'fork'">
+          <p v-if="forkStatus" class="lm-empty">{{ forkStatus }}</p>
+          <template v-else>
+            <LmResultCard v-for="match in forkGames" :key="match.gameId"
+              :home="{ name: match.homeTeam, coach: match.homeCoach }" :away="{ name: match.awayTeam, coach: match.awayCoach }"
+              :clock="phase(match)" score-mode="vs">
+              <template #actions><button class="sf-btn primary" type="button" @click="spectateFork(match.gameId)">{{ $t('lmBlades.spectate.spectate') }}</button></template>
+            </LmResultCard>
+          </template>
+        </template>
+        <template v-else>
+          <p v-if="browserStatus" class="lm-empty">{{ browserStatus }}</p>
+          <p v-else-if="lmShownCount === 0" class="lm-empty">{{ $t('spectateBrowser.gameList.noLiveGamesMatch') }}</p>
+          <template v-else>
+            <template v-for="(group, groupIndex) in lmGroups" :key="group.key">
+              <div class="lm-sub-band">
+                <h3 :data-tour="groupIndex === 0 ? 'spectate-league' : undefined" :title="group.label">{{ group.label }}</h3>
+                <span class="hm-cap">({{ group.matches.length }})</span>
+              </div>
+              <LmResultCard v-for="(match, matchIndex) in group.matches" :key="match.id"
+                :home="lmSide(match, 0)" :away="lmSide(match, 1)" :clock="phase(match)" :score-mode="lmHideScores ? 'hidden' : 'score'"
+                :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-phase' : undefined" :coach-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-coach' : undefined">
+                <template #actions><button class="sf-btn primary" type="button" :data-tour="groupIndex === 0 && matchIndex === 0 ? 'spectate-button' : undefined" @click="spectate(match.id)">{{ $t('lmBlades.spectate.spectate') }}</button></template>
+              </LmResultCard>
+            </template>
+          </template>
+          <!-- client walkthrough with no live game to point at: the static example card (as the Retro example row) -->
+          <template v-if="tourExample && (browserStatus || lmShownCount === 0)">
+            <div class="lm-sub-band" data-testid="spectate-tour-example"><h3 data-tour="spectate-league">{{ $t('spectateBrowser.gameList.exampleLeague') }}</h3><span class="hm-cap">{{ $t('spectateBrowser.gameList.example') }}</span></div>
+            <LmResultCard data-tour="spectate-phase" coach-tour="spectate-coach" clock="H2 T3"
+              :home="{ name: $t('spectateBrowser.gameList.riversideReavers'), coach: $t('spectateBrowser.gameList.examplecoach'), race: $t('spectateBrowser.gameList.human'), score: 1 }"
+              :away="{ name: $t('spectateBrowser.gameList.ironjawKrumpaz'), coach: $t('spectateBrowser.gameList.anothercoach'), race: $t('spectateBrowser.gameList.orc'), score: 1 }">
+              <template #actions><button class="sf-btn primary" type="button" data-tour="spectate-button" disabled :title="$t('spectateBrowser.gameList.example')">{{ $t('lmBlades.spectate.spectate') }}</button></template>
+            </LmResultCard>
+          </template>
+        </template>
+      </div>
+    </section>
+
+    <aside class="lm-col">
+      <section class="lm-panel" aria-labelledby="lm-find-h">
+        <header class="hm-band"><h2 id="lm-find-h">{{ $t('lmBlades.spectate.findAGame') }}</h2><span class="hm-cap">{{ $t('lmBlades.spectate.byId') }}</span></header>
+        <form class="lm-body" @submit.prevent="findGame">
+          <label class="sf-k" for="lm-find-id">{{ $t('lmBlades.gameId') }}</label>
+          <div class="lm-row">
+            <input id="lm-find-id" v-model="findGameId" class="sf-input" type="text" inputmode="numeric" autocomplete="off" :placeholder="$t('lmBlades.spectate.gameIdExample')" />
+            <button class="sf-btn primary" type="submit" :disabled="!findGameValid">{{ $t('lmBlades.spectate.watch') }}</button>
+          </div>
+          <p class="lm-muted">{{ $t('lmBlades.spectate.findHelp') }}</p>
+        </form>
+      </section>
+
+      <section v-if="spectateSection === 'fumbbl'" class="lm-panel lm-grow" aria-labelledby="lm-filter-h">
+        <header class="hm-band"><h2 id="lm-filter-h">{{ $t('lmBlades.spectate.filter') }}</h2><button class="sf-btn small" type="button" @click="clearLmFilters">{{ $t('lmBlades.clear') }}</button></header>
+        <div class="lm-body">
+          <input v-model="browserFilter" class="sf-input" type="search" :aria-label="$t('spectateBrowser.filterLiveGamesBy')" :placeholder="$t('spectateBrowser.filterByTeamCoach')" />
+          <label class="sf-check"><input v-model="lmHideScores" type="checkbox" data-testid="lm-hide-scores" /> {{ $t('lmBlades.spectate.hideScores') }}</label>
+          <label class="sf-check"><input v-model="lmPastKickoff" type="checkbox" /> {{ $t('lmBlades.spectate.pastKickoff') }}</label>
+        </div>
+      </section>
+
+    </aside>
+  </main>
+  <main v-else class="spectate-browser" :class="{ 'theme-fumbbl': spectateSection === 'fumbbl' }" :aria-label="$t('spectateBrowser.spectateBrowser')">
     <header class="browser-toolbar">
       <!-- Owner ruling (08-18): FUMBBL / Super FUMBBL selector, restyled to reuse the header's own
            branded plate buttons (.server-plate / .server-plate-fumbbl / .server-plate-super — App.vue

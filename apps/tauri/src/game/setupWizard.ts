@@ -1,7 +1,7 @@
 import type { AppSettings } from './settings';
 import { UI_FONTS } from './uiFonts';
 import { resolveBlockDieSurface } from '@fumbbl40k/ffb-pitch/src/blockDieSurface';
-import { DEFAULT_LOCALE, availableLocales, t, type Locale } from '../i18n';
+import { DEFAULT_LOCALE, availableLocales, englishVariantOf, systemLanguageTags, t, type Locale } from '../i18n';
 
 /**
  * First-launch setup wizard (owner 10-06): the pure step model behind components/FirstLaunchSetup.vue — steps,
@@ -105,12 +105,16 @@ export const FONT_SAMPLE = {
  * the Latin script. Nothing maps -> English, `matched: false` (the panel says the system language is not available).
  * Traditional Chinese (zh-Hant, zh-TW, zh-HK, zh-MO) maps to Simplified as a FALLBACK (`fallback: true`): the panel
  * names it the closest available language, never "detected".
+ * Owner 11-03: an English tag picks the English variant by region (i18n/englishVariant.ts): en-GB / en-IE / en-AU /
+ * en-NZ / en-ZA and the other British-spelling regions -> English (UK), every other English tag -> English (US).
  */
 export interface DetectedLocale { locale: Locale; matched: boolean; fallback: boolean; tag: string }
 export function detectSystemLocale(tags: readonly (string | null | undefined)[]): DetectedLocale {
   const clean = tags.map((tag) => (typeof tag === 'string' ? tag.trim().replace(/_/g, '-') : '')).filter(Boolean);
   for (const tag of clean) {
     const lower = tag.toLowerCase();
+    const english = englishVariantOf(tag);
+    if (english) return { locale: english, matched: true, fallback: false, tag };
     const exact = availableLocales.find((l) => l.id.toLowerCase() === lower);
     if (exact) return { locale: exact.id, matched: true, fallback: false, tag };
     const parts = lower.split('-');
@@ -125,16 +129,8 @@ export function detectSystemLocale(tags: readonly (string | null | undefined)[])
   }
   return { locale: DEFAULT_LOCALE, matched: false, fallback: false, tag: clean[0] ?? '' };
 }
-/** The browser's preferred language tags (navigator.languages, then navigator.language); [] without a navigator. */
-export function systemLanguageTags(): string[] {
-  try {
-    const nav = (globalThis as { navigator?: { languages?: readonly string[]; language?: string } }).navigator;
-    if (!nav) return [];
-    return [...(nav.languages ?? []), ...(nav.language ? [nav.language] : [])];
-  } catch {
-    return [];
-  }
-}
+/** The browser's preferred language tags (moved to i18n/englishVariant.ts; re-exported for existing callers). */
+export { systemLanguageTags };
 /**
  * The language the wizard switches to on open: the detected one ONLY on a brand-new install (`freshInstall`: nothing was
  * stored before this launch - settingsProvenance) whose language nobody has picked yet, so the very first panel already

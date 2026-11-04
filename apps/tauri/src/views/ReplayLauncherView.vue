@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import fumbblLogoUrl from '../assets/resources/fumbbl-logo.png';
 import { gameStore } from '../game/store';
 import { activeServerTarget, applyServerTarget, settings } from '../game/settings';
@@ -11,7 +11,7 @@ import { jnlpEntryError, readJnlpFile, routeJnlpRequest } from '../game/jnlpRout
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { recentTeamCapNote } from '../game/fumbblRecentMatches';
 import {
-  REPLAY_SEARCH_RESOLVERS, REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
+  REPLAY_SEARCH_RESOLVERS, REPLAY_SEARCH_TIMEOUT_MS, ReplaySearchTimeout, enrichLeagueRows, maskRow, normalizeQuery, replayIdRow, resolveReplayId, runReplaySearch, searchGroup, withSearchTimeout,
   type AbortableFetch, type FumbblGroup, type ReplayRow, type ReplaySearchResult,
   searchNoticeText,
 } from '../game/replaySearch';
@@ -20,7 +20,11 @@ import { CONSOLE_PALETTE, THEME_PRESETS, deriveTheme } from '../game/theme';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import MatchRow from '../components/MatchRow.vue';
 import PostGamePanel from '../components/PostGamePanel.vue';
-import { loadPostGameSnapshot, postGameSnapshotKeys } from '../game/postGameCache';
+import { loadPostGameSnapshot, postGameSnapshotKeys, recentPostGameSummaries, type PostGameSummary } from '../game/postGameCache';
+import { lmRootClass } from '../game/lmTheme';
+import { teamLogoUrl } from '../game/teamLogos';
+import { teamTone } from '../game/teamTone';
+import { rowsThatFit } from '../game/lmFit';
 import { postGameKey, type PostGameSnapshot } from '../game/postGameProjection';
 import { $t, useLiveSet } from '../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
@@ -301,11 +305,240 @@ async function loadFile(event: Event): Promise<void> {
   else if (result.status === 'failed') localError.value = result.error.message;
 }
 
+// ---- Modern style (owner 11-03, spec-client-restyle-and-team-port lane 3): the same search, rows and actions drawn
+// as League Manager panels (Match archive, Results table, Open a file, By game ID, Recently watched). ----
+const modern = computed(() => settings.uiStyle === 'modern');
+const lmClass = computed(() => lmRootClass(settings.uiStyle));
+function rowDate(row: ReplayRow): string {
+  if (!row.when) return '';
+  const date = new Date(row.when.replace(' ', 'T'));
+  return Number.isNaN(date.valueOf()) ? row.when : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+/** Owner 11-03 (Sol r1): result rows carry the same race tints as the cards (game/teamTone.ts). */
+function rowTone(row: ReplayRow): Record<string, string> { return { '--lm-tone-home': teamTone(row.left), '--lm-tone-away': teamTone(row.right) }; }
+/** Owner 11-03: the Competition column only when some row has one (a coach search carries none); the team columns take its room. */
+/** Sol r2: own / coach searches put the searched coach's team on the LEFT whatever side it played (replaySearch.ts
+ *  rowFromRecent; FUMBBL's recent-match list carries no home / away), so those columns read Team / Opponent. Match,
+ *  league and replay-id rows keep the match's own home / away order. */
+const coachOriented = computed(() => search.result?.kind === 'own' || search.result?.kind === 'coach');
+const showCompetition = computed(() => rows.value.some((row) => !!row.division));
+function miniCrest(race: string | undefined, side: 'home' | 'away'): string | null { return race ? teamLogoUrl({ race, side }) : null; }
+function miniInitials(name: string | undefined): string {
+  const words = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  return words.length === 1 ? words[0]!.slice(0, 2).toUpperCase() : words.slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
+}
+/** By game ID: the FFB game id opens the replay at once (the same path as Replay on a bare replay-id row). */
+const byIdValue = ref('');
+const byIdValid = computed(() => /^\d+$/.test(byIdValue.value.trim()) && Number(byIdValue.value.trim()) > 0);
+function openById(): void { if (byIdValid.value) void replayRow(replayIdRow(Number(byIdValue.value.trim()))); }
+/** Recently watched: the FUMBBL games this client saw to the end in the last 7 days (the Details cache the pane already
+ *  reads; game/postGameCache.ts), newest first. */
+const watched = ref<PostGameSummary[]>([]);
+async function refreshWatched(): Promise<void> { watched.value = await recentPostGameSummaries('fumbbl', WATCHED_CAP); }
+/** Owner 11-03: Recently watched never scrolls - it shows as many entries as fit its panel (newest first), at most
+ *  WATCHED_CAP; stacked (small windows, the page scrolls) it shows them all. */
+const WATCHED_CAP = 8;
+const watchedFit = ref(WATCHED_CAP);
+const watchedBody = ref<HTMLElement | null>(null);
+/** the last measured height of one Recently watched row (px); 0 until a row has rendered */
+let watchedRowHeight = 0;
+const watchedShown = computed(() => watched.value.slice(0, watchedFit.value));
+function fitWatched(): void {
+  const body = watchedBody.value;
+  if (!body || typeof window === 'undefined') return;
+  if (window.matchMedia?.('(max-width: 1100px), (max-height: 720px)').matches) { watchedFit.value = WATCHED_CAP; return; }
+  // Sol r3: measure a rendered row when there is one and keep its height, so a box that shrank to no rows can grow
+  // back (with none shown there is nothing left to measure)
+  const measured = body.querySelector<HTMLElement>('.lm-list-row')?.getBoundingClientRect().height ?? 0;
+  if (measured > 0) watchedRowHeight = measured;
+  const rowHeight = watchedRowHeight;
+  if (!rowHeight) return;
+  const style = getComputedStyle(body);
+  const room = body.clientHeight - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0');
+  // Sol r2: the rows sit in a flex column with a gap; count it, and allow none (never a partly visible row)
+  watchedFit.value = rowsThatFit(room, rowHeight, parseFloat(style.rowGap || '0') || 0, WATCHED_CAP);
+}
+let watchedResize: ResizeObserver | null = null;
+watch(watchedBody, (body) => {
+  watchedResize?.disconnect(); watchedResize = null;
+  if (body && typeof ResizeObserver !== 'undefined') { watchedResize = new ResizeObserver(() => fitWatched()); watchedResize.observe(body); }
+});
+watch(watched, () => { void nextTick(fitWatched); });
+onBeforeUnmount(() => { watchedResize?.disconnect(); });
+function watchedRow(w: PostGameSummary): ReplayRow {
+  const id = Number(w.gameId);
+  return { ...replayIdRow(id), key: `watched-${id}`, left: { name: w.home.name, coach: w.home.coach, race: w.home.race || undefined }, right: { name: w.away.name, coach: w.away.coach, race: w.away.race || undefined } };
+}
+/** Sol r3: the side the LOCAL coach played in a cached game, from the snapshot's own teams (never from a row's
+ *  left / right order): their FUMBBL coach name on the home or the away team; null when it is neither, or not a
+ *  played game. Watched rows carry no team ids, so the search rows' detailsSide() cannot answer for them. */
+function localSideOf(snapshot: PostGameSnapshot): 'home' | 'away' | null {
+  const me = settings.coach.trim().toLowerCase();
+  if (snapshot.seat !== 'play' || !me) return null;
+  const coachOf = (team: unknown) => String((team as { coach?: unknown } | undefined)?.coach ?? '').trim().toLowerCase();
+  if (coachOf(snapshot.game?.teamHome) === me) return 'home';
+  if (coachOf(snapshot.game?.teamAway) === me) return 'away';
+  return null;
+}
+/** The Modern Details popup's sides: watched rows resolve the local side from the snapshot; search rows keep the
+ *  Retro rule (detailsSide by the row's team id). */
+function lmLocalSide(row: ReplayRow, snapshot: PostGameSnapshot): 'home' | 'away' | null {
+  if (row.key.startsWith('watched-')) return localSideOf(snapshot);
+  return snapshot.seat === 'play' ? detailsSide(row, snapshot) : null;
+}
+function lmRosterSide(row: ReplayRow, snapshot: PostGameSnapshot): 'home' | 'away' {
+  return row.key.startsWith('watched-') ? localSideOf(snapshot) ?? 'home' : detailsSide(row, snapshot);
+}
+function watchedSeat(w: PostGameSummary): string {
+  return w.seat === 'play' ? t('lmBlades.replay.seatPlayed') : w.seat === 'spectate' ? t('lmBlades.replay.seatSpectated') : t('lmBlades.replay.seatReplayed');
+}
+watch(modern, (on) => { if (on) void refreshWatched(); }, { immediate: true });
+
 onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is searched until the user presses Search (an empty query then = their own recent games)
 </script>
 
 <template>
-  <section class="replay-launcher" :style="paneTheme" data-scheme="fumbbl">
+  <!-- Owner 11-03 (lane 3): the Modern Replay blade - Match archive (the one search field) over the Results table, then
+       Open a file, By game ID and Recently watched in the right column. Same search, rows and actions as the Retro
+       template (v-else, unchanged). FUMBBL only, as before. -->
+  <main v-if="modern" :class="[lmClass, 'lm-page', 'lm-replay']" :aria-label="$t('replayLauncher.replays')" data-testid="lm-replay">
+    <div class="lm-col">
+      <section class="lm-panel" aria-labelledby="lm-search-h" data-testid="replay-search">
+        <header class="hm-band"><h2 id="lm-search-h">{{ $t('replayLauncher.matchArchive') }}</h2><span class="hm-cap">{{ $t('lmBlades.replay.searchFumbbl') }}</span></header>
+        <form class="lm-body" role="search" @submit.prevent="runSearch">
+          <label class="sf-k" for="lm-replay-q">{{ $t('replayLauncher.replayPanel.coachLeagueOrGame') }}</label>
+          <div class="lm-row">
+            <input id="lm-replay-q" v-model="query" class="sf-input" data-tour="replay-search" type="search" autocomplete="off" spellcheck="false" :placeholder="$t('replayLauncher.replayPanel.coachLeagueOrGame')" />
+            <button class="sf-btn primary big" type="submit" :aria-busy="search.loading">{{ search.loading ? $t('replayLauncher.replayPanel.searching') : $t('replayLauncher.replayPanel.search') }}</button>
+          </div>
+          <div class="lm-row wrap">
+            <span class="lm-muted">{{ $t('replayLauncher.searchAFumbblCoach') }}</span>
+            <span class="lm-spacer"></span>
+            <label class="sf-check" data-tour="replay-hide-scores"><input v-model="settings.replaySearchHideScores" type="checkbox" /> {{ $t('replayLauncher.replayPanel.hideScoresAndOutcomes') }}</label>
+          </div>
+          <div aria-live="polite">
+            <p v-if="search.loading" class="lm-muted">{{ $t('replayLauncher.replayPanel.searching') }}</p>
+            <p v-else-if="search.error" class="sf-error">{{ search.error }}</p>
+            <p v-else-if="needsOwnCoach" class="lm-muted">{{ $t('replayLauncher.replayPanel.setYourFumbblCoach') }}</p>
+            <p v-else-if="!search.result" class="lm-muted">{{ $t('replayLauncher.replayPanel.searchACoachLeague') }}</p>
+            <p v-else-if="emptyMessage" class="lm-muted">{{ emptyMessage }}</p>
+            <p v-if="!search.loading && searchNoticeText(search.result)" class="lm-muted" role="status">{{ searchNoticeText(search.result) }}</p>
+            <p v-if="!search.loading && search.result?.teamCap" class="lm-muted">{{ recentTeamCapNote(search.result.teamCap) }}</p>
+            <p v-if="!search.loading && altReadings.length" class="lm-muted">
+              {{ $t('replayLauncher.replayPanel.lookingFor') }}
+              <template v-for="(alt, i) in altReadings" :key="alt.query"><template v-if="i">{{ $t('replayLauncher.replayPanel.or') }}</template><button class="lm-link" type="button" @click="searchFor(alt.query)">{{ alt.label }}</button></template>
+              {{ $t('replayLauncher.replayPanel.instead') }}
+            </p>
+          </div>
+        </form>
+      </section>
+
+      <section class="lm-panel lm-grow" aria-labelledby="lm-results-h" data-testid="replay-results">
+        <header class="hm-band">
+          <h2 id="lm-results-h">{{ pickGroups.length ? $t('replayLauncher.replayPanel.leaguesMatchingQuery', { query: search.result?.query }) : resultsTitle }}</h2>
+          <span class="hm-cap">{{ pickGroups.length ? pickGroups.length : $t('lmBlades.play.gamesCount', { n: rows.length }) }}</span>
+        </header>
+        <div v-if="pickGroups.length" class="lm-body lm-scroll" data-testid="replay-league-pick">
+          <button v-for="group in pickGroups" :key="group.id" class="sf-btn" type="button" :disabled="search.loading" :title="$t('replayLauncher.replayPanel.leagueId', { id: group.id })" @click="pickGroup(group)">
+            {{ group.name }}<small v-if="duplicatePickNames.has(group.name.toLowerCase())">&nbsp;#{{ group.id }}</small>
+          </button>
+        </div>
+        <div v-else-if="rows.length" class="lm-table-wrap" :aria-busy="search.loading">
+          <table class="lm-table">
+            <thead>
+              <tr>
+                <th scope="col" class="lm-col-date">{{ $t('lmBlades.replay.date') }}</th>
+                <th scope="col">{{ coachOriented ? $t('lmBlades.replay.team') : $t('lmBlades.replay.home') }}</th>
+                <th scope="col" class="lm-num lm-col-score">{{ $t('lmBlades.score') }}</th>
+                <th scope="col">{{ coachOriented ? $t('lmBlades.replay.opponent') : $t('lmBlades.replay.away') }}</th>
+                <th v-if="showCompetition" scope="col" class="lm-col-comp">{{ $t('lmBlades.replay.competition') }}</th>
+                <th scope="col" class="lm-col-act"><span class="visually-hidden">{{ $t('lmBlades.replay.actions') }}</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in rows" :key="row.key" class="lm-tinted-row" :data-kind="search.result?.kind" :style="rowTone(row)">
+                <td class="lm-date" :title="rowWhen(row).abs">{{ rowDate(row) }}</td>
+                <td><span class="lm-team-cell"><img v-if="miniCrest(row.left.race, 'home')" class="lm-mini" :src="miniCrest(row.left.race, 'home')!" alt="" /><span v-else class="lm-mini" aria-hidden="true">{{ miniInitials(row.left.name) }}</span><span class="lm-team-text"><span class="lm-team-name" :title="row.left.name">{{ row.left.name }}</span><span v-if="row.left.coach" class="lm-team-coach">{{ row.left.coach }}</span></span></span></td>
+                <td class="lm-num">
+                  <span v-if="maskRow(row, hideScores).score" class="lm-small-score">{{ maskRow(row, hideScores).score!.left }}<span class="lm-dash" aria-hidden="true">&ndash;</span>{{ maskRow(row, hideScores).score!.right }}</span>
+                  <span v-else class="lm-small-score" data-hidden="true">{{ row.score ? '?–?' : $t('lmBlades.vs') }}</span>
+                </td>
+                <td><span v-if="row.right" class="lm-team-cell"><img v-if="miniCrest(row.right.race, 'away')" class="lm-mini" :src="miniCrest(row.right.race, 'away')!" alt="" /><span v-else class="lm-mini" aria-hidden="true">{{ miniInitials(row.right.name) }}</span><span class="lm-team-text"><span class="lm-team-name" :title="row.right.name">{{ row.right.name }}</span><span v-if="row.right.coach" class="lm-team-coach">{{ row.right.coach }}</span></span></span><span v-else class="lm-muted">—</span></td>
+                <td v-if="showCompetition"><span v-if="row.division" class="sf-chip lm-chip-clip" data-tone="info" :title="row.division">{{ row.division }}</span></td>
+                <td class="lm-end">
+                  <span class="lm-actions">
+                    <button v-if="hasDetails(row) && !hideScores" class="sf-btn small" type="button" :title="$t('replayLauncher.replayPanel.endOfGameDetails', { replayId: row.replayId })" @click="openDetails(row)">{{ $t('replayLauncher.replayPanel.details') }}</button>
+                    <button class="sf-btn small primary" type="button" :disabled="gameStore.replay.loading || lookupRowKey === row.key || (!row.replayId && !row.replayLookup)"
+                      :title="row.replayId ? $t('replayLauncher.replayPanel.replayGameReplayid', { replayId: row.replayId }) : row.replayLookup ? $t('replayLauncher.replayPanel.replayMatchMatchid', { matchId: row.matchId }) : $t('replayLauncher.replayPanel.fumbblHasNoReplay')" @click="replayRow(row)">{{ $t('lmBlades.spectate.watch') }}</button>
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="lm-body"><p class="lm-empty">{{ $t('lmBlades.replay.noResultsYet') }}</p></div>
+      </section>
+    </div>
+
+    <aside class="lm-col">
+      <section class="lm-panel" aria-labelledby="lm-file-h">
+        <header class="hm-band"><h2 id="lm-file-h">{{ $t('replayLauncher.replayPanel.openAReplayFile') }}</h2><span class="hm-cap">{{ $t('lmBlades.replay.local') }}</span></header>
+        <div class="lm-body">
+          <button class="sf-btn primary big" type="button" :disabled="fileLoading || gameStore.replay.loading" :aria-busy="fileLoading" @click="openFilePicker">{{ fileLoading ? $t('replayLauncher.replayPanel.reading') : $t('replayLauncher.replayPanel.openFumbblReplay') }}</button>
+          <p class="lm-muted">{{ $t('replayLauncher.replayPanel.openAFumbblReplay') }}</p>
+        </div>
+      </section>
+
+      <section class="lm-panel" aria-labelledby="lm-byid-h">
+        <header class="hm-band"><h2 id="lm-byid-h">{{ $t('lmBlades.replay.byGameId') }}</h2></header>
+        <form class="lm-body" @submit.prevent="openById">
+          <div class="lm-row">
+            <label class="visually-hidden" for="lm-replay-id">{{ $t('lmBlades.gameId') }}</label>
+            <input id="lm-replay-id" v-model="byIdValue" class="sf-input" type="text" inputmode="numeric" autocomplete="off" :placeholder="$t('lmBlades.gameId')" />
+            <button class="sf-btn" type="submit" :disabled="!byIdValid || gameStore.replay.loading">{{ $t('lmBlades.replay.open') }}</button>
+          </div>
+          <p class="lm-muted">{{ $t('lmBlades.replay.byGameIdHelp') }}</p>
+        </form>
+      </section>
+
+      <section class="lm-panel lm-grow" aria-labelledby="lm-watched-h" data-testid="lm-recently-watched">
+        <header class="hm-band"><h2 id="lm-watched-h">{{ $t('lmBlades.replay.recentlyWatched') }}</h2><span class="hm-cap">{{ watchedShown.length }}</span></header>
+        <div ref="watchedBody" class="lm-body lm-fill">
+          <p v-if="!watched.length" class="lm-empty">{{ $t('lmBlades.replay.nothingWatched') }}</p>
+          <div v-for="w in watchedShown" :key="w.key" class="lm-list-row">
+            <div>
+              <strong>{{ $t('lmBlades.teamVsTeam', { home: w.home.name || '—', away: w.away.name || '—' }) }}</strong>
+              <span class="lm-muted">{{ watchedSeat(w) }} · {{ relativeTime(new Date(w.savedAt).toISOString()) }}</span>
+            </div>
+            <button v-if="!hideScores" class="sf-btn small" type="button" @click="openDetails(watchedRow(w))">{{ $t('replayLauncher.replayPanel.details') }}</button>
+            <button class="sf-btn small primary" type="button" :disabled="gameStore.replay.loading" @click="replayRow(watchedRow(w))">{{ $t('lmBlades.spectate.watch') }}</button>
+          </div>
+        </div>
+      </section>
+      <p v-if="gameStore.replay.error || localError || replayLookupError" class="sf-error" role="alert" aria-live="assertive">{{ gameStore.replay.error || localError || replayLookupError }}</p>
+    </aside>
+    <input ref="fileInput" type="file" hidden tabindex="-1" aria-hidden="true"
+      accept="application/json,application/x-java-jnlp-file,text/xml,.json,.ffbreplay,.jnlp" @change="loadFile" />
+    <div v-if="detailsRow && !hideScores" class="details-modal" role="dialog" aria-modal="true" :aria-label="$t('replayLauncher.detailsModal.detailsNameVsP1', { name: detailsRow.left.name, p1: detailsRow.right?.name ?? '' })" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
+      <div class="details-card lm-panel">
+        <header class="hm-band">
+          <h2>{{ $t('replayLauncher.replayPanel.details') }}</h2>
+          <span class="hm-cap">{{ $t('lmBlades.teamVsTeam', { home: detailsRow.left.name, away: detailsRow.right?.name ?? '' }) }}</span>
+          <button class="sf-btn small" type="button" :aria-label="$t('replayLauncher.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
+        </header>
+        <div class="details-body">
+          <p v-if="detailsLoading" class="lm-empty">{{ $t('replayLauncher.detailsModal.loading') }}</p>
+          <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="lmRosterSide(detailsRow, detailsSnapshot)" :local-side="lmLocalSide(detailsRow, detailsSnapshot)" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <p v-else class="lm-empty">{{ $t('replayLauncher.detailsModal.noDetailsStoredFor') }}</p>
+        </div>
+        <footer class="details-foot">
+          <button class="sf-btn primary" type="button" :disabled="gameStore.replay.loading" @click="replayRow(detailsRow)">{{ $t('replayLauncher.replayPanel.replay') }}</button>
+        </footer>
+      </div>
+    </div>
+  </main>
+  <section v-else class="replay-launcher" :style="paneTheme" data-scheme="fumbbl">
     <div class="replay-console">
       <header class="replay-heading">
         <div>

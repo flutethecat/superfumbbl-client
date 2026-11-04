@@ -1,0 +1,292 @@
+/* Settings reflow (owner 11-03, spec-settings-reflow-2026-11-03.md; mock docs/artifact-orchestration/settings-reflow-mock.html).
+   The dialog in the League Manager's "modern retro" language: a scrollable rail of red-edged SNES category rows, and
+   content as panels with band headings (4px heading-red left edge, SNES Italic title, bold-sans body).
+
+   Tokens only. Under Interface style: Modern the pane carries `.sf-lm` (game/lmTheme.ts lmRootClass), so the --ui-* /
+   --sf-* names resolve to the League Manager values from styles/lm-theme.css (dark or light) and its shared controls
+   (.sf-btn, .sf-table, ...) apply. Under Retro there is no `.sf-lm`: the --ui-* tokens are the client theme engine's
+   (game/theme.ts), the --sf-* ones fall back to the values below, and the few lane-1 controls Settings uses get a
+   Retro-only fallback (`:not(.sf-lm)`), never a second copy of the Modern rule. */
+
+.settings-pane {
+  --sr-line: var(--sf-panel-line, var(--ui-border));
+  --sr-top: var(--sf-panel-top, color-mix(in srgb, var(--ui-surface-2) 88%, white));
+  --sr-bottom: var(--sf-panel-bottom, var(--ui-surface));
+  --sr-hi: var(--sf-panel-hi, color-mix(in srgb, var(--ui-border) 55%, white));
+  --sr-drop: var(--sf-panel-drop, rgb(0 0 0 / 0.55));
+  /* "SF Band Italic" (lm-theme.css) is SNES-Italic.ttf limited to the glyphs it draws; anything else (é ä & - / :)
+     falls back to the bold sans. The full-range "SNES" family would draw those as blank boxes (Sol r1). */
+  --sr-band-title: var(--sf-band-title-font, "SF Band Italic", "SF Sans Bold", Arial, Helvetica, sans-serif);
+  --sr-bold: var(--sf-band-font, Arial, Helvetica, sans-serif);
+  --sr-panel: linear-gradient(var(--sr-top), var(--sr-bottom)), var(--ui-surface);
+  width: min(1040px, 96vw);
+  height: min(760px, 92vh);
+  border: 2px solid var(--sr-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 4px 0 var(--sr-drop);
+}
+.settings-pane.sf-lm { background: var(--ui-secondary); }
+
+/* ---- the tab rail: League Manager sidebar category rows (ShellNav .sf-tree-head), scrollable */
+.settings-pane .settings-sidebar {
+  flex: 0 0 214px;
+  gap: 10px;
+  padding: 14px 10px 14px 12px;
+  background: var(--ui-secondary);
+  border-right: 2px solid var(--sr-line);
+}
+.settings-pane .settings-sidebar h3 {
+  margin: 0 0 2px 2px;
+  font: 1.7rem/1 var(--sr-band-title);
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: var(--ui-heading);
+}
+.settings-pane .settings-nav {
+  gap: 7px;
+  padding: 2px 6px 6px 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+.settings-pane .settings-nav button {
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 6px 12px 6px 10px;
+  text-align: left;
+  font: 1.15rem/1.1 var(--sr-band-title);
+  letter-spacing: 0.03em;
+  color: var(--ui-heading);
+  background: var(--sr-panel);
+  border: 2px solid var(--sr-line);
+  border-left: 4px solid var(--ui-heading);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 2px 0 var(--sr-drop);
+}
+.settings-pane .settings-nav button:hover { filter: brightness(1.15); color: var(--ui-heading); background: var(--sr-panel); }
+.settings-pane .settings-nav button[data-active='true'] {
+  color: var(--ui-text-on-primary);
+  background: var(--ui-primary);
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 2px 0 var(--sr-drop);
+}
+.settings-pane .settings-nav button:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* ---- content: the tab band, then one panel per section */
+.settings-pane .settings-main { background: var(--ui-secondary); }
+.settings-pane .settings-content { padding: 14px 16px 16px; }
+.settings-pane .settings-content section { gap: 14px; }
+.settings-pane .settings-tab-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 0 2.4rem 14px 0;
+  padding: 8px 12px;
+  background: var(--sr-panel);
+  border: 2px solid var(--sr-line);
+  border-left: 4px solid var(--ui-heading);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 3px 0 var(--sr-drop);
+}
+.settings-pane .settings-content .settings-tab-band > h2 {
+  margin: 0;
+  font: 1.6rem/1.1 var(--sr-band-title);
+  color: var(--ui-heading);
+}
+.settings-pane .settings-tab-cap {
+  font: 700 max(var(--ui-min-text-size, 12px), 0.7rem)/1.2 var(--sr-bold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ui-muted);
+}
+
+/* Section panel (League Manager .hm-panel) with its band (.hm-band). The legend stays a <legend> (screen readers
+   name the group by it); floated out of the border so it lays out as the band row. */
+.settings-pane .settings-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0 14px 10px;
+  gap: 2px;
+  background: var(--sr-panel);
+  border: 2px solid var(--sr-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 3px 0 var(--sr-drop);
+}
+.settings-pane .settings-group > legend {
+  float: left;
+  box-sizing: border-box;
+  width: calc(100% + 28px);
+  margin: 0 -14px 6px;
+  padding: 7px 12px;
+  font: 1.25rem/1.1 var(--sr-band-title);
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ui-heading);
+  border-left: 4px solid var(--ui-heading);
+  border-bottom: 2px solid var(--sr-line);
+}
+/* Rows: label left, control right; a checkbox written first in the markup still sits on the right. */
+.settings-pane .settings-group label.row,
+.settings-pane .settings-group .row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 14px;
+  min-height: 36px;
+  padding: 4px 0;
+  font: 700 max(var(--ui-min-primary-text-size, 16px), 0.86rem)/1.3 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-text);
+  border-bottom: 1px solid color-mix(in srgb, var(--sr-line) 70%, transparent);
+}
+.settings-pane .settings-group label.row > span:first-of-type { flex: 1 1 auto; min-width: 0; }
+.settings-pane .settings-group label.row > input[type='checkbox'] { order: 2; flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--ui-primary); }
+.settings-pane .settings-group .hint { margin: 2px 0 4px; font-weight: 400; line-height: 1.4; }
+
+/* ---- Lane B: the "i" column. Every row is a grid [label | i | control]; the control column has one fixed width, so
+   every "i" in a section lines up just left of its control (owner 11-03). The <label> wraps the text and the control
+   (click-to-focus, accessible name) and is display: contents, so the "i" can sit between them without being inside
+   the label. Under the row: the preview panel and the live example text. */
+.settings-pane .settings-group div.row {
+  --sr-ctl-w: 272px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px var(--sr-ctl-w);
+  grid-template-areas: "label info ctl" "pop pop pop" "sample sample sample";
+  column-gap: 10px;
+  row-gap: 0;
+  align-items: center;
+}
+.settings-pane .settings-group div.row > .row-main { display: contents; }
+.settings-pane .settings-group div.row > .row-main > span:first-child,
+.settings-pane .settings-group div.row > .row-label { grid-area: label; min-width: 0; }
+.settings-pane .settings-group div.row .row-ctl {
+  grid-area: ctl; display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 400;
+}
+.settings-pane .settings-group div.row .row-ctl > input[type='checkbox'] { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--ui-primary); }
+.settings-pane .settings-group div.row .row-ctl > input[type='range'] { flex: 1 1 auto; min-width: 0; }
+.settings-pane .settings-group div.row .row-ctl > select { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.settings-pane .settings-group div.row .row-ctl > input[type='text'],
+.settings-pane .settings-group div.row .row-ctl > input:not([type]) { flex: 1 1 auto; min-width: 0; }
+.settings-pane .settings-group div.row .row-ctl > span:not([class]) { flex: none; min-width: 3.2em; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.settings-pane .settings-group div.row .row-note { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
+.settings-pane .settings-group div.row .creds-status { margin: 0; text-align: left; }
+.settings-pane .settings-group div.row.locked .row-ctl { opacity: 0.62; }
+
+.settings-pane .sinfo { grid-area: info; position: relative; display: inline-flex; justify-self: center; }
+.settings-pane .sinfo-btn {
+  all: unset; box-sizing: border-box; cursor: pointer; display: inline-grid; place-items: center;
+  width: 20px; height: 20px; border: 1px solid var(--sr-line); border-radius: 50%;
+  font: 700 0.72rem/1 var(--sr-bold); color: var(--ui-muted);
+}
+.settings-pane .sinfo.has-prev .sinfo-btn { border-style: dashed; border-width: 2px; }
+.settings-pane .sinfo-btn:hover,
+.settings-pane .sinfo-btn[aria-expanded='true'] { color: var(--ui-text); border-color: var(--ui-heading); }
+.settings-pane .sinfo-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+/* Tooltip: above the "i", opening up and to the left so it never covers the control; .below when there is no room. */
+.settings-pane .sinfo-tip {
+  position: absolute; z-index: 30; right: -10px; bottom: calc(100% + 10px);
+  width: max-content; max-width: min(320px, 70vw); display: none; padding: 8px 11px;
+  background: var(--ui-surface-2); color: var(--ui-text);
+  border: 2px solid var(--sr-line); border-left: 4px solid var(--ui-heading); border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 3px 0 var(--sr-drop);
+  font: 400 max(var(--ui-min-text-size, 12px), 0.84rem)/1.4 var(--font-body, Arial, Helvetica, sans-serif);
+  text-align: left; white-space: normal; pointer-events: none;
+}
+/* Sol final r1 P2: a shown tooltip takes the pointer (it can be read and selected) and a transparent bridge spans the
+   10px gap to the "i", so moving from one to the other never leaves the hover (SettingInfo.vue also waits 150 ms). */
+.settings-pane .sinfo-tip[data-shown='true'] { display: block; pointer-events: auto; }
+.settings-pane .sinfo-tip::before { content: ""; position: absolute; left: -4px; right: -4px; top: 100%; height: 14px; }
+.settings-pane .sinfo-tip.below::before { top: auto; bottom: 100%; }
+.settings-pane .sinfo-tip::after {
+  content: ""; position: absolute; right: 14px; top: 100%;
+  border: 7px solid transparent; border-top-color: var(--sr-line);
+}
+.settings-pane .sinfo-tip.below { bottom: auto; top: calc(100% + 10px); }
+.settings-pane .sinfo-tip.below::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--sr-line); }
+.settings-pane .sinfo-def { display: block; margin-top: 3px; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
+/* Inline preview panel under the row. */
+.settings-pane .sinfo-pop {
+  grid-area: pop; display: grid; gap: 8px; margin: 6px 0 4px; padding: 8px 10px;
+  background: var(--ui-surface-2); border: 2px solid var(--sr-line); border-left: 4px solid var(--ui-heading); border-radius: 2px;
+  font: 400 max(var(--ui-min-text-size, 12px), 0.86rem)/1.4 var(--font-body, Arial, Helvetica, sans-serif);
+}
+.settings-pane .sinfo-pop-text { margin: 0; }
+.settings-pane .sinfo-figs { display: flex; flex-wrap: wrap; gap: 10px; }
+.settings-pane .sinfo-fig { margin: 0; display: grid; gap: 3px; max-width: 100%; }
+.settings-pane .sinfo-fig img { display: block; max-width: min(250px, 100%); height: auto; border: 2px solid var(--sr-line); border-radius: 2px; background: var(--ui-secondary); }
+.settings-pane .sinfo-fig figcaption { color: var(--ui-muted); font: 700 max(var(--ui-min-text-size, 12px), 0.72rem)/1.2 var(--sr-bold); letter-spacing: 0.06em; text-transform: uppercase; }
+/* Live example text under the font and size rows. */
+.settings-pane .row-sample {
+  grid-area: sample; margin: 4px 0 2px; padding-left: 8px; border-left: 2px solid var(--sr-line);
+  font-weight: 400; color: var(--ui-text); overflow-wrap: anywhere;
+}
+.settings-pane .row-sample-cap { color: var(--ui-muted); font: 700 max(var(--ui-min-text-size, 12px), 0.72rem)/1.2 var(--sr-bold); letter-spacing: 0.06em; text-transform: uppercase; }
+.settings-pane .settings-subgroup { display: flex; flex-direction: column; gap: 2px; }
+.settings-pane .settings-actions,
+.settings-pane .settings-group > .actions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 10px; padding: 8px 0 4px; }
+.settings-pane .theme-preset-row { align-items: center; }
+.settings-pane .creds-status-row .creds-status { margin: 0; text-align: right; }
+
+/* Fields: square, themed (League Manager .sf-input). */
+.settings-pane .settings-content select,
+.settings-pane .settings-content input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']) {
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  font: 0.9rem/1.3 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-text);
+  background: var(--ui-surface-2);
+  border: 2px solid var(--sr-line);
+  border-radius: 2px;
+}
+.settings-pane .settings-content select { max-width: 280px; }
+.settings-pane .settings-content :is(select, input):disabled { color: var(--ui-muted); border-style: dashed; }
+
+/* Retro only: the bevelled button for .sf-btn (Modern takes lm-theme.css's). */
+.settings-pane:not(.sf-lm) .sf-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 12px;
+  font: 700 0.72rem/1.2 var(--sr-bold); letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
+  color: var(--ui-text); background: var(--sr-panel);
+  border: 2px solid var(--sr-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sr-hi), 0 3px 0 var(--sr-drop);
+}
+.settings-pane:not(.sf-lm) .sf-btn:hover:not(:disabled) { border-color: var(--ui-heading); }
+.settings-pane:not(.sf-lm) .sf-btn.primary { color: var(--ui-text-on-primary); background: var(--ui-primary); border-color: var(--ui-primary); }
+.settings-pane:not(.sf-lm) .sf-btn:disabled { cursor: not-allowed; color: var(--ui-muted); border-style: dashed; box-shadow: none; }
+
+/* Footer: the existing Cancel / Apply / OK, bevelled. */
+.settings-pane .settings-footer { background: var(--sr-panel); border-top: 2px solid var(--sr-line); }
+
+@media (max-width: 640px), (max-height: 500px) {
+  .settings-pane { width: min(96vw, 1040px); height: min(94dvh, 760px); }
+  .settings-pane .settings-content { padding: 10px; }
+  .settings-pane .settings-tab-band { margin-right: 0; }
+  .settings-pane .settings-group { padding: 0 10px 8px; }
+  .settings-pane .settings-group > legend { width: calc(100% + 20px); margin: 0 -10px 6px; }
+  .settings-pane .settings-group label.row { flex-wrap: wrap; }
+  .settings-pane .settings-content select { max-width: 100%; }
+  /* 375 px: the control drops under the label and its "i" goes with it (the "i" column stays left of the control). */
+  .settings-pane .settings-group div.row {
+    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-areas: "label label" "info ctl" "pop pop" "sample sample";
+    row-gap: 4px;
+  }
+  .settings-pane .sinfo-tip { right: auto; left: -10px; }
+  .settings-pane .sinfo-tip::after { right: auto; left: 14px; }
+}
+/* Sol final r5: rows stack on the CONTENT PANE's own width, not the viewport. A row needs the label plus ~314 px
+   (the "i" column, the 272 px control column and the gaps); below ~560 px of pane (a small window, a UI zoom, the
+   tab rail beside it) the label would be squeezed into the "i". The viewport rule above stays as the fallback. */
+.settings-pane .settings-content { container: sr-content / inline-size; }
+@container sr-content (max-width: 560px) {
+  .settings-pane .settings-group div.row {
+    grid-template-columns: 22px minmax(0, 1fr);
+    grid-template-areas: "label label" "info ctl" "pop pop" "sample sample";
+    row-gap: 4px;
+  }
+  .settings-pane .sinfo-tip { right: auto; left: -10px; }
+  .settings-pane .sinfo-tip::after { right: auto; left: 14px; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-pane .settings-nav button, .settings-pane .sinfo-btn, .settings-pane .sinfo-tip { transition: none; animation: none; } }

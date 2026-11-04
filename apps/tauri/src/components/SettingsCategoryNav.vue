@@ -2,6 +2,8 @@
 import { nextTick } from 'vue';
 import { SETTINGS_SECTIONS, nextSettingsSection, type SettingsTab } from '../game/settingsDialog';
 import { $t } from '../i18n';
+// Owner 11-03 settings reflow: the dialog's own styling (rail rows, panels, bands); tokens only.
+import '../styles/settings-reflow.css';
 
 const props = defineProps<{ modelValue: SettingsTab; compact?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [tab: SettingsTab]; contentFocus: [] }>();

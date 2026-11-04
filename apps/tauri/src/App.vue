@@ -120,6 +120,7 @@ import {
   type ReplayFileImportTicket,
 } from './game/replay/replayFileImport';
 import { applyTheme, deriveTheme, resolveThemeColors, THEME_PRESETS, type ThemeId } from './game/theme';
+import { applyLmRoot, lmRootClass } from './game/lmTheme';
 import { dialogDescriptor } from './game/dialogRegistry';
 import { endGameExitPlan, type EndGameExit } from './game/spectatorEndGame';
 import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports, type InstalledAssetPack } from './game/assetMods';
@@ -658,9 +659,16 @@ function openTournamentNotification() {
 import { SOUND_CATALOG, SOUND_STYLE_OFF, previewSound, invalidateSoundCache } from './game/sounds';
 import { commitMarkingStores, currentMarkingStores, invalidateMarkingsImports, normalizeMarkingStores, setTableMarker } from './game/markingRules';
 import SkillMarkingsSettings from './components/SkillMarkingsSettings.vue';
+import SettingInfo from './components/settings/SettingInfo.vue';
+import { closeOpenSettingInfo, dismissOpenSettingInfo } from './components/settings/settingInfoState';
+import { LOG_FONT_STACKS, SETTING_PREVIEWS } from './components/settings/settingPreviews';
+import ForkConnectionRows from './components/settings/ForkConnectionRows.vue';
+import { uiZoomState } from './game/uiZoom';
+import { EDGE_PAN_SPEED, UI_ZOOM } from './game/settings';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
+  SETTINGS_TAB_BLURBS,
   appShellModalOwnsKeyboard,
   acceptSettingsPreview,
   cancelSettingsPreview,
@@ -675,6 +683,10 @@ import {
   trapDialogFocus,
   type SettingsTab,
 } from './game/settingsDialog';
+import {
+  launchScreensFrom, launchScreensWrites, logDiceFrom, logDiceWrites, stadiumFrom, stadiumWrites, uniformFiguresFrom,
+  uniformFiguresWrites, type LaunchScreens, type LogDiceChoice, type StadiumChoice, type UniformFiguresChoice,
+} from './game/settingsMerges';
 import helmetIconUrl from './assets/resources/football-helmet.png';
 import tabblLogoUrl from './assets/resources/tabbl-logo.png';
 // Owner 2026-07-11: rebrand to the working name "Super FUMBBL" (display only — server/identifier/
@@ -1314,6 +1326,24 @@ const settingsTab = computed({
   set: (v: SettingsTab) => (ui.settingsTab = resolveSettingsTab(v)),
 });
 const activeSettingsSection = computed(() => SETTINGS_SECTIONS.find((section) => section.id === settingsTab.value) ?? SETTINGS_SECTIONS[0]!);
+// Owner 11-03 settings reflow: four row pairs became one select each; each select is a view over its two stored keys
+// (game/settingsMerges.ts), so every existing combination keeps its behaviour.
+const launchScreens = computed<LaunchScreens>({
+  get: () => launchScreensFrom(settings),
+  set: (value) => { Object.assign(settings, launchScreensWrites(value)); },
+});
+const uniformFiguresChoice = computed<UniformFiguresChoice>({
+  get: () => uniformFiguresFrom(settings),
+  set: (value) => { Object.assign(settings, uniformFiguresWrites(value)); },
+});
+const stadiumChoice = computed<StadiumChoice>({
+  get: () => stadiumFrom(settings),
+  set: (value) => { Object.assign(settings, stadiumWrites(value)); },
+});
+const logDiceChoice = computed<LogDiceChoice>({
+  get: () => logDiceFrom(settings),
+  set: (value) => { Object.assign(settings, logDiceWrites(value)); },
+});
 const footstepStyle = computed({
   get: () => settings.soundStyles.step ?? 'tick',
   set: (value: string) => { settings.soundStyles.step = value; previewSound('step'); },
@@ -1334,10 +1364,29 @@ const waypointSound = computed({
 });
 const UI_CUE_TOGGLES = [
   { id: 'actionCancel', get label() { return t('app.uiCueToggles.cancelAnAction'); } },
-  { id: 'turnClockMinute', get label() { return t('app.uiCueToggles.turnClock1Minute'); } },
   { id: 'turnClockCountdown', get label() { return t('app.uiCueToggles.turnClockLast5'); } },
   { id: 'rollFailed', get label() { return t('app.uiCueToggles.failedDiceRoll'); } },
 ] as const;
+// Owner 11-03: Audio splits the cues into Turn clock and UI cues. The old "Turn clock: 1 minute" toggle is retired:
+// the Turn clock warning select (settings.turnClockWarning, lane C) is its one control, and lane C's migration moved a
+// stored soundStyles.turnClockMinute = 'off' onto it - a toggle left here could silence the warning again behind it.
+const TURN_CLOCK_CUES = UI_CUE_TOGGLES.filter((cue) => cue.id === 'turnClockCountdown');
+const OTHER_UI_CUES = UI_CUE_TOGGLES.filter((cue) => cue.id !== 'turnClockCountdown');
+// Owner ruling 11-03: the UI zoom row shows only while the shell can zoom its webview. Lane C's startup probe sets
+// uiZoomState.available; until that flag exists (or while it is unset) the row stays hidden (fails closed).
+const uiZoomAvailable = computed(() => (uiZoomState as unknown as { available?: boolean }).available === true);
+/** Owner 11-03 settings reflow (lane B): the "i" text for each sound-cue toggle. */
+const UI_CUE_INFO: Readonly<Record<string, string>> = {
+  actionCancel: 'settings.info.cueActionCancel',
+  turnClockCountdown: 'settings.info.cueTurnClockCountdown',
+  rollFailed: 'settings.info.cueRollFailed',
+};
+function cueInfo(id: string): string { return t(UI_CUE_INFO[id] ?? 'settings.info.aboutThisSetting'); }
+/** Live example text under the log font rows (the log's own font stacks). */
+function logSampleStyle(): Record<string, string> {
+  return { fontSize: `${settings.logFontSize}px`, fontFamily: LOG_FONT_STACKS[settings.logFont] ?? LOG_FONT_STACKS.arial! };
+}
+function uiFontSampleStyle(): Record<string, string> { return { fontFamily: UI_FONTS[settings.uiFont] ?? UI_FONTS.nuffle }; }
 function uiCueOn(id: string): boolean { return settings.soundStyles[id] !== SOUND_STYLE_OFF; }
 function setUiCueOn(id: string, on: boolean): void {
   if (on) { delete settings.soundStyles[id]; previewSound(id); } else settings.soundStyles[id] = SOUND_STYLE_OFF;
@@ -1351,6 +1400,14 @@ const autoDodge = computed({
 // Owner 2026-07-14 (theme engine, spec black-red-ui-scheme.md): apply the derived --ui-* tokens to :root,
 // re-running whenever the theme settings change (deriveTheme is pure; applyTheme writes :root).
 watchEffect(() => applyTheme(settings.uiTheme, settings.uiPrimary, settings.uiSecondary));
+// lm-theme: root attributes + preset accents (logic in game/lmTheme.ts)
+// Owner 11-03 (spec-client-restyle-and-team-port, lane 1): stamp the interface style / colour scheme on <html> and feed
+// the colour preset into Modern's accent tokens (game/lmTheme.ts). Styles nothing until a blade opts in with .sf-lm.
+watchEffect(() => applyLmRoot({
+  uiStyle: settings.uiStyle, uiColorScheme: settings.uiColorScheme,
+  uiTheme: settings.uiTheme, uiPrimary: settings.uiPrimary, uiSecondary: settings.uiSecondary,
+}));
+// /lm-theme
 function selectThemePreset(id: ThemeId) {
   settings.uiTheme = id;
   if (id !== 'custom') { settings.uiPrimary = THEME_PRESETS[id].primary; settings.uiSecondary = THEME_PRESETS[id].secondary; }
@@ -1528,7 +1585,7 @@ const settingsDialog = ref<HTMLElement | null>(null);
 let settingsOpener: HTMLElement | null = null;
 
 function appMenuFocusFallback(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('.blade[data-active="true"]')
+  return document.querySelector<HTMLElement>('.blade[data-active="true"], .lm-blade[data-active="true"]')
     ?? document.querySelector<HTMLElement>('.icon-button[title="Settings"]')
     // In a game the console blades are gone and the quick bar's menu button is the Settings route.
     ?? document.querySelector<HTMLElement>('.icon-button[title="Game menu (Esc)"]');
@@ -1620,6 +1677,8 @@ function escSettings(e: KeyboardEvent) {
 /** The Settings-family Escape step (topmost modal first). Controller support P1: a pad's Start reaches the same step.
  *  False when no Settings-family surface is open. */
 function settingsEscape(): boolean {
+  // Owner 11-03: Escape on the Reset UI confirmation closes it only (nothing is reset).
+  if (resetUiConfirmOpen.value) { closeResetUi(); return true; }
   // Owner 10-10: Escape on the controller-support notice closes the notice only (the box stays off).
   if (controllerOptIn.noticeOpen.value) { controllerOptIn.dismiss(); return true; }
   const action = settingsEscapeAction({
@@ -1642,6 +1701,9 @@ function settingsEscape(): boolean {
     closeCredsMenu();
     return true;
   }
+  // Owner 11-03 settings reflow (lane B; Sol final r4): nested modals and key capture above go first; an open Settings
+  // "i" (tooltip or preview panel) closes right before Settings itself would, focus back on it.
+  if (closeOpenSettingInfo()) return true;
   void cancelSettingsChanges();
   return true;
 }
@@ -1781,12 +1843,30 @@ async function startUiCustomize(): Promise<void> {
   settings.uiCustomize = true;
 }
 
-function resetPanelLayoutImmediately() {
-  runConfirmedImmediateOperation(
-    () => window.confirm(t('app.text.resetEveryPanelPosition')),
-    () => { settings.uiLayout = {}; },
-  );
+// Owner 11-03 settings reflow: "Reset UI to default" (was "Reset all panels now") asks in the client's own modal
+// (the save-prompt idiom the controller notice uses over Settings) before it clears every panel position and size.
+// Immediate, like before: not undone by Cancel.
+const resetUiConfirmOpen = ref(false);
+const resetUiDialog = ref<HTMLElement | null>(null);
+const resetUiCancel = ref<HTMLButtonElement | null>(null);
+let resetUiOpener: HTMLElement | null = null;
+function requestResetUi(): void {
+  resetUiOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  resetUiConfirmOpen.value = true;
+  void nextTick(() => resetUiCancel.value?.focus());
 }
+function closeResetUi(): void {
+  if (!resetUiConfirmOpen.value) return;
+  resetUiConfirmOpen.value = false;
+  const opener = resetUiOpener;
+  resetUiOpener = null;
+  void nextTick(() => restoreDialogFocus(opener, settingsModalFocusFallback()));
+}
+function confirmResetUi(): void {
+  runConfirmedImmediateOperation(() => resetUiConfirmOpen.value, () => { settings.uiLayout = {}; });
+  closeResetUi();
+}
+watch(() => ui.settingsOpen, (open) => { if (!open) { resetUiConfirmOpen.value = false; resetUiOpener = null; } });
 
 // owner ruling 11-01: the fork server's default address is baked (FORK_SERVER_HOST); `--fork-server=<host>` (or, in
 // the FORK edition, settings.forkHost / VITE_FORK_SERVER_HOST; game/forkAccess.ts) overrides it. The old editable IP
@@ -2293,6 +2373,10 @@ const controllerRuntime = createControllerRuntime({
 });
 /** The opt-in box: ticking asks first (the owner's notice), the setting turns on only on its OK. */
 const controllerOptIn = createControllerOptIn(settings);
+// Sol final r4: a nested modal or a key capture opening over Settings closes any open help (no focus move), so the
+// modal's own focus trap is never undone by a later help Escape.
+watch(() => resetUiConfirmOpen.value || controllerOptIn.noticeOpen.value || credsMenuOpen.value || registerModalOpen.value
+  || !!capturingKey.value || !!capturingBinding.value, (nested) => { if (nested) dismissOpenSettingInfo(); });
 function onControllerBoxChange(event: Event): void {
   const box = event.target as HTMLInputElement;
   const checked = box.checked;
@@ -2381,7 +2465,34 @@ onBeforeUnmount(() => {
     <!-- Owner ruling (console shell restructure): the ribbon is ONE merged blade tree — Hub is gone (Play is
          the landing blade for both server plates), and the fork-only blades (Team/League/Players/Store) stay
          reachable alongside Play/Spectate/Replay rather than swapping out under a second parallel branch. -->
-    <nav v-if="!gameStore.game.value" class="blade-ribbon" :aria-label="$t('app.consoleViews')">
+    <!-- Owner 11-03 (lane 3, spec-client-restyle-and-team-port): under Settings > Interface style: Modern the ribbon is
+         the League Manager top bar - the SUPER FUMBBL wordmark, the joined tab strip (same blades, same handlers, same
+         tour anchors), BETA, Report, the coach and the Settings menu button at the far right. Retro keeps the ribbon
+         below exactly as it was (plus the same Settings button at its right end, owner 11-03). -->
+    <header v-if="!gameStore.game.value && settings.uiStyle === 'modern'" :class="[lmRootClass(settings.uiStyle), 'lm-topbar']" data-testid="lm-topbar">
+      <p class="lm-wordmark">{{ $t('app.superFumbbl') }}</p>
+      <nav class="sf-tabs" :aria-label="$t('app.consoleViews')">
+        <template v-if="view === 'console'">
+          <button class="sf-tab lm-blade" type="button" aria-current="page" data-active="true" @click="view = 'console'">{{ $t('blades.console.protocolConsole') }}</button>
+        </template>
+        <template v-else>
+          <button v-if="homeBladeEnabled" class="sf-tab lm-blade" type="button" :aria-current="view === 'home' ? 'page' : undefined" :data-active="view === 'home'" data-tour="blade-home" @click="selectBlade('home')">FUMBBL.COM</button>
+          <button class="sf-tab lm-blade" type="button" data-tour="blade-play" :aria-current="view === 'play' ? 'page' : undefined" :data-active="view === 'play'" @click="selectBlade('play')">{{ $t('blades.play') }}</button>
+          <button class="sf-tab lm-blade" type="button" data-tour="blade-spectate" :aria-current="view === 'spectate' ? 'page' : undefined" :data-active="view === 'spectate'" @click="selectBlade('spectate')">{{ $t('blades.spectate') }}</button>
+          <button class="sf-tab lm-blade" type="button" data-tour="blade-replay" :aria-current="view === 'replay' ? 'page' : undefined" :data-active="view === 'replay'" @click="selectBlade('replay')">{{ $t('blades.replay') }}</button>
+          <button v-if="forkFeaturesEnabled()" class="sf-tab lm-blade" type="button" :aria-current="view === 'team' ? 'page' : undefined" :data-active="view === 'team'" @click="selectBlade('team')">{{ $t('blades.team') }}</button>
+        </template>
+      </nav>
+      <span class="sf-chip lm-beta" :aria-label="$t('app.betaRelease')">{{ $t('app.beta') }}</span>
+      <div class="lm-topbar-end">
+        <button class="sf-btn" type="button" data-testid="ribbon-report" :title="shellReportTitle" :disabled="shellReportOpen" @click="openShellReport">{{ $t('app.report') }}</button>
+        <span v-if="settings.coach.trim()" class="lm-coach-name" :title="$t('lmBlades.signedInCoach')">{{ settings.coach.trim() }}</span>
+        <button class="sf-btn lm-icon-btn" type="button" data-testid="open-settings-menu" :aria-label="$t('lmBlades.openSettings')" :title="$t('lmBlades.openSettings')" @click="openSettings()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
+      </div>
+    </header>
+    <nav v-else-if="!gameStore.game.value" class="blade-ribbon" :aria-label="$t('app.consoleViews')">
       <!-- Owner 10-12: the Super FUMBBL logo plate sits first at the ribbon's left edge (moved from the retired header
            strip). Inert branding (owner 08-18: a logo, not a button). It binds a logo mip level so the "FANTASY
            FOOTBALL" line stays crisp at any DPR. -->
@@ -2412,6 +2523,10 @@ onBeforeUnmount(() => {
       <!-- Owner 10-13: Report on every blade, both editions, at the ribbon's right edge (the blades stay left). -->
       <button class="ribbon-report" type="button" data-testid="ribbon-report" :title="shellReportTitle"
         :disabled="shellReportOpen" @click="openShellReport"><span class="ribbon-report-bug" aria-hidden="true">🐞</span>{{ $t('app.report') }}</button>
+      <!-- Owner 11-03: Settings from the main menu - the menu button at the ribbon's far right (as on the Modern top bar). -->
+      <button class="ribbon-menu" type="button" data-testid="open-settings-menu" :aria-label="$t('lmBlades.openSettings')" :title="$t('lmBlades.openSettings')" @click="openSettings()">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+      </button>
     </nav>
     <BugReportModal ref="shellReportModal" v-model:open="shellReportOpen" v-model:busy="shellReportBusy"
       :host="shellReportHost" @sent="onShellReportSent" />
@@ -2647,7 +2762,7 @@ onBeforeUnmount(() => {
       @keydown.capture="captureKey" @mousedown.capture="captureBindingMouse" tabindex="-1">
       <!-- owner 2026-07-06: large settings window — left sidebar of categories,
            the selected category's controls fill the scrollable content pane. -->
-      <div ref="settingsDialog" class="settings-pane" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title"
+      <div ref="settingsDialog" class="settings-pane" :class="lmRootClass(settings.uiStyle)" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title"
         @keydown="trapSettingsFocus">
         <button class="settings-x" type="button" :aria-label="$t('settings.cancelChangesAndClose')" :title="$t('settings.closeSettings')" @click="requestCloseSettings()">✕</button>
         <SettingsCategoryNav v-model="settingsTab" />
@@ -2656,95 +2771,137 @@ onBeforeUnmount(() => {
           <SettingsCategoryNav v-model="settingsTab" compact @content-focus="selectSettingsTab(settingsTab, true)" />
         <div :id="`settings-panel-${settingsTab}`" class="settings-content" role="tabpanel"
           :aria-labelledby="`settings-tab-${settingsTab}`">
-        <h2 tabindex="-1">{{ activeSettingsSection.label }}</h2>
+        <!-- Owner 11-03 settings reflow: each tab opens with a band naming it (SNES Italic title + a one-line caption). -->
+        <header class="settings-tab-band">
+          <h2 tabindex="-1">{{ activeSettingsSection.label }}</h2>
+          <span class="settings-tab-cap">{{ SETTINGS_TAB_BLURBS[settingsTab] }}</span>
+        </header>
+        <!-- Owner 11-03 settings reflow: 13 tabs; inside each, sections and rows run most-changed first (the agreed mock,
+             docs/artifact-orchestration/settings-reflow-mock.html). Every row keeps its stored key and value. -->
         <!-- ============================ GENERAL ============================ -->
         <section v-if="settingsTab === 'general'">
-          <AccountSettings v-if="forkFeaturesEnabled()" />
-
           <!-- Owner 10-23: client language; each option is labelled in its own language, and the switch applies live. -->
           <fieldset class="settings-group" data-testid="language-settings">
             <legend>{{ $t('settings.language.label') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.language.choose') }}</span>
-              <!-- Astra r1: an explicit pick (English too) marks the language chosen, so the system language never overrides it -->
-              <select v-model="settings.language" data-testid="language-select" @change="settings.languageChosen = true">
-                <option v-for="loc in availableLocales" :key="loc.id" :value="loc.id" :lang="loc.id">{{ loc.name }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.language.hint') }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.language.languageRow') }}</span>
+                <span class="row-ctl">
+                  <!-- Astra r1: an explicit pick (English too) marks the language chosen, so the system language never overrides it -->
+                  <select v-model="settings.language" data-testid="language-select" @change="settings.languageChosen = true">
+                    <option v-for="loc in availableLocales" :key="loc.id" :value="loc.id" :lang="loc.id">{{ loc.name }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.language')" :def="$t('settings.info.languageDefault')" />
+            </div>
+          </fieldset>
+
+          <!-- Owner 11-03: "Hide welcome" + "Hide tutorial" merged into one select (game/settingsMerges.ts). -->
+          <fieldset class="settings-group" data-testid="launch-settings">
+            <legend>{{ $t('settings.general.launch.launch') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.launch.onLaunchShow') }}</span>
+                <span class="row-ctl">
+                  <select v-model="launchScreens" data-testid="launch-screens">
+                    <option value="both">{{ $t('settings.general.launch.welcomeAndTutorial') }}</option>
+                    <option value="welcome">{{ $t('settings.general.launch.welcomeOnly') }}</option>
+                    <option v-if="launchScreens === 'tutorial'" value="tutorial">{{ $t('settings.general.launch.tutorialOnly') }}</option>
+                    <option value="neither">{{ $t('settings.general.launch.neither') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.launchScreens')" :def="$t('settings.info.launchScreensDefault')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="walkthrough-settings">
+            <legend>{{ $t('settings.general.walkthroughs.walkthroughs') }}</legend>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.general.launchScreens.runFirstLaunchSetup') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runFirstLaunchSetup')" @click="rerunSetupWizard()">{{ $t('settings.info.runButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.walkSetup')" />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.general.launchScreens.runTheClientWalkthrough') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runTheClientWalkthrough')" @click="rerunClientTour()">{{ $t('settings.info.runButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.walkClientTour')" />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.general.launchScreens.replayTheIntroScreens') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.replayTheIntroScreens')" @click="replayIntro()">{{ $t('settings.info.replayButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.walkIntro')" />
+            </div>
+            <!-- Owner 10-06: the FUMBBL.COM walkthrough (game/homeTour.ts). -->
+            <div class="row" v-if="homeBladeEnabled">
+              <span class="row-label">{{ $t('settings.general.launchScreens.runTheFumbblCom') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runTheFumbblCom')" @click="rerunHomeTour()">{{ $t('settings.info.runButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.walkHomeTour')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.discord.discord') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.general.discord.discordRichPresenceShow') }}</span>
-              <input v-model="settings.discordPresence" type="checkbox" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.general.discord.letFriendsJoinAs') }}</span>
-              <input v-model="settings.discordSpectateInvites" type="checkbox" :disabled="!settings.discordPresence" />
-            </label>
-          </fieldset>
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.connection.connection') }}</legend>
-            <label class="creds-open-row"><!-- owner 09-10: "Login credentials" caption cut -->
-              <button type="button" class="creds-open-btn" @click="openCredsMenu('fumbbl')">{{ $t('settings.credsOpenRow.general.connection.manageLoginCredentials') }}</button>
-            </label>
-            <p class="creds-status">
-              <span>{{ $t('settings.general.connection.fumbbl') }} <b>{{ settings.coach.trim() || '—' }}</b></span>
-              <span v-if="forkFeaturesEnabled()" class="connection-fork-status">
-                <span>{{ $t('settings.general.connection.superFumbbl') }}
-                  <b v-if="forkChallenge.kind === 'ok'">✓ {{ settings.coach40k.trim() }}</b>
-                  <button
-                    v-else
-                    type="button"
-                    class="creds-challenge-btn"
-                    :disabled="forkChallenge.kind === 'checking'"
-                    @click="verifyForkCredentials"
-                  >{{ forkChallenge.kind === 'checking' ? $t('settings.general.connection.verifying') : $t('settings.general.connection.verify') }}</button>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.discord.discordRichPresenceShow') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.discordPresence" type="checkbox" />
                 </span>
-                <span
-                  v-if="forkChallenge.kind === 'checking' || forkChallenge.kind === 'warn' || forkChallenge.kind === 'fail'"
-                  class="creds-challenge-result"
-                  :data-kind="forkChallenge.kind"
-                >{{ forkChallenge.message }}</span>
-              </span>
-            </p>
-            <p class="hint">{{ $t('settings.general.connection.credentialsAreStoredLocally') }}</p>
-            <!-- Owner 10-31 (Sol r1): pick the server target whenever the fork is reachable (FORK edition, or a public run
-                 launched with --fork-server). The raw URL / bot URL inputs below stay fork-edition only. -->
-            <label v-if="forkFeaturesEnabled()" class="row">
-              <span>{{ $t('settings.general.connection.serverTarget') }}</span>
-              <select :value="settings.activeServerTarget" data-testid="server-target-select"
-                @change="applyServerTarget(($event.target as HTMLSelectElement).value)">
-                <option v-for="target in serverTargets()" :key="target.id" :value="target.id">{{ target.label }}</option>
-              </select>
-            </label>
-            <!-- Owner 09-10: the raw server URL is a fork-edition control; the public edition is FUMBBL-only. -->
-            <label v-if="FORK_EDITION">{{ $t('settings.general.connection.server') }}
-              <input v-model="settings.url" placeholder="ws://host:port/command" @input="noteForkUrlEdited()" />
-            </label>
-            <label v-if="FORK_EDITION">{{ $t('settings.general.connection.tournamentBotUrl') }} <span class="hint-inline">(optional — blank = https://&lt;fork host&gt;, or http://&lt;local host&gt;:4310)</span>
-              <input v-model="settings.botConfigUrl" type="text" :placeholder="$t('settings.general.connection.botUrlOptional')" />
-            </label>
-            <label v-if="FORK_EDITION" class="row"><input v-model="settings.compression" type="checkbox" />{{ $t('settings.general.connection.lzStringCompression') }}</label>
+              </label>
+              <SettingInfo :text="$t('settings.info.discordPresence')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.discord.letFriendsJoinAs') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.discordSpectateInvites" type="checkbox" :disabled="!settings.discordPresence" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.discordSpectate')" :def="$t('settings.info.valueOn')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.launchScreens.launchScreens') }}</legend>
-            <label class="row"><input v-model="settings.hideWelcomeSplash" type="checkbox" /> <span>{{ $t('settings.general.launchScreens.hideTheWelcomeSplash') }}</span></label>
-            <label class="row"><input v-model="settings.hideTutorialSplash" type="checkbox" /> <span>{{ $t('settings.general.launchScreens.hideTheGettingStarted') }}</span></label>
-            <div class="actions" style="justify-content: flex-start">
-              <button type="button" @click="replayIntro()">{{ $t('settings.general.launchScreens.replayTheIntroScreens') }}</button>
-              <button type="button" @click="rerunSetupWizard()">{{ $t('settings.general.launchScreens.runFirstLaunchSetup') }}</button>
+            <legend>{{ $t('settings.general.connection.connection') }}</legend>
+            <div class="row creds-status-row">
+              <span class="row-label">{{ $t('settings.general.connection.serverStatus') }}</span>
+              <div class="row-ctl">
+                <p class="creds-status">
+                  <span>{{ $t('settings.general.connection.fumbbl') }} <b>{{ settings.coach.trim() || '—' }}</b></span>
+                  <span v-if="forkFeaturesEnabled()" class="connection-fork-status">
+                    <span>{{ $t('settings.general.connection.superFumbbl') }}
+                      <b v-if="forkChallenge.kind === 'ok'">✓ {{ settings.coach40k.trim() }}</b>
+                      <button
+                        v-else
+                        type="button"
+                        class="creds-challenge-btn"
+                        :disabled="forkChallenge.kind === 'checking'"
+                        @click="verifyForkCredentials"
+                      >{{ forkChallenge.kind === 'checking' ? $t('settings.general.connection.verifying') : $t('settings.general.connection.verify') }}</button>
+                    </span>
+                    <span
+                      v-if="forkChallenge.kind === 'checking' || forkChallenge.kind === 'warn' || forkChallenge.kind === 'fail'"
+                      class="creds-challenge-result"
+                      :data-kind="forkChallenge.kind"
+                    >{{ forkChallenge.message }}</span>
+                  </span>
+                </p>
+              </div>
+              <SettingInfo :text="$t('settings.info.serverStatus')" />
             </div>
-            <!-- Owner 10-06: the FUMBBL.COM walkthrough (game/homeTour.ts). -->
-            <div v-if="homeBladeEnabled" class="actions" style="justify-content: flex-start">
-              <button type="button" @click="rerunHomeTour()">{{ $t('settings.general.launchScreens.runTheFumbblCom') }}</button>
-            </div>
-            <div class="actions" style="justify-content: flex-start">
-              <button type="button" @click="rerunClientTour()">{{ $t('settings.general.launchScreens.runTheClientWalkthrough') }}</button>
-            </div>
+            <!-- Owner 11-03: Game server, Server URL and Tournament Bot URL show only in a run started with the bare
+                 --fork-server flag, in every edition; the two URLs are editable in the FORK edition only (Sol r1). -->
+            <ForkConnectionRows />
           </fieldset>
 
           <!-- Owner 10-22 ("Option A"): the shell reads this key (and allowSecondClientEdition) from settings.json at
@@ -2752,89 +2909,125 @@ onBeforeUnmount(() => {
                a new client that joins on its own (cold-start argv path) - the last sentence of the hint. -->
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.clientWindows.clientWindows') }}</legend>
-            <label class="row">
-              <input :checked="secondClientEnabled()" type="checkbox" data-testid="allow-second-client-toggle"
-                @change="setAllowSecondClient(($event.target as HTMLInputElement).checked)" />
-              <span>{{ $t('settings.general.clientWindows.allowASecondClient') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.general.clientWindows.letsYouLaunchSuper') }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.clientWindows.allowASecondClient') }}</span>
+                <span class="row-ctl">
+                  <input :checked="secondClientEnabled()" type="checkbox" data-testid="allow-second-client-toggle"
+                    @change="setAllowSecondClient(($event.target as HTMLInputElement).checked)" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.general.clientWindows.letsYouLaunchSuper')" :def="$t('settings.info.valueOff')" />
+            </div>
             <p v-if="secondClientEnabledElsewhere()" class="hint" data-testid="allow-second-client-other-edition">{{ $t('settings.general.clientWindows.thisWasTurnedOn') }}</p>
           </fieldset>
 
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.gameplayAssistance.gameplayAssistance') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.general.gameplayAssistance.tackleZonesShown') }}</span>
-              <select v-model="settings.tackleZoneMode">
-                <option value="opposition">{{ $t('settings.general.gameplayAssistance.opposition') }}</option>
-                <option value="friendly">{{ $t('settings.general.gameplayAssistance.friendly') }}</option>
-                <!-- Owner 10-13: Classic (fork only) still draws both teams for 'both', so it keeps the old wording. -->
-                <option v-if="ClassicView && settings.uiMode === 'classic'" value="both">{{ $t('settings.classic.gameplayAssistance.both') }}</option>
-                <option v-else value="both" :title="$t('settings.general.gameplayAssistance.selectingAnOpposingPlayer')">{{ $t('settings.general.gameplayAssistance.relevantToTheSelected') }}</option>
-              </select>
-            </label>
+          <fieldset v-if="jnlpAssocSupported" class="settings-group">
+            <legend>{{ $t('settings.general.fumbblJoinFiles.fumbblJoinFilesJnlp') }}</legend>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.info.jnlpLabel') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :disabled="jnlpAssocBusy" @click="toggleJnlpAssociation()">
+                  {{ jnlpAssocOn ? $t('settings.general.fumbblJoinFiles.removeJnlpAssociation') : $t('settings.general.fumbblJoinFiles.associateJnlpFilesWith') }}
+                </button>
+              </span>
+              <SettingInfo :text="$t('settings.info.jnlp')" />
+            </div>
+            <!-- Sol final r3: the button changes Windows at once and Cancel does not undo it - a state warning, always
+                 visible under the row (the tooltip says it too). -->
+            <p class="settings-immediate-note" data-testid="jnlp-immediate-note">{{ $t('settings.general.fumbblJoinFiles.thisChangesWindowsImmediately') }}</p>
+            <p v-if="jnlpAssocOn" class="hint">{{ $t('settings.general.fumbblJoinFiles.currentlyAssociatedWithThis') }}</p>
+            <p v-if="jnlpAssocError" class="hint" style="color: var(--danger, #e05555)">{{ jnlpAssocError }}</p>
           </fieldset>
+        </section>
 
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.movementPlanner.movementPlanner') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.general.movementPlanner.declareBlitz') }}</span>
-              <select v-model="settings.declareBlitzBehavior">
-                <option value="fumbbl">{{ $t('settings.general.movementPlanner.fumbblDefault') }}</option>
-                <option value="modern">{{ $t('settings.general.movementPlanner.modern') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.general.movementPlanner.fumbblDeclareBlitzFrom') }}</p>
-            <!-- Owner 09-16: planner colours — Primary = the route line; Secondary = steps that owe a roll. -->
-            <label class="row">
-              <span>{{ $t('settings.general.movementPlanner.primaryColor') }}</span>
-              <input v-model="settings.plannerPrimaryColor" type="color" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.general.movementPlanner.secondaryColor') }}</span>
-              <input v-model="settings.plannerSecondaryColor" type="color" />
-            </label>
-            <p class="hint">{{ $t('settings.general.movementPlanner.primaryDrawsThePlanned') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.auras.auras') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.general.auras.disturbingPresence') }} <em class="aura-swatch dp-friendly" />/<em class="aura-swatch dp-opp" /></span>
-              <select v-model="settings.auraDisturbingPresence">
-                <option value="selected">{{ $t('settings.general.auras.onWhenSelectedDefault') }}</option>
-                <option value="always">{{ $t('settings.general.auras.alwaysOn') }}</option>
-                <option value="off">{{ $t('settings.general.auras.off') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.general.auras.pickMeUp') }} <em class="aura-swatch pmu-friendly" />/<em class="aura-swatch pmu-opp" /></span>
-              <select v-model="settings.auraPickMeUp">
-                <option value="selected">{{ $t('settings.general.auras.onWhenSelectedDefault') }}</option>
-                <option value="always">{{ $t('settings.general.auras.alwaysOn') }}</option>
-                <option value="off">{{ $t('settings.general.auras.off') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.general.auras.eachAuraShadesA') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
+        <!-- ============================ CONTROLS ============================ -->
+        <!-- Controller support P1 (owner 10-07, spec-controller-support.md): input method, every key / button binding.
+             Owner 11-03: the Control layer, Right click and FUMBBL keyboard sections arrive with FUMBBL Controls
+             (spec-fumbbl-controls-2026-11-03.md), which builds into this tab. -->
+        <section v-if="settingsTab === 'controls'" data-testid="settings-controls">
+          <fieldset class="settings-group" data-testid="mouse-settings">
             <legend>{{ $t('settings.general.mouse.mouse') }}</legend>
-            <label class="row">
-              <input v-model="settings.friendlyPlayerSwitch" type="checkbox" />
-              <span>{{ $t('settings.general.mouse.leftClickSwitchesFriendly') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.general.mouse.refundsAnUntouchedDeclaration') }}</p>
-            <label class="row" data-testid="defer-friendly-switch-end">
-              <input v-model="settings.deferFriendlySwitchEnd" type="checkbox" :disabled="!settings.friendlyPlayerSwitch" />
-              <span>{{ $t('settings.general.mouse.holdThePreviousPlayer') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.general.mouse.theFirstClickOn') }}</p>
-            <label class="row">
-              <input v-model="settings.leftClickOpensContextMenu" type="checkbox" />
-              <span>{{ $t('settings.general.mouse.leftClickOpensContext') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.general.mouse.showsTheSelectedFriendly') }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.mouse.leftClickSwitchesFriendly') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.friendlyPlayerSwitch" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.friendlySwitch')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row" data-testid="defer-friendly-switch-end">
+              <label class="row-main">
+                <span>{{ $t('settings.general.mouse.holdThePreviousPlayer') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.deferFriendlySwitchEnd" type="checkbox" :disabled="!settings.friendlyPlayerSwitch" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.deferSwitch')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.mouse.leftClickOpensContext') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.leftClickOpensContextMenu" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.leftClickMenu')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.movementPlanner.declareBlitz') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.declareBlitzBehavior">
+                    <option value="fumbbl">{{ $t('settings.general.movementPlanner.fumbblDefault') }}</option>
+                    <option value="modern">{{ $t('settings.general.movementPlanner.modern') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.declareBlitz')" :def="$t('settings.info.declareBlitzDefault')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="camera-settings">
+            <legend>{{ $t('settings.controls.camera.camera') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.controls.camera.wasdPanSpeed') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
+                  <span>{{ settings.cameraPanSpeed }} px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.wasdPan')" :def="$t('settings.info.wasdPanDefault')" />
+            </div>
+            <!-- Owner 11-03 (lane C): edge-of-screen panning, off by default; its speed shows only while it is on. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.edgePan.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.edgePan" type="checkbox" data-testid="edge-pan" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.edgePan.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div v-if="settings.edgePan" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.edgePanSpeed.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.edgePanSpeed" v-fill-range type="range" :min="EDGE_PAN_SPEED.min" :max="EDGE_PAN_SPEED.max" :step="EDGE_PAN_SPEED.step" data-testid="edge-pan-speed" />
+                  <span>{{ settings.edgePanSpeed }} px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.edgePanSpeed.description')" :def="$t('settings.info.edgePanSpeedDefault')" />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.info.mouseCameraLabel') }}</span>
+              <span class="row-ctl">
+                <span class="row-note">{{ $t('settings.controls.camera.mouseCamera') }}</span>
+              </span>
+              <SettingInfo :text="$t('settings.info.mouseCamera')" />
+            </div>
           </fieldset>
 
           <!-- Owner 10-04: every client confirmation prompt has its own line. Off = the gesture goes straight through. -->
@@ -2842,173 +3035,25 @@ onBeforeUnmount(() => {
             <legend>{{ $t('settings.general.confirmations.confirmations') }}</legend>
             <p class="hint">{{ $t('settings.general.confirmations.eachPromptBelowAsks') }}</p>
             <template v-for="row in CONFIRMATION_SETTING_ROWS" :key="row.key">
-              <label class="row">
-                <input v-model="settings[row.key]" type="checkbox" />
-                <span>{{ row.label }}</span>
-              </label>
-              <p class="hint">{{ row.hint }}</p>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ row.label }}</span>
+                  <span class="row-ctl">
+                    <input v-model="settings[row.key]" type="checkbox" />
+                  </span>
+                </label>
+                <SettingInfo :text="row.hint" />
+              </div>
             </template>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.cinematics.cinematics') }}</legend>
-            <!-- Owner 08-19: "Injury cinematics" retired — cinematicMode had zero consumers (dead since
-                 the injury-banner rework); the dropdown promised behavior that no longer exists. -->
-            <label class="row">
-              <input v-model="settings.clickDismissCinematics" type="checkbox" />
-              <span>{{ $t('settings.general.cinematics.requireClickToDismiss') }}</span>
-            </label>
-          </fieldset>
-
-          <fieldset v-if="jnlpAssocSupported" class="settings-group">
-            <legend>{{ $t('settings.general.fumbblJoinFiles.fumbblJoinFilesJnlp') }}</legend>
-            <p class="hint">
-              {{ $t('settings.general.fumbblJoinFiles.openingAFumbbl') }} <code>.jnlp</code> {{ $t('settings.general.fumbblJoinFiles.joinReplayLinkLaunches') }}
-            </p>
-            <p class="settings-immediate-note">{{ $t('settings.general.fumbblJoinFiles.thisChangesWindowsImmediately') }}</p>
-            <div class="actions" style="justify-content: flex-start">
-              <button type="button" :disabled="jnlpAssocBusy" @click="toggleJnlpAssociation()">
-                {{ jnlpAssocOn ? $t('settings.general.fumbblJoinFiles.removeJnlpAssociation') : $t('settings.general.fumbblJoinFiles.associateJnlpFilesWith') }}
-              </button>
-              <span v-if="jnlpAssocOn" class="hint">{{ $t('settings.general.fumbblJoinFiles.currentlyAssociatedWithThis') }}</span>
-            </div>
-            <p v-if="jnlpAssocError" class="hint" style="color: var(--danger, #e05555)">{{ jnlpAssocError }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.matchLog.matchLog') }}</legend>
-            <label class="row">
-              <input v-model="settings.showServerSequencingEvents" type="checkbox" />
-              <span>{{ $t('settings.general.matchLog.showServerSequencingEvents') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.general.matchLog.showsInternalPlanAnd') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.general.diagnostics.diagnostics') }}</legend>
-            <label class="row">
-              <input v-model="settings.debugLog" type="checkbox" />
-              <span>{{ $t('settings.general.diagnostics.verboseLogAllEvents') }}</span>
-            </label>
-            <!-- Owner 09-10: the wire-log file + dev panel toggles are fork-edition diagnostics; the public edition keeps
-                 the wire log ON silently (it rides bug reports) and never shows the panel. -->
-            <template v-if="FORK_EDITION">
-            <label class="row">
-              <input v-model="settings.wireLog" type="checkbox" />
-              <span>{{ $t('settings.general.diagnostics.verboseWireLogFile') }}</span>
-            </label>
-            <div v-if="settings.wireLog" style="margin: 2px 0 4px 24px;">
-              <template v-if="gameStore.state.wireLogFile">
-                <input type="text" readonly :value="gameStore.state.wireLogFile"
-                  @focus="($event.target as HTMLInputElement).select()"
-                  style="width: 100%; font-size: max(var(--ui-min-text-size, 12px), 11px); padding: 3px 5px; box-sizing: border-box;" />
-                <button type="button" @click="copyWireLogPath" style="margin-top: 4px; font-size: max(var(--ui-min-text-size, 12px), 11px);">
-                  {{ wireLogCopied ? $t('settings.general.diagnostics.copied') : $t('settings.general.diagnostics.copyPath') }}
-                </button>
-              </template>
-              <span v-else class="hint">{{ $t('settings.general.diagnostics.writesOneJsonlFile') }}</span>
-            </div>
-            <label class="row">
-              <input v-model="settings.devPanelOpen" type="checkbox" />
-              <span>{{ $t('settings.general.diagnostics.showDeveloperLogPanel') }}</span>
-            </label>
-            <label v-if="settings.devMode" class="row">
-              <span>{{ $t('settings.general.diagnostics.coachBrain') }}</span>
-              <select :value="settings.coachBrain" @change="gameStore.setCoachBrain(($event.target as HTMLSelectElement).value as typeof settings.coachBrain)">
-                <option value="none">{{ $t('settings.general.diagnostics.none') }}</option>
-                <option value="random">{{ $t('settings.general.diagnostics.random') }}</option>
-                <option value="fly-chaos">{{ $t('settings.general.diagnostics.flyChaos') }}</option>
-              </select>
-            </label>
-            <label v-if="settings.devMode && settings.coachBrain === 'fly-chaos'" class="row">
-              <span>{{ $t('settings.general.diagnostics.flyBrainUrl') }}</span>
-              <input v-model="settings.flyBrainUrl" type="text" />
-            </label>
-            <span class="hint">{{ $t('settings.general.diagnostics.theDevStreamIs') }}</span>
-            </template>
-          </fieldset>
-        </section>
-
-        <!-- ============================ CONTROLS ============================ -->
-        <!-- Controller support P1 (owner 10-07, spec-controller-support.md): input method, every key / button binding. -->
-        <section v-if="settingsTab === 'controls'" data-testid="settings-controls">
-          <!-- Owner 10-10: controller support is opt-in. Ticking the box asks first (the notice below the Settings
-               window); it turns on when the coach presses OK. While off nothing here reads a gamepad. -->
-          <fieldset class="settings-group" data-testid="controller-support">
-            <legend>{{ $t('settings.controls.controller.controller') }}</legend>
-            <label class="row">
-              <input type="checkbox" data-testid="controller-support-enabled" :checked="settings.controllerSupportEnabled"
-                @change="onControllerBoxChange" />
-              <span>{{ $t('settings.controls.controller.enableControllerSupport') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.controls.controller.offByDefaultController') }}</p>
-          </fieldset>
-
-          <fieldset v-if="settings.controllerSupportEnabled" class="settings-group" data-testid="input-method-group">
-            <legend>{{ $t('settings.controls.inputMethod.inputMethod') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.controls.inputMethod.inputMethod') }}</span>
-              <select v-model="settings.inputMethod" data-testid="input-method">
-                <option value="auto">{{ $t('settings.controls.inputMethod.autoFollowTheLast') }}</option>
-                <option value="keyboard">{{ $t('settings.controls.inputMethod.keyboard') }}</option>
-                <option value="controller">{{ $t('settings.controls.inputMethod.controller') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.controls.inputMethod.anXboxLayoutPad') }}</p>
-            <label class="row">
-              <input v-model="settings.showInputSwitchNotice" type="checkbox" data-testid="input-switch-notice" />
-              <span>{{ $t('settings.controls.inputMethod.showInputSwitchNotice') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.controllerRumble" type="checkbox" data-testid="controller-rumble" />
-              <span>{{ $t('settings.controls.inputMethod.rumbleDiceTurnoversCasualties') }}</span>
-            </label>
-          </fieldset>
-
-          <fieldset v-if="settings.controllerSupportEnabled" class="settings-group" data-testid="stick-deadzones">
-            <legend>{{ $t('settings.controls.stickDeadzones.stickDeadzones') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.controls.stickDeadzones.leftStickDeadzone') }}</span>
-              <input v-model.number="settings.stickDeadzoneLeft" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-left" />
-              <span>{{ settings.stickDeadzoneLeft.toFixed(2) }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.controls.stickDeadzones.rightStickDeadzone') }}</span>
-              <input v-model.number="settings.stickDeadzoneRight" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-right" />
-              <span>{{ settings.stickDeadzoneRight.toFixed(2) }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.controls.stickDeadzones.crosshairSpeed') }}</span>
-              <input v-model.number="settings.crosshairSpeed" v-fill-range type="range" :min="CROSSHAIR_SPEED_MIN" :max="CROSSHAIR_SPEED_MAX" step="1" data-testid="crosshair-speed" />
-              <span>{{ $t('settings.controls.stickDeadzones.crosshairspeedSqS', { crosshairSpeed: settings.crosshairSpeed }) }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.crosshairAcceleration" type="checkbox" data-testid="crosshair-acceleration" />
-              <span>{{ $t('settings.controls.stickDeadzones.crosshairAcceleration') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.controls.stickDeadzones.theLeftStickMoves') }}</p>
-            <p class="hint stick-readout" data-testid="stick-readout" aria-live="off">
-              <template v-if="stickReadout.connected > 0">
-                {{ $t('settings.controls.stickDeadzones.leftXP0Y', { p0: fmtAxis(stickReadout.left.x), p1: fmtAxis(stickReadout.left.y), p2: fmtAxis(stickReadout.right.x), p3: fmtAxis(stickReadout.right.y) }) }}
-              </template>
-              <template v-else>{{ $t('settings.controls.stickDeadzones.noControllerSeenYet') }}</template>
-            </p>
-            <ul v-if="connectedPads.length" class="hint connected-pads" data-testid="connected-pads">
-              <li v-for="pad in connectedPads" :key="pad.pad" :data-mapping="pad.standard ? 'standard' : 'non-standard'">
-                {{ padShortName(pad.id) }} — <strong>{{ pad.standard ? $t('settings.controllers.mappingStandard') : $t('settings.controllers.mappingNonStandard') }}</strong>
-                <span v-if="!pad.standard">{{ $t('settings.controls.stickDeadzones.notUsableRunThe') }}</span>
-              </li>
-            </ul>
-            <p class="hint">{{ $t('settings.controls.stickDeadzones.raiseADeadzoneIf') }}</p>
           </fieldset>
 
           <fieldset class="settings-group" data-testid="edit-bindings">
-            <legend>{{ $t('settings.controls.editBindings.editBindings') }}</legend>
+            <legend>{{ $t('settings.controls.keyboard.keyboard') }}</legend>
             <!-- Owner 10-02 + controller support P1: every binding in one table (action | keyboard | controller).
                  Owner 10-10: the controller columns (and the pad-only actions) show only while controller support is on. -->
             <p v-if="settings.controllerSupportEnabled" class="hint">{{ $t('settings.controls.editBindings.clickACellThen') }}</p>
             <p v-else class="hint" data-testid="bindings-hint-keyboard">{{ $t('settings.controls.editBindings.clickACellThen2') }}</p>
-            <table class="keybind-table bindings-table">
+            <table class="keybind-table bindings-table sf-table">
               <thead><tr><th scope="col">{{ $t('settings.controls.editBindings.action') }}</th><th scope="col" colspan="2">{{ $t('settings.controls.editBindings.keyboardMouse') }}</th><th v-if="settings.controllerSupportEnabled" scope="col" colspan="2">{{ $t('settings.controls.editBindings.controller') }}</th></tr></thead>
               <tbody>
                 <tr v-for="action in shownControlActions" :key="action.id" :data-action="action.id">
@@ -3036,402 +3081,684 @@ onBeforeUnmount(() => {
             <p v-for="conflict in bindingConflicts" :key="`${conflict.method}:${conflict.input}`" class="hint keybind-refusal" role="status" data-testid="binding-conflict">
               {{ $t('settings.controls.editBindings.p0IsBoundTo', { p0: conflict.method === 'keyboard' ? keyLabel(conflict.input) : controllerInputLabel(conflict.input), p1: conflict.actions.map((id) => controlAction(id).label).join(', ') }) }}</p>
             <div class="row">
-              <button type="button" data-testid="reset-bindings" @click="resetBindings()">{{ $t('settings.controls.editBindings.resetToDefaults') }}</button>
+              <span class="row-label">{{ $t('settings.info.resetBindingsLabel') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" data-testid="reset-bindings" @click="resetBindings()">{{ $t('settings.controls.editBindings.resetToDefaults') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.resetBindings')" />
             </div>
-            <label class="row">
-              <span>{{ $t('settings.controls.editBindings.cameraPanSpeed') }}</span>
-              <input v-model.number="settings.cameraPanSpeed" v-fill-range type="range" min="2" max="30" step="1" />
-              <span>{{ settings.cameraPanSpeed }} px</span>
-            </label>
+          </fieldset>
+
+          <!-- Owner 10-10: controller support is opt-in. Ticking the box asks first (the notice below the Settings
+               window); it turns on when the coach presses OK. While off nothing here reads a gamepad. -->
+          <fieldset class="settings-group" data-testid="controller-support">
+            <legend>{{ $t('settings.controls.controller.controller') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.controls.controller.enableControllerSupport') }}</span>
+                <span class="row-ctl">
+                  <input type="checkbox" data-testid="controller-support-enabled" :checked="settings.controllerSupportEnabled"
+                    @change="onControllerBoxChange" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.controllerSupport')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div v-if="settings.controllerSupportEnabled" class="settings-subgroup" data-testid="input-method-group">
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.inputMethod.inputMethod') }}</span>
+                  <span class="row-ctl">
+                    <select v-model="settings.inputMethod" data-testid="input-method">
+                      <option value="auto">{{ $t('settings.controls.inputMethod.autoFollowTheLast') }}</option>
+                      <option value="keyboard">{{ $t('settings.controls.inputMethod.keyboard') }}</option>
+                      <option value="controller">{{ $t('settings.controls.inputMethod.controller') }}</option>
+                    </select>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.inputMethod')" :def="$t('settings.info.inputMethodDefault')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.inputMethod.showInputSwitchNotice') }}</span>
+                  <span class="row-ctl">
+                    <input v-model="settings.showInputSwitchNotice" type="checkbox" data-testid="input-switch-notice" />
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.inputSwitchNotice')" :def="$t('settings.info.valueOn')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.inputMethod.rumbleDiceTurnoversCasualties') }}</span>
+                  <span class="row-ctl">
+                    <input v-model="settings.controllerRumble" type="checkbox" data-testid="controller-rumble" />
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.rumble')" :def="$t('settings.info.valueOn')" />
+              </div>
+            </div>
+            <div v-if="settings.controllerSupportEnabled" class="settings-subgroup" data-testid="stick-deadzones">
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.stickDeadzones.leftStickDeadzone') }}</span>
+                  <span class="row-ctl">
+                    <input v-model.number="settings.stickDeadzoneLeft" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-left" />
+                    <span>{{ settings.stickDeadzoneLeft.toFixed(2) }}</span>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.deadzoneLeft')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.stickDeadzones.rightStickDeadzone') }}</span>
+                  <span class="row-ctl">
+                    <input v-model.number="settings.stickDeadzoneRight" v-fill-range type="range" :min="STICK_DEADZONE_MIN" :max="STICK_DEADZONE_MAX" step="0.01" data-testid="deadzone-right" />
+                    <span>{{ settings.stickDeadzoneRight.toFixed(2) }}</span>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.deadzoneRight')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.stickDeadzones.crosshairSpeed') }}</span>
+                  <span class="row-ctl">
+                    <input v-model.number="settings.crosshairSpeed" v-fill-range type="range" :min="CROSSHAIR_SPEED_MIN" :max="CROSSHAIR_SPEED_MAX" step="1" data-testid="crosshair-speed" />
+                    <span>{{ $t('settings.controls.stickDeadzones.crosshairspeedSqS', { crosshairSpeed: settings.crosshairSpeed }) }}</span>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.crosshairSpeed')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.controls.stickDeadzones.crosshairAcceleration') }}</span>
+                  <span class="row-ctl">
+                    <input v-model="settings.crosshairAcceleration" type="checkbox" data-testid="crosshair-acceleration" />
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.crosshairAccel')" :def="$t('settings.info.valueOff')" />
+              </div>
+              <p class="hint stick-readout" data-testid="stick-readout" aria-live="off">
+                <template v-if="stickReadout.connected > 0">
+                  {{ $t('settings.controls.stickDeadzones.leftXP0Y', { p0: fmtAxis(stickReadout.left.x), p1: fmtAxis(stickReadout.left.y), p2: fmtAxis(stickReadout.right.x), p3: fmtAxis(stickReadout.right.y) }) }}
+                </template>
+                <template v-else>{{ $t('settings.controls.stickDeadzones.noControllerSeenYet') }}</template>
+              </p>
+              <ul v-if="connectedPads.length" class="hint connected-pads" data-testid="connected-pads">
+                <li v-for="pad in connectedPads" :key="pad.pad" :data-mapping="pad.standard ? 'standard' : 'non-standard'">
+                  {{ padShortName(pad.id) }} — <strong>{{ pad.standard ? $t('settings.controllers.mappingStandard') : $t('settings.controllers.mappingNonStandard') }}</strong>
+                  <span v-if="!pad.standard">{{ $t('settings.controls.stickDeadzones.notUsableRunThe') }}</span>
+                </li>
+              </ul>
+            </div>
           </fieldset>
         </section>
 
-        <!-- ============================ ACCESSIBILITY ============================ -->
-        <section v-if="settingsTab === 'accessibility'">
+        <!-- ============================ PITCH (was Display) ============================ -->
+        <section v-if="settingsTab === 'pitch'">
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.accessibility.textAndContrast.textAndContrast') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.textAndContrast.uiFont') }}</span>
-              <select v-model="settings.uiFont">
-                <option value="nuffle">{{ $t('settings.accessibility.textAndContrast.nuffleBloodBowl') }}</option>
-                <option value="system">{{ $t('settings.accessibility.textAndContrast.system') }}</option>
-                <option value="arial">{{ $t('settings.accessibility.textAndContrast.arialHelvetica') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.textAndContrast.minimumTextSize') }}</span>
-              <input v-model.number="settings.uiTextSize" v-fill-range type="range" min="12" max="20" step="1" />
-              <span>{{ settings.uiTextSize }}px</span>
-            </label>
-            <p class="hint">{{ $t('settings.accessibility.textAndContrast.subHeadersAndAnnotations') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.textAndContrast.brightness') }}</span>
-              <input v-model.number="settings.brightness" v-fill-range type="range" min="50" max="150" step="5" />
-              <span>{{ settings.brightness }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.textAndContrast.colourblindMode') }}</span>
-              <select v-model="settings.colorblindMode">
-                <option value="off">{{ $t('settings.accessibility.textAndContrast.off') }}</option>
-                <option value="deuteranopia">{{ $t('settings.accessibility.textAndContrast.deuteranopiaRedGreenMost') }}</option>
-                <option value="protanopia">{{ $t('settings.accessibility.textAndContrast.protanopiaRedGreen') }}</option>
-                <option value="tritanopia">{{ $t('settings.accessibility.textAndContrast.tritanopiaBlueYellow') }}</option>
-              </select>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.accessibility.gridLines.gridLines') }}</legend>
-            <label class="row">
-              <input v-model="settings.gridLines" type="checkbox" />
-              <span>{{ $t('settings.accessibility.gridLines.showPitchGridLines') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.gridLines.lineWidth') }}</span>
-              <input v-model.number="settings.gridLineWidth" v-fill-range type="range" min="0.1" max="3" step="0.1" :disabled="!settings.gridLines" />
-              <span>{{ settings.gridLineWidth }}×</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.gridLines.lineColor') }}</span>
-              <input v-model="settings.gridLineColor" type="color" :disabled="!settings.gridLines" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.gridLines.lineOpacity') }}</span>
-              <input v-model.number="settings.gridLineOpacity" v-fill-range type="range" min="0.1" max="1" step="0.05" :disabled="!settings.gridLines" />
-              <span>{{ Math.round(settings.gridLineOpacity * 100) }}%</span>
-            </label>
-            <p class="hint">{{ $t('settings.accessibility.gridLines.turningGridLinesOff') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.accessibility.echos.echos') }}</legend>
-            <label class="row">
-              <input v-model="settings.activePlayerEcho" type="checkbox" />
-              <span>{{ $t('settings.accessibility.echos.selectionEchoOnThe') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.clickEcho" type="checkbox" />
-              <span>{{ $t('settings.accessibility.echos.cursorClickEcho') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.echos.echoColour') }}</span>
-              <input v-model="settings.clickEchoColor" type="color" :disabled="!settings.clickEcho" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.accessibility.echos.echoSize') }}</span>
-              <input v-model.number="settings.echoSize" v-fill-range type="range" min="0.5" max="2" step="0.1" :disabled="!settings.clickEcho" />
-              <span>{{ settings.echoSize }}×</span>
-            </label>
-            <div class="echo-preview" :style="{ '--click-echo-color': settings.clickEchoColor, '--echo-scale': settings.echoSize }">
-              <span class="echo-preview-ring"></span>
-              <em>{{ $t('settings.accessibility.echos.preview') }}</em>
+            <legend>{{ $t('settings.pitch.view.view') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.pitchOrientation') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.pitchOrientation">
+                    <option value="ns">{{ $t('settings.display.pitch.northSouthEndZones') }}</option>
+                    <option value="ew">{{ $t('settings.display.pitch.eastWestEndZones') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.pitchOrientation')" :def="$t('settings.info.pitchOrientationDefault')" :previews="SETTING_PREVIEWS.pitchOrientation" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.flipThePitchView') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.pitchFlipped" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.pitchFlipped')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.spectatorAndReplayView') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.spectatorView">
+                    <option value="drive">{{ $t('settings.display.pitch.followTheDrive') }}</option>
+                    <option value="home">{{ $t('settings.display.pitch.homeTeamAtThe') }}</option>
+                    <option value="away">{{ $t('settings.display.pitch.awayTeamAtThe') }}</option>
+                    <option value="mine">{{ $t('settings.display.pitch.myTeamAtThe') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.spectatorView')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.flatNonIsometricPitch') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.flatRender" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.flatRender')" :def="$t('settings.info.valueOff')" :previews="SETTING_PREVIEWS.flatRender" />
             </div>
           </fieldset>
-        </section>
 
-        <!-- ============================ DISPLAY ============================ -->
-        <section v-if="settingsTab === 'display'">
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.video.video') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.display.video.autoDirectorCameraFollows') }}</span>
-              <input v-model="settings.autoDirector" type="checkbox" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.video.resolutionScale') }}</span>
-              <select v-model.number="settings.renderScale">
-                <option :value="0">{{ $t('settings.display.video.autoDisplayNative') }}</option>
-                <option :value="0.5">50%</option>
-                <option :value="0.75">75%</option>
-                <option :value="1">{{ $t('settings.display.video.n100DisplayNative') }}</option>
-                <option :value="1.5">150%</option>
-                <option :value="2">200%</option>
-                <option :value="3">300%</option>
-                <option :value="4">400%</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.video.fpsLimit') }}</span>
-              <select v-model="settings.fpsCap">
-                <option :value="30">30</option>
-                <option :value="60">60</option>
-                <option :value="120">120</option>
-                <option value="display">{{ matchDisplayLabel(measuredRefreshHz) }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ measuredRefreshHz ? $t('settings.display.video.matchDisplayCapsThe') : $t('settings.display.video.matchDisplayCapsThe2') }}</p>
-            <div class="actions" style="justify-content: flex-start">
-              <button @click="toggleFullscreen">{{ fullscreen ? $t('settings.display.video.exitNativeFullscreen') : $t('settings.display.video.nativeFullscreen') }}</button>
+            <legend>{{ $t('settings.pitch.gameplayHelpers.gameplayHelpers') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.gameplayAssistance.tackleZonesShown') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.tackleZoneMode">
+                    <option value="opposition">{{ $t('settings.general.gameplayAssistance.opposition') }}</option>
+                    <option value="friendly">{{ $t('settings.general.gameplayAssistance.friendly') }}</option>
+                    <option value="both" :title="$t('settings.general.gameplayAssistance.selectingAnOpposingPlayer')">{{ $t('settings.general.gameplayAssistance.relevantToTheSelected') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.tackleZones')" :def="$t('settings.info.tackleZonesDefault')" />
             </div>
-            <p class="hint">{{ $t('settings.display.video.usesTheDesktopWindow') }}{{ fullscreenIsNative ? '.' : $t('settings.display.video.browserPreviewUsesWebpage') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.pitch.pitch') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.display.pitch.pitchOrientation') }}</span>
-              <select v-model="settings.pitchOrientation">
-                <option value="ns">{{ $t('settings.display.pitch.northSouthEndZones') }}</option>
-                <option value="ew">{{ $t('settings.display.pitch.eastWestEndZones') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <input v-model="settings.pitchFlipped" type="checkbox" />
-              <span>{{ $t('settings.display.pitch.flipThePitchView') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.pitch.spectatorAndReplayView') }}</span>
-              <select v-model="settings.spectatorView">
-                <option value="drive">{{ $t('settings.display.pitch.followTheDrive') }}</option>
-                <option value="home">{{ $t('settings.display.pitch.homeTeamAtThe') }}</option>
-                <option value="away">{{ $t('settings.display.pitch.awayTeamAtThe') }}</option>
-                <option value="mine">{{ $t('settings.display.pitch.myTeamAtThe') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <input v-model="settings.flatRender" type="checkbox" />
-              <span>{{ $t('settings.display.pitch.flatNonIsometricPitch') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.showStadium" type="checkbox" />
-              <span>{{ $t('settings.display.pitch.stadium') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.pitch.stadiumStands') }}</span>
-              <select v-model="settings.stadiumStands" :disabled="!settings.showStadium">
-                <option value="classic">{{ $t('settings.display.pitch.classicSeatsFans') }}</option>
-                <option value="crowd">{{ $t('settings.display.pitch.bakedCrowdTiles') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.pitch.backdrop') }}</span>
-              <select v-model="settings.backdrop" data-testid="backdrop-select">
-                <option v-for="o in BACKDROP_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
-              </select>
-            </label>
-            <!-- Owner 10-12: CC BY 4.0 - the Hubble credit stays visible and unaltered while the image is chosen. -->
-            <p v-if="settings.backdrop === 'galaxy'" class="hint" data-testid="backdrop-galaxy-credit">
-              <a :href="GALAXY_BACKDROP_URL" @click.prevent="openExternal(GALAXY_BACKDROP_URL)">{{ GALAXY_BACKDROP_CREDIT }}</a>
-            </p>
-            <label v-if="settings.backdrop === 'color'" class="row">
-              <span>{{ $t('settings.display.pitch.backdropColour') }}</span>
-              <input v-model="settings.backdropColor" type="color" data-testid="backdrop-color" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.pitch.tilesetTurf') }}</span>
-              <select v-model="settings.turf">
-                <option v-for="t in turfCatalog.options" :key="t" :value="t">{{ TURF_LABELS[t] ?? t }}</option>
-              </select>
-            </label>
-            <label v-if="settings.uiMode === 'classic'" class="row">
-              <span>{{ $t('settings.classic.pitch.classicEffects') }}</span>
-              <input type="checkbox" v-model="settings.classicEffects" />
-            </label>
-            <p v-if="settings.uiMode === 'classic'" class="hint">{{ $t('settings.classic.pitch.offThePureClassic') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.playerSprites.playerSprites') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.display.playerSprites.playerSprites') }}</span>
-              <select v-model="spriteChoice">
-                <option value="walk">{{ $t('settings.display.playerSprites.superFumbbl') }}</option>
-                <!-- Owner 09-15: the checker discs are ORIGINAL art (67af2368) — offered always, no pack gate. -->
-                <option value="checkers">{{ $t('settings.display.playerSprites.checkers') }}</option>
-                <option value="chess">{{ $t('settings.display.playerSprites.chess') }}</option>
-                <option v-for="pack in spritePackOptions" :key="pack.installId" :value="spritePackValue(pack)">{{ pack.name }} {{ pack.version }}</option>
-              </select>
-            </label>
-            <!-- Owner 09-15: the Checkers disc letter font. -->
-            <label v-if="settings.spriteSet === 'checkers'" class="row">
-              <span>{{ $t('settings.display.playerSprites.checkerLetterFont') }}</span>
-              <select v-model="settings.checkerLetterFont">
-                <option value="arial">{{ $t('settings.display.playerSprites.arialHelvetica') }}</option>
-                <option value="helvetica">{{ $t('settings.display.playerSprites.helveticaArial') }}</option>
-                <option value="system">{{ $t('settings.display.playerSprites.systemSans') }}</option>
-                <option value="nuffle">{{ $t('settings.display.playerSprites.nuffle') }}</option>
-              </select>
-            </label>
-            <!-- Owner 09-10: sprite-set explainer paragraph cut. -->
-            <label class="row">
-              <input v-model="settings.walkAnimation" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.animatePlayerWalkCycles') }}</span>
-            </label>
-            <!-- Owner 09-10: the FPS override row is cut — every walk sheet runs at its authored 10 fps (settings.walkFps stays null). -->
-            <label class="row">
-              <input v-model="settings.walkFaceCamera" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.idlePlayersFaceThe') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.castShadows" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.castShadowsOnPlayers') }}</span>
-            </label>
-            <!-- Owner 10-03: casualty blood splatters on the pitch can be turned off. -->
-            <label class="row">
-              <input v-model="settings.bloodSplatters" type="checkbox" data-testid="blood-splatters-toggle" />
-              <span>{{ $t('settings.display.playerSprites.bloodSplattersWherePlayers') }}</span>
-            </label>
-            <!-- Owner 10-21: the movement-left badge at the acting player's feet can be turned off. -->
-            <label class="row">
-              <input v-model="settings.moveBadge" type="checkbox" data-testid="move-badge-toggle" />
-              <span>{{ $t('settings.display.playerSprites.movementLeftBadge') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.display.playerSprites.showsTheNormalMovement') }}</p>
-            <label class="row">
-              <input v-model="settings.uniformFigures" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.playersStayOneSize') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.uniformFiguresEw" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.playersStayOneSize2') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.display.playerSprites.spritesDiceAndMarkers') }}</p>
-            <label class="row">
-              <input v-model="settings.oneSpritePerPosition" type="checkbox" />
-              <span>{{ $t('settings.display.playerSprites.oneSpritePerPosition') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.display.playerSprites.usesTheFirstAvailable') }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.auras.disturbingPresence') }} <em class="aura-swatch dp-friendly" />/<em class="aura-swatch dp-opp" /></span>
+                <span class="row-ctl">
+                  <select v-model="settings.auraDisturbingPresence">
+                    <option value="selected">{{ $t('settings.general.auras.onWhenSelectedDefault') }}</option>
+                    <option value="always">{{ $t('settings.general.auras.alwaysOn') }}</option>
+                    <option value="off">{{ $t('settings.general.auras.off') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.auraDisturbingPresence')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.auras.pickMeUp') }} <em class="aura-swatch pmu-friendly" />/<em class="aura-swatch pmu-opp" /></span>
+                <span class="row-ctl">
+                  <select v-model="settings.auraPickMeUp">
+                    <option value="selected">{{ $t('settings.general.auras.onWhenSelectedDefault') }}</option>
+                    <option value="always">{{ $t('settings.general.auras.alwaysOn') }}</option>
+                    <option value="off">{{ $t('settings.general.auras.off') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.auraPickMeUp')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.showBlockDiceOn') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.preClickBlockDice" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.preClickBlockDice')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.skipArmourRollsIf') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.skipArmourDiceOnCasualty" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.ui.hudLayout.whenAKnockdownEnds')" :def="$t('settings.info.valueOff')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.movementAnimation.movementAnimation') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.display.movementAnimation.movementAnimation') }}</span>
-              <select v-model="settings.moveStyle">
-                <option value="trail">{{ $t('settings.display.movementAnimation.slideEcho') }}</option>
-                <option value="slide">{{ $t('settings.display.movementAnimation.slideDirect') }}</option>
-                <option value="walk">{{ $t('settings.display.movementAnimation.walkTileByTile') }}</option>
-                <option value="hop">{{ $t('settings.display.movementAnimation.hopPerTileArc') }}</option>
-                <option value="hoptrail">{{ $t('settings.display.movementAnimation.hopPathTrailBob') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.movementAnimation.movementSpeed') }}</span>
-              <select v-model.number="settings.moveSpeedMs">
-                <option :value="50">{{ $t('settings.display.movementAnimation.n50msFastest') }}</option>
-                <option :value="100">{{ $t('settings.display.movementAnimation.n100ms') }}</option>
-                <option :value="150">{{ $t('settings.display.movementAnimation.n150ms') }}</option>
-                <option :value="200">{{ $t('settings.display.movementAnimation.n200msDefault') }}</option>
-                <option :value="300">{{ $t('settings.display.movementAnimation.n300ms') }}</option>
-                <option :value="400">{{ $t('settings.display.movementAnimation.n400msSlowest') }}</option>
-              </select>
-            </label>
-            <label class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
-              <span>{{ $t('settings.display.movementAnimation.pathTrailColour') }}</span>
-              <select v-model="settings.trailColor">
-                <option value="auto">{{ $t('settings.display.movementAnimation.autoContrastWithBackground') }}</option>
-                <option value="white">{{ $t('settings.display.movementAnimation.white') }}</option>
-                <option value="black">{{ $t('settings.display.movementAnimation.black') }}</option>
-                <option value="gold">{{ $t('settings.display.movementAnimation.gold') }}</option>
-              </select>
-            </label>
-            <label class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
-              <span>{{ $t('settings.display.movementAnimation.pathTrailMarks') }}</span>
-              <select v-model="settings.trailMarks">
-                <option value="echo">{{ $t('settings.display.movementAnimation.echoFootprints') }}</option>
-                <option value="numbers">{{ $t('settings.display.movementAnimation.numbersCountSquaresMoved') }}</option>
-              </select>
-            </label>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.movementAnimation.movementAnimation') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.moveStyle">
+                    <option value="trail">{{ $t('settings.display.movementAnimation.slideEcho') }}</option>
+                    <option value="slide">{{ $t('settings.display.movementAnimation.slideDirect') }}</option>
+                    <option value="walk">{{ $t('settings.display.movementAnimation.walkTileByTile') }}</option>
+                    <option value="hop">{{ $t('settings.display.movementAnimation.hopPerTileArc') }}</option>
+                    <option value="hoptrail">{{ $t('settings.display.movementAnimation.hopPathTrailBob') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.moveStyle')" :def="$t('settings.info.moveStyleDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.movementAnimation.movementSpeed') }}</span>
+                <span class="row-ctl">
+                  <select v-model.number="settings.moveSpeedMs">
+                    <option :value="50">{{ $t('settings.display.movementAnimation.n50msFastest') }}</option>
+                    <option :value="100">{{ $t('settings.display.movementAnimation.n100ms') }}</option>
+                    <option :value="150">{{ $t('settings.display.movementAnimation.n150ms') }}</option>
+                    <option :value="200">{{ $t('settings.display.movementAnimation.n200msDefault') }}</option>
+                    <option :value="300">{{ $t('settings.display.movementAnimation.n300ms') }}</option>
+                    <option :value="400">{{ $t('settings.display.movementAnimation.n400msSlowest') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.moveSpeed')" :def="$t('settings.info.moveSpeedDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.animatePlayerWalkCycles') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.walkAnimation" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.walkAnimation')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
+              <label class="row-main">
+                <span>{{ $t('settings.display.movementAnimation.pathTrailColour') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.trailColor">
+                    <option value="auto">{{ $t('settings.display.movementAnimation.autoContrastWithBackground') }}</option>
+                    <option value="white">{{ $t('settings.display.movementAnimation.white') }}</option>
+                    <option value="black">{{ $t('settings.display.movementAnimation.black') }}</option>
+                    <option value="gold">{{ $t('settings.display.movementAnimation.gold') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.trailColor')" :def="$t('settings.info.trailColorDefault')" />
+            </div>
+            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
+              <label class="row-main">
+                <span>{{ $t('settings.display.movementAnimation.pathTrailMarks') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.trailMarks">
+                    <option value="echo">{{ $t('settings.display.movementAnimation.echoFootprints') }}</option>
+                    <option value="numbers">{{ $t('settings.display.movementAnimation.numbersCountSquaresMoved') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.trailMarks')" :def="$t('settings.info.trailMarksDefault')" />
+            </div>
           </fieldset>
 
-          <!-- Owner 09-16: every log APPEARANCE setting lives here (moved from UI > Log window) + the dice toggles. -->
+          <fieldset class="settings-group" data-testid="planner-settings">
+            <legend>{{ $t('settings.pitch.planner.planner') }}</legend>
+            <!-- Owner 09-16: planner colours — Primary = the route line; Secondary = steps that owe a roll. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.movementPlanner.primaryColor') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.plannerPrimaryColor" type="color" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.plannerPrimary')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.movementPlanner.secondaryColor') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.plannerSecondaryColor" type="color" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.plannerSecondary')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.plannerRollTags') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.plannerTagStyle">
+                    <option value="dieWord">{{ $t('settings.mods.dice.dieAndWordRush') }}</option>
+                    <option value="letter">{{ $t('settings.mods.dice.letterAndNumberR2') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.plannerTags')" />
+            </div>
+            <!-- Owner 10-22: the route chips can wear the mover's Home / Away die (default: the neutral grey die). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.teamColouredRouteDice') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.plannerDiceSeatTint" type="checkbox" data-testid="planner-dice-seat-tint-toggle" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.mods.dice.routeAndReachRoll')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.blitzTargetMarker') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.blitzTargetMarker">
+                    <option value="turn">{{ $t('settings.mods.dice.keepForTheTurn') }}</option>
+                    <option value="fumbbl">{{ $t('settings.mods.dice.clearWhenTheBlitz') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.blitzTargetMarker')" :def="$t('settings.info.blitzTargetMarkerDefault')" />
+            </div>
+          </fieldset>
+
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.log.log') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.display.log.opacity') }}</span>
-              <input v-model.number="settings.logOpacity" v-fill-range type="range" min="0.05" max="1" step="0.01" />
-              <span>{{ Math.round(settings.logOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.log.fontSize') }}</span>
-              <input v-model.number="settings.logFontSize" v-fill-range type="range" min="8" max="22" step="0.5" />
-              <span>{{ settings.logFontSize }}px</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.log.font') }}</span>
-              <select v-model="settings.logFont">
-                <option value="nuffle">{{ $t('settings.display.log.nuffleBloodBowl') }}</option>
-                <option value="arial">{{ $t('settings.display.log.arialHelvetica') }}</option>
-                <option value="mono">{{ $t('settings.display.log.monospace') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.log.displayDiceRollsAs') }}</span>
-              <input v-model="settings.logDiceAsNumbers" type="checkbox" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.log.showTimestamps') }}</span>
-              <input v-model="settings.logTimestamps" type="checkbox" />
-            </label>
-            <p class="hint">{{ $t('settings.display.log.rollsShowAsOne') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.display.log.displayDiceRollNeeded') }}</span>
-              <input v-model="settings.logNeededAsNumbers" type="checkbox" />
-            </label>
-            <p class="hint">{{ $t('settings.display.log.theRollNeededShows') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.display.log.logStyle') }}</span>
-              <select v-model="settings.logStyle">
-                <option value="text">{{ $t('settings.display.log.text') }}</option>
-                <option value="graphical">{{ $t('settings.display.log.graphical') }}</option>
-                <option value="fumbbl">{{ $t('settings.display.log.fumbbl') }}</option>
-              </select>
-            </label>
-            <p v-if="settings.logStyle === 'fumbbl'" class="hint">{{ $t('settings.display.log.theFumbblClientS') }}</p>
-            <p v-else class="hint">{{ $t('settings.display.log.graphicalEachLineIs') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.display.log.chatStyle') }}</span>
-              <select v-model="settings.chatStyle" data-testid="chat-style">
-                <option value="text">{{ $t('settings.display.log.text') }}</option>
-                <option value="bubbles">{{ $t('settings.display.log.bubbles') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.display.log.bubblesEachMessageSits') }}</p>
-            <label v-if="settings.logStyle === 'graphical'" class="row">
-              <span>{{ $t('settings.display.log.rowColourStrength') }}</span>
-              <input v-model.number="settings.logTintStrength" v-fill-range type="range" min="0" max="100" step="5" data-testid="log-tint-strength" />
-              <span>{{ settings.logTintStrength }}%</span>
-            </label>
-            <p v-if="settings.logStyle === 'graphical'" class="hint">{{ $t('settings.display.log.howStronglyTheTeam') }}</p>
+            <legend>{{ $t('settings.pitch.playerFigures.playerFigures') }}</legend>
+            <!-- Owner 11-03: the North-South and East-West rows merged into one select (game/settingsMerges.ts). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.pitch.playerFigures.playersStayOneSize') }}</span>
+                <span class="row-ctl">
+                  <select v-model="uniformFiguresChoice" data-testid="uniform-figures">
+                    <option value="off">{{ $t('settings.pitch.playerFigures.off') }}</option>
+                    <option value="ns">{{ $t('settings.pitch.playerFigures.northSouth') }}</option>
+                    <option value="ew">{{ $t('settings.pitch.playerFigures.eastWest') }}</option>
+                    <option value="both">{{ $t('settings.pitch.playerFigures.both') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.uniformFigures')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.idlePlayersFaceThe') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.walkFaceCamera" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.walkFaceCamera')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.castShadowsOnPlayers') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.castShadows" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.castShadows')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <!-- Owner 10-03: casualty blood splatters on the pitch can be turned off. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.bloodSplattersWherePlayers') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.bloodSplatters" type="checkbox" data-testid="blood-splatters-toggle" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.bloodSplatters')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <!-- Owner 10-21: the movement-left badge at the acting player's feet can be turned off. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.movementLeftBadge') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.moveBadge" type="checkbox" data-testid="move-badge-toggle" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.moveBadge')" :def="$t('settings.info.valueOn')" />
+            </div>
           </fieldset>
 
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.display.onFieldMarkings.onFieldMarkings') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.showRowNumberMarkers') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.showRowMarkers" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.rowMarkers')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.showSweetSpotMarkers') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.showSweetSpot" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.sweetSpot')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.showOnFieldTeam') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.showFieldLogos" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.fieldLogos')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.playerCountsOnDugout') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.dugoutCounts" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.dugoutCounts')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.hideRerollChipsAt') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.hideZeroRerolls" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.hideZeroRerolls')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <!-- owner 2026-07-08: end-zone label — team name (FUMBBL) or TOUCHDOWN -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.endZoneLabel') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.endZoneLabel">
+                    <option value="team">{{ $t('settings.display.onFieldMarkings.teamName') }}</option>
+                    <option value="touchdown">{{ $t('settings.display.onFieldMarkings.touchdownOnly') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.endZoneLabel')" :def="$t('settings.info.endZoneLabelDefault')" />
+            </div>
+            <!-- owner 09-05: red/blue end-zone shading (tile turf + Acasas pack) -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.redBlueEndZone') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.endZoneTint" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.endZoneTint')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <!-- owner 2026-07-07: toggle the on-pitch turn/score/reroll tracks -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.onFieldMarkings.onPitchTurnScore') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.turnTrack" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.turnTrack')" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.display.positionRings.positionRings') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.positionRings.showPositionRingsUnder') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.showPositionRings" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.positionRings')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.positionRings.ringDensity') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.positionRingDensity" v-fill-range type="range" min="0.3" max="1.5" step="0.1" :disabled="!settings.showPositionRings" />
+                  <span>{{ settings.positionRingDensity }}×</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.ringDensity')" :def="$t('settings.info.ringDensityDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.positionRings.ringColour') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.positionRingColor" :disabled="!settings.showPositionRings">
+                    <option value="auto">{{ $t('settings.display.positionRings.autoPerPosition') }}</option>
+                    <option value="#f5c542">{{ $t('settings.display.positionRings.gold') }}</option>
+                    <option value="#ffffff">{{ $t('settings.display.positionRings.white') }}</option>
+                    <option value="#66e0ff">{{ $t('settings.display.positionRings.cyan') }}</option>
+                    <option value="#ff8a8a">{{ $t('settings.display.positionRings.red') }}</option>
+                    <option value="#9ab8ff">{{ $t('settings.display.positionRings.blue') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.ringColor')" :def="$t('settings.info.ringColorDefault')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.accessibility.gridLines.gridLines') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.gridLines.showPitchGridLines') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.gridLines" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.gridLines')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.gridLines.lineWidth') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.gridLineWidth" v-fill-range type="range" min="0.1" max="3" step="0.1" :disabled="!settings.gridLines" />
+                  <span>{{ settings.gridLineWidth }}×</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.gridWidth')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.gridLines.lineColor') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.gridLineColor" type="color" :disabled="!settings.gridLines" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.gridColor')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.gridLines.lineOpacity') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.gridLineOpacity" v-fill-range type="range" min="0.1" max="1" step="0.05" :disabled="!settings.gridLines" />
+                  <span>{{ Math.round(settings.gridLineOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.gridOpacity')" :def="$t('settings.info.gridOpacityDefault')" />
+            </div>
+          </fieldset>
+
+          <!-- Owner 10-13: the three setup-phase aids, each separately switchable -->
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.pitch.setupHelpers.setupHelpers') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.setup.setupRulesCardAt') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.setupRulesCard" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.setupRulesCard')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.setup.formationsPanelAtSetup') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.setupFormationsPanel" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.setupFormations')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.setup.zoneHelpersAtSetup') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.setupZoneHelpers" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.setupZones')" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ SKILLS ============================ -->
+        <section v-if="settingsTab === 'skills'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.skillDisplay.skillDisplay') }}</legend>
             <!-- B2-17: icons and markings are mutually exclusive display modes -->
-            <label class="row">
-              <span>{{ $t('settings.display.skillDisplay.skillDisplay') }}</span>
-              <select v-model="settings.skillDisplay">
-                <option value="icons">{{ $t('settings.display.skillDisplay.skillIconsBadges') }}</option>
-                <option value="markings">{{ $t('settings.display.skillDisplay.skillMarkingsText') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.skillDisplay.actionDecorations') }}</span>
-              <select v-model="settings.actionDecorations">
-                <option value="art">{{ $t('settings.display.skillDisplay.superFumbblArtwork') }}</option>
-                <option value="emoji">{{ $t('settings.display.skillDisplay.emojiGlyphs') }}</option>
-              </select>
-            </label>
-            <!-- Per-skill display config (owner 2026-07-03 r6f): every skill in the
-                 game, grouped into Skill Icons / Skill Markers, each with MY TEAM
-                 (home coach) / OPPOSITION (away coach) behaviour + a marker glyph. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.skillDisplay.skillDisplay') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.skillDisplay">
+                    <option value="icons">{{ $t('settings.display.skillDisplay.skillIconsBadges') }}</option>
+                    <option value="markings">{{ $t('settings.display.skillDisplay.skillMarkingsText') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.skillDisplay')" :def="$t('settings.info.skillDisplayDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.hatred.pitchIconsShowThe') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.hatredIconNeedsTarget" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.hatred')" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.display.skillDisplay.actionDecorations') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.skillDisplay.actionDecorations') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.actionDecorations">
+                    <option value="art">{{ $t('settings.display.skillDisplay.superFumbblArtwork') }}</option>
+                    <option value="emoji">{{ $t('settings.display.skillDisplay.emojiGlyphs') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.actionDecorations')" :def="$t('settings.info.actionDecorationsDefault')" />
+            </div>
+          </fieldset>
+
+          <!-- Per-skill display config (owner 2026-07-03 r6f): every skill in the
+               game, grouped into Skill Icons / Skill Markers, each with MY TEAM
+               (home coach) / OPPOSITION (away coach) behaviour + a marker glyph. -->
+          <fieldset class="settings-group" data-testid="per-skill-config">
+            <legend>{{ $t('settings.skills.perSkill.perSkillIconsMarkers') }}</legend>
             <details class="skill-config">
               <summary>{{ $t('settings.display.skillDisplay.skillDisplayConfigPer') }}</summary>
-              <label class="row">
-                <span>{{ $t('settings.display.skillDisplay.configure') }}</span>
-                <select v-model="skillConfigGroup">
-                  <option value="icons">{{ $t('settings.display.skillDisplay.skillIcons') }}</option>
-                  <option value="markers">{{ $t('settings.display.skillDisplay.skillMarkers') }}</option>
-                </select>
-              </label>
-              <label class="row">
-                <span>{{ $t('settings.display.skillDisplay.renderPosition') }}</span>
-                <select v-model="skillGroupPosition">
-                  <option value="head">{{ $t('settings.display.skillDisplay.overHead') }}</option>
-                  <option value="feet">{{ $t('settings.display.skillDisplay.atFeet') }}</option>
-                  <option value="centre">{{ $t('settings.display.skillDisplay.onToken') }}</option>
-                </select>
-              </label>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.display.skillDisplay.configure') }}</span>
+                  <span class="row-ctl">
+                    <select v-model="skillConfigGroup">
+                      <option value="icons">{{ $t('settings.display.skillDisplay.skillIcons') }}</option>
+                      <option value="markers">{{ $t('settings.display.skillDisplay.skillMarkers') }}</option>
+                    </select>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.skillConfigGroup')" />
+              </div>
+              <div class="row">
+                <label class="row-main">
+                  <span>{{ $t('settings.display.skillDisplay.renderPosition') }}</span>
+                  <span class="row-ctl">
+                    <select v-model="skillGroupPosition">
+                      <option value="head">{{ $t('settings.display.skillDisplay.overHead') }}</option>
+                      <option value="feet">{{ $t('settings.display.skillDisplay.atFeet') }}</option>
+                      <option value="centre">{{ $t('settings.display.skillDisplay.onToken') }}</option>
+                    </select>
+                  </span>
+                </label>
+                <SettingInfo :text="$t('settings.info.renderPosition')" />
+              </div>
               <input class="sc-filter" v-model="skillFilter" :placeholder="$t('settings.display.skillDisplay.filterSkills')" spellcheck="false" />
               <div class="sc-table" :data-markers="skillConfigGroup === 'markers'">
                 <div class="sc-thead">
@@ -3506,266 +3833,378 @@ onBeforeUnmount(() => {
                   </select>
                 </div>
               </div>
-              <div class="actions" style="justify-content: flex-start">
-                <button type="button" @click="resetSkillConfig">{{ $t('settings.display.skillDisplay.resetPerSkillConfig') }}</button>
-                <span class="hint" aria-live="polite">{{ skillConfigStatus }}</span>
-              </div>
             </details>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.info.resetSkillConfigLabel') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" @click="resetSkillConfig">{{ $t('settings.display.skillDisplay.resetPerSkillConfig') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.resetSkillConfig')" />
+            </div>
+            <p class="hint" aria-live="polite">{{ skillConfigStatus }}</p>
           </fieldset>
 
-          <!-- Owner 10-13: ONE "Skill markings" box (appearance, fumbbl.com import, table, add, clear all) as a sibling
-               of Skill display, no nested fieldsets. Only while Skill markings are the chosen display. -->
+          <!-- Owner 10-13: ONE "Skill markings" box (appearance, fumbbl.com import, table, add, clear all). Only while
+               Skill markings are the chosen display. -->
           <SkillMarkingsSettings v-if="settings.skillDisplay === 'markings'" :skills="allSkills" />
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.onFieldMarkings.onFieldMarkings') }}</legend>
-            <label class="row">
-              <input v-model="settings.showRowMarkers" type="checkbox" />
-              <span>{{ $t('settings.display.onFieldMarkings.showRowNumberMarkers') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.showSweetSpot" type="checkbox" />
-              <span>{{ $t('settings.display.onFieldMarkings.showSweetSpotMarkers') }}</span>
-            </label>
-            <label class="row">
-              <input v-model="settings.showFieldLogos" type="checkbox" />
-              <span>{{ $t('settings.display.onFieldMarkings.showOnFieldTeam') }}</span>
-            </label>
-            <label class="row"><input v-model="settings.dugoutCounts" type="checkbox" /> <span>{{ $t('settings.display.onFieldMarkings.playerCountsOnDugout') }}</span></label>
-            <label class="row"><input v-model="settings.hideZeroRerolls" type="checkbox" /> <span>{{ $t('settings.display.onFieldMarkings.hideRerollChipsAt') }}</span></label>
-            <!-- Owner 08-19: showPlayerNumbers + showBlockDice rows RETIRED from Settings > UI
-                 (settings keep their defaults; toggles no longer surfaced). -->
-            <!-- owner 2026-07-08: end-zone label — team name (FUMBBL) or TOUCHDOWN -->
-            <label class="row">
-              <span>{{ $t('settings.display.onFieldMarkings.endZoneLabel') }}</span>
-              <select v-model="settings.endZoneLabel">
-                <option value="team">{{ $t('settings.display.onFieldMarkings.teamName') }}</option>
-                <option value="touchdown">{{ $t('settings.display.onFieldMarkings.touchdownOnly') }}</option>
-              </select>
-            </label>
-            <!-- owner 09-05: red/blue end-zone shading (tile turf + Acasas pack) -->
-            <label class="row">
-              <input v-model="settings.endZoneTint" type="checkbox" />
-              <span>{{ $t('settings.display.onFieldMarkings.redBlueEndZone') }}</span>
-            </label>
-            <!-- owner 2026-07-07: toggle the on-pitch turn/score/re-roll tracks -->
-            <label class="row">
-              <input v-model="settings.turnTrack" type="checkbox" />
-              <span>{{ $t('settings.display.onFieldMarkings.onPitchTurnScore') }}</span>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.hatred.hatred') }}</legend>
-            <label class="row">
-              <input v-model="settings.hatredIconNeedsTarget" type="checkbox" />
-              <span>{{ $t('settings.display.hatred.pitchIconsShowThe') }}</span>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.display.positionRings.positionRings') }}</legend>
-            <label class="row">
-              <input v-model="settings.showPositionRings" type="checkbox" />
-              <span>{{ $t('settings.display.positionRings.showPositionRingsUnder') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.positionRings.ringDensity') }}</span>
-              <input v-model.number="settings.positionRingDensity" v-fill-range type="range" min="0.3" max="1.5" step="0.1" :disabled="!settings.showPositionRings" />
-              <span>{{ settings.positionRingDensity }}×</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.display.positionRings.ringColour') }}</span>
-              <select v-model="settings.positionRingColor" :disabled="!settings.showPositionRings">
-                <option value="auto">{{ $t('settings.display.positionRings.autoPerPosition') }}</option>
-                <option value="#f5c542">{{ $t('settings.display.positionRings.gold') }}</option>
-                <option value="#ffffff">{{ $t('settings.display.positionRings.white') }}</option>
-                <option value="#66e0ff">{{ $t('settings.display.positionRings.cyan') }}</option>
-                <option value="#ff8a8a">{{ $t('settings.display.positionRings.red') }}</option>
-                <option value="#9ab8ff">{{ $t('settings.display.positionRings.blue') }}</option>
-              </select>
-            </label>
-          </fieldset>
-
-          <!-- Owner 09-14: the Injury results group (Stun display banner/tag) is cut — the stun reads as the token toast like a KO; the 'tag' variant only swapped toast styles. -->
-        </section>
-
-        <!-- ============================ ART (id 'mods') ============================ -->
-        <section v-if="settingsTab === 'mods'">
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.mods.dice.dice') }}</legend>
-            <label class="row">
-              <input v-model="settings.blockDice3d" type="checkbox" />
-              <span>{{ $t('settings.mods.dice.n3dDiceBlockDice') }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.d6Style') }}</span>
-              <select v-model="settings.d6FaceVariant">
-                <option value="brushed-metal">{{ $t('settings.mods.dice.blackDefault') }}</option>
-                <option value="black">{{ $t('settings.mods.dice.white') }}</option>
-                <option value="team">{{ $t('settings.mods.dice.brushedMetalHomeAnd') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.blockDieSurface') }}</span>
-              <select v-model="settings.blockDiceSurface">
-                <option value="auto">{{ $t('settings.mods.dice.matchTheFaceSet') }}</option>
-                <option value="black">{{ $t('settings.mods.dice.black') }}</option>
-                <option value="white">{{ $t('settings.mods.dice.white') }}</option>
-                <option value="team">{{ $t('settings.mods.dice.brushedMetalHomeAnd') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.diceTumbleBlocktumblemsMs', { blockTumbleMs: settings.blockTumbleMs }) }}</span>
-              <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.dieRollTagPosition') }}</span>
-              <select v-model="settings.dieTagPosition">
-                <option value="corner">{{ $t('settings.mods.dice.onDieTopRight') }}</option>
-                <option value="top">{{ $t('settings.mods.dice.onDieTop') }}</option>
-                <option value="side">{{ $t('settings.mods.dice.toTheSideOf') }}</option>
-                <option value="bottom">{{ $t('settings.mods.dice.onDieBottom') }}</option>
-                <option value="off">{{ $t('settings.mods.dice.off') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.plannerRollTags') }}</span>
-              <select v-model="settings.plannerTagStyle">
-                <option value="dieWord">{{ $t('settings.mods.dice.dieAndWordRush') }}</option>
-                <option value="letter">{{ $t('settings.mods.dice.letterAndNumberR2') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.mods.dice.marksTheRushDodge') }}</p>
-            <!-- Owner 10-22: the route chips can wear the mover's Home / Away die (default: the neutral grey die). -->
-            <label class="row">
-              <input v-model="settings.plannerDiceSeatTint" type="checkbox" data-testid="planner-dice-seat-tint-toggle" />
-              <span>{{ $t('settings.mods.dice.teamColouredRouteDice') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.mods.dice.routeAndReachRoll') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.mods.dice.blitzTargetMarker') }}</span>
-              <select v-model="settings.blitzTargetMarker">
-                <option value="turn">{{ $t('settings.mods.dice.keepForTheTurn') }}</option>
-                <option value="fumbbl">{{ $t('settings.mods.dice.clearWhenTheBlitz') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.mods.dice.howLongTheTarget') }}</p>
-          </fieldset>
-
-          <!-- Owner 10-20: the coach rank badges on the Play screen coach card and the game-load rank panel. -->
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</span>
-              <select v-model="settings.coachBadgeStyle">
-                <option value="realistic">{{ $t('settings.mods.coachRankBadges.realistic') }}</option>
-                <option value="retro">{{ $t('settings.mods.coachRankBadges.retro') }}</option>
-              </select>
-            </label>
-          </fieldset>
-
-          <AssetPackSettings :live-game="gameStore.game.value" />
         </section>
 
         <!-- ============================ UI ============================ -->
         <section v-if="settingsTab === 'ui'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.hudLayout.hudLayout') }}</legend>
-            <label v-if="FORK_EDITION" class="row">
-              <span>{{ $t('settings.ui.hudLayout.uiMode') }}</span>
-              <select v-model="settings.uiMode">
-                <option value="fumbbl40k">{{ $t('settings.ui.hudLayout.superFumbblDefault') }}</option>
-                <option value="classic">{{ $t('settings.ui.hudLayout.fumbblClassic') }}</option>
-              </select>
-            </label>
-            <p v-if="FORK_EDITION" class="hint">{{ $t('settings.ui.hudLayout.fumbblClassicMirrorsThe') }}</p>
-            <label v-if="settings.uiMode === 'fumbbl40k'" class="row">
-              <span>{{ $t('settings.fumbbl40k.hudLayout.modernHudStyle') }}</span>
-              <select v-model="settings.modernHudStyle">
-                <option value="chrome">{{ $t('settings.fumbbl40k.hudLayout.consoleChromeDefault') }}</option>
-                <option value="minimalist">{{ $t('settings.fumbbl40k.hudLayout.minimalist') }}</option>
-              </select>
-            </label>
-            <p v-if="settings.uiMode === 'fumbbl40k'" class="hint">{{ $t('settings.fumbbl40k.hudLayout.chromeAddsTheMolded') }}</p>
-            <label class="row">
-              <input v-model="settings.bottomBarsSwapped" type="checkbox" />
-              <span>{{ $t('settings.ui.hudLayout.logBottomLeftQuick') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.putsTheLogWindow') }}</p>
-            <label class="row">
-              <span>{{ $t('settings.ui.hudLayout.playerPortraits') }}</span>
-              <select v-model="settings.playerCardMode" data-testid="player-card-mode">
-                <option value="auto">{{ $t('settings.ui.hudLayout.onShowAutomaticallyDefault') }}</option>
-                <option value="called">{{ $t('settings.ui.hudLayout.offOnlyWhenCalled') }}</option>
-              </select>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.onClickingAPlayer') }}</p>
-            <label class="row">
-              <input v-model="settings.chatDockRosterTab" type="checkbox" />
-              <span>{{ $t('settings.ui.hudLayout.rosterTabInThe') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.theRosterOpensFrom') }}</p>
-            <label class="row">
-              <input v-model="settings.preClickBlockDice" type="checkbox" />
-              <span>{{ $t('settings.ui.hudLayout.showBlockDiceOn') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.afterYouDeclareA') }}</p>
-            <label class="row">
-              <input v-model="settings.coachCornerCounts" type="checkbox" />
-              <span>{{ $t('settings.ui.hudLayout.reserveOutCountsOn') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.aSmallTabOn') }}</p>
-            <label class="row">
-              <input v-model="settings.skipArmourDiceOnCasualty" type="checkbox" />
-              <span>{{ $t('settings.ui.hudLayout.skipArmourRollsIf') }}</span>
-            </label>
-            <p class="hint">{{ $t('settings.ui.hudLayout.whenAKnockdownEnds') }}</p>
-            <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
-                 a centred "Confirm Layout" button on the game screen exits it (SpectateView). -->
-            <div class="actions" style="justify-content: flex-start">
-              <button type="button" @click="startUiCustomize">{{ $t('settings.ui.hudLayout.customizeUiLayout') }}</button>
-              <button type="button" @click="resetPanelLayoutImmediately">{{ $t('settings.ui.hudLayout.resetAllPanelsNow') }}</button>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.fumbbl40k.hudLayout.modernHudStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.modernHudStyle">
+                    <option value="chrome">{{ $t('settings.fumbbl40k.hudLayout.consoleChromeDefault') }}</option>
+                    <option value="minimalist">{{ $t('settings.fumbbl40k.hudLayout.minimalist') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.hudStyle')" :def="$t('settings.info.hudStyleDefault')" :previews="SETTING_PREVIEWS.hudStyle" />
             </div>
-            <p class="settings-immediate-note">{{ $t('settings.ui.hudLayout.resettingEveryPanelChanges') }}</p>
-            <p class="hint"><RichT k="settings.ui.hudLayout.richCustomizeLayout" /></p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.playerPortraits') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.playerCardMode" data-testid="player-card-mode">
+                    <option value="auto">{{ $t('settings.ui.hudLayout.onShowAutomaticallyDefault') }}</option>
+                    <option value="called">{{ $t('settings.ui.hudLayout.offOnlyWhenCalled') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.playerPortraits')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.rosterTabInThe') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.chatDockRosterTab" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.rosterTab')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.reserveOutCountsOn') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.coachCornerCounts" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.coachCounts')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.confirmBar.hideTheConfirmBar') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.hideConfirmBar" type="checkbox" data-testid="hide-confirm-bar" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.hideConfirmBar')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
+                 a centred "Confirm Layout" button on the game screen exits it (SpectateView).
+                 Owner 11-03: "Reset all panels now" became "Reset UI to default", behind a confirmation modal. -->
+            <div class="row">
+              <span class="row-label">{{ $t('settings.ui.hudLayout.customizeUiLayout') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.ui.hudLayout.customizeUiLayout')" @click="startUiCustomize">{{ $t('settings.info.openButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.customizeUi')" />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.ui.hudLayout.resetUiToDefault') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" :aria-label="$t('settings.ui.hudLayout.resetUiToDefault')" data-testid="reset-ui-default" @click="requestResetUi">{{ $t('settings.info.resetButton') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.resetUi')" />
+            </div>
           </fieldset>
 
-          <!-- Owner 10-13: the three setup-phase aids, each separately switchable -->
+          <!-- Owner 09-16 / 11-03: the log's look and the merged "Dice in the log". -->
+          <fieldset class="settings-group" data-testid="log-settings">
+            <legend>{{ $t('settings.display.log.log') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.logStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.logStyle">
+                    <option value="text">{{ $t('settings.display.log.text') }}</option>
+                    <option value="graphical">{{ $t('settings.display.log.graphical') }}</option>
+                    <option value="fumbbl">{{ $t('settings.display.log.fumbbl') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.logStyle')" :def="$t('settings.info.logStyleDefault')" :previews="SETTING_PREVIEWS.logStyle" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.chatStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.chatStyle" data-testid="chat-style">
+                    <option value="text">{{ $t('settings.display.log.text') }}</option>
+                    <option value="bubbles">{{ $t('settings.display.log.bubbles') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.chatStyle')" :def="$t('settings.info.chatStyleDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.fontSize') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.logFontSize" v-fill-range type="range" min="8" max="22" step="0.5" />
+                  <span>{{ settings.logFontSize }}px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.logFontSize')" :def="$t('settings.info.logFontSizeDefault')" />
+              <p class="row-sample" data-testid="sample-logFontSize"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="logSampleStyle()">{{ $t('settings.info.logFontSizeSample') }}</span></p>
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.font') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.logFont">
+                    <option value="nuffle">{{ $t('settings.display.log.nuffleBloodBowl') }}</option>
+                    <option value="arial">{{ $t('settings.display.log.arialHelvetica') }}</option>
+                    <option value="mono">{{ $t('settings.display.log.monospace') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.logFont')" :def="$t('settings.info.logFontDefault')" />
+              <p class="row-sample" data-testid="sample-logFont"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="logSampleStyle()">{{ $t('settings.info.logFontSample') }}</span></p>
+            </div>
+            <!-- Owner 11-03: "Display dice as numbers" + "Display needed as numbers" merged (game/settingsMerges.ts). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.log.diceInTheLog') }}</span>
+                <span class="row-ctl">
+                  <select v-model="logDiceChoice" data-testid="log-dice">
+                    <option value="dice">{{ $t('settings.ui.log.diceIcons') }}</option>
+                    <option value="rolls">{{ $t('settings.ui.log.rollsAsNumbers') }}</option>
+                    <option value="needed">{{ $t('settings.ui.log.neededAsNumbers') }}</option>
+                    <option value="numbers">{{ $t('settings.ui.log.allAsNumbers') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.logDice')" :def="$t('settings.info.logDiceDefault')" :previews="SETTING_PREVIEWS.logDice" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.showTimestamps') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.logTimestamps" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.timestamps')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div v-if="settings.logStyle === 'graphical'" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.rowColourStrength') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.logTintStrength" v-fill-range type="range" min="0" max="100" step="5" data-testid="log-tint-strength" />
+                  <span>{{ settings.logTintStrength }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.logTint')" :def="$t('settings.info.logTintDefault')" :previews="SETTING_PREVIEWS.logTint" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.matchLog.showServerSequencingEvents') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.showServerSequencingEvents" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.serverSequencing')" :def="$t('settings.info.valueOff')" />
+            </div>
+          </fieldset>
+
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.ui.setup.setup') }}</legend>
-            <label class="row"><input v-model="settings.setupRulesCard" type="checkbox" /> <span>{{ $t('settings.ui.setup.setupRulesCardAt') }}</span></label>
-            <label class="row"><input v-model="settings.setupFormationsPanel" type="checkbox" /> <span>{{ $t('settings.ui.setup.formationsPanelAtSetup') }}</span></label>
-            <label class="row"><input v-model="settings.setupZoneHelpers" type="checkbox" /> <span>{{ $t('settings.ui.setup.zoneHelpersAtSetup') }}</span></label>
+            <legend>{{ $t('settings.ui.chatNotifications.chatNotifications') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.chatNotifications.disableChat') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.chatDisabled" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.disableChat')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row" v-if="!settings.chatDisabled">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.chatNotifications.chatToasts') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.chatToastsEnabled" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.chatToasts')" :def="$t('settings.info.valueOn')" :previews="SETTING_PREVIEWS.chatToasts" />
+            </div>
+            <div class="row" v-if="!settings.chatDisabled && settings.chatToastsEnabled">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.chatNotifications.chatToastPosition') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.chatToastPos">
+                    <option value="left">{{ $t('settings.ui.chatNotifications.leftDefault') }}</option>
+                    <option value="right">{{ $t('settings.ui.chatNotifications.right') }}</option>
+                    <option value="bottomLeft">{{ $t('settings.ui.chatNotifications.bottomLeft') }}</option>
+                    <option value="top">{{ $t('settings.ui.chatNotifications.top') }}</option>
+                    <option value="center">{{ $t('settings.ui.chatNotifications.center') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.chatToastPos')" :def="$t('settings.info.chatToastPosDefault')" :previews="SETTING_PREVIEWS.chatToastPos" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.chatNotifications.chatToastTextSize') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.chatToastTextSize" v-fill-range type="range" min="12" max="28" step="1"
+                    />
+                  <span>{{ settings.chatToastTextSize }}px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.chatToastTextSize')" :def="$t('settings.info.chatToastTextSizeDefault')" />
+              <p class="row-sample" data-testid="sample-chatToastTextSize"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="{ fontSize: `${settings.chatToastTextSize}px` }">{{ $t('settings.info.chatToastTextSizeSample') }}</span></p>
+            </div>
+          </fieldset>
+
+          <!-- Owner 11-03: one Opacity group, the Log's opacity included. -->
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.ui.opacity.opacity') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.elementOpacity.coachPanels') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.hudCoachOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
+                  <span>{{ Math.round(settings.hudCoachOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.elementOpacity.scoreboard') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.hudScoreboardOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
+                  <span>{{ Math.round(settings.hudScoreboardOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.elementOpacity.quickBar') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.hudQuickBarOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
+                  <span>{{ Math.round(settings.hudQuickBarOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.elementOpacity.chatToasts') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.hudToastOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
+                  <span>{{ Math.round(settings.hudToastOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.elementOpacity.rosterWindow') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.rosterOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" data-testid="roster-opacity" />
+                  <span>{{ Math.round(settings.rosterOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.log.log') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.logOpacity" v-fill-range type="range" min="0.05" max="1" step="0.01" data-testid="log-opacity" />
+                  <span>{{ Math.round(settings.logOpacity * 100) }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.uiTheme.uiTheme') }}</legend>
-            <div class="theme-presets">
-              <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'brand-red'"
-                @click="selectThemePreset('brand-red')">
-                <span class="theme-swatch" :style="{ background: THEME_PRESETS['brand-red'].secondary, borderColor: THEME_PRESETS['brand-red'].primary }"></span>
-                <span>{{ $t('settings.ui.uiTheme.blackRed') }}</span>
-              </button>
-              <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'fumbbl'"
-                @click="selectThemePreset('fumbbl')">
-                <span class="theme-swatch" :style="{ background: THEME_PRESETS['fumbbl'].secondary, borderColor: THEME_PRESETS['fumbbl'].primary }"></span>
-                <span>{{ $t('settings.ui.uiTheme.fumbbl') }}</span>
-              </button>
-              <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'custom'"
-                @click="selectThemePreset('custom')">
-                <span class="theme-swatch" :style="{ background: settings.uiSecondary, borderColor: settings.uiPrimary }"></span>
-                <span>{{ $t('settings.ui.uiTheme.custom') }}</span>
-              </button>
+            <!-- lm-theme: uiStyle/uiColorScheme rows -->
+            <!-- Owner 11-03: Modern (League Manager look, default) or Retro (today's look); dark or light for Modern. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.uiStyle.interfaceStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.uiStyle" data-testid="ui-style">
+                    <option value="modern">{{ $t('settings.ui.uiStyle.modern') }}</option>
+                    <option value="retro">{{ $t('settings.ui.uiStyle.retro') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.uiStyle')" :def="$t('settings.info.uiStyleDefault')" :previews="SETTING_PREVIEWS.uiStyle" />
             </div>
-            <label class="row">
-              <span>{{ $t('settings.ui.uiTheme.primaryAccent') }}</span>
-              <input v-model="settings.uiPrimary" type="color" @input="onThemeColorEdit" />
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.uiTheme.secondaryBase') }}</span>
-              <input v-model="settings.uiSecondary" type="color" @input="onThemeColorEdit" />
-            </label>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.uiStyle.theme') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.uiColorScheme" data-testid="ui-color-scheme">
+                    <option value="dark">{{ $t('settings.ui.uiStyle.dark') }}</option>
+                    <option value="light">{{ $t('settings.ui.uiStyle.light') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.uiColorScheme')" :def="$t('settings.info.uiColorSchemeDefault')" :previews="SETTING_PREVIEWS.uiColorScheme" />
+            </div>
+            <!-- /lm-theme -->
+            <div class="row theme-preset-row">
+              <span class="row-label">{{ $t('settings.ui.uiTheme.colorPreset') }}</span>
+              <div class="row-ctl">
+                <div class="theme-presets">
+                  <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'brand-red'"
+                    @click="selectThemePreset('brand-red')">
+                    <span class="theme-swatch" :style="{ background: THEME_PRESETS['brand-red'].secondary, borderColor: THEME_PRESETS['brand-red'].primary }"></span>
+                    <span>{{ $t('settings.ui.uiTheme.blackRed') }}</span>
+                  </button>
+                  <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'fumbbl'"
+                    @click="selectThemePreset('fumbbl')">
+                    <span class="theme-swatch" :style="{ background: THEME_PRESETS['fumbbl'].secondary, borderColor: THEME_PRESETS['fumbbl'].primary }"></span>
+                    <span>{{ $t('settings.ui.uiTheme.fumbbl') }}</span>
+                  </button>
+                  <button type="button" class="theme-preset" :data-active="settings.uiTheme === 'custom'"
+                    @click="selectThemePreset('custom')">
+                    <span class="theme-swatch" :style="{ background: settings.uiSecondary, borderColor: settings.uiPrimary }"></span>
+                    <span>{{ $t('settings.ui.uiTheme.custom') }}</span>
+                  </button>
+                </div>
+              </div>
+              <SettingInfo :text="$t('settings.info.colorPreset')" :def="$t('settings.info.colorPresetDefault')" :previews="SETTING_PREVIEWS.colorPreset" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.uiTheme.primaryAccent') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.uiPrimary" type="color" @input="onThemeColorEdit" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.primaryAccent')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.uiTheme.secondaryBase') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.uiSecondary" type="color" @input="onThemeColorEdit" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.secondaryBase')" />
+            </div>
             <div class="theme-preview">
               <span class="theme-chip" :style="{ background: themePreview['--ui-primary'], color: themePreview['--ui-text-on-primary'] }">{{ $t('settings.themeChip.ui.uiTheme.primary') }}</span>
               <span class="theme-chip" :style="{ background: themePreview['--ui-surface'], color: themePreview['--ui-text'], borderColor: themePreview['--ui-border'] }">{{ $t('settings.themeChip.ui.uiTheme.surface') }}</span>
@@ -3773,110 +4212,652 @@ onBeforeUnmount(() => {
               <span class="theme-chip" :style="{ background: themePreview['--ui-danger'], color: '#fff' }">{{ $t('settings.themeChip.ui.uiTheme.danger') }}</span>
               <span class="theme-chip" :style="{ background: themePreview['--ui-success'], color: '#111' }">{{ $t('settings.themeChip.ui.uiTheme.success') }}</span>
             </div>
-            <p class="hint">{{ $t('settings.ui.uiTheme.textColourIsChosen') }}</p>
           </fieldset>
 
           <fieldset class="settings-group">
-            <legend>{{ $t('settings.ui.elementOpacity.elementOpacity') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.ui.elementOpacity.coachPanels') }}</span>
-              <input v-model.number="settings.hudCoachOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
-              <span>{{ Math.round(settings.hudCoachOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.elementOpacity.scoreboard') }}</span>
-              <input v-model.number="settings.hudScoreboardOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
-              <span>{{ Math.round(settings.hudScoreboardOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.elementOpacity.quickBar') }}</span>
-              <input v-model.number="settings.hudQuickBarOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
-              <span>{{ Math.round(settings.hudQuickBarOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.elementOpacity.chatToasts') }}</span>
-              <input v-model.number="settings.hudToastOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" />
-              <span>{{ Math.round(settings.hudToastOpacity * 100) }}%</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.elementOpacity.rosterWindow') }}</span>
-              <input v-model.number="settings.rosterOpacity" v-fill-range type="range" min="0.2" max="1" step="0.01" data-testid="roster-opacity" />
-              <span>{{ Math.round(settings.rosterOpacity * 100) }}%</span>
-            </label>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.ui.confirmBar.confirmBar') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.ui.confirmBar.hideTheConfirmBar') }}</span>
-              <input v-model="settings.hideConfirmBar" type="checkbox" data-testid="hide-confirm-bar" />
-            </label>
-            <p class="hint">{{ $t('settings.ui.confirmBar.hidesTheBarAt') }}</p>
-          </fieldset>
-
-          <fieldset class="settings-group">
-            <legend>{{ $t('settings.ui.chatNotifications.chatNotifications') }}</legend>
-          <label class="row">
-            <span>{{ $t('settings.ui.chatNotifications.disableChat') }}</span>
-            <input v-model="settings.chatDisabled" type="checkbox" />
-          </label>
-          <label class="row" v-if="!settings.chatDisabled">
-            <span>{{ $t('settings.ui.chatNotifications.chatToasts') }}</span>
-            <input v-model="settings.chatToastsEnabled" type="checkbox" />
-          </label>
-          <label class="row" v-if="!settings.chatDisabled && settings.chatToastsEnabled">
-            <span>{{ $t('settings.ui.chatNotifications.chatToastPosition') }}</span>
-            <select v-model="settings.chatToastPos">
-              <option value="left">{{ $t('settings.ui.chatNotifications.leftDefault') }}</option>
-              <option value="right">{{ $t('settings.ui.chatNotifications.right') }}</option>
-              <option value="bottomLeft">{{ $t('settings.ui.chatNotifications.bottomLeft') }}</option>
-              <option value="top">{{ $t('settings.ui.chatNotifications.top') }}</option>
-              <option value="center">{{ $t('settings.ui.chatNotifications.center') }}</option>
-            </select>
-          </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.chatNotifications.chatToastTextSize') }}</span>
-              <input v-model.number="settings.chatToastTextSize" v-fill-range type="range" min="12" max="28" step="1"
-                aria-describedby="chat-toast-text-size-help" />
-              <span>{{ settings.chatToastTextSize }}px</span>
-            </label>
-            <p id="chat-toast-text-size-help" class="hint">{{ $t('settings.ui.chatNotifications.changesTheCoachName') }}</p>
+            <legend>{{ $t('settings.general.cinematics.cinematics') }}</legend>
+            <!-- Owner 08-19: "Injury cinematics" retired — cinematicMode had zero consumers. -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.cinematics.requireClickToDismiss') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.clickDismissCinematics" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.clickDismiss')" :def="$t('settings.info.valueOff')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.telestrator.telestrator') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.ui.telestrator.pitchMarkingColor') }}</span>
-              <input v-model="settings.markColor" type="color" />
-            </label>
+            <!-- Owner 11-03 (lane C): on for replays only (the new default), on for all games, or off (no button, no keys). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.telestrator.label') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.telestratorMode" data-testid="telestrator-mode">
+                    <option value="replays">{{ $t('settings.reflowNew.telestrator.optionReplays') }}</option>
+                    <option value="all">{{ $t('settings.reflowNew.telestrator.optionAll') }}</option>
+                    <option value="off">{{ $t('settings.reflowNew.telestrator.optionOff') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.telestrator.description')" :def="$t('settings.info.telestratorDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.telestrator.pitchMarkingColor') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.markColor" type="color" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.markColor')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
+            <legend>{{ $t('settings.ui.cursor.cursor') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.cursor.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.useFantasyCursor" type="checkbox" data-testid="fantasy-cursor" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.cursor.description')" :def="$t('settings.info.valueOn')" :previews="SETTING_PREVIEWS.fantasyCursor" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.echos.selectionEchoOnThe') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.activePlayerEcho" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.selectionEcho')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.echos.cursorClickEcho') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.clickEcho" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.clickEcho')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.echos.echoColour') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.clickEchoColor" type="color" :disabled="!settings.clickEcho" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.echoColor')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.echos.echoSize') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.echoSize" v-fill-range type="range" min="0.5" max="2" step="0.1" :disabled="!settings.clickEcho" />
+                  <span>{{ settings.echoSize }}×</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.echoSize')" :def="$t('settings.info.echoSizeDefault')" />
+            </div>
+            <div class="echo-preview" :style="{ '--click-echo-color': settings.clickEchoColor, '--echo-scale': settings.echoSize }">
+              <span class="echo-preview-ring"></span>
+              <em>{{ $t('settings.accessibility.echos.preview') }}</em>
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ ART ============================ -->
+        <!-- Owner 11-03: what things look like. Installed mod packs add options to these selects (sprites, turf, dice). -->
+        <section v-if="settingsTab === 'art'">
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.display.playerSprites.playerSprites') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.playerSprites') }}</span>
+                <span class="row-ctl">
+                  <select v-model="spriteChoice">
+                    <option value="walk">{{ $t('settings.display.playerSprites.superFumbbl') }}</option>
+                    <!-- Owner 09-15: the checker discs are ORIGINAL art (67af2368) — offered always, no pack gate. -->
+                    <option value="checkers">{{ $t('settings.display.playerSprites.checkers') }}</option>
+                    <option value="chess">{{ $t('settings.display.playerSprites.chess') }}</option>
+                    <option v-for="pack in spritePackOptions" :key="pack.installId" :value="spritePackValue(pack)">{{ pack.name }} {{ pack.version }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.spriteSet')" :def="$t('settings.info.spriteSetDefault')" :previews="SETTING_PREVIEWS.spriteSet" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.oneSpritePerPosition') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.oneSpritePerPosition" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.display.playerSprites.usesTheFirstAvailable')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <!-- Owner 09-15: the Checkers disc letter font. -->
+            <div v-if="settings.spriteSet === 'checkers'" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.playerSprites.checkerLetterFont') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.checkerLetterFont">
+                    <option value="arial">{{ $t('settings.display.playerSprites.arialHelvetica') }}</option>
+                    <option value="helvetica">{{ $t('settings.display.playerSprites.helveticaArial') }}</option>
+                    <option value="system">{{ $t('settings.display.playerSprites.systemSans') }}</option>
+                    <option value="nuffle">{{ $t('settings.display.playerSprites.nuffle') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.checkerFont')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.art.pitchAndStadium.pitchAndStadium') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.tilesetTurf') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.turf">
+                    <option v-for="t in turfCatalog.options" :key="t" :value="t">{{ TURF_LABELS[t] ?? t }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.turf')" :previews="SETTING_PREVIEWS.turf" />
+            </div>
+            <!-- Owner 11-03: the Stadium toggle + Stadium stands merged into one select (game/settingsMerges.ts). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.stadium') }}</span>
+                <span class="row-ctl">
+                  <select v-model="stadiumChoice" data-testid="stadium-select">
+                    <option value="off">{{ $t('settings.art.pitchAndStadium.noStadium') }}</option>
+                    <option value="classic">{{ $t('settings.display.pitch.classicSeatsFans') }}</option>
+                    <option value="crowd">{{ $t('settings.display.pitch.bakedCrowdTiles') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.stadium')" :def="$t('settings.info.stadiumDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.backdrop') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.backdrop" data-testid="backdrop-select">
+                    <option v-for="o in BACKDROP_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.backdrop')" />
+            </div>
+            <!-- Owner 10-12: CC BY 4.0 - the Hubble credit stays visible and unaltered while the image is chosen. -->
+            <p v-if="settings.backdrop === 'galaxy'" class="hint" data-testid="backdrop-galaxy-credit">
+              <a :href="GALAXY_BACKDROP_URL" @click.prevent="openExternal(GALAXY_BACKDROP_URL)">{{ GALAXY_BACKDROP_CREDIT }}</a>
+            </p>
+            <div v-if="settings.backdrop === 'color'" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.backdropColour') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.backdropColor" type="color" data-testid="backdrop-color" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.backdropColor')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.mods.dice.dice') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.n3dDiceBlockDice') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.blockDice3d" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.dice3d')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.d6Style') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.d6FaceVariant">
+                    <option value="brushed-metal">{{ $t('settings.mods.dice.blackDefault') }}</option>
+                    <option value="black">{{ $t('settings.mods.dice.white') }}</option>
+                    <option value="team">{{ $t('settings.mods.dice.brushedMetalHomeAnd') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.d6Style')" :def="$t('settings.info.d6StyleDefault')" :previews="SETTING_PREVIEWS.d6Style" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.blockDieSurface') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.blockDiceSurface">
+                    <option value="auto">{{ $t('settings.mods.dice.matchTheFaceSet') }}</option>
+                    <option value="black">{{ $t('settings.mods.dice.black') }}</option>
+                    <option value="white">{{ $t('settings.mods.dice.white') }}</option>
+                    <option value="team">{{ $t('settings.mods.dice.brushedMetalHomeAnd') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.blockDieSurface')" :def="$t('settings.info.blockDieSurfaceDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.diceTumbleBlocktumblemsMs', { blockTumbleMs: settings.blockTumbleMs }) }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.blockTumbleMs" v-fill-range type="range" min="100" max="600" step="25" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.diceTumble')" :def="$t('settings.info.diceTumbleDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.dice.dieRollTagPosition') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.dieTagPosition">
+                    <option value="corner">{{ $t('settings.mods.dice.onDieTopRight') }}</option>
+                    <option value="top">{{ $t('settings.mods.dice.onDieTop') }}</option>
+                    <option value="side">{{ $t('settings.mods.dice.toTheSideOf') }}</option>
+                    <option value="bottom">{{ $t('settings.mods.dice.onDieBottom') }}</option>
+                    <option value="off">{{ $t('settings.mods.dice.off') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.dieTagPosition')" :def="$t('settings.info.dieTagPositionDefault')" />
+            </div>
+          </fieldset>
+
+          <!-- Owner 10-20: the coach rank badges on the Play screen coach card and the game-load rank panel. -->
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.coachBadgeStyle">
+                    <option value="realistic">{{ $t('settings.mods.coachRankBadges.realistic') }}</option>
+                    <option value="retro">{{ $t('settings.mods.coachRankBadges.retro') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.coachBadges')" :def="$t('settings.info.coachBadgesDefault')" />
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ AUDIO ============================ -->
+        <section v-if="settingsTab === 'audio'">
+          <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.sound.sound') }}</legend>
-            <label class="row">
-              <span>{{ $t('settings.ui.sound.gameSound') }}</span>
-              <input v-model.number="settings.soundVolume" v-fill-range type="range" min="0" max="100" step="5" />
-              <span>{{ settings.soundVolume === 0 ? 'muted' : settings.soundVolume + '%' }}</span>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.sound.footstepStyle') }}</span>
-              <select v-model="footstepStyle">
-                <option value="tick">{{ $t('settings.ui.sound.tick') }}</option>
-                <option value="footsteps">{{ $t('settings.ui.sound.footstepsByWeather') }}</option>
-              </select>
-            </label>
-            <label class="row">
-              <span>{{ $t('settings.ui.sound.plannerWaypoint') }}</span>
-              <select v-model="waypointSound" data-testid="waypoint-sound">
-                <option v-for="option in WAYPOINT_SOUND_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-              </select>
-            </label>
-            <label v-for="cue in UI_CUE_TOGGLES" :key="cue.id" class="row">
-              <span>{{ cue.label }}</span>
-              <input type="checkbox" :checked="uiCueOn(cue.id)" :data-testid="`ui-cue-${cue.id}`"
-                @change="setUiCueOn(cue.id, ($event.target as HTMLInputElement).checked)" />
-            </label>
-            <p class="hint">{{ $t('settings.ui.sound.eventSpecificSoundPacks') }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.sound.gameSound') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.soundVolume" v-fill-range type="range" min="0" max="100" step="5" />
+                  <span>{{ settings.soundVolume === 0 ? 'muted' : settings.soundVolume + '%' }}</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.gameSound')" :def="$t('settings.info.gameSoundDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.sound.footstepStyle') }}</span>
+                <span class="row-ctl">
+                  <select v-model="footstepStyle">
+                    <option value="tick">{{ $t('settings.ui.sound.tick') }}</option>
+                    <option value="footsteps">{{ $t('settings.ui.sound.footstepsByWeather') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.footsteps')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.sound.plannerWaypoint') }}</span>
+                <span class="row-ctl">
+                  <select v-model="waypointSound" data-testid="waypoint-sound">
+                    <option v-for="option in WAYPOINT_SOUND_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.waypointSound')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.audio.turnClock.turnClock') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.turnClockWarning.label') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.turnClockWarning" data-testid="turn-clock-warning">
+                    <option value="2m">{{ $t('settings.reflowNew.turnClockWarning.option2m') }}</option>
+                    <option value="1m">{{ $t('settings.reflowNew.turnClockWarning.option1m') }}</option>
+                    <option value="30s">{{ $t('settings.reflowNew.turnClockWarning.option30s') }}</option>
+                    <option value="off">{{ $t('settings.reflowNew.turnClockWarning.optionOff') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.turnClockWarning')" :def="$t('settings.info.turnClockWarningDefault')" />
+            </div>
+            <div v-for="cue in TURN_CLOCK_CUES" :key="cue.id" class="row">
+              <label class="row-main">
+                <span>{{ cue.label }}</span>
+                <span class="row-ctl">
+                  <input type="checkbox" :checked="uiCueOn(cue.id)" :data-testid="`ui-cue-${cue.id}`"
+                    @change="setUiCueOn(cue.id, ($event.target as HTMLInputElement).checked)" />
+                </span>
+              </label>
+              <SettingInfo :text="cueInfo(cue.id)" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.audio.uiCues.uiCues') }}</legend>
+            <div v-for="cue in OTHER_UI_CUES" :key="cue.id" class="row">
+              <label class="row-main">
+                <span>{{ cue.label }}</span>
+                <span class="row-ctl">
+                  <input type="checkbox" :checked="uiCueOn(cue.id)" :data-testid="`ui-cue-${cue.id}`"
+                    @change="setUiCueOn(cue.id, ($event.target as HTMLInputElement).checked)" />
+                </span>
+              </label>
+              <SettingInfo :text="cueInfo(cue.id)" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ VIDEO ============================ -->
+        <section v-if="settingsTab === 'video'">
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.display.video.video') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.video.autoDirectorCameraFollows') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.autoDirector" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.autoDirector')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.video.resolutionScale') }}</span>
+                <span class="row-ctl">
+                  <select v-model.number="settings.renderScale">
+                    <option :value="0">{{ $t('settings.display.video.autoDisplayNative') }}</option>
+                    <option :value="0.5">50%</option>
+                    <option :value="0.75">75%</option>
+                    <option :value="1">{{ $t('settings.display.video.n100DisplayNative') }}</option>
+                    <option :value="1.5">150%</option>
+                    <option :value="2">200%</option>
+                    <option :value="3">300%</option>
+                    <option :value="4">400%</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.renderScale')" :def="$t('settings.info.renderScaleDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.video.fpsLimit') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.fpsCap">
+                    <option :value="30">30</option>
+                    <option :value="60">60</option>
+                    <option :value="120">120</option>
+                    <option value="display">{{ matchDisplayLabel(measuredRefreshHz) }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.fpsLimit')" :def="$t('settings.info.fpsLimitDefault')" />
+            </div>
+            <div class="row">
+              <span class="row-label">{{ $t('settings.info.fullscreenLabel') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" @click="toggleFullscreen">{{ fullscreen ? $t('settings.display.video.exitNativeFullscreen') : $t('settings.display.video.nativeFullscreen') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.fullscreen')" />
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ ACCESSIBILITY ============================ -->
+        <section v-if="settingsTab === 'accessibility'">
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.accessibility.textAndZoom.textAndZoom') }}</legend>
+            <!-- Owner 11-03 (lane C): the webview's own zoom. Owner ruling 11-03: the row is HIDDEN until the shell can
+                 zoom (uiZoomAvailable), never shown disabled. -->
+            <div v-if="uiZoomAvailable" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.uiZoom.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.uiZoom" v-fill-range type="range" :min="UI_ZOOM.min" :max="UI_ZOOM.max" :step="UI_ZOOM.step"
+                    data-testid="ui-zoom" />
+                  <span>{{ settings.uiZoom }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.uiZoom.description')" :def="$t('settings.info.uiZoomDefault')" />
+            </div>
+            <!-- Sol final r2: the shell passed the probe but refused this factor - a STATE note, visible (not the tooltip). -->
+            <p v-if="uiZoomAvailable && uiZoomState.unavailable" class="hint" role="status" data-testid="ui-zoom-failed">{{ $t('settings.info.uiZoomFailed', { requested: settings.uiZoom, applied: Math.round(uiZoomState.applied * 100) }) }}</p>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.textAndContrast.uiFont') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.uiFont">
+                    <option value="nuffle">{{ $t('settings.accessibility.textAndContrast.nuffleBloodBowl') }}</option>
+                    <option value="system">{{ $t('settings.accessibility.textAndContrast.system') }}</option>
+                    <option value="arial">{{ $t('settings.accessibility.textAndContrast.arialHelvetica') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.uiFont')" :def="$t('settings.info.uiFontDefault')" />
+              <p class="row-sample" data-testid="sample-uiFont"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="uiFontSampleStyle()">{{ $t('settings.info.uiFontSample') }}</span></p>
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.textAndContrast.minimumTextSize') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.uiTextSize" v-fill-range type="range" min="12" max="20" step="1" />
+                  <span>{{ settings.uiTextSize }}px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.minTextSize')" :def="$t('settings.info.minTextSizeDefault')" />
+              <p class="row-sample" data-testid="sample-minTextSize"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="{ fontSize: `${settings.uiTextSize}px` }">{{ $t('settings.info.minTextSizeSample') }}</span></p>
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.accessibility.colorAndContrast.colorAndContrast') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.textAndContrast.colourblindMode') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.colorblindMode">
+                    <option value="off">{{ $t('settings.accessibility.textAndContrast.off') }}</option>
+                    <option value="deuteranopia">{{ $t('settings.accessibility.textAndContrast.deuteranopiaRedGreenMost') }}</option>
+                    <option value="protanopia">{{ $t('settings.accessibility.textAndContrast.protanopiaRedGreen') }}</option>
+                    <option value="tritanopia">{{ $t('settings.accessibility.textAndContrast.tritanopiaBlueYellow') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.colorblind')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.highContrast.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.highContrast" type="checkbox" data-testid="high-contrast" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.highContrast.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.accessibility.colorAndContrast.pitchBrightness') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.brightness" v-fill-range type="range" min="50" max="150" step="5" />
+                  <span>{{ settings.brightness }}%</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.brightness')" :def="$t('settings.info.brightnessDefault')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="motion-settings">
+            <legend>{{ $t('settings.accessibility.motion.motion') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.reduceMotion.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.reduceMotion" type="checkbox" data-testid="reduce-motion" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.reduceMotion.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.reduceFlashing.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.reduceFlashing" type="checkbox" data-testid="reduce-flashing" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.reduceFlashing.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="sound-cue-settings">
+            <legend>{{ $t('settings.accessibility.soundCues.soundCues') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.visualSoundCues.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.visualSoundCues" type="checkbox" data-testid="visual-sound-cues" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.visualSoundCues.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <!-- The turn-clock warning time lives in Audio; this row only links there. -->
+            <div class="row">
+              <span class="row-label">{{ $t('settings.reflowNew.turnClockWarning.accessibilityLink') }}</span>
+              <span class="row-ctl">
+                <button type="button" class="sf-btn small" data-testid="turn-clock-link" @click="selectSettingsTab('audio', true)">{{ $t('settings.accessibility.soundCues.openAudio') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.turnClockLink')" />
+            </div>
+          </fieldset>
+
+          <fieldset class="settings-group" data-testid="input-settings">
+            <legend>{{ $t('settings.accessibility.input.input') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.reflowNew.largerTargets.label') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.largerTargets" type="checkbox" data-testid="larger-targets" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.reflowNew.largerTargets.description')" :def="$t('settings.info.valueOff')" />
+            </div>
+          </fieldset>
+        </section>
+
+        <!-- ============================ ACCOUNT ============================ -->
+        <!-- Owner 11-03: the FUMBBL login always; the Super FUMBBL account only with Super FUMBBL features. -->
+        <section v-if="settingsTab === 'account'">
+          <fieldset class="settings-group" data-testid="fumbbl-account">
+            <legend>{{ $t('settings.account.fumbbl.fumbbl') }}</legend>
+            <!-- owner 09-10: "Login credentials" caption cut -->
+            <div class="row creds-open-row">
+              <span class="row-label">{{ $t('settings.general.connection.fumbbl') }} <b>{{ settings.coach.trim() || '—' }}</b></span>
+              <span class="row-ctl">
+                <button type="button" class="creds-open-btn sf-btn small" @click="openCredsMenu('fumbbl')">{{ $t('settings.credsOpenRow.general.connection.manageLoginCredentials') }}</button>
+              </span>
+              <SettingInfo :text="$t('settings.info.fumbblCreds')" />
+            </div>
+          </fieldset>
+          <AccountSettings v-if="forkFeaturesEnabled()" />
+        </section>
+
+        <!-- ============================ MOD PACKS ============================ -->
+        <section v-if="settingsTab === 'modpacks'">
+          <AssetPackSettings :live-game="gameStore.game.value" />
+        </section>
+
+        <!-- ============================ DIAGNOSTICS ============================ -->
+        <section v-if="settingsTab === 'diagnostics'">
+          <fieldset class="settings-group">
+            <legend>{{ $t('settings.diagnostics.logging.logging') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.diagnostics.verboseLogAllEvents') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.debugLog" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.debugLog')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <!-- Owner 09-10: the wire-log file + dev panel toggles are fork-edition diagnostics; the public edition keeps
+                 the wire log ON silently (it rides bug reports) and never shows the panel. -->
+            <template v-if="FORK_EDITION">
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.diagnostics.verboseWireLogFile') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.wireLog" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.wireLog')" :def="$t('settings.info.valueOn')" />
+            </div>
+            <div v-if="settings.wireLog" style="margin: 2px 0 4px 24px;">
+              <template v-if="gameStore.state.wireLogFile">
+                <input type="text" readonly :value="gameStore.state.wireLogFile"
+                  @focus="($event.target as HTMLInputElement).select()"
+                  style="width: 100%; font-size: max(var(--ui-min-text-size, 12px), 11px); padding: 3px 5px; box-sizing: border-box;" />
+                <button type="button" @click="copyWireLogPath" style="margin-top: 4px; font-size: max(var(--ui-min-text-size, 12px), 11px);">
+                  {{ wireLogCopied ? $t('settings.general.diagnostics.copied') : $t('settings.general.diagnostics.copyPath') }}
+                </button>
+              </template>
+              <span v-else class="hint">{{ $t('settings.general.diagnostics.writesOneJsonlFile') }}</span>
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.diagnostics.showDeveloperLogPanel') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.devPanelOpen" type="checkbox" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.devPanel')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <div v-if="settings.devMode" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.diagnostics.coachBrain') }}</span>
+                <span class="row-ctl">
+                  <select :value="settings.coachBrain" @change="gameStore.setCoachBrain(($event.target as HTMLSelectElement).value as typeof settings.coachBrain)">
+                    <option value="none">{{ $t('settings.general.diagnostics.none') }}</option>
+                    <option value="random">{{ $t('settings.general.diagnostics.random') }}</option>
+                    <option value="fly-chaos">{{ $t('settings.general.diagnostics.flyChaos') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.coachBrain')" />
+            </div>
+            <div v-if="settings.devMode && settings.coachBrain === 'fly-chaos'" class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.general.diagnostics.flyBrainUrl') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.flyBrainUrl" type="text" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.flyBrainUrl')" />
+            </div>
+            </template>
           </fieldset>
         </section>
 
@@ -4042,13 +5023,13 @@ onBeforeUnmount(() => {
             {{ assetMods.creatorApplyBusy || assetMods.pendingAssignments ? $t('settings.settingsFooter.finishingTheAssetPack') : (settingsDirty ? $t('settings.settingsFooter.changesArePreviewingLive') : $t('settings.settingsFooter.settingsAreUpTo')) }}
           </span>
           <div class="settings-footer-actions">
-            <button type="button" :disabled="settingsTransactionBusy" @click="cancelSettingsChanges()">
+            <button type="button" class="sf-btn small" :disabled="settingsTransactionBusy" @click="cancelSettingsChanges()">
               {{ settingsDiscardBusy ? $t('settings.settingsFooter.restoring') : $t('settings.settingsFooter.cancel') }}
             </button>
-            <button type="button" :disabled="!settingsDirty || settingsTransactionBusy" @click="applySettingsChanges(false)">
+            <button type="button" class="sf-btn small" :disabled="!settingsDirty || settingsTransactionBusy" @click="applySettingsChanges(false)">
               {{ settingsApplyBusy ? $t('settings.settingsFooter.applying') : $t('settings.settingsFooter.apply') }}
             </button>
-            <button type="button" class="primary" :disabled="settingsTransactionBusy" @click="applySettingsChanges(true)">
+            <button type="button" class="sf-btn small primary" :disabled="settingsTransactionBusy" @click="applySettingsChanges(true)">
               {{ $t('settings.settingsFooter.ok') }}
             </button>
           </div>
@@ -4066,6 +5047,20 @@ onBeforeUnmount(() => {
          on the launch splash or Settings → Connection. -->
     <!-- Owner 10-10: ticking "Enable controller support" asks first - the owner's wording, one button. OK turns it on;
          Escape / a click outside closes the notice and leaves the box off. Shown on every off -> on. -->
+    <div v-if="resetUiConfirmOpen" class="modal-backdrop save-prompt-backdrop controller-notice-backdrop"
+      data-testid="reset-ui-confirm" @click.self="closeResetUi()">
+      <div ref="resetUiDialog" class="save-prompt" role="alertdialog" aria-modal="true"
+        aria-labelledby="reset-ui-confirm-title" aria-describedby="reset-ui-confirm-text"
+        @keydown="trapDialogFocus($event, resetUiDialog)">
+        <h3 id="reset-ui-confirm-title">{{ $t('settings.ui.hudLayout.resetUiToDefaultTitle') }}</h3>
+        <p id="reset-ui-confirm-text" class="hint">{{ $t('app.text.resetEveryPanelPosition') }}</p>
+        <div class="save-prompt-actions">
+          <button class="primary" type="button" data-testid="reset-ui-confirm-ok" @click="confirmResetUi()">{{ $t('settings.ui.hudLayout.reset') }}</button>
+          <button ref="resetUiCancel" type="button" data-testid="reset-ui-confirm-cancel" @click="closeResetUi()">{{ $t('settings.settingsFooter.cancel') }}</button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="controllerOptIn.noticeOpen.value" class="modal-backdrop save-prompt-backdrop controller-notice-backdrop"
       data-testid="controller-support-notice" @click.self="controllerOptIn.dismiss()">
       <div ref="controllerNoticeDialog" class="save-prompt controller-notice" role="alertdialog" aria-modal="true"
@@ -4223,7 +5218,9 @@ onBeforeUnmount(() => {
       data-testid="controller-toast">{{ controllerToast.text }}</div>
     <!-- Owner ruling (08-18): the header's "Signed in as" identity block relocates here, stacked directly
          above the version stamp — same quiet/muted styling family, bottom-left, under every panel (owner 08-18 2nd). -->
-    <div class="corner-stamp">
+    <!-- Owner 11-03 (lane 3): over a Modern blade the stamp drops the display face for the sans (no blackletter-style
+         lettering on the Modern blades); in a game and under Retro it is unchanged. -->
+    <div class="corner-stamp" :class="settings.uiStyle === 'modern' && !gameStore.game.value ? [lmRootClass(settings.uiStyle), 'lm-stamp'] : []">
       <div class="header-identity" :aria-label="$t('app.signedInAccounts')">
         <!-- Owner 09-10: the public edition shows just the coach name (no "Signed in as" / service labels, no fork account). -->
         <span v-if="forkFeaturesEnabled()" class="identity-label">{{ $t('app.signedInAs') }}</span>
@@ -4606,6 +5603,21 @@ input, textarea, [contenteditable="true"], .log-panel {
 .blade-ribbon .ribbon-report:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-hover); }
 .blade-ribbon .ribbon-report:disabled { opacity: 0.6; cursor: default; }
 .blade-ribbon .ribbon-report-bug { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+.blade-ribbon .ribbon-menu {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  margin-left: 0.6rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  color: var(--ui-text);
+  background: transparent;
+  cursor: pointer;
+}
+.blade-ribbon .ribbon-menu:hover { background: var(--ui-hover); }
+.blade-ribbon .ribbon-menu:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
 @media (max-width: 640px) {
   .blade-ribbon { padding-left: 1.25rem; }
   .blade-ribbon .ribbon-beta { display: none; }

@@ -55,7 +55,7 @@ import { isRightStuffReRolledAction } from '../game/logic/ttmLandingPromptHold';
 import { prayerForWireValue } from '../game/prayerCatalog';
 import { playSound } from '../game/sounds';
 import { createModalOfferHoldTracker } from '../game/logic/modalOfferHolds';
-import { ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed } from '../game/logic/uiSoundCues';
+import { ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed, turnClockWarnAtS } from '../game/logic/uiSoundCues';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
@@ -213,7 +213,8 @@ import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { blitzTargetCostText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
-import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel } from '../game/logic/availableActions';
+import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned } from '../game/logic/availableActions';
+import { rootedBlitzEndServerConfirmed, rootedBlitzReadyArm, rootedBlitzReadyReconcile, rootedBlitzReadyStageLive } from '../game/logic/rootedBlitzReady';
 import { deriveClientState, type ClientStateContext, type ClientStateId } from '../game/logic/clientStateMachine';
 import { localMoverId, selectPlayerLeftClick, commitLocalWalk, proneTeammateSwitchMenu } from '../game/logic/localSelection';
 import { prettySkillName } from '../game/logic/prettySkillName';
@@ -543,6 +544,10 @@ import { decisionCardOpen, gameKeyDecision, middleClickDecision, playerCardsTogg
 import { createIntensiveTrainingFocus, intensiveCardAnchor, intensiveTrainingFocusTarget } from '../game/intensiveTrainingFocus';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
+import { telestratorAvailable } from '../game/telestratorMode';
+import { createEdgePanController, domOverlayOpen, installEdgePanListeners, textInputFocused } from '../game/edgePan';
+import { uiZoomState } from '../game/uiZoomShell';
+import { flashingReduced, motionReduced } from '../game/accessibilityModes';
 // Owner 2026-07-06: supporter names for the crowd "I ♥ name" signs. The CSV is the
 // single source of truth — add names to apps/tauri/src/assets/givethanks.csv and
 // they are incorporated on the next build (Vite ?raw import, header row skipped).
@@ -836,6 +841,8 @@ function chooseKickElection(target: (typeof kickElectionTargets.value)[number]):
 const liveChatEntries = computed(() => gameStore.state.log.filter((e) => e.kind === 'talk'));
 const reviewChatHidden = computed(() => gameStore.spectatorReview.value.active && !gameStore.spectatorLiveChatOpen.value);
 const replayerOpen = computed(() => props.mode === 'replay' || gameStore.spectatorReview.value.active);
+// Settings reflow (owner 11-03): Settings > UI "Telestrator" - replay viewer only (default) / every game / off.
+const telestratorEnabled = computed(() => telestratorAvailable(settings.telestratorMode, { replayViewer: replayerOpen.value || gameStore.isReplay.value }));
 const chatEntries = computed(() => reviewChatHidden.value ? [] : liveChatEntries.value);
 // Owner 08-19: coach-name/message split for the chat pane — pure helper in game/chatLine.ts.
 function chatParts(entry: { text: string }): { name: string; rest: string } {
@@ -2740,7 +2747,9 @@ function blockTumbleIndices(bp: { dice: readonly number[]; rerolledDice?: readon
 }
 const bpDiceHost = ref<HTMLElement | null>(null);
 const bpDice3dLive = ref(false);
-const bpReducedMotion = ref(false);
+/** The OS prefers-reduced-motion query. bpReducedMotion = it OR Settings > Accessibility "Reduce motion" (11-03). */
+const bpOsReducedMotion = ref(false);
+const bpReducedMotion = computed(() => bpOsReducedMotion.value || motionReduced(settings, false));
 let bpDice3d: BlockDiceRow | null = null;
 let bpDice3dModule: Awaited<ReturnType<typeof loadBlockDice3d>> | null = null;
 let bpDice3dFailed = false;
@@ -3047,7 +3056,7 @@ let detachMouseEntropy: (() => void) | null = null;
 onMounted(() => {
   bpMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
   detachMouseEntropy = installMouseEntropy(); // owner 10-16: client-supplied entropy, as the Java client harvests it
-  bpMotionListener = () => { bpReducedMotion.value = bpMotionQuery?.matches ?? false; };
+  bpMotionListener = () => { bpOsReducedMotion.value = bpMotionQuery?.matches ?? false; };
   bpMotionListener();
   bpMotionQuery.addEventListener('change', bpMotionListener);
 });
@@ -7117,7 +7126,8 @@ const o66MoveSquares = computed<[number, number][]>(() => {
   //   JUMP squares (TK stage-5 g716 confirmed: toggleJump→leaping=true→moveSquareArray=2-away jump set→jump resolves).
   //   The client o66Reach is the MA WALK reach and does NOT include jump tiles, so render the SERVER's set (⚖ law).
   //   Toggling OFF returns to the o66Reach walk. Click routing steps a jump square directly (onTilePick below).
-  if (JUMP_MOVE_STATES.has(st) && (g.actingPlayer as { leaping?: boolean } | undefined)?.leaping) return serverMoveSquares(g);
+  // Owner 11-03 / Sol r2 (P1): a pinned jumper has no jump - offers still in the model from before the rooting are not shown.
+  if (JUMP_MOVE_STATES.has(st) && (g.actingPlayer as { leaping?: boolean } | undefined)?.leaping) return playerPinned(g, actingId) ? [] : serverMoveSquares(g);
   // Owner 08-18: a plotted plan re-anchors the reach at the LAST WAYPOINT on the budget its steps left
   //   (o66Reach's plannedRoute) — the range/rush tint follows the plan instead of freezing on the origin ring.
   const reach = renderer.o66Reach(actingId, o66PendingMove.value?.route ?? []);
@@ -7187,6 +7197,8 @@ const jumpCrosshairSquares = computed<[number, number][]>(() => {
   //   condition that makes the reach return the server jump set, so the crosshair squares are provably IDENTICAL to
   //   the reach shading — no divergence even in a transient non-jump-state frame carrying a stale leaping flag.
   const leaping = !!(g.actingPlayer as { leaping?: boolean } | undefined)?.leaping;
+  const jumperId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (jumperId && playerPinned(g, jumperId)) return []; // Sol r2 (P1): the same pinned gate as o66MoveSquares
   return leaping && !isPuntTargeting(g) && JUMP_MOVE_STATES.has(deriveClientState(g, o66Ctx())) ? serverMoveSquares(g) : [];
 });
 watch(jumpCrosshairSquares, (squares) => { renderer?.setJumpCrosshairs(squares); });
@@ -8445,6 +8457,10 @@ watch(
   () => [settings.renderScale, settings.fpsCap, measuredRefreshHz.value],
   () => renderer?.setVideoOptions({ renderScale: settings.renderScale, fpsCap: resolveFpsCap(settings.fpsCap, measuredRefreshHz.value) }),
 );
+// Settings reflow (11-03): the UI zoom changes devicePixelRatio (page zoom), which the renderer's resolution follows -
+// re-apply the video options once the shell confirms the new zoom.
+watch(() => uiZoomState.applied, () => renderer?.setVideoOptions({ renderScale: settings.renderScale, fpsCap: resolveFpsCap(settings.fpsCap, measuredRefreshHz.value) }));
+
 
 // Owner: brightness/gamma slider applies live
 watch(
@@ -9308,10 +9324,68 @@ watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
   const routeDisposition = storedBlitzRouteDisposition(g, plan.targetId);
   if (routeDisposition === 'wait') return;
   if (routeDisposition === 'drop') { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
+  // Owner 11-03 (Take Root): the target selection rooted the blitzer. The stored route is dropped and no plan starts
+  // (nothing walks, nothing is auto-sent); beside the target the readiness watcher below arms the one-click block.
+  if (playerPinned(g, plan.playerId)) { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
   // At contact the plan hands over to the "Stab or Block?" chooser when there is anything to choose (owner 11-03,
   // option A; store plannerFireAct).
   if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) retireStoredBlitzRoute();
 }, { deep: true, flush: 'post' });
+// Owner 11-03 (Take Root): a ROOTED acting player has no walk - every plotted route goes (the reach is already empty,
+// renderer o66MovementBudgetAt). A rooted Blitz actor beside its declared target gets its block READIED: the ordinary
+// Blitz confirm stage on that target, so one click sends it through the existing path (confirmAggroStage, or the
+// special-attack choice). Arming is local and sends nothing. Once per activation and target: a stage the coach cleared
+// (a right-click disarm, a click elsewhere) is not re-armed. See game/logic/rootedBlitzReady.ts.
+const rootedBlitzReadyKeys = new Set<string>();
+/** The readiness stage this view armed (its key and target), while it is on screen. */
+const rootedBlitzReadyArmed = ref<{ key: string; targetId: string } | null>(null);
+/** Sol r1 (P2): reconciled on EVERY change and once at setup (a seat that joins an already-rooted Blitz is readied at
+ *  once). A stage this view armed is retired first when its activation is gone (actor, target, seat, snapshot), so a
+ *  replacement activation is readied afresh and its right-click still disarms. */
+function reconcileRootedBlitzReady(): void {
+  const g = gameStore.game.value;
+  const clientState = g ? deriveClientState(g, o66Ctx()) : '';
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const seatLive = !!g && settings.order66 && gameStore.isPlaying.value && !!gameStore.myTurn.value && !!actingId && gameStore.iControl(actingId);
+  const armed = rootedBlitzReadyArmed.value;
+  if (armed) {
+    // The confirm handed the readied block to the "Stab or Block?" chooser (confirmAggroStage clears the stage while
+    // its card is up): the readiness still owns that target, so a dismissed card restores a stage a right-click disarms.
+    const choice = gameStore.state.blitzBlockChoice;
+    const chooserHolds = !o66AggroStage.value && choice?.origin === 'blitz' && choice.blitzerId === actingId && choice.targetId === armed.targetId;
+    const stageNow = chooserHolds ? { kind: 'blitz' as const, target: armed.targetId, stage: 2 as const } : o66AggroStage.value;
+    const disposition = rootedBlitzReadyReconcile(g, clientState, armed, stageNow, seatLive);
+    if (disposition !== 'keep') rootedBlitzReadyArmed.value = null;
+    if (disposition === 'retire') {
+      // Sol r2 (P2): the attack kind the coach picked belonged to that activation: it goes with its stage, so a
+      // replacement readiness never confirms the old Stab / Vomit / plain-Block choice without asking.
+      o66AggroStage.value = null;
+      o66PendingBlitzBlockKind.value = null;
+      o66ExplicitBlockChoice.value = null;
+    }
+  }
+  if (!g || !seatLive || !playerPinned(g, actingId)) return;
+  if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); }
+  const arm = rootedBlitzReadyArm({
+    game: g, clientState, controlsActing: true,
+    planActive: gameStore.isPlanActive(), stageArmed: !!o66AggroStage.value, handledKeys: rootedBlitzReadyKeys,
+  });
+  if (!arm) return;
+  // Sol r2 (P2): a fresh readiness starts with no attack chosen (a kind left from another activation is not this one's).
+  o66PendingBlitzBlockKind.value = null;
+  o66ExplicitBlockChoice.value = null;
+  rootedBlitzReadyKeys.add(arm.key);
+  rootedBlitzReadyArmed.value = { key: arm.key, targetId: arm.targetId };
+  o66AggroStage.value = { kind: 'blitz', target: arm.targetId, stage: 2 };
+}
+watch(() => [gameStore.state.appliedFrameSeq, gameStore.game.value, gameStore.isPlaying.value, gameStore.myTurn.value,
+  gameStore.state.plannerRevision, o66AggroStage.value, String(gameStore.game.value?.gameId ?? '')] as const,
+reconcileRootedBlitzReady, { flush: 'post', immediate: true });
+/** The confirm stage on screen is this activation's readied rooted block. */
+function rootedBlitzReadyLive(): boolean {
+  const g = gameStore.game.value;
+  return !!g && rootedBlitzReadyStageLive(g, deriveClientState(g, o66Ctx()), o66AggroStage.value, rootedBlitzReadyArmed.value?.key ?? null);
+}
 
 // Focus an owned off-turn prompt when it arms; never focus spectator/opponent prompts.
 const offTurnPromptActive = computed(() =>
@@ -9917,6 +9991,15 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // Owner 10-05: a right-click with a player switch pending only cancels it (never an end of the activation). After
   // the confirmation branches above (Astra): an open prompt owns the gesture.
   if (cancelDeferredFriendlySwitch()) { ctxMenu.visible = false; popup.visible = false; return; }
+  // Owner 11-03 (Take Root): a right-click anywhere disarms a ROOTED blitzer's readied block - nothing is sent and the
+  // activation stays; the blitzer is the plain selected acting player again (the next right-click is its End).
+  if (rootedBlitzReadyLive()) {
+    o66AggroStage.value = null;
+    rootedBlitzReadyArmed.value = null;
+    ctxMenu.visible = false;
+    playCancelCue();
+    return;
+  }
   const controlledActingTarget = !!actingId && target.playerId === actingId && gameStore.iControl(actingId);
   const rows = controlledActingTarget ? assembleActingPlayerRows(target, x, y) : [];
   // Spec S23: a live Activate intent on the acting Big Guy surfaces the menu; only its roll row (or confirm) rolls.
@@ -10383,6 +10466,46 @@ function onKeyup(event: KeyboardEvent) {
 }
 function clearPan() { heldPanKeys.clear(); renderer?.setPanDirection(0, 0); }
 
+// Settings reflow (owner 11-03): edge-of-screen panning (Settings > Controls > Camera; default off). The pointer resting
+// at the pitch viewport's edge glides the camera through the WASD glide (renderer.setEdgePanDirection); every pause
+// rule (menus, dialogs, text fields, focus, the pointer leaving, controller mode, a held button) is in game/edgePan.ts.
+/** Sol r2: a decision / confirmation card the coach must answer is open (the store's cards and the view's own
+ *  confirmations - the same derivation the pad crosshair uses, plus the confirm-card input lock). */
+const edgePanCardOpen = computed(() => {
+  try { return crosshairGateInput().cardOpen || confirmCardLocked(); } catch { return true; } // a failed read never pans
+});
+const edgePan = createEdgePanController({
+  setDirection: (dx, dy) => renderer?.setEdgePanDirection(dx, dy),
+  hitTest: (x, y) => document.elementFromPoint(x, y),
+  hostRect: () => pitchHost.value?.getBoundingClientRect() ?? null,
+  gate: (pointer) => {
+    const canvas = pitchHost.value?.querySelector('canvas') ?? null;
+    return {
+      enabled: settings.edgePan,
+      controllerMode: activeInput.value === 'controller' || (renderer?.isPointerHidden() ?? false),
+      overlayOpen: ui.gameMenuOpen || ui.settingsOpen || ui.browserOpen || ui.reportOpen || ui.setupWizardRerunOpen
+        || ui.clientTourActive || reportOpen.value || ctxMenu.visible || edgePanCardOpen.value || domOverlayOpen(document),
+      textInputFocused: textInputFocused(document.activeElement),
+      pointerOverPitch: pointer.target !== null && (pointer.target === canvas || pointer.target === pitchHost.value),
+      buttonsDown: pointer.buttons !== 0,
+      windowFocused: true,
+      pointerInWindow: true,
+    };
+  },
+});
+let detachEdgePan: (() => void) | null = null;
+let stopEdgePanRecheck: (() => void) | null = null;
+onMounted(() => {
+  detachEdgePan = installEdgePanListeners(edgePan, { win: window, doc: document, active: () => settings.edgePan });
+  // A menu, a decision card, the setting or the input mode changing under a resting pointer re-runs the gates at once.
+  // (Registered at mount: the card derivation reads view state declared further down the file.)
+  stopEdgePanRecheck = watch(() => [settings.edgePan, ui.gameMenuOpen, ui.settingsOpen, ui.browserOpen, ui.reportOpen, reportOpen.value,
+    ctxMenu.visible, activeInput.value, edgePanCardOpen.value] as const, () => edgePan.recheck());
+});
+onBeforeUnmount(() => { stopEdgePanRecheck?.(); stopEdgePanRecheck = null; detachEdgePan?.(); detachEdgePan = null; });
+watch(() => settings.edgePanSpeed, (v) => renderer?.setEdgePanSpeed(v));
+watch(() => settings.reduceFlashing, (on) => renderer?.setReduceFlashing(on));
+
 /** Shared rail 5 nominate/confirm arm; changing the square or action re-nominates. TTM uses the same selector,
  * destination cue, confirm gesture, and teardown as a regular throw while retaining its exact upstream sender. */
 function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' | 'fireball' | 'throwTeamMate'): void {
@@ -10557,7 +10680,7 @@ function nudgeConfirmCard(): void {
   if (now - lastConfirmNudgeAt < 350) return;
   lastConfirmNudgeAt = now;
   if (typeof document === 'undefined') return;
-  const reduce = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const reduce = motionReduced(); // the OS preference or Settings > Accessibility "Reduce motion"
   const frames: Keyframe[] = reduce
     ? [{ filter: 'brightness(1)' }, { filter: 'brightness(1.6)' }, { filter: 'brightness(1)' }]
     : [{ translate: '0 0' }, { translate: '-7px 0' }, { translate: '6px 0' }, { translate: '-4px 0' }, { translate: '2px 0' }, { translate: '0 0' }];
@@ -10827,6 +10950,18 @@ function confirmAggroStage(): boolean {
     // Owner 09-29 (S33): the click that confirmed the quick blitz selected the opposing target in the renderer; like
     // the `block` intent, hand the selection back so the target's reach never shows once the activation ends.
     swallowBlockTargetSelection(st.target);
+    // Sol r1 (P2): a readiness stage whose activation is gone (a replacement snapshot) confirms nothing; it is retired.
+    const armedReady = rootedBlitzReadyArmed.value;
+    if (armedReady && armedReady.targetId === st.target && !rootedBlitzReadyLive()) {
+      rootedBlitzReadyArmed.value = null;
+      o66AggroStage.value = null;
+      o66PendingBlitzBlockKind.value = null;
+      o66ExplicitBlockChoice.value = null;
+      return true;
+    }
+    // Owner 11-03 (Take Root): a ROOTED blitzer's readied block - whichever gesture confirms it (the target click, the
+    // confirm bar, the keyboard) - takes the terminal below like any adjacent Blitz: the "Stab or Block?" chooser
+    // (tryHoldBlitzBlockChoice, every alternative) when there is anything to choose, else the plain block.
     // Once Blitz is authoritative and the target is adjacent, this is the second-click terminal. The menu-selected
     // flavor rides the existing CLIENT_BLOCK flags; no second Blitz declare or target-selection command is sent.
     if (deriveClientState(g, o66Ctx()) === 'BLITZ' && actingId
@@ -11390,7 +11525,7 @@ const runAction = createInGameActionRunner({
     return true;
   },
   toggleTelestrator: () => {
-    if (!telestratorRef.value) return false;
+    if (!telestratorRef.value || !telestratorEnabled.value) return false; // Settings > UI "Telestrator": not in this view
     telestratorRef.value.toggleExpanded();
     return true;
   },
@@ -11730,6 +11865,11 @@ onMounted(async () => {
   renderer.setEndZoneLabel(settings.endZoneLabel); // owner 2026-07-08: team name | TOUCHDOWN
   renderer.setEndZoneTint(settings.endZoneTint); // owner 09-05: red/blue end-zone shading toggle
   renderer.setPanSpeed(settings.cameraPanSpeed); // owner 09-05: WASD pan speed
+  renderer.setEdgePanSpeed(settings.edgePanSpeed); // settings reflow 11-03: edge-of-screen pan speed
+  renderer.setReduceFlashing(settings.reduceFlashing); // settings reflow 11-03: Accessibility > Reduce flashing
+  // Sol r5: UI zoom never zooms the pitch - the renderer reads the page zoom (confirmed factor / in-flight flag) on
+  // every resize and keeps the camera's physical scale and centre when it changed (renderer setUiZoomSource).
+  renderer.setUiZoomSource(() => ({ applied: uiZoomState.applied, inFlight: uiZoomState.inFlight }));
   renderer.setPadCameraRelease(settings.controllerSupportEnabled); // owner 10-10: box off = public camera behaviour
   renderer.setPositionRingOptions({ density: settings.positionRingDensity, color: ringColorOverrideInt() });
   renderer.setDieTagPosition(settings.dieTagPosition); // owner 2026-07-04: on-die cause tag
@@ -12643,6 +12783,7 @@ onMounted(async () => {
           //   o66Reach auto-path/preview below (that's for MA walks + would route through intermediate squares).
           //   Gate on serverMoveSquares (the flipped jump set) → a non-jump tile is a no-op. Mirrors Ball & Chain.
           if (JUMP_MOVE_STATES.has(st) && (g.actingPlayer as { leaping?: boolean } | undefined)?.leaping) {
+            if (playerPinned(g, actingId)) return; // Sol r2 (P1): a pinned jumper's stale jump square is inert
             if (walkStillOnScreen()) return;
             if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) gameStore.stepMove(actingId, c);
             return;
@@ -14236,8 +14377,8 @@ function resetMvpPresentation() {
   mvpFlashSide.value = null;
 }
 function startMvpRoll(side: 'home' | 'away', pool: string[], winner: string) {
-  const reduced = typeof window !== 'undefined'
-    && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  // Settings reflow (11-03): "Reduce motion" / "Reduce flashing" (the 90 ms name roulette strobes) land at once too.
+  const reduced = motionReduced() || flashingReduced();
   // §3a fail-open: can't/shouldn't animate → land on the server winner at once.
   if (reduced || pool.length < 2) { mvpRoll.value[side] = { phase: 'landed', display: winner }; return; }
   mvpRoll.value[side] = { phase: 'cycling', display: pool[0]! };
@@ -14424,7 +14565,8 @@ const turnClockCueReading = computed<{ key: string | null; seconds: number | nul
   };
 });
 watch(() => [turnClockCueReading.value.key, turnClockCueReading.value.seconds, turnClockCueReading.value.sample] as const, ([key, seconds, sample]) => {
-  const cue = turnClockCues.reading(key, seconds, gameStore.myTurn.value, sample);
+  // Settings reflow (11-03): Settings > Audio "Turn clock warning" (2 min / 1 min / 30 s / Off) sets the early warning.
+  const cue = turnClockCues.reading(key, seconds, gameStore.myTurn.value, sample, turnClockWarnAtS(settings.turnClockWarning));
   // Owner 10-21: the minute tone also warns on each of the last 10..6 s; the countdown tone takes 5..1.
   if (cue === 'minute' || cue === 'warning') playSound('turnClockMinute');
   else if (cue === 'countdown') playSound('turnClockCountdown');
@@ -14660,6 +14802,19 @@ const CANCEL_CARD_KINDS: ReadonlySet<EndActivationConfirmKind> = new Set(['blitz
 function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationOrigin = 'cancel') {
   // Astra P2 (10-09): the coach is ending; an open convert-to-Move question is moot and never shares the screen with this prompt.
   gameStore.retireGazeToMoveQuestionForEnd();
+  // Owner 11-03 (Take Root): a rooted blitzer's End is confirmed by the SERVER (its confirmEndAction, shown as any
+  // server confirmation and never answered for the coach). Our own Blitz card would be a second question - and its
+  // "Cancel Blitz ... refunded" copy is wrong here (the rooting spent the Blitz) - so the gesture goes straight out,
+  // exactly as the switched-off card below would send it (no cancel cue: nothing is refunded).
+  if (kind === 'blitz' && rootedBlitzEndServerConfirmed(gameStore.game.value)) {
+    endActConfirm.value = null;
+    clearO66Arms();
+    renderer?.clearSelection();
+    const sentBefore = gameStore.gameplaySendCount();
+    gameStore.endActivation({ blitzConfirmed: true });
+    rearmIfEndRefused(sentBefore);
+    return;
+  }
   // Owner 10-04: each confirmation has its own Settings line. Switched off, the gesture does exactly what the
   // prompt's confirm button would have done (same arms cleared, same wire, same Blitz token / Activate roll).
   if (!endActivationConfirmEnabled(kind, settings)) {
@@ -15242,7 +15397,7 @@ watch(() => [
           @blur="commitMarkLabelField" />
         <ReplayTelestrator
           ref="telestratorRef"
-          :enabled="true"
+          :enabled="telestratorEnabled"
           :toolbar-bottom="telestratorBottom"
           :toolbar-right="telestratorRight"
           :toolbar-left="quickBarLeft"

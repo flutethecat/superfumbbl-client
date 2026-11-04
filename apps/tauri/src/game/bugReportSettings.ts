@@ -8,6 +8,7 @@
 // tokens, file paths or identity ever reach this object - the allow-list holds none of them and the test pins that.
 
 import type { AppSettings } from './settings';
+import { uiZoomState } from './uiZoomShell';
 
 /** Display / performance / presentation settings copied into `context.settings.prefs`. Order = report order. */
 export const BUG_REPORT_SETTINGS_KEYS = [
@@ -25,12 +26,16 @@ export const BUG_REPORT_SETTINGS_KEYS = [
   'showSweetSpot', 'showFieldLogos', 'activePlayerEcho', 'clickEcho', 'turnTrack', 'trailMarks', 'trailColor',
   'auraDisturbingPresence', 'auraPickMeUp', 'colorblindMode',
   // HUD / log / chat presentation
-  'uiMode', 'modernHudStyle', 'classicEffects', 'uiTheme', 'uiFont', 'uiTextSize', 'uiCustomize', 'useFantasyCursor',
+  'uiMode', 'modernHudStyle', 'classicEffects', 'uiTheme', 'uiStyle', 'uiColorScheme', 'uiFont', 'uiTextSize', 'uiCustomize', 'useFantasyCursor',
   'logStyle', 'chatStyle', 'logFont', 'logFontSize', 'chatToastsEnabled', 'chatDisabled', 'chatPoppedOut',
   'playerCardMode', 'spectatorView', 'spectatorClean', 'autoDirector',
   // input / audio / play mode / diagnostics switches
   'inputMethod', 'controllerSupportEnabled', 'soundVolume', 'order66', 'compression', 'wireLog', 'debugLog', 'devMode',
   'devWireCapture',
+  // Settings reflow lane C (11-03): camera, telestrator and accessibility modes, and the REQUESTED UI zoom (a number;
+  // Sol r1: the one zoom key the forbidden-key pin exempts). The applied factor and the shell's refusal ride in env.
+  'uiZoom', 'edgePan', 'edgePanSpeed', 'telestratorMode', 'highContrast', 'reduceMotion', 'reduceFlashing', 'visualSoundCues',
+  'largerTargets', 'turnClockWarning',
 ] as const satisfies readonly (keyof AppSettings)[];
 
 /** Asset-pack slots: the assigned pack's install hash (or '' = built-in). */
@@ -53,6 +58,9 @@ export interface BugReportEnv {
   deviceMemory?: number | null;
   webglVendor?: string | null;
   webglRenderer?: string | null;
+  /** Settings reflow (Sol r1): the UI zoom factor the shell CONFIRMED (game/uiZoom.ts), and whether it refused one. */
+  uiZoomApplied?: number | null;
+  uiZoomUnavailable?: boolean | null;
 }
 
 export interface BugReportSettingsSnapshot {
@@ -115,6 +123,8 @@ export function bugReportSettingsSnapshot(
       deviceMemory: num(env.deviceMemory),
       webglVendor: gpu(env.webglVendor),
       webglRenderer: gpu(env.webglRenderer),
+      uiZoomApplied: num(env.uiZoomApplied),
+      uiZoomUnavailable: typeof env.uiZoomUnavailable === 'boolean' ? env.uiZoomUnavailable : null,
     },
   };
 }
@@ -159,5 +169,7 @@ export function collectBugReportEnv(canvas: Element | null | undefined): BugRepo
     deviceMemory: nav.deviceMemory ?? null,
     webglVendor: vendor,
     webglRenderer: renderer,
+    uiZoomApplied: uiZoomState.applied,
+    uiZoomUnavailable: uiZoomState.unavailable,
   };
 }

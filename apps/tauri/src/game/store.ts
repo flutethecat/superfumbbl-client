@@ -15,7 +15,7 @@ import { actionRollPresentation, dodgeUsedBreakTackle, type ActionRollCue } from
 import { skillUsePresentation } from './skillUsePresentation';
 import { LiveSpectateTransport } from './replay/liveSpectateTransport';
 import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/spectatorPublication';
-import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorIdentity } from './replay/spectatorCheckpoint';
+import { freezeSpectatorValue, reduceSpectatorCheckpoint, sameSpectatorIdentity, type SpectatorCheckpoint, type SpectatorEvent, type SpectatorIdentity } from './replay/spectatorCheckpoint';
 import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngress';
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
 import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, swarmingWaitingFromGame, quickSnapWaitingFromGame, usablePlayerCount, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
@@ -117,7 +117,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, playerPinned, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -4788,6 +4788,7 @@ function deferPassiveSkillCard(g: GameJson, dialog: object, card: Omit<PassiveSk
 /** An injury-presentation end hook (or the cap): arm the held card once nothing of the injury is left on screen. */
 function wakeDeferredPassiveSkillCard(capReached = false): void {
   wakePublishedSkillCardHold(); // Sol r3: the same end hooks release the published route's hold
+  wakeBounceInjuryHolds(); // owner 11-03: a loose-ball bounce held behind the injury teardown re-checks now
   const held = deferredPassiveSkillCard;
   if (!held) return;
   if (!deferredPassiveSkillCardLive()) { dropDeferredPassiveSkillCard(); return; }
@@ -5481,6 +5482,8 @@ let reviewFollowPresentedAt: string | null = null;
 /** Owner 10-20 (fall beat): until when the frames behind a fall wait for its delayed armour dice (0 = none). */
 let fallArmourPendingUntil = 0;
 function fallArmourWaitMs(): number {
+  // Owner 11-03 (Sol r1 P2-3): a beat that has run out is spent - a wall clock set back later cannot re-arm it.
+  if (fallArmourPendingUntil !== 0 && Date.now() >= fallArmourPendingUntil) fallArmourPendingUntil = 0;
   return playback.catchingUp ? 0 : Math.max(0, fallArmourPendingUntil - Date.now());
 }
 /** Astra r4 P2-1: the landed follow/stay indicator whose knockdown frame a spectator's drain may apply at its deadline. */
@@ -6698,6 +6701,7 @@ async function pauseSpectatorView(): Promise<void> {
       spectatorDisplayedCheckpoint = position;
       spectatorDice?.ledger.publishDisplayed(position.cursor); // owner 10-10: a reviewed position shows ITS totals
     },
+    holdPublication: holdBouncePublication, // owner 11-03: a loose-ball bounce waits for the injury teardown
     present: async (event, signal) => {
       if (signal.aborted) return;
       const position = spectatorPublication.position.value?.checkpoint;
@@ -13932,6 +13936,7 @@ const BALL_CHAIN_POLL_MS = 50;
 let ballChainOpen = false;
 /** Owner 10-07 (Astra): the pending playback timer when it is the ball-chain wait (a dialog cancels it). */
 let ballChainTimer: ReturnType<typeof setTimeout> | null = null;
+/** The next hop / catch beat's deadline on the monotonic clock (monotonicMs); 0 = none. */
 let ballChainNextApplyAt = 0;
 /** Owner 10-03 ("bomb marker should stay up ... until the explosion animation plays"): an uncontested bomb's frames
  *  (throw animation, explosion, knockdowns, passCoordinate clear) arrive in one burst, so live play fired the explosion
@@ -14063,7 +14068,7 @@ function ballChainPacingActive(): boolean {
 }
 function armBallChainBeat(ms: number): void {
   if (!ballChainPacingActive()) return;
-  ballChainNextApplyAt = Math.max(ballChainNextApplyAt, Date.now() + ms);
+  ballChainNextApplyAt = Math.max(ballChainNextApplyAt, monotonicMs() + ms); // Sol r2 P2-1: monotonic hop deadline
 }
 /** Astra review: bomb frames (Bombardier / Hail Mary bomb) carry bomb model changes or bomb-flagged reports. */
 function frameInvolvesBomb(changes: ModelChangeListJson | null | undefined, reports: readonly Record<string, unknown>[]): boolean {
@@ -14078,7 +14083,7 @@ function frameSetsDialog(frame: QueuedFrame): boolean {
 }
 /** Astra review: the chain is holding frames back - the coach's model is behind the server's. */
 function ballChainHolding(): boolean {
-  return ballChainPacingActive() && playback.queue.length > 0 && (ballChainOpen || Date.now() < ballChainNextApplyAt);
+  return ballChainPacingActive() && playback.queue.length > 0 && (ballChainOpen || monotonicMs() < ballChainNextApplyAt);
 }
 function frameIsLooseBallBounce(frame: QueuedFrame): boolean {
   if (frame.serverPush || kickoffPresentationOccurrence != null) return false;
@@ -14092,27 +14097,206 @@ function frameIsLooseBallBounce(frame: QueuedFrame): boolean {
     return Array.isArray(dirs) && dirs.length > 0;
   });
 }
+/** Owner 11-03 ("Ball bounces are rendering before the armor rolls are resolved. Let's wait for teardown of
+ *  armor/injury before we render bounces." - option 1, the FULL teardown): the server sends the loose ball's
+ *  `scatterBall` in its own sync 0-160 ms after the frame carrying the fall's `injury` reports (23 captures), so the hop
+ *  played over the armour dice and the pill. A loose-ball bounce frame now waits in the playback queue while any injury
+ *  presentation is pending or on screen: queued / presenting injury events, injury pills, injury token holds (the
+ *  shared injuryPresentationRunning, as the passive skill card's hold) and the armour dice - withheld, scheduled or
+ *  still on the pitch. Frames behind it keep their order.
+ *  One hold per bounce frame covers this wait AND the movement wait (10-02): one UNSCALED 5 s safety deadline shared by
+ *  both (Sol r1 P2-2: the waits never stack), measured monotonically and enforced by its own plain timer, which wakes
+ *  the pump (Sol r1 P2-3: a wall-clock jump cannot stretch it). A released frame is never held again.
+ *  Wakes: the injury end hooks (wakeBallBounceHold, from wakeDeferredPassiveSkillCard's call sites), the cap timer and
+ *  the ball-chain poll (BALL_CHAIN_POLL_MS: the renderer's armour dice have no end hook). A server dialog in the queue
+ *  (or on the bounce frame) releases it at once; catch-up is never held; resetPlayback drops it. The teardown wait
+ *  applies on every seat and in replay (the playback queue); the published spectator route holds the bounce's
+ *  publication the same way (holdBouncePublication). Modern only: Classic draws no injury pill and keeps its timing. */
+const BALL_BOUNCE_HOLD_SAFETY_MS = 5000;
+type BallBounceHold = { frame: QueuedFrame; startedAt: number; capped: boolean; capTimer: ReturnType<typeof setTimeout> | null };
+let ballBounceHold: BallBounceHold | null = null;
+/** Bounce frames whose hold ended at the cap or on a dialog: they apply, never re-held. */
+const releasedBounceFrames = new WeakSet<QueuedFrame>();
+function monotonicMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+}
+function clearBallBounceHold(): void {
+  if (ballBounceHold?.capTimer) clearTimeout(ballBounceHold.capTimer);
+  ballBounceHold = null;
+}
+function ballBounceHoldFor(frame: QueuedFrame): BallBounceHold {
+  if (ballBounceHold?.frame === frame) return ballBounceHold;
+  clearBallBounceHold();
+  const hold: BallBounceHold = { frame, startedAt: monotonicMs(), capped: false, capTimer: null };
+  // A plain timer: it fires whatever the wall clock does and wakes the pump on its own.
+  hold.capTimer = setTimeout(() => {
+    hold.capTimer = null;
+    hold.capped = true;
+    if (ballBounceHold === hold) wakeBallBounceHold();
+  }, BALL_BOUNCE_HOLD_SAFETY_MS);
+  ballBounceHold = hold;
+  return hold;
+}
+function releaseBallBounceHold(frame: QueuedFrame): void {
+  if (ballBounceHold?.frame !== frame) return;
+  releasedBounceFrames.add(frame);
+  clearBallBounceHold();
+}
+/** The armour dice / injury of a fall are not torn down yet (Modern presentation). */
+function injuryTeardownPending(): boolean {
+  if (!modernInjuryTiming()) return false;
+  return injuryPresentationRunning() || armourDiceShowing()
+    || armourAfterFollow !== null || armourRevealScheduled > 0 || armourPublishPending > 0;
+}
+/** @internal test seam: stands in for the movement presentation probe (null = the real one). */
+let movementPendingTestProbe: (() => boolean) | null = null;
+/** Milliseconds a loose-ball bounce frame still waits for the injury teardown / the movement in front of it. */
+function ballBounceHoldWaitMs(frame: QueuedFrame, pacing: boolean, dialogQueued: boolean): number {
+  if (dialogQueued || frameSetsDialog(frame)) { ballBounceMovementWaitSince = 0; releaseBallBounceHold(frame); return 0; }
+  if (playback.catchingUp || releasedBounceFrames.has(frame) || !frameIsLooseBallBounce(frame)) {
+    ballBounceMovementWaitSince = 0;
+    if (ballBounceHold?.frame !== frame) clearBallBounceHold();
+    return 0;
+  }
+  const teardown = injuryTeardownPending();
+  let movement = false;
+  if (pacing && (movementPendingTestProbe ?? movementPresentationPending)()) {
+    const now = monotonicMs();
+    if (ballBounceMovementWaitSince === 0) ballBounceMovementWaitSince = now;
+    movement = now - ballBounceMovementWaitSince < presentationMs(BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS);
+  } else ballBounceMovementWaitSince = 0;
+  if (!teardown && !movement) { ballBounceMovementWaitSince = 0; clearBallBounceHold(); return 0; }
+  const hold = ballBounceHoldFor(frame);
+  if (hold.capped || monotonicMs() - hold.startedAt >= BALL_BOUNCE_HOLD_SAFETY_MS) {
+    ballBounceMovementWaitSince = 0;
+    releaseBallBounceHold(frame);
+    return 0;
+  }
+  return BALL_CHAIN_POLL_MS;
+}
+/** An injury end hook / the cap: a held bounce re-checks now instead of at its next poll. */
+function wakeBallBounceHold(): void {
+  if (!ballBounceHold || !ballChainTimer || playback.timer !== ballChainTimer) return;
+  cancelGameTimeout(ballChainTimer);
+  ballChainTimer = null;
+  playback.timer = null;
+  pumpPlayback();
+}
+/** Owner 11-03: the published spectator route's twin (live review, Pause -> GO TO LIVE, a retained-history
+ *  reconnect). Its positions are published one event at a time after the previous event's present() (which already
+ *  waits out the injury slot itself, never the pill / token hold / armour dice teardown), so the bounce event's
+ *  PUBLICATION waits here - set before publish(), where the renderer starts the hop. Same predicate; the same
+ *  unscaled 5 s cap (a plain timer); a server dialog on the bounce event or on any event already received behind it
+ *  releases it (Sol r1 P2-1: checked at the start, on every poll and on ingress). Woken by the injury end hooks and
+ *  spectator ingress, polled as the live hold. An abort (pause, seek, return, cancel) ends it at once. */
+const bounceInjuryHoldWakes = new Set<() => void>();
+/** The injury end hooks: the live queue hold and the published holds re-check now. */
+function wakeBounceInjuryHolds(): void {
+  wakeBallBounceHold();
+  wakePublishedBounceHolds();
+}
+/** Spectator ingress (an event appended to the history) and the injury end hooks. */
+function wakePublishedBounceHolds(): void {
+  const wakes = [...bounceInjuryHoldWakes];
+  bounceInjuryHoldWakes.clear();
+  for (const wake of wakes) wake();
+}
+function commandSetsDialog(command: Readonly<Record<string, unknown>>): boolean {
+  return ((command.modelChangeList as ModelChangeListJson | null | undefined)?.modelChangeArray ?? []).some((change) =>
+    change.modelChangeId === ModelChangeId.GAME_SET_DIALOG_PARAMETER && change.modelChangeValue != null);
+}
+/** A published event that bounces the loose ball (not a bomb, a kick-off or a pass in flight; no dialog of its own). */
+function publishedLooseBallBounce(command: Readonly<Record<string, unknown>>, visible: GameJson | null): boolean {
+  const reports = (command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
+  const changes = command.modelChangeList as ModelChangeListJson | null | undefined;
+  if (frameInvolvesBomb(changes, reports)) return false;
+  if (commandSetsDialog(command)) return false;
+  if (visible && (String(visible.turnMode ?? '') === 'kickoff' || (visible as { passCoordinate?: unknown }).passCoordinate)) return false;
+  return reports.some((report) => {
+    if (String(report.reportId ?? '') !== 'scatterBall') return false;
+    const dirs = report.directionArray ?? report.directions;
+    return Array.isArray(dirs) && dirs.length > 0;
+  });
+}
+/** Sol r2 P2-2: a scan over the events received behind a held bounce that examines each event ONCE: it resumes
+ *  where it stopped (a cursor), so a dialog any number of events behind is found as the scan reaches it. Each call
+ *  examines at most PUBLISHED_DIALOG_SCAN_BUDGET new events; a longer backlog continues on the next poll / wake. */
+const PUBLISHED_DIALOG_SCAN_BUDGET = 256;
+function publishedDialogScan(from: SpectatorEvent): () => boolean {
+  let last = from;
+  return () => {
+    const history = spectatorTransport?.history;
+    if (!history) return false;
+    for (let i = 0; i < PUBLISHED_DIALOG_SCAN_BUDGET; i++) {
+      const next = history.eventAfter(last.cursor);
+      if (!next) return false;
+      last = next;
+      if (commandSetsDialog(next.command as Record<string, unknown>)) return true;
+    }
+    return false;
+  };
+}
+/** null = no hold (the position publishes synchronously). */
+function holdBouncePublication(event: SpectatorEvent, signal: AbortSignal): Promise<void> | null {
+  const visible = spectatorPublication.position.value?.checkpoint.model ?? null;
+  const dialogBehind = publishedDialogScan(event);
+  if (signal.aborted || playback.catchingUp || !publishedLooseBallBounce(event.command as Record<string, unknown>, visible as GameJson | null)
+    || !injuryTeardownPending() || dialogBehind()) return null;
+  return new Promise<void>((resolve) => {
+    let cap: ReturnType<typeof setTimeout> | null = null;
+    let poll: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (cap) clearTimeout(cap);
+      if (poll) clearTimeout(poll);
+      bounceInjuryHoldWakes.delete(check);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const check = () => {
+      if (done) return;
+      if (signal.aborted || playback.catchingUp || !injuryTeardownPending() || dialogBehind()) { finish(); return; }
+      bounceInjuryHoldWakes.add(check);
+      if (poll) clearTimeout(poll);
+      poll = setTimeout(check, BALL_CHAIN_POLL_MS);
+    };
+    signal.addEventListener('abort', finish, { once: true });
+    cap = setTimeout(finish, BALL_BOUNCE_HOLD_SAFETY_MS); // fail-open: a plain, unscaled timer
+    check();
+  });
+}
 /** Milliseconds `frame` must still wait behind the loose-ball chain (0 = apply now). */
 function ballChainWaitMs(frame: QueuedFrame | undefined): number {
-  if (!frame || !ballChainPacingActive()) {
-    ballChainNextApplyAt = 0;
-    ballBounceMovementWaitSince = 0;
-    return 0;
-  }
-  const now = Date.now();
+  const pacing = ballChainPacingActive();
+  if (!frame || !pacing) ballChainNextApplyAt = 0;
+  if (!frame) { ballBounceMovementWaitSince = 0; clearBallBounceHold(); return 0; }
+  const now = monotonicMs();
   // Astra review: a dialog queued behind the chain (a Catch / team reroll on a failed catch, apothecary, ...) ends the
   // pacing - the remaining hops apply at once so the decision reaches the coach without waiting out the beats.
-  if (playback.queue.some(frameSetsDialog)) {
+  const dialogQueued = playback.queue.some(frameSetsDialog);
+  if (pacing && dialogQueued) {
     ballChainNextApplyAt = 0; ballChainOpen = false; ballBounceMovementWaitSince = 0;
+    releaseBallBounceHold(frame);
     return 0;
   }
-  if (now < ballChainNextApplyAt) return ballChainNextApplyAt - now;
-  if (frameIsLooseBallBounce(frame) && movementPresentationPending()) {
-    if (ballBounceMovementWaitSince === 0) ballBounceMovementWaitSince = now;
-    if (now - ballBounceMovementWaitSince < presentationMs(BALL_BOUNCE_MOVEMENT_WAIT_CAP_MS)) return BALL_CHAIN_POLL_MS;
+  // Sol r2 P2-1: a bounce released at the cap (or by a dialog) is honoured before the hop pacing, and a spent hop
+  // deadline is retired - neither can hold the frame again.
+  if (releasedBounceFrames.has(frame) || (ballBounceHold?.frame === frame && ballBounceHold.capped)) {
+    ballChainNextApplyAt = 0;
+    return ballBounceHoldWaitMs(frame, pacing, dialogQueued);
   }
-  ballBounceMovementWaitSince = 0;
-  return 0;
+  if (ballChainNextApplyAt !== 0 && now >= ballChainNextApplyAt) ballChainNextApplyAt = 0;
+  if (pacing && now < ballChainNextApplyAt) return ballChainNextApplyAt - now;
+  return ballBounceHoldWaitMs(frame, pacing, dialogQueued);
+}
+/** @internal Owner 11-03 test seam (Sol r1 P2-2): stand in for the movement presentation probe. */
+export function installBallBounceHoldTestHarness(): { movementPending(fn: (() => boolean) | null): void; dispose(): void } {
+  return {
+    movementPending(fn) { movementPendingTestProbe = fn; },
+    dispose() { movementPendingTestProbe = null; },
+  };
 }
 /** The touchdown sound push bypasses the playback queue; it waits while frames received before it are unapplied. */
 function framesAheadOfServerPush(aheadAtPush: ReadonlySet<QueuedFrame>): boolean {
@@ -14519,6 +14703,7 @@ function resetPlayback() {
   ballChainOpen = false;
   ballChainNextApplyAt = 0;
   ballBounceMovementWaitSince = 0;
+  clearBallBounceHold();
   ballChainTimer = null;
   resetBallOutFifo();
   onTheBallConnectionEpoch += 1;
@@ -15852,6 +16037,10 @@ interface PlannerPlan {
    *  move), it ended on that roll - an expected outcome the roll's own toast already shows - so it retires quietly.
    *  A later successful roll (a reroll) clears it. */
   failedGate: string | null;
+  /** Owner 11-03 (Take Root): the plan's player was already pinned (rooted / chomped) when the plan started - only a
+   *  walk-free plan starts so (plannerStart), e.g. the block a rooted blitzer makes from where it stands. A plan whose
+   *  player becomes pinned while it runs ends quietly instead (plannerAdvance). */
+  startedPinned?: boolean;
   /** Astra 10-10: the server echoed this Blitz plan's declare (acting player + blitzMove) at least once. */
   blitzDeclareSeen?: boolean;
   /** Owner 10-14 (Astra review of the JLeav fix): BB2025 rolls a Blitz's Bloodlust in SelectBlitzTarget's activation
@@ -16358,15 +16547,18 @@ function plannerRetireQuietly(reason: string) {
   // Owner 10-15: no em dash in user-facing text.
   log('system', lt('store.text.planEndedReason', { reason }));
 }
-function plannerFlush(reason: string) {
+/** A planner cancellation. `reason` is an English (US) reason sentence, or a whole catalogued message (lt()). Owner
+ *  11-03: the log keeps the LocalText, so the stored / exported text is base English (US) whatever the display
+ *  language (English (UK) included); the notice is rendered in the display language. */
+function plannerFlush(reason: string | LocalText) {
   if (!plannerPlan) return;
   plannerSet(null); plannerClearAbort();
   if (state.yesNo?.key.startsWith('starCommit:')) clearYesNo();
   state.blitzBlockChoice = null; // #111 fail-safe: a held block-choice dies with its plan (turn-end/knockdown/etc.) — never a stale hold
   state.foulChoiceHold = null; foulChoice = null; // S42: same for a held Foul / Chainsaw choice and its remembered pick
-  const text = $t('store.text.planCancelledP0P1', { p0: reason.charAt(0).toUpperCase(), p1: reason.slice(1) });
-  log('system', `⚠ ${text}`);
-  state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+  const message = isLocalText(reason) ? reason : lt('store.text.planCancelledP0P1', { p0: reason.charAt(0).toUpperCase(), p1: reason.slice(1) });
+  log('system', lt('store.text.warningLine', { text: message }));
+  state.actionNotice = { text: shownText(message), seq: (state.actionNotice?.seq ?? 0) + 1 };
 }
 /** Owner 10-14 (JLeav, FUMBBL g1953483): a final failed Bloodlust roll spent the plan's sent step and the server is
  *  selecting a move again (see the caller in plannerAdvance). The plan ends like any retired plan (its watchdog,
@@ -16391,6 +16583,13 @@ function plannerBase(pid: string): number | null { const d = plannerPData(pid); 
 function plannerCoord(pid: string): [number, number] | null { const c = plannerPData(pid)?.playerCoordinate as [number, number] | undefined; return c ? [c[0], c[1]] : null; }
 function plannerActingId(): string { return String((game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''); }
 function plannerActingAction(): string { return String((game.value?.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? ''); }
+/** Owner 11-03: upstream PlayerState.isPinned on the applied model (a failed Take Root, or Chomped). */
+function plannerPinned(pid: string): boolean { return !!game.value && playerPinned(game.value, pid); }
+/** Owner 11-03 (Take Root): the last FAILED negatrait roll this client applied, kept even with no plan running, so a
+ *  plan that starts after the report (the Blitz's Take Root is rolled on the target selection) still knows it. */
+let lastFailedGate: { playerId: string; skill: string; turnKey: string } | null = null;
+/** Owner 11-03 / Sol r1 (P1): plan kinds a pinned player never runs - they walk, or end in a block. */
+const PLANNER_PINNED_REFUSED: ReadonlySet<PlanActKind> = new Set<PlanActKind>(['move', 'blitzWalk', 'blitz', 'block']);
 function clearAnsweredDialogInstance(): void {
   answeredDialogInstanceKey = null;
   answeredDialogInstanceRef = null;
@@ -16558,6 +16757,15 @@ function plannerStart(input: {
       return false;
     }
   }
+  // Owner 11-03 (Take Root): a pinned player (rooted / chomped; upstream StepMove refuses it and the server offers no
+  // square) has no walk. A plan that would move it is refused quietly, and so is every Block / Blitz plan (Sol r1 P1):
+  // a pinned blitzer's block is never sent by a plan - it stays on the explicit readied click / chooser path. A
+  // walk-free pass, hand-off, foul or team-mate throw from where it stands (a rooted Treeman's throw) still starts.
+  const startedPinned = plannerPinned(playerId);
+  if (startedPinned && ((input.route ?? []).length > 0 || PLANNER_PINNED_REFUSED.has(actKind))) {
+    log('system', `ignored: ${playerName(game.value, playerId)} is rooted to the spot and cannot move`);
+    return false;
+  }
   const carriedFoulChoice = actKind === 'foul' ? liveFoulChoice(game.value)?.usingChainsaw : undefined; // S42: survives its own re-plan
   if (plannerPlan) plannerFlush('superseded by a new plan');
   const route = (input.route ?? []).map((c) => [c[0], c[1]] as [number, number]);
@@ -16625,7 +16833,9 @@ function plannerStart(input: {
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
-    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, opponentPromptOverSend: false, failedRoll: null, failedGate: null, sentOfferRevisions: [],
+    route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, opponentPromptOverSend: false, failedRoll: null,
+    failedGate: lastFailedGate && lastFailedGate.playerId === playerId && lastFailedGate.turnKey === currentTurnKey(game.value) ? lastFailedGate.skill : null,
+    startedPinned, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
     blockKind: input.blockKind ?? null,
     blockChoiceResolved: input.blockKind != null,
@@ -16818,6 +17028,14 @@ function plannerAdvance() {
   // Owner 10-06: a knocked-down mover is a server-resolved outcome (failed dodge / rush / foul...) — the roll's own
   // presentation and the turnover splash already say it; no ⚠ "Plan cancelled" notice for an expected failure.
   if (base != null && base !== 0x01 && base !== 0x02) { plannerRetireQuietly(`${playerName(g, p.playerId)} is no longer standing`); return; }
+  // Owner 11-03 (Take Root): the plan's player became pinned (a failed Take Root sets the rooted bit; StepMove then
+  // refuses it and the server publishes no square). The plan is over - quietly, the roll's own report tells the story,
+  // and nothing is sent: no step, and no block either (a rooted Blitz beside its target is READIED by the view for the
+  // coach's one click, never auto-sent). Checked before the pause: the rooting is final whatever dialog stands.
+  if (plannerPinned(p.playerId) && (!p.startedPinned || p.route.length > 0 || PLANNER_PINNED_REFUSED.has(p.actKind))) {
+    plannerRetireQuietly(`${playerName(g, p.playerId)} is rooted to the spot`);
+    return;
+  }
   // ---- PAUSE (a decision surface is up) ----
   if (plannerClientPromptHold) return; // Astra 10-10: the coach is being asked whether to end; the wake is the prompt closing
   if (plannerPromptPending()) return;
@@ -21360,6 +21578,14 @@ function plannerBindPipelinedFirst(p: PlannerPlan, cmd: Record<string, unknown> 
 /** Hook: called after each server command is fully applied to the model (applyFrame). `cmd` is the frame just
  *  applied — its reportList carries the arrival-square resolution outcomes (leg-2a). */
 function plannerOnModelApplied(cmd?: Record<string, unknown>) {
+  // Owner 11-03: a failed negatrait roll is remembered even with no plan (lastFailedGate), for a plan started after it.
+  for (const r of ((cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; confusionSkill?: unknown }[] } | undefined)?.reports ?? [])) {
+    if (String(r.reportId ?? '') !== 'confusionRoll') continue;
+    const rolledId = String(r.playerId ?? '');
+    if (r.successful === false && rolledId) {
+      lastFailedGate = { playerId: rolledId, skill: String(r.confusionSkill ?? '').trim() || 'negatrait', turnKey: game.value ? currentTurnKey(game.value) : '' };
+    } else if (r.successful === true && lastFailedGate?.playerId === rolledId) lastFailedGate = null;
+  }
   const p = plannerPlan;
   if (!p) return;
   // Owner 10-09: remember a FAILED negatrait roll for the plan's player in any phase (see failedGate).
@@ -30023,6 +30249,7 @@ export const gameStore = {
             // Owner 10-10: in review a match command the history refused is not displayed either - its rolls are missing.
             if (packetClass === 'match' && result.kind !== 'committed') spectatorDice?.ledger.dropped();
             spectatorTransport.received();
+            wakePublishedBounceHolds(); // owner 11-03 (Sol r1 P2-1): a dialog received behind a held bounce releases it
             if (packetClass === 'snapshot') {
               const repairHead = history.head;
               if (repairHead) void reconstructJoinRerollsFromReplay({
@@ -31414,6 +31641,9 @@ export const gameStore = {
     if ((action === 'gazeMove' || action === 'gaze') && !gameStore.hasLiveGazeIntent() && gazeToMoveUnanswered !== playerId) return false;
     // Owner 10-08: `gaze` is a non-moving action (a consumed gaze). A walk needs upstream's GAZE→MOVE change first.
     if (action === 'gaze') return offerGazeToMove(playerId, [toSquare]);
+    // Owner 11-03 / Sol r2 (P1): a pinned player cannot step - a Jump square or Ball & Chain aim the server offered
+    // before the rooting (or still in the model) included. Upstream StepMove refuses it; nothing is sent.
+    if (plannerPinned(playerId)) { log('system', `ignored: ${playerName(game.value, playerId)} is rooted to the spot and cannot move`); return false; }
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
     if (!from) return false;
     // ClientStatePassBlock.java:32 and ClientStateKickoffReturn.java:30 both use the shared move state;
@@ -31469,6 +31699,8 @@ export const gameStore = {
       if (accepted) log('system', `play: HIT & RUN step ${playerName(game.value, playerId)} (server resolves)`);
       return accepted;
     }
+    // Owner 11-03 (Take Root): a pinned player cannot step (upstream StepMove refuses it); nothing is sent.
+    if (plannerPinned(playerId)) { log('system', `ignored: ${playerName(game.value, playerId)} is rooted to the spot and cannot move`); return false; }
     const onTheBall = game.value.turnMode === 'passBlock' || game.value.turnMode === 'kickoffReturn';
     // Multi-square routes use the echo-driven continuation seam.
     if (!plannerPlan && path.length > 1) {
@@ -32521,6 +32753,8 @@ export const gameStore = {
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
     const acting = (game.value.actingPlayer ?? {}) as { playerId?: string | null };
     if (acting.playerId !== attackerId) { log('system', 'ignored: server has not confirmed this player as acting'); return; }
+    // Owner 11-03 / Sol r2 (P1): a pinned blitzer cannot step, whatever square is still in the model.
+    if (plannerPinned(attackerId)) { log('system', `ignored: ${playerName(game.value, attackerId)} is rooted to the spot and cannot move`); return; }
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === attackerId)?.playerCoordinate;
     if (!from) return;
     if (!currentMoveOffer(attackerId, toSquare)) {
@@ -32558,6 +32792,8 @@ export const gameStore = {
     }
     const acting = (game.value.actingPlayer ?? {}) as { playerId?: string | null };
     if (acting.playerId !== attackerId) { log('system', 'ignored: server has not confirmed this player as acting'); return false; }
+    // Owner 11-03 (Take Root): a pinned blitzer cannot step (upstream StepMove refuses it); nothing is sent.
+    if (plannerPinned(attackerId)) { log('system', `ignored: ${playerName(game.value, attackerId)} is rooted to the spot and cannot move`); return false; }
     // Multi-square Blitz walks use one CLIENT_BLITZ_MOVE per echo and never fire the block automatically.
     if (path.length > 1 && plannerStart({ playerId: attackerId, actKind: 'blitzWalk', route: path })) return true;
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === attackerId)?.playerCoordinate;
@@ -32921,7 +33157,7 @@ export const gameStore = {
   emittedCommandCount(): number { return emittedCommandCount; },
   isPlanWalking(playerId: string): boolean { return plannerPlan != null && plannerPlan.phase === 'moving' && plannerPlan.playerId === playerId; },
   /** ORDER 66 (#6.4): cancel the in-flight plan (e.g. user Esc / right-click clear). */
-  cancelPlan() { priorActivationEndSeq += 1; plannerFlush('cancelled by you'); }, // Astra r3 F2: and any queued declaration
+  cancelPlan() { priorActivationEndSeq += 1; plannerFlush(lt('store.text.planCanceledByYou')); }, // Astra r3 F2: and any queued declaration
   /** The coach confirmed End Activation / End Turn: the plan goes with it. Expected, so no "Plan cancelled" notice. */
   retirePlanForConfirmedEnd() { plannerRetireQuietly('the coach confirmed the end'); },
   /** Astra 10-10 (P2): the view reports its End prompts (End Activation / End Turn warning). Open = the planner sends

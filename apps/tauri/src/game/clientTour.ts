@@ -6,7 +6,7 @@
  * Details popup and walks the Settings tabs through a host API (never by clicking the DOM). Anchors are `data-tour`
  * attributes on the real elements. Public-edition code: no import from the FUMBBL.COM pane modules.
  */
-import type { SettingsTab } from './settingsDialog';
+import { SETTINGS_SECTIONS, type SettingsTab } from './settingsDialog';
 import { $t } from '../i18n';
 
 export const CLIENT_TOUR_VERSION = 1;
@@ -39,10 +39,17 @@ export type ClientStepId =
   | 'hud-card'
   | 'esc'
   | 'settings-general'
-  | 'settings-accessibility'
-  | 'settings-display'
-  | 'settings-mods'
+  | 'settings-controls'
+  | 'settings-pitch'
+  | 'settings-skills'
   | 'settings-ui'
+  | 'settings-art'
+  | 'settings-audio'
+  | 'settings-video'
+  | 'settings-accessibility'
+  | 'settings-account'
+  | 'settings-modpacks'
+  | 'settings-diagnostics'
   | 'settings-credits'
   | 'disclaimer';
 
@@ -70,10 +77,17 @@ export const CLIENT_STEPS: readonly ClientStepId[] = [
   'hud-card',
   'esc',
   'settings-general',
-  'settings-accessibility',
-  'settings-display',
-  'settings-mods',
+  'settings-controls',
+  'settings-pitch',
+  'settings-skills',
   'settings-ui',
+  'settings-art',
+  'settings-audio',
+  'settings-video',
+  'settings-accessibility',
+  'settings-account',
+  'settings-modpacks',
+  'settings-diagnostics',
   'settings-credits',
   'disclaimer',
 ];
@@ -134,17 +148,24 @@ const BAR: Record<string, { anchor: string; label: string; body: string }> = {
   'hud-bar-report': { anchor: 'hud-report', get label() { return $t('tour.bar.report'); }, get body() { return $t('tour.bar.sendsMeABug'); } },
 };
 
+/** One line per Settings tab (owner 11-03 reflow: all 13 tabs, Controls included, in rail order). */
 export const SETTINGS_LINES: Record<SettingsTab, string> = {
-  get general() { return $t('tour.settingsLines.generalHoldsYourConnection'); },
-  get controls() { return $t('tour.settingsLines.controlsPicksKeyboardOr'); },
-  get accessibility() { return $t('tour.settingsLines.accessibilitySetsTextSize'); },
-  get display() { return $t('tour.settingsLines.displayCoversVideoThe'); },
-  get mods() { return $t('tour.settingsLines.artHoldsTheDice'); }, // shown as the Art tab (id stays mods)
-  get ui() { return $t('tour.settingsLines.uiArrangesTheHud'); },
-  get credits() { return $t('tour.settingsLines.creditsShowsTheClient'); },
+  get general() { return $t('tour.settingsLines.general'); },
+  get controls() { return $t('tour.settingsLines.controls'); },
+  get pitch() { return $t('tour.settingsLines.pitch'); },
+  get skills() { return $t('tour.settingsLines.skills'); },
+  get ui() { return $t('tour.settingsLines.ui'); },
+  get art() { return $t('tour.settingsLines.art'); },
+  get audio() { return $t('tour.settingsLines.audio'); },
+  get video() { return $t('tour.settingsLines.video'); },
+  get accessibility() { return $t('tour.settingsLines.accessibility'); },
+  get account() { return $t('tour.settingsLines.account'); },
+  get modpacks() { return $t('tour.settingsLines.modPacks'); },
+  get diagnostics() { return $t('tour.settingsLines.diagnostics'); },
+  get credits() { return $t('tour.settingsLines.credits'); },
 };
 
-const SETTINGS_ORDER: readonly SettingsTab[] = ['general', 'accessibility', 'display', 'mods', 'ui', 'credits'];
+const SETTINGS_ORDER: readonly SettingsTab[] = SETTINGS_SECTIONS.map((section) => section.id);
 
 export function clientStep(id: ClientStepId): ClientStep {
   switch (id) {
@@ -316,7 +337,9 @@ export function clientStep(id: ClientStepId): ClientStep {
       return { id, title: '', body: [], anchors: [], placement: 'top' };
     default: {
       const bar = BAR[id];
-      if (bar) return { id, get title() { return $t('tour.text.quickBar'); }, body: [bar.body], anchors: [bar.anchor], labels: [bar.label], placement: 'centre' };
+      // Settings reflow (11-03): the telestrator exists only where Settings > UI "Telestrator" allows it (by default the
+      // replay viewer, not the demo match): its launcher is an optional anchor - the card shows without the arrow.
+      if (bar) return { id, get title() { return $t('tour.text.quickBar'); }, body: [bar.body], anchors: [bar.anchor], labels: [bar.label], optional: bar.anchor === 'hud-telestrator' ? [bar.anchor] : undefined, placement: 'centre' };
       const tab = id.slice('settings-'.length) as SettingsTab;
       return { id, get title() { return $t('tour.text.settings'); }, body: [SETTINGS_LINES[tab]], anchors: [`settings-tab-${tab}`], placement: 'dock-settings', settingsTab: tab };
     }

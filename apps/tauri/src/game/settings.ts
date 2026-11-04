@@ -14,7 +14,7 @@ import { STICK_DEADZONE, clampDeadzone } from './gamepad';
 import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
 import { DEFAULT_SPECTATOR_VIEW, normalizeSpectatorView, type SpectatorView } from './spectatorView';
 import { CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
-import { $t, normalizeLocale, type Locale } from '../i18n';
+import { $t, mapLegacyEnglish, normalizeLocale, systemLanguageTags, type Locale } from '../i18n';
 
 /**
  * App settings, persisted to localStorage (works in the web preview and the
@@ -100,7 +100,100 @@ const REBINDABLE_ACTION: Record<RebindableKey, ControlActionId> = { confirmKey: 
 /** Owner 10-20: coach rank badge art set. */
 export type CoachBadgeStyle = 'realistic' | 'retro';
 
-export interface AppSettings extends ConfirmationSettings {
+// =====================================================================================================================
+// SETTINGS REFLOW - NEW FEATURES (lane C, spec-settings-reflow-2026-11-03.md section 2). ONE block: the keys, their
+// defaults, the load-merge validation and the one-time migration. Rows: docs/artifact-orchestration/
+// settings-features-rows.md (the descriptors live in game/settingsFeatureRows.ts). The Super FUMBBL cursor toggle
+// reuses the existing `useFantasyCursor` key (no new key: the stored value carries over).
+// =====================================================================================================================
+export type TelestratorMode = 'replays' | 'all' | 'off';
+export const TELESTRATOR_MODES: readonly TelestratorMode[] = ['replays', 'all', 'off'];
+export type TurnClockWarning = '2m' | '1m' | '30s' | 'off';
+export const TURN_CLOCK_WARNINGS: readonly TurnClockWarning[] = ['2m', '1m', '30s', 'off'];
+/** Edge-of-screen pan speed, screen px per frame at full glide (the WASD scale: renderer setPanSpeed clamps 2-30). */
+export const EDGE_PAN_SPEED = { min: 4, max: 30, step: 2, default: 12 } as const;
+/** UI zoom, percent of the normal interface size. */
+export const UI_ZOOM = { min: 80, max: 150, step: 5, default: 100 } as const;
+/** Bump to re-run the one-time migration below for every install (each step must stay idempotent). */
+export const REFLOW_FEATURES_MIGRATION = 1;
+
+export interface SettingsReflowFeatures {
+  /** Edge-of-screen panning: the camera glides while the pointer rests at the pitch edge (default off). */
+  edgePan: boolean;
+  edgePanSpeed: number;
+  /** Where the telestrator exists: the replay viewer only (default), every game, or nowhere. */
+  telestratorMode: TelestratorMode;
+  /** Interface zoom in percent (80-150). Scales the client interface; the pitch keeps its own camera. */
+  uiZoom: number;
+  highContrast: boolean;
+  /** Shorter / no decorative animation. Never touches the roll-beat hold or any server-paced timing. */
+  reduceMotion: boolean;
+  /** No strobing or rapid flashing effects. */
+  reduceFlashing: boolean;
+  /** A short on-screen label whenever a sound cue plays. */
+  visualSoundCues: boolean;
+  /** Bigger hit areas for small HUD buttons and chips. */
+  largerTargets: boolean;
+  /** When my turn clock warns before the last-seconds countdown (the countdown itself is unchanged). */
+  turnClockWarning: TurnClockWarning;
+  /** REFLOW_FEATURES_MIGRATION of the stored blob (0 = before these settings existed). */
+  reflowFeaturesMigrated: number;
+}
+
+export const REFLOW_FEATURE_DEFAULTS: SettingsReflowFeatures = {
+  edgePan: false,
+  edgePanSpeed: EDGE_PAN_SPEED.default,
+  telestratorMode: 'replays', // owner 11-03: "force this on for all players" - migrated onto every install once
+  uiZoom: UI_ZOOM.default,
+  highContrast: false,
+  reduceMotion: false,
+  reduceFlashing: false,
+  visualSoundCues: false,
+  largerTargets: false,
+  turnClockWarning: '1m', // today's one-minute warning
+  reflowFeaturesMigrated: REFLOW_FEATURES_MIGRATION,
+};
+
+function snapNumber(value: unknown, range: { min: number; max: number; step: number; default: number }): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return range.default;
+  const snapped = Math.round((value - range.min) / range.step) * range.step + range.min;
+  return Math.min(range.max, Math.max(range.min, snapped));
+}
+export function clampEdgePanSpeed(value: unknown): number { return snapNumber(value, EDGE_PAN_SPEED); }
+export function clampUiZoom(value: unknown): number { return snapNumber(value, UI_ZOOM); }
+
+/**
+ * Load-merge validation of the block above, plus the one-time migration (marker `reflowFeaturesMigrated`):
+ *  - telestratorMode becomes 'replays' for EVERY existing install once (owner 11-03); a later pick ('all' / 'off') is
+ *    kept because the stamped marker stops the step from running again.
+ *  - turnClockWarning replaces the "Turn clock 1 minute" sound toggle (soundStyles.turnClockMinute): a coach who had
+ *    it off gets 'off' (the warning tones stay silent, exactly as before) and the old toggle entry is retired so the
+ *    select alone decides from now on.
+ * `raw` is the stored blob; `merged` already holds DEFAULTS + raw with soundStyles validated. Mutates `merged`.
+ */
+export function normalizeReflowFeatures(raw: Partial<SettingsReflowFeatures>, merged: SettingsReflowFeatures & { soundStyles: Record<string, string> }): void {
+  merged.edgePan = raw.edgePan === true;
+  merged.edgePanSpeed = clampEdgePanSpeed(raw.edgePanSpeed);
+  merged.telestratorMode = TELESTRATOR_MODES.includes(raw.telestratorMode as TelestratorMode) ? raw.telestratorMode as TelestratorMode : REFLOW_FEATURE_DEFAULTS.telestratorMode;
+  merged.uiZoom = clampUiZoom(raw.uiZoom);
+  merged.highContrast = raw.highContrast === true;
+  merged.reduceMotion = raw.reduceMotion === true;
+  merged.reduceFlashing = raw.reduceFlashing === true;
+  merged.visualSoundCues = raw.visualSoundCues === true;
+  merged.largerTargets = raw.largerTargets === true;
+  merged.turnClockWarning = TURN_CLOCK_WARNINGS.includes(raw.turnClockWarning as TurnClockWarning) ? raw.turnClockWarning as TurnClockWarning : REFLOW_FEATURE_DEFAULTS.turnClockWarning;
+  const migrated = typeof raw.reflowFeaturesMigrated === 'number' && Number.isFinite(raw.reflowFeaturesMigrated) ? raw.reflowFeaturesMigrated : 0;
+  if (migrated < 1) {
+    merged.telestratorMode = 'replays';
+    if (merged.soundStyles.turnClockMinute === 'off') merged.turnClockWarning = 'off'; // the old silence, mapped once
+  }
+  // Sol r1: the retired toggle's entry goes on EVERY load (sounds.ts never reads it either): the select decides.
+  delete merged.soundStyles.turnClockMinute;
+  merged.reflowFeaturesMigrated = Math.max(migrated, REFLOW_FEATURES_MIGRATION);
+}
+// ============================================ end of SETTINGS REFLOW - NEW FEATURES ==================================
+
+export interface AppSettings extends ConfirmationSettings, SettingsReflowFeatures {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
   /** Owner 10-02: toggles the Helmet roster pop-out (KeyboardEvent.code; default H). */
@@ -438,11 +531,22 @@ export interface AppSettings extends ConfirmationSettings {
   /** Owner 10-23 (Astra r1): the user picked `language` explicitly (the setup wizard's Language card or the Settings
    *  dropdown, English included). Until then the wizard may adopt the system language - and only on a fresh install. */
   languageChosen: boolean;
+  /** Owner 11-03: English split into English (US) `en` and English (UK) `en-GB`. True once a stored legacy `en` has been
+   *  mapped onto its variant (i18n/englishVariant.ts mapLegacyEnglish) - so the mapping runs once per install and a
+   *  later explicit English (US) pick is never re-mapped. A fresh install starts settled (the setup wizard detects). */
+  englishVariantSettled: boolean;
   /** UI theme engine (owner 2026-07-14, spec black-red-ui-scheme.md): a preset or a custom Primary/Secondary
    *  pair drives the derived `--ui-*` token set (Settings → Accessibility). Default = the Black/Red headline. */
   uiTheme: 'brand-red' | 'fumbbl' | 'custom';
   uiPrimary: string;
   uiSecondary: string;
+  /** Owner 11-03 (spec-client-restyle-and-team-port): interface style of the menu blades. 'modern' (default, new and
+   *  existing installs) = the League Manager look (styles/lm-theme.css, opted into per blade with the `.sf-lm` class);
+   *  'retro' = today's look. In-game HUD and Classic are unaffected. */
+  uiStyle: 'modern' | 'retro';
+  /** Owner 11-03: Modern's colour scheme. 'dark' (default) or 'light' (the League Manager's derived light values).
+   *  Separate from `uiTheme` (the colour preset), which still recolours Modern's accents (game/lmTheme.ts). */
+  uiColorScheme: 'dark' | 'light';
   /** Show the on-pitch row-number markers (2/4/6/8/10/12). */
   showRowMarkers: boolean;
   /** Show the midfield sweet-spot crosshair markers. */
@@ -828,6 +932,7 @@ const DEFAULTS: AppSettings = {
   colorblindMode: 'off',
   language: 'en',
   languageChosen: false,
+  englishVariantSettled: true,
   uiTheme: 'brand-red',
   uiPrimary: '#A10005',
   uiSecondary: '#000000',
@@ -875,6 +980,8 @@ const DEFAULTS: AppSettings = {
   // surfaces out of the box; the coach opts each one into auto-fire. (Dodge auto lives in dodgeReroll above.)
   autoUseSkills: { fend: false, standFirm: false, tackle: false, sidestep: false, taunt: false },
   uiMode: 'fumbbl40k', // owner 2026-07-08 (FC): current UI is the default
+  uiStyle: 'modern', // owner 11-03: the League Manager look by default; Retro keeps today's look
+  uiColorScheme: 'dark', // owner 11-03: dark by default, light is opt-in
   modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
   classicEffects: false, // owner 2026-07-08 (FC-D3): classic is effects-off by default
   savedSetupPreviews: {},
@@ -893,6 +1000,7 @@ const DEFAULTS: AppSettings = {
   hideCredsSplash: false, // owner 08-18: opt-out checkbox on the setup splash
   hideWelcomeSplash: true, // owner 2026-07-04: welcome splash deprecated at launch (still in the build; re-enable via Settings → Connection / "Replay the intro screens")
   hideTutorialSplash: true, // owner 2026-07-14: getting-started tour off by default too (needs revising; re-enable via Settings → Connection / "Replay the intro screens")
+  ...REFLOW_FEATURE_DEFAULTS, // Settings reflow lane C: the new-features block (above AppSettings)
   settingsVersion: SETTINGS_VERSION,
 };
 
@@ -914,6 +1022,14 @@ export const BACKDROP_OPTIONS: readonly { value: BackdropSetting; label: string 
   { value: 'parking', get label() { return $t('settings.backdropOptions.nightParkingLot'); } },
   { value: 'color', get label() { return $t('settings.backdropOptions.plainColour'); } },
 ];
+/** Owner 11-03: interface style; anything but an explicit 'retro' is the Modern default. */
+export function normalizeUiStyle(value: unknown): AppSettings['uiStyle'] {
+  return value === 'retro' ? 'retro' : 'modern';
+}
+/** Owner 11-03: Modern colour scheme; anything but an explicit 'light' is the dark default. */
+export function normalizeUiColorScheme(value: unknown): AppSettings['uiColorScheme'] {
+  return value === 'light' ? 'light' : 'dark';
+}
 export function normalizeBackdrop(value: unknown): BackdropSetting {
   return BACKDROP_OPTIONS.some((o) => o.value === value) ? value as BackdropSetting : 'skybox';
 }
@@ -1105,6 +1221,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       raw.rosterOpacity === undefined ? raw.logOpacity : merged.rosterOpacity,
       DEFAULTS.rosterOpacity,
     );
+    merged.uiStyle = normalizeUiStyle(raw.uiStyle); // owner 11-03: missing / unknown -> 'modern'
+    merged.uiColorScheme = normalizeUiColorScheme(raw.uiColorScheme); // owner 11-03: missing / unknown -> 'dark'
     merged.spectatorView = normalizeSpectatorView(raw.spectatorView); // owner 10-11: missing / unknown -> 'drive' (today's view)
     merged.modernHudStyle = raw.modernHudStyle === 'chrome' ? 'chrome' : 'minimalist'; // owner 10-05: a stored chrome pick is kept; everything else is minimalist
     // Current-version blobs bypass migrations, so malformed video values must be
@@ -1118,6 +1236,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.soundStyles = raw.soundStyles && typeof raw.soundStyles === 'object' && !Array.isArray(raw.soundStyles)
       ? Object.fromEntries(Object.entries(raw.soundStyles).filter(([key, value]) => key.length > 0 && typeof value === 'string'))
       : { ...DEFAULTS.soundStyles };
+    normalizeReflowFeatures(raw, merged); // Settings reflow lane C: validation + one-time migration (after soundStyles)
     const dataUrlMap = (value: unknown, validKey: (key: string) => boolean): Record<string, string> =>
       value && typeof value === 'object' && !Array.isArray(value)
         ? Object.fromEntries(Object.entries(value).filter(([key, entry]) => validKey(key)
@@ -1539,18 +1658,31 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if (merged.activeServerTarget === 'fork' && !merged.forkUrlCustom) merged.url = derivedForkUrl;
     // Owner 09-10: public edition — wire log file always on (bug reports carry it), developer panel never shown.
     if (!FORK_EDITION) { merged.wireLog = true; merged.devPanelOpen = false; }
-    if (!FORK_EDITION) merged.uiMode = 'fumbbl40k'; // owner 09-12: FUMBBL Classic is fork-edition only
+    // Owner 11-03 settings reflow: Classic is descoped (its UI mode row is gone from Settings in every edition), so no
+    // run can be left in a mode it has no way back out of. (Was: owner 09-12, Classic fork-edition only.)
+    merged.uiMode = 'fumbbl40k';
+    // Owner 11-03: LZ-String compression is always on (upstream FFB and FUMBBL both use it); its row is gone.
+    merged.compression = true;
+    // Owner 11-03: the "Log bottom-left, Quick bar bottom-right" row is gone; the layout is always the default one.
+    merged.bottomBarsSwapped = DEFAULTS.bottomBarsSwapped;
     merged.casualtySplash = false; // owner 09-10: toggle cut from Settings; the token-anchored toast carries casualties
     // Owner 09-10: the legacy red-green accent remap becomes the deuteranopia filter; anything unknown → off.
     if ((merged.colorblindMode as string) === 'redgreen') merged.colorblindMode = 'deuteranopia';
     if (!['off', 'deuteranopia', 'protanopia', 'tritanopia'].includes(merged.colorblindMode)) merged.colorblindMode = 'off';
     merged.language = normalizeLocale(merged.language); // owner 10-23: unknown / missing -> English
     merged.languageChosen = merged.languageChosen === true; // Astra r1: only an explicit pick sets it
+    // Owner 11-03: a blob saved before English split into US / UK stored `en` for "English": it now means English (US),
+    // or English (UK) when the system's first English preference is a UK-family region. Once per install.
+    if (rawText !== null && raw.englishVariantSettled !== true) merged.language = mapLegacyEnglish(merged.language, systemLanguageTags());
+    merged.englishVariantSettled = true;
     // stamp any migration immediately so it runs ONCE (not every launch) and a
     // later user change to these keys sticks. rawText===null means NO blob was readable — a
     // fresh install needs no migration, and a transiently-null read of an EXISTING blob must
     // not let this stamp write DEFAULTS over it (the no-exception variant of the P1 wipe).
-    if (stampToLocalStorage && rawText !== null && (raw.settingsVersion ?? 0) < SETTINGS_VERSION
+    // Owner 11-03 (Sol r1 #3): the English-variant mapping is a migration too: stamp it even on a current-version blob,
+    // so it runs once and is not recomputed on every launch until some other setting happens to be saved.
+    if (stampToLocalStorage && rawText !== null
+      && ((raw.settingsVersion ?? 0) < SETTINGS_VERSION || raw.englishVariantSettled !== true)
       && !v26UserOverrideMigrationPending) {
       // Keep the legacy clear-text password in the blob until credentials.ts confirms the keychain
       // write — a migration stamp must not be the thing that loses it.

@@ -57,7 +57,7 @@ import {
   worldWidth,
   isWorldPointOnPitch,
 } from './geometry';
-import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
+import { baseState, blockedDecoration, hasFlag, hasTackleZones, isDown, isPinned, rendersOnPitch, PlayerStateBase, PlayerStateFlag } from './playerState';
 import { markerAnchorFor, type MarkerSpriteSet } from './markerAnchor';
 import { eyeGougeRingColor, eyeGougeSizeBoost, type EyeGougeFit } from './eyeGougeRing';
 
@@ -152,6 +152,7 @@ import { ACTION_DIE_TUMBLE_MS, nextTumbleFace, type ActionDiceLayer, type Action
 import { presentationMs, setPresentationMode as configurePresentationMode, type PresentationMode } from './presentationTiming';
 import { SQUARE_MARK_LABEL_MAX_CHARS, playerMarkLabelScale, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
+import { compensateUiZoom, rebaseCameraTransform, viewCenterWorld, type CameraView, type WorldPoint } from './uiZoomCamera';
 import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { CROSSHAIR_GLIDE_MS, RAIL_COLOR, crosshairTargetKey, easeOutCubic, railLanes, type PitchCrosshairTarget } from './crosshairRail';
 import { rushTargetForPlayer } from './rushTarget';
@@ -3830,7 +3831,8 @@ export class PitchRenderer {
   /** True while the coach's manual camera input owns the camera and the director holds its follow. */
   autoDirectorManualHoldActive(now = performance.now()): boolean {
     return now < this.adManualUntil || this.dragging || this.pointers.size > 1 || this.crosshairTarget !== null
-      || this.panDir.x !== 0 || this.panDir.y !== 0 || this.panVel.x !== 0 || this.panVel.y !== 0;
+      || this.panDir.x !== 0 || this.panDir.y !== 0 || this.panVel.x !== 0 || this.panVel.y !== 0
+      || this.edgePanDir.x !== 0 || this.edgePanDir.y !== 0;
   }
 
   /** The effective manual-hold state as last raised through onAutoDirectorManualHoldChange (seed a listener from this). */
@@ -5394,15 +5396,9 @@ export class PitchRenderer {
     // why"). Only refit when the view is still AT THE FIT (untouched — world.scale ≈ the fit reference). Once
     // the coach has zoomed in (scale diverged), PRESERVE their zoom/pan on resize: just redraw the backdrop +
     // rescale overlays. Explicit refits (first layout, new game, orientation/flat/flip toggles) still reset.
-    this.onRendererResize = () => {
-      if (!this.app) return;
-      // owner 08-27 (1080p-maximize bug): a diverged camera keeps its zoom/pan on resize, but the held POSITION
-      // was legal for the OLD screen — keepOrRefitCamera re-legalises it against the new bounds (and refreshes
-      // the fit reference so the wheel can still zoom out to the new fit).
-      this.drawBackdrop();
-      this.keepOrRefitCamera();
-    };
+    this.onRendererResize = () => this.handleRendererResize();
     app.renderer.on('resize', this.onRendererResize);
+    this.noteScreen();
 
     try {
       await loadSprites();
@@ -5719,8 +5715,9 @@ export class PitchRenderer {
     // pan direction's velocity and decelerates to a stop on release — replacing the
     // old instant 45px tile-shift per keypress.
     app.ticker.add(() => {
-      const targetX = this.panDir.x * this.panSpeedPx; // px/frame at full glide (Settings > Controls, 09-05)
-      const targetY = this.panDir.y * this.panSpeedPx;
+      // Settings reflow (11-03): the edge-of-screen pan rides the same glide at its own speed, added to the keys'.
+      const targetX = this.panDir.x * this.panSpeedPx + this.edgePanDir.x * this.edgePanSpeedPx; // px/frame at full glide (Settings > Controls, 09-05)
+      const targetY = this.panDir.y * this.panSpeedPx + this.edgePanDir.y * this.edgePanSpeedPx;
       this.panVel.x += (targetX - this.panVel.x) * 0.18; // ease-in / decelerate
       this.panVel.y += (targetY - this.panVel.y) * 0.18;
       if (Math.abs(this.panVel.x) < 0.05) this.panVel.x = 0;
@@ -5911,7 +5908,8 @@ export class PitchRenderer {
     app.ticker.add(() => {
       const focus = this.cameraFocus;
       if (!focus || !this.app || this.cinematic) { if (focus && this.cinematic) this.cameraFocus = null; return; }
-      const t = Math.min(1, (performance.now() - focus.start) / focus.ms);
+      // Settings reflow (Sol r1): reduced motion snaps the eased focus pan (same end state, no glide).
+      const t = this.reducedMotion ? 1 : Math.min(1, (performance.now() - focus.start) / focus.ms);
       const e = 1 - (1 - t) * (1 - t);
       const scale = focus.fromScale + (focus.toScale - focus.fromScale) * e;
       const cx = this.app.screen.width / 2 - focus.target.x * focus.toScale;
@@ -5943,7 +5941,10 @@ export class PitchRenderer {
         y: this.app!.screen.height / 2 - target.y * scale,
       });
       const elapsed = performance.now() - cine.start;
-      const ease = (t: number) => 1 - (1 - t) * (1 - t);
+      // Settings reflow (Sol r1): under reduced motion the zoom-in / zoom-out interpolation SNAPS (ease = 1 at once):
+      // the camera sits on the target for the whole in + hold window and back home for the whole out window, so every
+      // phase boundary, the hold and the cinematic's completion time are exactly as before - only the glide is gone.
+      const ease = (t: number) => (this.reducedMotion ? 1 : 1 - (1 - t) * (1 - t));
       if (elapsed < CINE_IN) {
         const t = ease(elapsed / CINE_IN);
         const scale = cine.savedScale + (zoomScale - cine.savedScale) * t;
@@ -8721,10 +8722,14 @@ export class PitchRenderer {
     if (!data) return null;
     const player = [...this.game.teamHome.playerArray, ...this.game.teamAway.playerArray].find((p) => p.playerId === playerId);
     if (!player) return null;
+    used = Number.isFinite(used) ? Math.max(0, used) : 0;
+    // Owner 11-03: a pinned player (failed Take Root, or Chomped) cannot leave its square (upstream
+    // PlayerState.isPinned; StepMove refuses it and the server publishes no move squares). Zero budget: no reach, no
+    // auto / extended / contact path. o66PathToContact still answers [] beside the target (the block stays legal).
+    if (isPinned(Number(data.playerState ?? 0))) return { from: [from[0], from[1]], normal: 0, rushes: 0, used };
     let normal = this.safeMovement(player);
     if (isDown(data.playerState)) normal = Math.max(0, normal - 3); // stand up costs 3
     const baseNormal = normal; // MA after stand-up, BEFORE subtracting steps taken (drives the rush-used count)
-    used = Number.isFinite(used) ? Math.max(0, used) : 0;
     // W27: On-the-Ball reactions have their own fixed allowance. Upstream UtilPlayer.hasMoveLeft uses
     // currentMove < 3 for PASS_BLOCK/KICKOFF_RETURN and isNextMoveGoingForIt returns false in both modes.
     // Keep this branch after the shared player/from/used reads but before every regular MA/rush calculation:
@@ -8767,6 +8772,8 @@ export class PitchRenderer {
   o66Reach(playerId: string, plannedRoute: readonly Square[] = []): { from: Square; squares: Square[]; rush: Square[]; normal: number } | null {
     const b = this.o66MovementBudget(playerId);
     if (!b) return null;
+    // Owner 11-03: a pinned mover's stale plotted squares are not offers either (no budget, nothing to confirm).
+    if (b.normal + b.rushes === 0) return { from: b.from, squares: [], rush: [], normal: 0 };
     return this.o66ReachFromBudget(playerId, b, plannedRoute);
   }
 
@@ -9336,6 +9343,8 @@ export class PitchRenderer {
   private static HAND_CURSOR =
     'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'26\' height=\'26\'><text x=\'2\' y=\'20\' font-size=\'18\'>✋</text></svg>") 12 12, pointer';
   private actionCursorFor(mode: 'foul' | 'handoff' | 'pass'): string {
+    // Settings reflow (owner 11-03): "Use the Super FUMBBL cursor" off = system cursors for the action art too.
+    if (!this.fantasyCursorEnabled) return mode === 'handoff' ? 'pointer' : 'crosshair';
     if (mode === 'foul') return PitchRenderer.SKULL_CURSOR;
     if (mode === 'handoff') return PitchRenderer.HAND_CURSOR;
     return 'crosshair';
@@ -10742,7 +10751,7 @@ export class PitchRenderer {
     const tick = () => {
       const t = (performance.now() - start) / life;
       if (t >= 1 || this.app !== app) { cleanup(); return; }
-      flash.alpha = 0.9 * (1 - t);
+      flash.alpha = this.flashPeak(0.9) * (1 - t);
       flash.scale.set(0.6 + t * 0.8);
     };
     cleanup = this.registerEffectTicker(app, tick, [flash]);
@@ -12270,16 +12279,20 @@ export class PitchRenderer {
     canvas.style.cursor = this.pointerHidden ? 'none' : cursor;
   }
 
-  /** Toggle generic cursor art while retaining semantic action cursors. */
+  /** Settings > UI > Cursor "Use the Super FUMBBL cursor" (settings.useFantasyCursor): the Spike gauntlet, its primed
+   *  form and the foul / hand-off action art; off = the system cursors (default / pointer / crosshair). */
   setFantasyCursorEnabled(enabled: boolean): void {
     if (this.fantasyCursorEnabled === enabled) return;
     this.fantasyCursorEnabled = enabled;
     const canvas = this.app?.canvas;
     if (!canvas) return;
-    if (canvas.style.cursor === SPIKE_CURSOR || canvas.style.cursor === 'default') {
+    const now = canvas.style.cursor;
+    if (now === SPIKE_CURSOR || now === 'default') {
       canvas.style.cursor = this.restingCursor();
-    } else if (canvas.style.cursor === SPIKE_CURSOR_PRIMED || canvas.style.cursor === 'pointer') {
+    } else if (now === SPIKE_CURSOR_PRIMED || now === 'pointer') {
       canvas.style.cursor = this.primedCursor();
+    } else if (!enabled && (now === PitchRenderer.SKULL_CURSOR || now === PitchRenderer.HAND_CURSOR)) {
+      canvas.style.cursor = now === PitchRenderer.HAND_CURSOR ? 'pointer' : 'crosshair'; // the next hover re-derives it
     }
   }
 
@@ -12824,6 +12837,24 @@ export class PitchRenderer {
     this.panDir.y = Math.max(-1, Math.min(1, Number.isFinite(dy) ? dy : 0));
   }
 
+  /** Settings reflow (owner 11-03): edge-of-screen panning. The view sets the direction (-1 / 0 / +1 per axis, the
+   *  WASD convention: +x = content moves right = the view looks left) while the pointer rests at a pitch edge and
+   *  clears it when the pointer leaves the edge, a menu opens or the window loses focus. It is the same glide as the
+   *  keys (ticker above, clampCamera at the pitch edge) at its own speed, a manual camera input exactly like a held
+   *  key (the auto director holds its follow; a cinematic's tween wins unless the controller release is on). */
+  private edgePanDir = { x: 0, y: 0 };
+  private edgePanSpeedPx = 12;
+  setEdgePanSpeed(pxPerFrame: number): void { this.edgePanSpeedPx = Math.min(30, Math.max(2, pxPerFrame || 12)); }
+  setEdgePanDirection(dx: number, dy: number): void {
+    const x = Math.max(-1, Math.min(1, Number.isFinite(dx) ? Math.sign(dx) : 0));
+    const y = Math.max(-1, Math.min(1, Number.isFinite(dy) ? Math.sign(dy) : 0));
+    if (x === this.edgePanDir.x && y === this.edgePanDir.y) return;
+    if (x !== 0 || y !== 0) { if (this.app && this.padCameraRelease) this.releaseCinematicForUser(); this.noteManualCameraInput(); }
+    else this.noteManualCameraInput(); // the glide ends: the director's manual hold runs from here, as after a key's last repeat
+    this.edgePanDir.x = x;
+    this.edgePanDir.y = y;
+  }
+
   /** Accessibility (owner 2026-07-03 r4): toggle the on-field row markers, the
    *  sweet-spot crosshairs, and the faded on-field team logos. */
   setFieldMarkers(opts: { rowMarkers?: boolean; sweetSpot?: boolean; fieldLogos?: boolean; rowNumberRails?: boolean }): void {
@@ -13072,7 +13103,7 @@ export class PitchRenderer {
     const scale = (options.renderScale && options.renderScale > 0 ? options.renderScale : 1) * dpr;
     if (this.app.renderer.resolution !== scale) {
       this.app.renderer.resolution = scale;
-      this.resize();
+      this.resize({ preserveCamera: true }); // Sol r7: never the default-view reset of a fit camera
       this.requantizeZoom();
     }
     // Owner 10-13: always bounded. Callers resolve 'display' to a number; a stray string/0/NaN (e.g. Classic) gets 60.
@@ -14751,7 +14782,7 @@ export class PitchRenderer {
       const t = (performance.now() - start) / life;
       if (t >= 1 || this.app !== app) { cleanup(); return; }
       bolt.alpha = t < 0.3 ? 1 : 1 - (t - 0.3) / 0.7;
-      flash.alpha = 0.85 * (1 - t);
+      flash.alpha = this.flashPeak(0.85) * (1 - t);
       flash.scale.set(1 + t * 0.6);
     };
     cleanup = this.registerEffectTicker(app, tick, [bolt, flash], finishEffect);
@@ -16949,10 +16980,126 @@ export class PitchRenderer {
     if (this.actionDice3d && die.id !== undefined && die.value !== undefined) this.actionDice3d.tumble(die.id, die.value, Math.max(1, ms), now, startAt - now);
   }
 
+  /** Pixi's 'resize' (host / viewport size or devicePixelRatio changed). */
+  private rendererResizeEvents = 0;
+  private handleRendererResize(): void {
+    if (!this.app) return;
+    this.rendererResizeEvents += 1;
+    // Settings reflow (Sol r5): if the page zoom in effect now differs from the one the camera was laid out under,
+    // snapshot the camera as it stood on the OLD screen, before keepOrRefitCamera touches it.
+    const anchor = this.uiZoomAnchorForResize();
+    // owner 08-27 (1080p-maximize bug): a diverged camera keeps its zoom/pan on resize, but the held POSITION
+    // was legal for the OLD screen — keepOrRefitCamera re-legalises it against the new bounds (and refreshes
+    // the fit reference so the wheel can still zoom out to the new fit).
+    this.drawBackdrop();
+    // Sol r7: a resize that changed neither the CSS screen nor the page zoom (a resolution / renderScale change, a
+    // devicePixelRatio change of the backing store only) leaves the camera exactly as it is: keepOrRefitCamera would
+    // read a camera at the stadium fit as untouched and reset it to the default view.
+    const sameScreen = !!this.lastScreen && this.lastScreen.w === this.app.screen.width && this.lastScreen.h === this.app.screen.height;
+    if (anchor || !sameScreen) this.keepOrRefitCamera();
+    if (anchor) this.applyUiZoomCompensation(anchor);
+    this.noteScreen();
+  }
+
+  // ---- Settings reflow (Sol r3-r5): UI zoom never zooms the pitch ----------------------------------------------
+  /**
+   * STATE, not events (Sol r5). The renderer keeps `layoutUiZoom`, the page zoom its camera was last laid out under.
+   * On every resize it reads the page zoom IN EFFECT and, when that differs, compensates the camera (and every saved
+   * camera) by layout / current once, then records it. Any number of queued, cancelled or coalesced requests collapse
+   * into one correct compensation on whichever resize finally lands; a refused request never resizes the page.
+   *
+   * The page zoom in effect - one source of truth, the shell's own state (game/uiZoom.ts, read through the view):
+   *  - no native call in flight: the CONFIRMED factor (`applied`). This is also where the OS part of the DPR is learnt
+   *    (`osDpr = devicePixelRatio / applied`), so a monitor change (DPR moves, zoom does not) compensates nothing;
+   *  - a native call in flight (its resize can land before its confirmation): devicePixelRatio / osDpr, the zoom the
+   *    page actually has right now. (A monitor change landing inside that one call's few ms would read as zoom.)
+   * Why not the DPR alone: it cannot tell a page zoom from another monitor. Why not the confirmation alone: it can lag
+   * the resize, and then the camera would already have been laid out on the new screen.
+   */
+  private uiZoomSource: (() => { applied: number; inFlight: boolean }) | null = null;
+  private layoutUiZoom = 1;
+  private osDpr = globalThis.devicePixelRatio ?? 1;
+  private lastScreen: { w: number; h: number } | null = null;
+  private noteScreen(): void {
+    if (!this.app) return;
+    this.lastScreen = { w: this.app.screen.width, h: this.app.screen.height };
+  }
+  /** The view, at mount: where the page zoom comes from. The camera is laid out under the confirmed zoom now. */
+  setUiZoomSource(source: (() => { applied: number; inFlight: boolean }) | null): void {
+    this.uiZoomSource = source;
+    const now = source?.();
+    if (!now || !(now.applied > 0)) return;
+    this.layoutUiZoom = now.applied;
+    this.osDpr = (globalThis.devicePixelRatio ?? 1) / now.applied;
+  }
+  /** The page zoom in effect right now (see above); null without a source. */
+  private pageUiZoomNow(): number | null {
+    const src = this.uiZoomSource?.();
+    if (!src || !(src.applied > 0)) return null;
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    if (!src.inFlight) { this.osDpr = dpr / src.applied; return src.applied; }
+    return this.osDpr > 0 ? dpr / this.osDpr : src.applied;
+  }
+  private uiZoomAnchorForResize(): { from: number; to: number; center: WorldPoint; scale: number; wasFit: boolean; screen: { w: number; h: number } } | null {
+    const to = this.pageUiZoomNow();
+    if (to === null || !this.lastScreen || Math.abs(to - this.layoutUiZoom) < 1e-6) return null;
+    const from = this.layoutUiZoom;
+    this.layoutUiZoom = to; // idempotent: the next resize under the same zoom compensates nothing
+    const scale = this.world.scale.x;
+    return {
+      from, to, scale, screen: { ...this.lastScreen },
+      center: viewCenterWorld({ scale, x: this.world.position.x, y: this.world.position.y }, this.lastScreen.w, this.lastScreen.h),
+      wasFit: Math.abs(scale - this.cameraFitScale) <= this.cameraFitScale * 0.02,
+    };
+  }
+  /** Put the camera - and every owner holding a camera transform to return to (cinematic, focus tween, kick follow) -
+   *  back on its physical scale and centre for the new page zoom (a camera at the fit: at the new fit). */
+  private applyUiZoomCompensation(anchor: NonNullable<ReturnType<PitchRenderer['uiZoomAnchorForResize']>>): void {
+    if (!this.app) return;
+    const next = { w: this.app.screen.width, h: this.app.screen.height };
+    const rebase = (t: CameraView): CameraView => rebaseCameraTransform(t, anchor.screen, next, anchor.from, anchor.to);
+    const cine = this.cinematic;
+    if (cine) {
+      const v = rebase({ scale: cine.savedScale, x: cine.savedX, y: cine.savedY });
+      cine.savedScale = v.scale; cine.savedX = v.x; cine.savedY = v.y;
+    }
+    const focus = this.cameraFocus;
+    if (focus) {
+      const v = rebase({ scale: focus.fromScale, x: focus.fromX, y: focus.fromY });
+      focus.fromScale = v.scale; focus.fromX = v.x; focus.fromY = v.y;
+      focus.toScale *= anchor.from / anchor.to;
+    }
+    const kick = this.kickFollow;
+    if (kick) {
+      const saved = rebase({ scale: anchor.scale, x: kick.savedX, y: kick.savedY });
+      kick.savedX = saved.x; kick.savedY = saved.y;
+      const from = rebase({ scale: anchor.scale, x: kick.fromX, y: kick.fromY });
+      kick.fromX = from.x; kick.fromY = from.y;
+    }
+    // Sol r6: EVERY camera keeps its view, the stadium fit included. (keepOrRefitCamera's reset of an untouched camera
+    // lands on the DEFAULT view - the 2x rung - not the fit, so relying on it made a fit camera jump 1 -> 2 physical
+    // and stay there after Cancel.) A camera AT the fit stays at the fit: the new screen's fit (cameraFitScale, just
+    // recomputed for the new CSS size - the same physical fit up to its CSS-px margin), about the same centre.
+    const view = anchor.wasFit
+      ? compensateUiZoom(anchor.center, this.cameraFitScale, 1, 1, next.w, next.h)
+      : compensateUiZoom(anchor.center, anchor.scale, anchor.from, anchor.to, next.w, next.h);
+    this.world.scale.set(view.scale);
+    this.world.position.set(view.x, view.y);
+    this.updateOverlayScales();
+    this.clampCamera();
+  }
+
   /** Owner 09-14: the view's reduced-motion preference — no dice tumble, results surface immediately. */
   setReducedMotion(on: boolean): void {
     this.reducedMotion = on;
   }
+
+  /** Settings reflow (owner 11-03): Settings > Accessibility "Reduce flashing" - the bright full-screen-ish flashes of a
+   *  Zap strike and the fallback explosion peak at FLASH_REDUCED_PEAK instead (the bolt, smoke and timing unchanged). */
+  private reduceFlashing = false;
+  setReduceFlashing(on: boolean): void { this.reduceFlashing = !!on; }
+  private flashPeak(full: number): number { return this.reduceFlashing ? Math.min(full, PitchRenderer.FLASH_REDUCED_PEAK) : full; }
+  static readonly FLASH_REDUCED_PEAK = 0.3;
 
   /** Owner 09-14: 3D action dice (the block-die cube with d6 faces) over the pitch; PNG faces when off/unavailable. */
   setActionDice3d(enabled: boolean): void {
@@ -18292,8 +18439,17 @@ export class PitchRenderer {
   /** Re-measures the host (layout changes don't fire window resize) and refits — Owner 09-14 ("the auto director
    *  consumes zoom steps"): ONLY while the camera is still at the fit. A coach's wheel zoom survives a HUD panel
    *  or dialog toggling; the pan is re-legalised against the new bounds instead (same rule as onRendererResize). */
-  resize(): void {
+  /** `preserveCamera` (Sol r7): the video-options path (a resolution change, the UI zoom's devicePixelRatio) - ONE camera
+   *  path, handleRendererResize (UI-zoom compensation included; a same-size screen leaves the camera alone). The old
+   *  trailing keepOrRefitCamera read a camera at the stadium fit as "untouched" and reset it to the default 2x view,
+   *  undoing the compensation. Without it (the send-off return's explicit re-legalise) the behaviour is unchanged. */
+  resize(opts?: { preserveCamera?: boolean }): void {
+    const before = this.rendererResizeEvents;
     this.app?.resize();
+    if (opts?.preserveCamera) {
+      if (this.rendererResizeEvents === before) this.handleRendererResize(); // an app that did not emit
+      return;
+    }
     this.drawBackdrop(); // B2-11: screen-space, re-fit to the new viewport
     this.keepOrRefitCamera();
   }

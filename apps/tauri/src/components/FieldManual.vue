@@ -43,9 +43,10 @@ const RAILS = [
 ];
 
 const SETTINGS_STOPS: Array<{ tab: SettingsTab; name: string; blurb: string }> = [
-  { tab: 'general', get name() { return t('fieldManual.settingsStops.declareBlitz'); }, get blurb() { return t('fieldManual.settingsStops.fumbblDefaultBlitzFrom'); } },
-  { tab: 'mods', get name() { return t('fieldManual.settingsStops.art'); }, get blurb() { return t('fieldManual.settingsStops.importF40kmodPacksFor'); } },
-  { tab: 'accessibility', get name() { return t('fieldManual.settingsStops.accessibility2'); }, get blurb() { return t('fieldManual.settingsStops.minimumTextSizeColourblind'); } },
+  // Owner 11-03 settings reflow: Declare Blitz lives in Controls, the pack manager in Mod Packs.
+  { tab: 'controls', get name() { return t('fieldManual.settingsStops.declareBlitz'); }, get blurb() { return t('fieldManual.settingsStops.fumbblDefaultBlitzFrom'); } },
+  { tab: 'modpacks', get name() { return t('fieldManual.settingsStops.modPacks'); }, get blurb() { return t('fieldManual.settingsStops.importF40kmodPacksFor'); } },
+  { tab: 'accessibility', get name() { return t('fieldManual.settingsStops.accessibility2'); }, get blurb() { return t('fieldManual.settingsStops.textSizeFontColourblind'); } },
 ];
 </script>
 

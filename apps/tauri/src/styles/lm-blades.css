@@ -1,0 +1,240 @@
+/* Modern blades (spec-client-restyle-and-team-port-2026-11-03, lane 3): the Play, Spectate and Replay blades and the
+   shared top bar under Settings > Interface style: Modern. Mock-ups: claude.ai/artifact/GxCGbMaHTvebUkgUiqosqC
+   (Spectate, Play, Replay at 1920x1080).
+
+   Every rule sits under `.sf-lm` (the opt-in root from game/lmTheme.ts lmRootClass), so Retro and the in-game HUD
+   never see these rules. Builds on lm-theme.css (tokens, .hm-band, .sf-tabs, .sf-btn, .sf-chip, .sf-input, .sf-table).
+
+   Rule (as lm-theme.css): raw colours appear ONLY inside token blocks (rule blocks that declare nothing but custom
+   properties). test/lmBlades.test.ts enforces it.
+
+   Fit (design.md section 6): at 1920x1080 the page never scrolls; each list scrolls inside its panel. Below 1100 px
+   wide or 720 px tall the panes stack and the page scrolls vertically; never sideways. */
+
+/* ---- tokens: dark (default) and fixed. Team names (owner 11-03) follow the League Manager result card's .rc-name:
+   the bold sans band font, uppercase, white ink with its drop shadow; dark ink with a light edge on the light scheme.
+   Card tints come from game/teamTone.ts (the League Manager race table, game/raceTone.ts). */
+.sf-lm {
+  --sf-team-name-font: var(--sf-band-font);
+  --sf-team-name-ink: #ffffff;
+  --sf-team-name-shadow: 2px 2px 0 rgb(0 0 0 / 80%), 0 0 10px rgb(0 0 0 / .45);
+  --lm-scorebox-fill: rgb(0 0 0 / 0.55);
+  --lm-live-dot: #e33333;
+  --lm-live-halo: rgb(227 51 51 / 0.25);
+}
+/* ---- tokens: light (the name ink and score box read on the pale panel gradient). */
+:root[data-ui-color-scheme="light"] .sf-lm,
+.sf-lm[data-theme="light"] {
+  --sf-team-name-ink: var(--ui-text);
+  --sf-team-name-shadow: 0 1px 0 rgb(255 255 255 / .55);
+  --lm-scorebox-fill: rgb(255 255 255 / 0.55);
+}
+
+/* ---- the blade page: the retired display faces map to the sans inside a Modern blade (components embedded as they
+   are, e.g. the Play coach card, then draw no blackletter-style lettering). */
+.sf-lm.lm-page, .sf-lm.lm-topbar {
+  --font-display: var(--font-heading);
+  --font-graduate: var(--font-heading);
+  --ui-font: var(--font-body);
+}
+.sf-lm.lm-page {
+  box-sizing: border-box; position: relative; flex: 1 1 0; width: 100%; min-height: 0; margin: 0; overflow: hidden;
+  display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 16px; padding: 18px 24px 24px;
+  font-size: 15px; line-height: 1.4; background: var(--ui-secondary);
+}
+.sf-lm .lm-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; }
+.sf-lm .lm-col > .lm-panel { flex: 0 0 auto; }
+.sf-lm .lm-col > .lm-panel.lm-grow { flex: 1 1 0; }
+.sf-lm .lm-col > .lm-panel.lm-share { flex: 0 1 auto; max-height: 46%; }
+.sf-lm .lm-panel.lm-share > .lm-scroll { flex: 0 1 auto; }
+
+/* ---- panel with band heading (design.md section 5), as a flex column so its body can scroll */
+.sf-lm .lm-panel {
+  box-sizing: border-box; display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--ui-text);
+  background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+  border: 2px solid var(--sf-panel-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm .lm-panel > .hm-band { flex: none; align-items: center; margin: 0; padding: 10px 16px 8px; }
+.sf-lm .lm-panel > .hm-band h2 { font-size: 22px; }
+.sf-lm .lm-band-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sf-lm .lm-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px 16px 16px; }
+.sf-lm .lm-panel { overflow: hidden; } /* a panel never scrolls; only a games list inside it may (owner 11-03) */
+/* the games lists (Spectate Live games, Play My active / My recent games, Replay Results): the only vertical scrollers */
+.sf-lm .lm-scroll { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
+/* a body that fills its panel and shows only what fits (Recently watched), never a scrollbar */
+.sf-lm .lm-fill { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.sf-lm .lm-sub-band { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; padding: 6px 4px; border-bottom: 2px solid var(--sf-panel-line); }
+.sf-lm .lm-sub-band h3 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 18px/1.15 var(--sf-band-title-font); color: var(--ui-heading); }
+.sf-lm .lm-muted { margin: 0; color: var(--ui-muted); font-size: 14px; }
+.sf-lm .lm-empty { margin: 0; padding: 14px 0; color: var(--ui-muted); font-size: 15px; }
+.sf-lm .lm-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sf-lm .lm-row > .sf-input { flex: 1 1 auto; min-width: 0; }
+.sf-lm .lm-row.wrap { flex-wrap: wrap; }
+.sf-lm .lm-spacer { flex: 1 1 auto; }
+.sf-lm .sf-btn.gold { color: var(--sf-gold); }
+.sf-lm .lm-link { padding: 0; border: 0; background: none; color: var(--ui-accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.sf-lm .lm-link:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm .lm-live { display: inline-flex; align-items: center; gap: 7px; }
+.sf-lm .lm-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ui-muted); }
+.sf-lm .lm-dot[data-on="true"] { background: var(--lm-live-dot); box-shadow: 0 0 0 3px var(--lm-live-halo); }
+.sf-lm .lm-icon-btn { min-width: 44px; padding: 0 10px; }
+.sf-lm .lm-icon-btn svg { display: block; width: 20px; height: 20px; }
+.sf-lm .lm-kv { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px 12px; align-items: center; margin: 0; }
+.sf-lm .lm-kv dt { font: 11px/1.4 var(--sf-band-font); text-transform: uppercase; letter-spacing: .12em; color: var(--ui-muted); }
+.sf-lm .lm-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* a chip that could carry a long competition name clips with an ellipsis (its full text is the title) */
+.sf-lm .lm-chip-clip { display: block; width: fit-content; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+/* the right column and its panels are sized to their content and never scroll, either way */
+.sf-lm aside.lm-col, .sf-lm aside.lm-col .lm-panel, .sf-lm aside.lm-col .lm-body { min-width: 0; max-width: 100%; overflow: hidden; }
+.sf-lm .lm-big { font: 22px/1.1 var(--font-heading); }
+.sf-lm .lm-well { display: grid; gap: 10px; padding: 12px 14px; border: 2px solid var(--sf-panel-line); border-radius: 2px; background: var(--ui-surface-2); }
+.sf-lm .lm-drop { padding: 18px; border: 2px dashed var(--sf-panel-line); border-radius: 2px; color: var(--ui-muted); text-align: center; font-size: 14px; }
+.sf-lm .lm-drop[data-over="true"] { border-color: var(--ui-heading); color: var(--ui-text); }
+.sf-lm .lm-list-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--sf-panel-line); }
+.sf-lm .lm-list-row > div { flex: 1 1 auto; min-width: 0; }
+.sf-lm .lm-list-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Spectate: one button per live competition over the list (owner 11-03). The row wraps, never scrolls
+   sideways; a long name clips with an ellipsis (its full name is the title). */
+.sf-lm .lm-group-row { flex: none; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; padding: 10px 16px 4px; }
+.sf-lm .lm-group-btn {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; min-height: 30px; box-sizing: border-box; margin: 0; padding: 0 10px;
+  font: 11px/1 var(--sf-band-font); text-transform: uppercase; letter-spacing: .06em; color: var(--ui-text); cursor: pointer;
+  background: var(--ui-surface-2); border: 1px solid var(--sf-panel-line); border-radius: 2px; box-shadow: var(--sf-bevel);
+}
+.sf-lm .lm-group-btn:hover { border-color: var(--ui-heading); }
+.sf-lm .lm-group-btn[aria-pressed="true"] { color: var(--ui-text-on-primary); background: var(--ui-primary); border-color: var(--ui-primary); }
+.sf-lm .lm-group-btn:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+.sf-lm .lm-group-name { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-lm .lm-group-n { flex: none; color: inherit; opacity: .8; font-variant-numeric: tabular-nums; }
+
+/* ---- the Play coach banner (views/console/play/CoachCard.vue, unchanged) rehoused in a panel: its own colour
+   variables read the Modern tokens here, so it follows Dark / Light */
+.sf-lm .lm-coach-panel { --ui-old-lace: var(--ui-surface-2); --ui-forest: var(--ui-text); }
+.sf-lm .lm-coach-panel > .lm-body { display: block; } /* the card is a flex item with basis 0: a block parent keeps its 52 px */
+
+/* ---- the Details popup inside a Modern blade: the blade's own popup (scoped .details-*) in panel dress */
+.sf-lm .details-card.lm-panel { color: var(--ui-text); background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface); border: 2px solid var(--sf-panel-line); border-radius: 2px; }
+.sf-lm .details-card.lm-panel .details-foot { border-top: 2px solid var(--sf-panel-line); }
+
+/* ---- the bottom-left "Signed in as" stamp over a Modern blade (App.vue .corner-stamp, given .sf-lm there): token
+   ink on the panel face, full strength (the Retro pill dims it to 65 % over a dark backdrop). --ui-text on
+   --ui-surface-2 is about 13:1 dark and 14:1 light. */
+.sf-lm.lm-stamp { background: var(--ui-surface-2); border: 1px solid var(--sf-panel-line); text-shadow: none; }
+.sf-lm.lm-stamp :is(.identity-label, .identity-service, .identity-name, .version-stamp) { color: var(--ui-text); opacity: 1; }
+
+/* ---- the top bar (shared by every blade; the tab strip switches blades) */
+.sf-lm.lm-topbar {
+  box-sizing: border-box; position: relative; z-index: 2; flex: none; display: flex; align-items: center; gap: 24px; min-height: 76px;
+  padding: 10px 24px; background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-secondary);
+  border-bottom: 2px solid var(--sf-panel-line); box-shadow: 0 3px 0 var(--sf-panel-drop);
+}
+.sf-lm .lm-wordmark { flex: none; margin: 0; font: 34px/1 var(--sf-wordmark-font); text-transform: uppercase; color: var(--ui-heading); white-space: nowrap; }
+.sf-lm.lm-topbar .sf-tabs { flex: 0 1 auto; min-width: 0; }
+.sf-lm.lm-topbar .sf-tab { min-height: 46px; padding: 0 22px; font-size: 14px; letter-spacing: .1em; }
+.sf-lm .lm-beta { color: var(--sf-gold); border-color: var(--sf-gold); }
+.sf-lm .lm-topbar-end { display: flex; align-items: center; gap: 12px; margin-left: auto; flex: none; }
+.sf-lm .lm-coach-name { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; color: var(--sf-led); font: 15px/1 var(--font-heading); border: 2px solid var(--sf-panel-line); border-radius: 2px; background: var(--ui-surface-2); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- result card (League Manager ResultCard / shared/result-card.css language): team-coloured diagonal tint, crest,
+   bold sans names, a boxed score, the actions in the last column. */
+.sf-lm .lm-card {
+  container-type: inline-size; box-sizing: border-box; position: relative; min-width: 0;
+  border: 2px solid var(--sf-panel-line); border-radius: 2px; box-shadow: var(--sf-bevel), 0 3px 0 var(--sf-panel-drop);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--lm-tone-home, var(--sf-panel-line)) 35%, transparent) 0%, transparent 48%, transparent 52%, color-mix(in srgb, var(--lm-tone-away, var(--sf-panel-line)) 35%, transparent) 100%),
+    linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface);
+}
+.sf-lm .lm-card-grid { display: grid; grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr) minmax(130px, auto); align-items: center; gap: 14px; padding: 12px 16px; }
+.sf-lm .lm-card-team { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.sf-lm .lm-card-team.away { flex-direction: row-reverse; text-align: right; }
+.sf-lm .lm-crest { flex: none; box-sizing: border-box; width: 56px; height: 56px; object-fit: contain; image-rendering: pixelated; }
+.sf-lm .lm-initials { display: inline-flex; align-items: center; justify-content: center; font: 18px var(--font-heading); color: var(--ui-text); background: color-mix(in srgb, var(--ui-surface-2) 80%, transparent); border: 2px solid var(--sf-panel-line); border-radius: 2px; }
+.sf-lm .lm-who { display: grid; gap: 2px; min-width: 0; }
+.sf-lm .lm-name { font: 16px/1.2 var(--sf-team-name-font); text-transform: uppercase; letter-spacing: .04em; color: var(--sf-team-name-ink); text-shadow: var(--sf-team-name-shadow);
+  overflow: hidden; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.sf-lm .lm-coach { font-size: 14px; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-lm .lm-meta { font-size: 13px; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-lm .lm-centre { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.sf-lm .lm-clock { font: 12px/1.2 var(--sf-band-font); text-transform: uppercase; letter-spacing: .12em; color: var(--ui-text); white-space: nowrap; }
+.sf-lm .lm-scorebox { display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px; font: 34px/1 var(--font-heading); font-variant-numeric: tabular-nums; color: var(--ui-text);
+  background: var(--lm-scorebox-fill); border: 2px solid var(--sf-panel-line); border-radius: 2px; white-space: nowrap; }
+.sf-lm .lm-scorebox[data-hidden="true"], .sf-lm .lm-scorebox[data-vs="true"] { color: var(--ui-text-dim); font-size: 22px; padding: 8px 14px; }
+.sf-lm .lm-dash { color: var(--ui-text-dim); font-size: .7em; }
+.sf-lm .lm-card-actions { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 8px; min-width: 0; }
+.sf-lm .lm-card-actions .lm-when { font-size: 12px; color: var(--ui-text); white-space: nowrap; }
+.sf-lm .lm-res { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; font: 13px/1 var(--font-heading); border: 2px solid var(--sf-panel-line); border-radius: 2px; background: var(--ui-surface-2); color: var(--ui-text); }
+.sf-lm .lm-res[data-result="W"] { color: var(--ui-success); border-color: var(--ui-success); background: color-mix(in srgb, var(--ui-success) 18%, var(--ui-surface-2)); }
+.sf-lm .lm-res[data-result="L"] { color: var(--ui-danger); border-color: var(--ui-danger); background: color-mix(in srgb, var(--ui-danger) 18%, var(--ui-surface-2)); }
+/* dense card (Play recent games, Replay results) */
+.sf-lm .lm-card[data-size="sm"] .lm-card-grid { grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr) minmax(150px, auto); gap: 12px; padding: 8px 12px; }
+.sf-lm .lm-card[data-size="sm"] .lm-card-team { gap: 10px; }
+.sf-lm .lm-card[data-size="sm"] .lm-crest { width: 36px; height: 36px; }
+.sf-lm .lm-card[data-size="sm"] .lm-initials { font-size: 12px; }
+.sf-lm .lm-card[data-size="sm"] .lm-name { font-size: 13px; -webkit-line-clamp: 1; line-clamp: 1; }
+.sf-lm .lm-card[data-size="sm"] .lm-scorebox { font-size: 22px; padding: 4px 10px; }
+.sf-lm .lm-card[data-size="sm"] .lm-scorebox[data-hidden="true"], .sf-lm .lm-card[data-size="sm"] .lm-scorebox[data-vs="true"] { font-size: 16px; }
+.sf-lm .lm-card[data-size="sm"] .lm-card-actions { flex-direction: row; align-items: center; justify-content: flex-end; }
+/* a narrow CARD (container query, whatever the viewport): the actions move under the teams; very narrow, everything stacks */
+@container (max-width: 760px) {
+  .sf-lm .lm-card-grid, .sf-lm .lm-card[data-size="sm"] .lm-card-grid { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+  .sf-lm .lm-card-actions { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .sf-lm .lm-crest { width: 40px; height: 40px; }
+}
+@container (max-width: 460px) {
+  .sf-lm .lm-card-grid, .sf-lm .lm-card[data-size="sm"] .lm-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .sf-lm .lm-card-team.away { flex-direction: row; text-align: left; }
+  .sf-lm .lm-centre { align-items: flex-start; }
+  .sf-lm .lm-card-actions { justify-content: flex-start; }
+}
+
+/* ---- Replay results table */
+.sf-lm .lm-table-wrap { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.sf-lm .lm-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 15px; }
+.sf-lm .lm-table td { overflow: hidden; overflow-wrap: anywhere; }
+.sf-lm .lm-table .lm-col-date { width: 130px; }
+.sf-lm .lm-table .lm-col-score { width: 110px; }
+.sf-lm .lm-table .lm-col-comp { width: 180px; }
+.sf-lm .lm-table .lm-col-act { width: 190px; }
+.sf-lm .lm-table th { position: sticky; top: 0; z-index: 1; padding: 10px 12px; text-align: left; font: 11px/1.4 var(--sf-band-font); text-transform: uppercase; letter-spacing: .12em; color: var(--ui-muted);
+  background: var(--ui-surface-2); border-bottom: 2px solid var(--sf-panel-line); white-space: nowrap; }
+.sf-lm .lm-table td { padding: 9px 12px; vertical-align: middle; border-bottom: 1px solid var(--sf-panel-line); }
+.sf-lm .lm-table tbody tr.lm-tinted-row {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--lm-tone-home, var(--sf-panel-line)) 35%, transparent) 0%, transparent 40%, transparent 60%, color-mix(in srgb, var(--lm-tone-away, var(--sf-panel-line)) 35%, transparent) 100%);
+}
+.sf-lm .lm-table tbody tr:hover td { background: color-mix(in srgb, var(--ui-hover) 50%, transparent); }
+.sf-lm .lm-table .lm-num { text-align: center; white-space: nowrap; }
+.sf-lm .lm-table .lm-date { color: var(--ui-text); font-size: 14px; white-space: nowrap; text-overflow: ellipsis; }
+.sf-lm .lm-table .lm-end { text-align: right; white-space: nowrap; }
+.sf-lm .lm-table .lm-actions { display: inline-flex; gap: 8px; }
+.sf-lm .lm-mini { display: inline-flex; align-items: center; justify-content: center; flex: none; box-sizing: border-box; width: 30px; height: 30px; margin-right: 10px; vertical-align: middle; object-fit: contain; image-rendering: pixelated; font: 11px var(--font-heading); color: var(--ui-text);
+  border: 2px solid var(--sf-panel-line); border-radius: 2px; background: var(--ui-surface-2); }
+.sf-lm img.lm-mini { border: 0; background: none; }
+.sf-lm .lm-team-cell { display: flex; align-items: center; min-width: 0; max-width: 100%; }
+/* block-level, clipped wrappers: a long name or coach never widens its fixed-width column */
+.sf-lm .lm-team-text { display: grid; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.sf-lm .lm-team-name { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 14px/1.25 var(--sf-team-name-font); text-transform: uppercase; letter-spacing: .04em; color: var(--sf-team-name-ink); text-shadow: var(--sf-team-name-shadow); }
+.sf-lm .lm-team-coach { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ui-text); }
+.sf-lm .lm-small-score { display: inline-flex; gap: 8px; align-items: center; padding: 3px 10px; font: 18px/1.2 var(--font-heading); background: var(--lm-scorebox-fill); border: 2px solid var(--sf-panel-line); border-radius: 2px; }
+.sf-lm .lm-small-score[data-hidden="true"] { color: var(--ui-text-dim); }
+
+/* ---- smaller windows: the panes stack and the page scrolls vertically (never sideways) */
+@media (max-width: 1100px), (max-height: 720px) {
+  .sf-lm.lm-page { grid-template-columns: minmax(0, 1fr); overflow-x: hidden; overflow-y: auto; }
+  .sf-lm.lm-page { align-content: start; }
+  .sf-lm.lm-page .lm-col, .sf-lm.lm-page .lm-panel { min-height: auto; } /* stacked panes take their content height; the page scrolls */
+  .sf-lm .lm-col > .lm-panel.lm-grow, .sf-lm .lm-col > .lm-panel.lm-share { flex: 0 0 auto; max-height: none; }
+  .sf-lm .lm-scroll, .sf-lm .lm-table-wrap { flex: 0 0 auto; max-height: 70vh; }
+  .sf-lm .lm-fill { flex: 0 0 auto; }
+}
+@media (max-width: 900px) {
+  .sf-lm.lm-topbar { flex-wrap: wrap; gap: 12px; }
+  .sf-lm .lm-wordmark { font-size: 26px; }
+}
+@media (max-width: 640px) {
+  .sf-lm.lm-page { padding: 12px; }
+  .sf-lm .lm-panel > .hm-band, .sf-lm .lm-band-right { flex-wrap: wrap; }
+  .sf-lm .lm-wordmark { display: none; }
+  .sf-lm.lm-topbar .sf-tabs { flex: 1 1 100%; order: 3; }
+  .sf-lm.lm-topbar .sf-tab { padding: 0 12px; font-size: 12px; }
+}

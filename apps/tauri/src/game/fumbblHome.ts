@@ -18,6 +18,7 @@ import { ui } from './ui';
 import { lastAppPatchStatus, type AppPatchStatus } from './appPatch';
 import { isTextEntry } from './fullscreenKeys';
 import { parseVersion } from './updateCheck';
+import { scaleBoundsForShell } from './uiZoomShell';
 
 export interface PaneRect {
   x: number;
@@ -374,13 +375,16 @@ export function createHomeSurface(overrides: Partial<HomeSurfaceDeps> = {}) {
     const box = current.el.getBoundingClientRect();
     const rect = { x: box.left, y: box.top, width: box.width, height: box.height };
     const occluded = isPaneOccluded(current.el, rect, document, (e) => getComputedStyle(e), current.options);
-    return desiredHomeState({
+    const desired = desiredHomeState({
       shell: 'available',
       active: !state.failed && !state.blocked && (current.options.active?.() ?? true),
       documentVisible: document.visibilityState !== 'hidden',
       rect,
       occluded,
     });
+    // Settings reflow (11-03): under UI zoom the page's CSS px are bigger than the window's logical px the shell places
+    // the site in (game/uiZoom.ts). The occlusion probe above stays in CSS px (elementFromPoint).
+    return desired.visible ? { ...desired, bounds: scaleBoundsForShell(desired.bounds) } : desired;
   }
 
   async function flush(): Promise<void> {

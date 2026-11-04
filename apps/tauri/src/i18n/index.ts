@@ -1,5 +1,6 @@
 import { getCurrentScope, onScopeDispose, readonly, watch, type App, type Ref } from 'vue';
 import enCatalogue from './locales/en.json';
+import enGbCatalogue from './locales/en-GB.json';
 import bgCatalogue from './locales/bg.json';
 import cyCatalogue from './locales/cy.json';
 import deCatalogue from './locales/de.json';
@@ -23,6 +24,8 @@ import { parseMessage, type IcuNode } from './icu';
  * Client localisation layer (owner 10-23: "Ensure we have each of the elements in our client bound to strings that we can
  * translate").
  *
+ * - English (owner 11-03): `en.json` is English (US) and stays the base (fallback, lt() log text, bug reports);
+ *   `en-GB.json` holds only the keys whose British spelling differs (tools/i18n/english-us-uk.mjs writes both).
  * - Every string the CLIENT authors goes through `t(key, params?)`. Keys are stable dotted ids (`settings.sound.volume`),
  *   never the English text. `locales/en.json` is the source of truth and carries every key; other locales may be partial.
  * - Missing key in the active locale -> the English text. Missing key in English -> the key itself, plus ONE console
@@ -44,9 +47,11 @@ type Catalogue = Readonly<Record<string, string>>;
 
 export const DEFAULT_LOCALE: Locale = 'en';
 
-/** Each locale labelled in its OWN language (the Settings dropdown shows these names as-is). */
+/** Each locale labelled in its OWN language (the Settings dropdown shows these names as-is, in every locale).
+ *  Owner 11-03: `en` is English (US); `en-GB` is English (UK), an overlay over `en` (./englishVariant.ts). */
 export const availableLocales: readonly { readonly id: Locale; readonly name: string }[] = [
-  { id: 'en', name: 'English' },
+  { id: 'en', name: 'English (US)' },
+  { id: 'en-GB', name: 'English (UK)' },
   { id: 'bg', name: 'Български' },
   { id: 'cy', name: 'Cymraeg' },
   { id: 'de', name: 'Deutsch' },
@@ -66,6 +71,7 @@ export const availableLocales: readonly { readonly id: Locale; readonly name: st
 
 const CATALOGUES: Readonly<Record<Locale, Catalogue>> = {
   en: enCatalogue as Catalogue,
+  'en-GB': enGbCatalogue as Catalogue, // overlay: only the British spellings; everything else falls back to en
   bg: bgCatalogue as Catalogue,
   cy: cyCatalogue as Catalogue,
   de: deCatalogue as Catalogue,
@@ -429,3 +435,4 @@ declare module 'vue' {
 }
 
 export { terms };
+export { englishVariantFor, englishVariantOf, mapLegacyEnglish, systemLanguageTags, UK_ENGLISH_REGIONS } from './englishVariant';

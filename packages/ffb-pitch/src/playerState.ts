@@ -45,6 +45,11 @@ export function hasFlag(playerState: number, flag: number): boolean {
   return (playerState & flag) !== 0;
 }
 
+/** Mirrors PlayerState.isPinned: rooted (Take Root) or chomped. A pinned player cannot leave its square. */
+export function isPinned(playerState: number): boolean {
+  return hasFlag(playerState, PlayerStateFlag.ROOTED) || hasFlag(playerState, PlayerStateFlag.CHOMPED);
+}
+
 /** Mirrors PlayerState.hasTacklezones: standing/moving/blocked, not confused/hypnotized. */
 export function hasTackleZones(playerState: number): boolean {
   const base = baseState(playerState);

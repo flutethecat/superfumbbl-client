@@ -6,6 +6,7 @@ import { SEND_OFF_REVEAL_FALLBACK_MS, type SendOffRevealOutcome, type SendOffRev
 import DisplayCaps from './DisplayCaps.vue';
 import D6Face from './D6Face.vue';
 import { $t, terms } from '../i18n';
+import { settings } from '../game/settings';
 
 export interface SendOffWaitingView {
   /** The referee occurrence; echoed back with `flip-shown` so the store arms the hold for the right one. */
@@ -46,7 +47,8 @@ function prefersReducedMotion(): boolean {
     return false;
   }
 }
-const reducedMotion = ref(prefersReducedMotion());
+// Settings reflow (11-03): Settings > Accessibility "Reduce motion" counts like the OS preference.
+const reducedMotion = ref(prefersReducedMotion() || settings.reduceMotion);
 
 /** Characters shown per step key; a key that is absent has not started typing (it is queued). */
 const typed = reactive<Record<string, number>>({});

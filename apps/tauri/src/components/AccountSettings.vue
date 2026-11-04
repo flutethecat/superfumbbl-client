@@ -10,26 +10,18 @@ import { $t, useLiveSet } from '../i18n';
 const liveSetHere = useLiveSet();
 import { t } from '../i18n';
 
-const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 const account = ref<AccountIdentity | null>(null);
 const busy = ref(false);
 const status = ref('Authenticate to view your verified identities and account profile.');
 const loginPassword = ref('');
 const displayName = ref('');
 const avatar = ref('');
-const timezone = ref('');
-const availability = ref<Record<string, { start: string; end: string }>>(Object.fromEntries(DAYS.map(day => [day, { start: '', end: '' }])));
 const extraProfile = ref<Array<{ key: string; value: string }>>([]);
 let discordAbort: AbortController | null = null;
 
 function loadEditor(identity: AccountIdentity) {
   displayName.value = identity.profile.displayName ?? '';
   avatar.value = identity.profile.avatar ?? '';
-  timezone.value = identity.scheduling?.timezone ?? '';
-  availability.value = Object.fromEntries(DAYS.map(day => {
-    const row = identity.scheduling?.availability?.find(item => item.day === day);
-    return [day, { start: row?.start ?? '', end: row?.end ?? '' }];
-  }));
   extraProfile.value = Object.entries(identity.profile)
     .filter(([key, value]) => key !== 'displayName' && key !== 'avatar' && typeof value === 'string')
     .map(([key, value]) => ({ key, value: value! }));
@@ -103,11 +95,9 @@ async function saveProfile() {
   try {
     const profile: Record<string, string> = { displayName: displayName.value, avatar: avatar.value };
     for (const row of extraProfile.value) if (row.key.trim()) profile[row.key.trim()] = row.value;
-    const rows = DAYS.flatMap(day => {
-      const row = availability.value[day]!;
-      return row.start && row.end ? [{ day, start: row.start, end: row.end }] : [];
-    });
-    account.value = await updateAccount({ profile, scheduling: { timezone: timezone.value, availability: rows } });
+    // Owner 11-03 settings reflow: Calendar / Scheduling is gone from the client; the patch carries no schedule, so
+    // whatever the account already has stays untouched (League Manager owns it).
+    account.value = await updateAccount({ profile });
     loadEditor(account.value);
     liveSetHere(status, 'value', () => t('ui.accountSettings.text.accountProfileSaved'));
   } catch (error) { status.value = error instanceof Error ? error.message : String(error); }
@@ -126,7 +116,7 @@ onBeforeUnmount(() => discordAbort?.abort());
 
 <template>
   <fieldset class="settings-group account-card">
-    <legend>{{ $t('settings.account.accountCard.account.account') }}</legend>
+    <legend>{{ $t('settings.account.superFumbblAccount') }}</legend>
     <template v-if="!account">
       <label>{{ $t('settings.account.accountCard.account.superFumbblCoach') }} <input v-model="settings.coach40k" autocomplete="username" /></label>
       <button type="button" :disabled="busy" @click="openDiscordSso">{{ busy ? $t('settings.account.accountCard.account.waitingForDiscord') : $t('settings.account.accountCard.account.signInWithDiscord') }}</button>
@@ -161,14 +151,6 @@ onBeforeUnmount(() => discordAbort?.abort());
         <button type="button" @click="extraProfile.push({ key: '', value: '' })">{{ $t('settings.account.accountCard.publicProfile.addProfileField') }}</button>
       </fieldset>
 
-      <fieldset class="settings-group">
-        <legend>{{ $t('settings.account.accountCard.scheduling.scheduling') }}</legend>
-        <label>{{ $t('settings.account.accountCard.scheduling.timeZone') }} <input v-model="timezone" :placeholder="$t('settings.account.accountCard.scheduling.americaLosAngeles')" maxlength="64" /></label>
-        <div v-for="day in DAYS" :key="day" class="availability-row">
-          <b>{{ day.toUpperCase() }}</b><input v-model="availability[day]!.start" type="time" /><span>{{ $t('settings.account.accountCard.scheduling.to') }}</span><input v-model="availability[day]!.end" type="time" />
-        </div>
-      </fieldset>
-
       <button class="primary" type="button" :disabled="busy" @click="saveProfile">{{ $t('settings.account.accountCard.account.saveAccountProfile') }}</button>
     </template>
     <p class="hint" aria-live="polite">{{ status }}</p>
@@ -181,6 +163,5 @@ onBeforeUnmount(() => discordAbort?.abort());
 .identity-grid b:first-of-type { color: var(--ui-success); }
 .identity-grid em { color: var(--ui-text-muted); }
 .account-actions { justify-content: flex-start; flex-wrap: wrap; }
-.profile-row, .availability-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: .5rem; align-items: center; margin: .4rem 0; }
-.availability-row { grid-template-columns: 52px 1fr auto 1fr; }
+.profile-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: .5rem; align-items: center; margin: .4rem 0; }
 </style>

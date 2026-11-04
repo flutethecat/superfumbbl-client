@@ -137,6 +137,13 @@ export function forkFeaturesEnabled(): boolean {
   return FORK_EDITION || forkHostFromLaunch.value !== null;
 }
 
+/** Owner 11-03 (settings reflow): was this run started with the bare `--fork-server` flag (or the browser build's
+ *  `?forkServer`)? Unlike forkFeaturesEnabled() the FORK edition alone does not count: Settings' Game server, Server
+ *  URL and Tournament Bot URL rows show only with the flag, in every edition. Reactive (reads a ref). */
+export function launchedWithForkServer(): boolean {
+  return forkHostFromLaunch.value !== null;
+}
+
 /** Does this ws/http URL point at the effective fork host (port ignored)? false with no fork features or no host. */
 export function isForkServerUrl(url: string | null | undefined): boolean {
   if (!url || !forkFeaturesEnabled()) return false;

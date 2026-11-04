@@ -1,11 +1,18 @@
 import { createApp, watch } from 'vue';
 import { configurePixiAssetOrigin } from '@fumbbl40k/ffb-pitch';
 import App from './App.vue';
+// Owner 11-03: the Modern style's tokens and controls; every rule is scoped under .sf-lm (opt-in per blade).
+import './styles/lm-theme.css';
+// Owner 11-03 (lane 3): the Modern Play / Spectate / Replay blades and top bar, also scoped under .sf-lm.
+import './styles/lm-blades.css';
 import { initCredentials } from './game/credentials';
 import { installFocusClickGuard } from './game/focusClickGuard';
 import { installFontStackVariables } from './game/fontStacks';
 import { setLocale } from './i18n';
 import { installPitchLabels } from './game/pitchLabels';
+import { installAccessibilityModes } from './game/accessibilityModes';
+import { installVisualSoundCues } from './game/visualSoundCues';
+import './styles/accessibilityModes.css';
 import { initSettingsFile, settings } from './game/settings';
 import {
   assetMods,
@@ -82,6 +89,9 @@ async function boot() {
   watch(() => settings.language, (locale) => setLocale(locale), { immediate: true });
   // The canvas's drawn words follow the language too. Never allowed to block boot (an English pitch is the fallback).
   try { installPitchLabels(); } catch (error) { console.warn('Pitch labels stay English: the label provider could not be installed', error); }
+  // Settings reflow (11-03): Accessibility modes (<html> classes), UI zoom and visual sound cues follow the settings live.
+  try { installAccessibilityModes(); } catch (error) { console.warn('Accessibility modes could not be installed', error); }
+  try { installVisualSoundCues(); } catch (error) { console.warn('Visual sound cues could not be installed', error); }
   // Components import $t from src/i18n themselves (i18nPlugin also exists for templates that do not).
   createApp(App).mount('#app');
 }

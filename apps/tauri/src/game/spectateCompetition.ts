@@ -1,6 +1,7 @@
 /** Owner 09-07: the FUMBBL live list grouped by COMPETITION. /api/match/current carries `division`
  *  ("League" / "Competitive"), `scheduler` ("Blackbox"…) and, for tournament games, `tournament: { id, group }`
  *  (ids only) — the names come from /api/group/get/<group> and /api/tournament/get/<id>, cached by the view. */
+import { t } from '../i18n';
 export interface CompetitionMatchLike {
   division?: string | null;
   scheduler?: string | null;
@@ -68,4 +69,32 @@ export function missingCompetitionIds(matches: readonly CompetitionMatchLike[], 
     if (t.id != null && !(String(t.id) in names.tournaments)) tournaments.add(String(t.id));
   }
   return { groups: [...groups], tournaments: [...tournaments] };
+}
+
+/** Owner 11-03 (Modern Spectate): a tidy display name for a group label (buttons and sub-band headings). The group
+ *  keys and the Retro headings are unchanged.
+ *  - FUMBBL's scheduler id "Blackbox" reads "Black Box".
+ *  - A game with no competition ("League · None", or no division at all) reads "Other".
+ *  - A League-division game from a scheduler ("League · Gamefinder") is a different FUMBBL division from the
+ *    Competitive one ("Gamefinder"), so it stays its own group, labelled "Gamefinder (League)". */
+export function lmGroupLabel(label: string): string {
+  const tidy = label.replace(/\bblack ?box\b/gi, 'Black Box').trim();
+  const [first, ...rest] = tidy.split(' · ');
+  const second = rest.join(' · ');
+  if (!tidy || /^other$/i.test(tidy) || (rest.length && /^none$/i.test(second))) return t('lmBlades.group.other');
+  if (rest.length && /^league$/i.test(first ?? '') && !/^none$/i.test(second)) return t('lmBlades.group.inLeague', { name: second });
+  return tidy;
+}
+
+/** Owner 11-03: the live groups under their tidy labels, groups that read the same merged (e.g. two kinds of
+ *  "Other"), in the order groupByCompetition gave. The key is the tidy label. */
+export function lmMergeGroups<M>(groups: readonly CompetitionGroup<M>[]): CompetitionGroup<M>[] {
+  const merged = new Map<string, CompetitionGroup<M>>();
+  for (const group of groups) {
+    const label = lmGroupLabel(group.label);
+    const into = merged.get(label);
+    if (into) into.matches.push(...group.matches);
+    else merged.set(label, { key: `lm:${label}`, label, matches: [...group.matches] });
+  }
+  return [...merged.values()];
 }

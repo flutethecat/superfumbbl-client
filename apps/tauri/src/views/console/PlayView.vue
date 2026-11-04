@@ -3,6 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
+import { lmRootClass } from '../../game/lmTheme';
+import { gameClockLabel } from '../../game/gameClock';
+import LmResultCard from '../../components/lm/LmResultCard.vue';
 import DisplayCaps from '../../components/DisplayCaps.vue';
 import MatchRow from '../../components/MatchRow.vue';
 import {
@@ -40,6 +43,9 @@ import { forkFeaturesEnabled } from '../../game/forkAccess'; // owner 10-31: run
 import { $t, terms, useLiveSet } from '../../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
+/** Owner 11-03 (lane 3): Settings > Interface style. Modern draws the League Manager panels below; Retro the template as it was. */
+const modern = computed(() => settings.uiStyle === 'modern');
+const lmClass = computed(() => lmRootClass(settings.uiStyle));
 
 /**
  * Owner 09-25 (HANDOFF-fumbbl-play-blade.md): the FUMBBL Play blade. Header "Play" + Open JNLP; left card
@@ -436,7 +442,165 @@ function crestFailed(url: string | null): void {
 </script>
 
 <template>
-  <main class="play-view" :aria-label="$t('play.fumbblPlay')">
+  <!-- Owner 11-03 (lane 3): the Modern Play blade - My active games and My recent games as result cards, then Start a
+       game, Coach (the Play coach banner as it is) in the right column. Same data and actions as the Retro template
+       (v-else, unchanged). No "What's new" panel: the client has no notes for the version it runs (only an update
+       offer carries notes, for the NEXT version). -->
+  <main v-if="modern" :class="[lmClass, 'lm-page', 'lm-play']" :aria-label="$t('play.fumbblPlay')" data-testid="lm-play">
+    <div class="lm-col">
+      <section class="lm-panel lm-share" aria-labelledby="lm-active-h">
+        <header class="hm-band">
+          <h2 id="lm-active-h">{{ $t('play.listCard.myActiveGames') }}</h2>
+          <div class="lm-band-right">
+            <span class="hm-cap">{{ $t('lmBlades.play.inProgressCount', { n: activeCount }) }}</span>
+            <button v-if="coach" class="sf-btn small" type="button" data-tour="play-refresh" :disabled="activeLoading" @click="refreshAll">{{ activeLoading ? $t('lmBlades.refreshing') : $t('lmBlades.refresh') }}</button>
+          </div>
+        </header>
+        <div class="lm-body lm-scroll">
+          <p v-if="!coach" class="lm-empty">{{ $t('play.listCard.setYourFumbblCoach') }}</p>
+
+          <template v-if="fumbblLobby">
+            <div v-if="!fumbblLobby.password" class="lm-well" data-testid="lm-loaded-jnlp">
+              <p class="sf-notice">{{ checkmark }} {{ fumbblLobby.sourceName || $t('play.listCard.jnlpLoaded') }}<template v-if="fumbblLobby.gameId"> {{ $t('play.listCard.gameGameid', { gameId: fumbblLobby.gameId }) }}</template></p>
+              <LmResultCard
+                :home="{ name: ownTeam?.name || '', coach: ownTeam?.coach || $t('play.listCard.coachUnavailable'), race: ownTeam?.race, tv: formatTeamValue(ownTeam?.teamValue), logoUrl: ownTeam?.logoUrl, baseIconPath: ownTeam?.baseIconPath }"
+                :away="opponentTeam ? { name: opponentTeam.name, coach: opponentTeam.coach || $t('play.listCard.coachUnavailable'), race: opponentTeam.race, tv: formatTeamValue(opponentTeam.teamValue), logoUrl: opponentTeam.logoUrl, baseIconPath: opponentTeam.baseIconPath } : null"
+                :away-placeholder="$t('play.listCard.opponentUnavailable')" score-mode="vs">
+                <template #actions>
+                  <button v-if="fumbblLobby.gameId" class="sf-btn primary" type="button" :disabled="!lobbyReady" @click="fumbblJoinLoaded(fumbblLobby.gameId)">{{ $t('play.listCard.play') }}</button>
+                </template>
+              </LmResultCard>
+              <form class="sf-field" @submit.prevent="launchNamed">
+                <label class="sf-k" for="lm-fumbbl-game-name">{{ $t('play.listCard.gameName') }}</label>
+                <div class="lm-row">
+                  <input id="lm-fumbbl-game-name" v-model="fumbblLobbyGameName" class="sf-input" type="text" autocomplete="off" :placeholder="$t('play.listCard.bothCoachesEnterThe')" />
+                  <button class="sf-btn primary" type="submit" :disabled="!lobbyReady || !fumbblLobbyGameName.trim()">{{ $t('play.listCard.join') }}</button>
+                </div>
+              </form>
+              <div class="lm-row wrap">
+                <button class="sf-btn small" type="button" :disabled="!lobbyReady" @click="fumbblListGames">{{ $t('play.listCard.listGames') }}</button>
+                <button class="sf-btn small" type="button" @click="clearFumbblLobby">{{ $t('play.listCard.cancel') }}</button>
+                <small v-if="lobbyStatus" class="lm-muted" role="status" aria-live="polite">{{ lobbyStatus }}</small>
+              </div>
+            </div>
+            <div v-else class="lm-well">
+              <p class="sf-notice">{{ $t('play.listCard.checkmarkFumbblLobbyAs', { checkmark, coach: fumbblLobby.coach }) }}</p>
+              <div class="lm-row wrap">
+                <button class="sf-btn small" type="button" :disabled="!lobbyReady" @click="fumbblListGames">{{ $t('play.listCard.listGames') }}</button>
+                <button class="sf-btn small" type="button" @click="clearFumbblLobby">{{ $t('play.listCard.cancel') }}</button>
+                <small v-if="lobbyStatus" class="lm-muted" role="status" aria-live="polite">{{ lobbyStatus }}</small>
+                <small v-else-if="fumbblLobbyListRequested && !fumbblLobbyGames.length" class="lm-muted">{{ $t('play.listCard.noWaitingGamesIn') }}</small>
+              </div>
+            </div>
+            <p v-if="fumbblLobbyError" class="sf-error" role="alert">{{ fumbblLobbyError }}</p>
+            <template v-if="fumbblLobbyListRequested">
+              <p v-if="!fumbblLobby.password && !fumbblLobbyGames.length" class="lm-empty">{{ $t('play.listCard.youDoNotHave') }}</p>
+              <LmResultCard v-for="{ entry, row: lr } in lobbyRows" :key="entry.gameId"
+                :home="{ name: lr.own.name, coach: lr.own.coach, race: lr.own.race, tv: formatTeamValue(lr.own.tv), logoUrl: lr.own.logoUrl, baseIconPath: lr.own.baseIconPath }"
+                :away="lr.opponent ? { name: lr.opponent.name, coach: lr.opponent.coach, race: lr.opponent.race, tv: formatTeamValue(lr.opponent.tv), logoUrl: lr.opponent.logoUrl, baseIconPath: lr.opponent.baseIconPath } : null"
+                :away-placeholder="$t('play.listCard.waitingForOpponent')"
+                :clock="lr.started ? $t('play.listCard.inProgress') : $t('play.listCard.waiting')" score-mode="vs" :title="$t('play.listCard.gameGameid2', { gameId: entry.gameId })">
+                <template #actions>
+                  <span class="sf-chip" :data-tone="lr.started ? 'soon' : 'muted'">{{ lr.started ? $t('play.listCard.inProgress') : $t('play.listCard.waiting') }}</span>
+                  <button class="sf-btn primary" type="button" :disabled="!lobbyReady || ownSide(entry) === null"
+                    :aria-label="lr.opponent ? $t(lr.started ? 'play.aria.rejoinAgainst' : 'play.aria.joinAgainst', { gameId: entry.gameId, opponent: lr.opponent.name || lr.opponent.coach }) : $t(lr.started ? 'play.aria.rejoin' : 'play.aria.join', { gameId: entry.gameId })"
+                    @click="launchListed(entry)">{{ lr.started ? $t('play.listCard.rejoin') : $t('play.listCard.join') }}</button>
+                </template>
+              </LmResultCard>
+            </template>
+          </template>
+
+          <LmResultCard v-for="game in activeGames" :key="game.id" :title="$t('play.listCard.gameId', { id: game.id })"
+            :home="{ name: myTeam(game).name, coach: myTeam(game).coach, race: myTeam(game).race || undefined, tv: formatTeamValue(myTeam(game).tv), score: myTeam(game).score }"
+            :away="{ name: theirTeam(game).name, coach: theirTeam(game).coach, race: theirTeam(game).race || undefined, tv: formatTeamValue(theirTeam(game).tv), score: theirTeam(game).score }"
+            :clock="gameClockLabel(game)">
+            <template #actions>
+              <span class="sf-chip" data-tone="soon">{{ $t('play.listCard.inProgress') }}</span>
+              <button class="sf-btn primary" type="button" :disabled="!canResume || (pendingResume?.id === game.id)"
+                :title="canResume ? $t('play.listCard.reconnectToGameId', { id: game.id }) : $t('play.listCard.saveYourFumbblPassword')"
+                @click="resumeGame(game)">{{ pendingResume?.id === game.id ? $t('play.listCard.connecting') : $t('play.listCard.rejoin') }}</button>
+            </template>
+          </LmResultCard>
+
+          <p v-if="activeError" class="sf-error" role="alert">{{ activeError }}</p>
+          <p v-if="coach && !activeCount && !activeLoading" class="lm-empty">{{ $t('play.listCard.noActiveGames') }}</p>
+          <p v-if="coach && !settings.password" class="lm-muted">{{ $t('play.listCard.saveYourFumbblPassword2') }}</p>
+        </div>
+      </section>
+
+      <section class="lm-panel lm-grow" aria-labelledby="lm-recent-h" data-tour="play-recent">
+        <header class="hm-band">
+          <h2 id="lm-recent-h">{{ $t('play.listCard.myRecentGames') }}</h2>
+          <span class="hm-cap">{{ $t('lmBlades.play.gamesCount', { n: recent.length }) }}</span>
+        </header>
+        <div class="lm-body lm-scroll">
+          <p v-if="coach && recentTeamCap" class="lm-muted">{{ recentTeamCapNote(recentTeamCap) }}</p>
+          <p v-if="!coach" class="lm-empty">{{ $t('play.listCard.setYourFumbblCoach2') }}</p>
+          <p v-else-if="recentError" class="sf-error" role="alert">{{ recentError }}</p>
+          <p v-else-if="recentLoading && !recent.length" class="lm-empty">{{ $t('play.listCard.loading') }}</p>
+          <p v-else-if="!recent.length" class="lm-empty">{{ $t('play.listCard.noRecentGames') }}</p>
+          <template v-else>
+          <LmResultCard v-for="row in recent" :key="row.matchId" size="sm" :data-cached="hasDetails(row)"
+            :home="{ name: row.myTeam, coach, race: row.myRace, score: row.myScore }"
+            :away="{ name: row.opponentTeam, coach: row.opponentCoach, race: row.opponentRace, score: row.opponentScore }">
+            <template #actions>
+              <span class="lm-res" :data-result="myRecent(row)" :aria-label="$t('lmBlades.play.result', { r: myRecent(row) })">{{ myRecent(row) }}</span>
+              <button class="sf-btn small" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :title="hasDetails(row) ? $t('play.listCard.endOfGameDetails', { matchId: row.matchId }) : $t('play.listCard.noStoredDetailsFor', { matchId: row.matchId })" @click="openDetails(row)">{{ $t('play.listCard.details') }}</button>
+              <button class="sf-btn small" type="button" :data-tour="row === recent[0] ? 'play-replay' : undefined" :disabled="gameStore.replay.loading" :title="$t('play.listCard.replayMatchMatchid', { matchId: row.matchId })" @click="replayMatch(row)">{{ $t('play.listCard.replay') }}</button>
+              <span class="lm-when">{{ relativeTime(row.when) }}</span>
+            </template>
+          </LmResultCard>
+          </template>
+        </div>
+      </section>
+    </div>
+
+    <aside class="lm-col">
+      <section class="lm-panel" aria-labelledby="lm-start-h">
+        <header class="hm-band"><h2 id="lm-start-h">{{ $t('lmBlades.play.startAGame') }}</h2><span class="hm-cap">{{ $t('spectateBrowser.fumbbl') }}</span></header>
+        <div class="lm-body">
+          <button class="sf-btn primary big" type="button" @click="fileInput?.click()">{{ $t('play.openJnlp') }}</button>
+          <p class="lm-muted">{{ $t('lmBlades.play.openJnlpHelp') }}</p>
+          <p v-if="loadError" class="sf-error" role="alert">{{ loadError }}</p>
+          <button v-if="forkFeaturesEnabled()" class="sf-btn gold" type="button" data-testid="lm-play-super" @click="createGameOpen = true">
+            {{ $t('play.playOnSuperFumbbl') }}<span class="sf-chip" data-tone="soon" style="margin-left: 8px">{{ $t('play.testEnvironmentSplash.testEnvironment') }}</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="lm-panel lm-coach-panel" aria-labelledby="lm-coach-h" data-testid="lm-coach-panel">
+        <header class="hm-band"><h2 id="lm-coach-h">{{ $t('lmBlades.play.coach') }}</h2><span class="hm-cap">{{ $t('spectateBrowser.fumbbl') }}</span></header>
+        <div class="lm-body">
+          <CoachCard v-if="coach" :name="coach" :profile="coachProfile" />
+          <p v-else class="lm-empty">{{ $t('play.listCard.setYourFumbblCoach') }}</p>
+        </div>
+      </section>
+    </aside>
+
+    <div v-if="detailsRow" class="details-modal" role="dialog" aria-modal="true" :aria-label="$t('play.detailsModal.detailsMyteamVsOpponentteam', { myTeam: detailsRow.myTeam, opponentTeam: detailsRow.opponentTeam })" tabindex="-1" @click.self="closeDetails" @keydown="onDetailsKey">
+      <div class="details-card lm-panel">
+        <header class="hm-band">
+          <h2>{{ $t('play.listCard.details') }}</h2>
+          <span class="hm-cap"><template v-if="detailsExample">{{ $t('play.detailsModal.exampleGame') }} · </template>{{ $t('lmBlades.teamVsTeam', { home: detailsRow.myTeam, away: detailsRow.opponentTeam }) }}<template v-if="!detailsExample"> · {{ $t('play.detailsModal.p0MatchMatchid', { p0: relativeTime(detailsRow.when), matchId: detailsRow.matchId }) }}</template></span>
+          <button class="sf-btn small" type="button" :aria-label="$t('play.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
+        </header>
+        <div class="details-body">
+          <p v-if="detailsLoading" class="lm-empty">{{ $t('play.detailsModal.loading') }}</p>
+          <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
+          <div v-else class="details-missing">
+            <p class="lm-empty">{{ $t('play.detailsModal.noDetailsStoredFor') }}</p>
+            <small>{{ $t('play.detailsModal.detailsAreKeptFor') }}</small>
+          </div>
+        </div>
+        <footer class="details-foot">
+          <button v-if="!detailsExample" class="sf-btn primary" type="button" :disabled="gameStore.replay.loading" @click="replayMatch(detailsRow)">{{ $t('play.detailsModal.replay') }}</button>
+        </footer>
+      </div>
+    </div>
+    <input ref="fileInput" class="file-input" type="file" accept=".jnlp,text/xml,application/xml" @change="openJnlpFile" />
+    <CreateGameModal v-if="forkFeaturesEnabled() && createGameOpen" @close="createGameOpen = false" />
+  </main>
+  <main v-else class="play-view" :aria-label="$t('play.fumbblPlay')">
     <header class="play-head">
       <h1 id="play-title">{{ $t('play.play') }}</h1>
       <CoachCard :name="coach" :profile="coachProfile" />

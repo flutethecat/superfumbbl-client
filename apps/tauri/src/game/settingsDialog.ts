@@ -1,34 +1,67 @@
 import { t } from '../i18n';
+/** Owner 11-03 settings reflow: 13 tabs in a scrollable rail, in this order (the agreed mock). */
 export const SETTINGS_SECTIONS = [
   { id: 'general', get label() { return t('settings.settingsSections.general'); } },
   { id: 'controls', get label() { return t('settings.settingsSections.controls'); } },
-  { id: 'accessibility', get label() { return t('settings.settingsSections.accessibility'); } },
-  { id: 'display', get label() { return t('settings.settingsSections.display'); } },
-  { id: 'mods', get label() { return t('settings.settingsSections.art'); } },
+  { id: 'pitch', get label() { return t('settings.settingsSections.pitch'); } },
+  { id: 'skills', get label() { return t('settings.settingsSections.skills'); } },
   { id: 'ui', get label() { return t('settings.settingsSections.ui'); } },
+  { id: 'art', get label() { return t('settings.settingsSections.art'); } },
+  { id: 'audio', get label() { return t('settings.settingsSections.audio'); } },
+  { id: 'video', get label() { return t('settings.settingsSections.video'); } },
+  { id: 'accessibility', get label() { return t('settings.settingsSections.accessibility'); } },
+  { id: 'account', get label() { return t('settings.settingsSections.account'); } },
+  { id: 'modpacks', get label() { return t('settings.settingsSections.modPacks'); } },
+  { id: 'diagnostics', get label() { return t('settings.settingsSections.diagnostics'); } },
   { id: 'credits', get label() { return t('settings.settingsSections.credits'); } },
 ] as const;
 
 export type SettingsTab = (typeof SETTINGS_SECTIONS)[number]['id'];
 
-/** Accept old deep links and untrusted callers without persisting navigation state. */
+/** The one-line caption in each tab's band (owner 11-03 mock). */
+export const SETTINGS_TAB_BLURBS: Record<SettingsTab, string> = {
+  get general() { return t('settings.tabBlurbs.general'); },
+  get controls() { return t('settings.tabBlurbs.controls'); },
+  get pitch() { return t('settings.tabBlurbs.pitch'); },
+  get skills() { return t('settings.tabBlurbs.skills'); },
+  get ui() { return t('settings.tabBlurbs.ui'); },
+  get art() { return t('settings.tabBlurbs.art'); },
+  get audio() { return t('settings.tabBlurbs.audio'); },
+  get video() { return t('settings.tabBlurbs.video'); },
+  get accessibility() { return t('settings.tabBlurbs.accessibility'); },
+  get account() { return t('settings.tabBlurbs.account'); },
+  get modpacks() { return t('settings.tabBlurbs.modpacks'); },
+  get diagnostics() { return t('settings.tabBlurbs.diagnostics'); },
+  get credits() { return t('settings.tabBlurbs.credits'); },
+};
+
+/** Accept old deep links and untrusted callers without persisting navigation state. Owner 11-03 reflow: every id the
+ *  7-tab dialog used still lands on the tab that now holds its rows (Display -> Pitch, the old Art id `mods` -> Art). */
 export function resolveSettingsTab(value: unknown): SettingsTab {
   switch (value) {
     case 'general':
-    case 'account':
     case 'connection':
     case 'gameplay':
-    case 'spectator':
-    case 'advanced': return 'general';
+    case 'spectator': return 'general';
     case 'controls':
+    case 'controller':
     case 'keyboard': return 'controls'; // controller support P1 (owner 10-07): keyboard + controller bindings
-    case 'accessibility': return 'accessibility';
     case 'appearance':
-    case 'display': return 'display';
-    case 'assets':
-    case 'mods': return 'mods';
-    case 'audio':
+    case 'display':
+    case 'pitch': return 'pitch';
+    case 'skills': return 'skills';
     case 'ui': return 'ui';
+    case 'art':
+    case 'mods': return 'art';
+    case 'audio':
+    case 'sound': return 'audio';
+    case 'video': return 'video';
+    case 'accessibility': return 'accessibility';
+    case 'account': return 'account';
+    case 'assets':
+    case 'modpacks': return 'modpacks';
+    case 'advanced': // the old General > Advanced group held the diagnostics
+    case 'diagnostics': return 'diagnostics';
     case 'about':
     case 'credits': return 'credits';
     default: return 'general';

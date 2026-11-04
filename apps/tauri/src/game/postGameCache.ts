@@ -134,6 +134,35 @@ export async function postGameSnapshotKeys(): Promise<Set<string>> {
   } catch { return new Set(); }
 }
 
+/** One held entry as the Modern Replay blade's "Recently watched" list draws it (owner 11-03, lane 3). */
+export interface PostGameSummary {
+  key: string;
+  server: string;
+  gameId: string;
+  seat: PostGameSnapshot['seat'];
+  savedAt: number;
+  home: { name: string; coach: string; race: string };
+  away: { name: string; coach: string; race: string };
+}
+
+/** The held entries for `server`, newest first, at most `limit` (the games this client saw to the end in the last
+ *  7 days: played, spectated or replayed). Read-only; a failing store yields an empty list. */
+export async function recentPostGameSummaries(server: string, limit = 8): Promise<PostGameSummary[]> {
+  try {
+    await prunePostGameSnapshots();
+    const index = (await store().index()).filter((r) => r.key.startsWith(`${server}|`)).sort((a, b) => b.savedAt - a.savedAt);
+    const out: PostGameSummary[] = [];
+    for (const { key } of index) {
+      if (out.length >= limit) break;
+      const row = await loadPostGameSnapshot(key);
+      if (!row) continue;
+      const side = (t: { teamName?: string; coach?: string; race?: string } | undefined) => ({ name: t?.teamName ?? '', coach: t?.coach ?? '', race: t?.race ?? '' });
+      out.push({ key, server: row.server, gameId: row.gameId, seat: row.seat, savedAt: row.savedAt, home: side(row.game?.teamHome), away: side(row.game?.teamAway) });
+    }
+    return out;
+  } catch { return []; }
+}
+
 /**
  * Owner 10-10: a spectated game's pre-join dice can be imported AFTER its Details were saved (the replay download
  * outlived the end screen - or the view). Replace the saved entry's tallies and coverage; everything else it holds

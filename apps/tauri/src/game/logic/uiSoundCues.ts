@@ -46,8 +46,19 @@ export function dieSettleMs(roll: CueRoll | null | undefined): number {
 /** The success sound of a rerolled chain never crowds the failed die's cue: at least this long after it. */
 export const REROLL_SUCCESS_AFTER_FAIL_CUE_MS = 150;
 
-/** Seconds left on the clock when the one-minute warning sounds. */
+/** Seconds left on the clock when the one-minute warning sounds (the default "Turn clock warning"). */
 export const TURN_CLOCK_MINUTE_S = 60;
+/** Settings reflow (11-03): Settings > Audio "Turn clock warning" - when the early warning sounds, in seconds left;
+ *  null = Off (no early warning and no 10..6 warning tones, exactly as the retired "Turn clock 1 minute" toggle did
+ *  when off). The last-seconds countdown (5..1) is not part of it. */
+export const TURN_CLOCK_WARNING_SECONDS: Readonly<Record<'2m' | '1m' | '30s' | 'off', number | null>> = {
+  '2m': 120, '1m': TURN_CLOCK_MINUTE_S, '30s': 30, off: null,
+};
+export function turnClockWarnAtS(choice: string | null | undefined): number | null {
+  return choice != null && Object.prototype.hasOwnProperty.call(TURN_CLOCK_WARNING_SECONDS, choice)
+    ? TURN_CLOCK_WARNING_SECONDS[choice as keyof typeof TURN_CLOCK_WARNING_SECONDS]
+    : TURN_CLOCK_MINUTE_S;
+}
 /** Owner 10-21: the warning tone (the minute sound) repeats once on each remaining second 10 .. 6, then the last-seconds
  *  countdown sounds once on each of 5, 4, ... 1. */
 export const TURN_CLOCK_WARNING_FROM_S = 10;
@@ -61,11 +72,12 @@ export type TurnClockCue = 'minute' | 'warning' | 'countdown' | null;
  * The clock re-snaps to the server's ~1 s tick, so a skipped tick still crosses the minute once and still counts
  * the second it lands on.
  */
-export function turnClockCue(prev: number | null | undefined, next: number, myTurn: boolean): TurnClockCue {
+export function turnClockCue(prev: number | null | undefined, next: number, myTurn: boolean, warnAtS: number | null = TURN_CLOCK_MINUTE_S): TurnClockCue {
   if (!myTurn || prev == null || !Number.isFinite(prev) || !Number.isFinite(next) || next >= prev) return null;
   if (next >= 1 && next <= TURN_CLOCK_COUNTDOWN_FROM_S) return 'countdown';
+  if (warnAtS === null) return null; // "Turn clock warning: Off" - only the countdown sounds
   if (next > TURN_CLOCK_COUNTDOWN_FROM_S && next <= TURN_CLOCK_WARNING_FROM_S) return 'warning';
-  if (prev > TURN_CLOCK_MINUTE_S && next <= TURN_CLOCK_MINUTE_S) return 'minute';
+  if (prev > warnAtS && next <= warnAtS) return 'minute';
   return null;
 }
 
@@ -84,15 +96,20 @@ export function turnClockCue(prev: number | null | undefined, next: number, myTu
  * already new when the key changes (a reconnect, a late first sample, turn and sample seen together) initialises at once.
  */
 export function createTurnClockCueTracker(): {
-  reading: (turnKey: string | null, seconds: number | null, myTurn: boolean, sampleId: number | null) => TurnClockCue;
+  /** `warnAtS`: the early warning's threshold (turnClockWarnAtS of Settings > Audio); null = Off. */
+  reading: (turnKey: string | null, seconds: number | null, myTurn: boolean, sampleId: number | null, warnAtS?: number | null) => TurnClockCue;
 } {
   let key: string | null = null;
   let prev: number | null = null;
   let lastSample: number | null = null;
-  let minuteDone = false;
+  /** Sol r2: the early warning SOUNDED this turn (once per turn, whatever the choice is afterwards). */
+  let warned = false;
+  /** The lowest reading of this turn so far: a threshold at or above it has already been passed (initialisation or a
+   *  re-snapping clock never cue), one below it is still ahead - even if the choice was Off a moment ago. */
+  let low = Infinity;
   const countdownDone = new Set<number>();
   return {
-    reading(turnKey, seconds, myTurn, sampleId) {
+    reading(turnKey, seconds, myTurn, sampleId, warnAtS = TURN_CLOCK_MINUTE_S) {
       const freshSample = sampleId !== lastSample;
       lastSample = sampleId;
       if (turnKey == null || seconds == null || !Number.isFinite(seconds)) { key = null; prev = null; return null; }
@@ -100,17 +117,20 @@ export function createTurnClockCueTracker(): {
       if (prev === null) {
         if (!freshSample) return null; // still the sample observed before the turn change: wait for this turn's own
         prev = seconds;
-        minuteDone = seconds <= TURN_CLOCK_MINUTE_S;
+        warned = false;
+        low = seconds;
         countdownDone.clear();
         for (let s = Math.max(1, Math.ceil(seconds)); s <= TURN_CLOCK_WARNING_FROM_S; s += 1) countdownDone.add(s);
         return null;
       }
-      const cue = turnClockCue(prev, seconds, myTurn);
+      const cue = turnClockCue(prev, seconds, myTurn, warnAtS);
       prev = seconds;
       let out: TurnClockCue = null;
       if ((cue === 'countdown' || cue === 'warning') && !countdownDone.has(seconds)) { countdownDone.add(seconds); out = cue; }
-      else if (cue === 'minute' && !minuteDone) out = 'minute';
-      if (seconds <= TURN_CLOCK_MINUTE_S) minuteDone = true;
+      // Sol r2: a disabled warning (Off) consumes nothing - only a SOUNDED one does. A threshold still ahead of this
+      // turn's lowest reading re-arms when the choice changes (Off at 200 s, 2 min at 190 s: it sounds at 120 s).
+      else if (cue === 'minute' && !warned && warnAtS !== null && low > warnAtS) { warned = true; out = 'minute'; }
+      low = Math.min(low, seconds);
       return out;
     },
   };

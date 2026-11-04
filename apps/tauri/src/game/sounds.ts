@@ -92,7 +92,12 @@ export const SOUND_CATALOG: SoundEntry[] = [
 
 /** Owner 10-19: `settings.soundStyles[id] === SOUND_STYLE_OFF` silences that one event (Settings › Sound). */
 export const SOUND_STYLE_OFF = 'off';
+/** Settings reflow (Sol r1): the turn-clock warning tone answers to Settings > Audio "Turn clock warning" alone
+ *  (settings.turnClockWarning; the view only plays it when the select allows). The retired "Turn clock 1 minute"
+ *  toggle's soundStyles entry is never consulted, so a stale one can not silence the select. */
+export const SELECT_OWNED_SOUND_IDS: ReadonlySet<string> = new Set(['turnClockMinute']);
 function soundEventOff(soundId: string): boolean {
+  if (SELECT_OWNED_SOUND_IDS.has(soundId)) return false;
   return settings.soundStyles[soundId] === SOUND_STYLE_OFF;
 }
 

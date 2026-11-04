@@ -7,6 +7,10 @@ export type SpectatorReviewPhase = 'live' | 'pausing' | 'paused' | 'playing' | '
 export interface SpectatorPresentationAdapter {
   /** Synchronous single publish of model AND durable HUD. Must not initiate async hydration. */
   publish(checkpoint: SpectatorCheckpoint, snap: boolean): void;
+  /** Optional presentation hold BEFORE `event`'s position is published (owner 11-03: a loose-ball bounce waits for
+   *  the injury teardown in front of it). null = no hold: the position publishes synchronously, as without the hook.
+   *  Must fail open on its own and settle promptly on abort; a throw / rejection is ignored. */
+  holdPublication?(event: SpectatorEvent, signal: AbortSignal): Promise<void> | null;
   /** Only transient effects; never writes durable state. Abort must settle promptly. */
   present(event: SpectatorEvent, signal: AbortSignal): Promise<void>;
   /** Optional synchronous cue for accelerated playback only; silent seek never calls this. */
@@ -91,6 +95,19 @@ export class LiveSpectateReview {
     const active = new AbortController();
     this.active = active;
     this.candidate = checkpoint;
+    let pendingHold: Promise<void> | null = null;
+    try { pendingHold = this.adapter.holdPublication?.(event, active.signal) ?? null; } catch { pendingHold = null; }
+    if (pendingHold) {
+      // The hold is part of this presentation: pause / seek / return abort it like a transient.
+      const hold = pendingHold.catch(() => undefined);
+      let releaseHold!: () => void;
+      const holdAborted = new Promise<void>((resolve) => { releaseHold = resolve; active.signal.addEventListener('abort', releaseHold, { once: true }); });
+      const held = Promise.race([hold, holdAborted]);
+      this.activeCompletion = held;
+      await held;
+      active.signal.removeEventListener('abort', releaseHold);
+      if (active.signal.aborted || generation !== this.presentationGeneration || this.active !== active) return false;
+    }
     // Candidate is complete before the first transient starts. Visible P remains independently owned.
     if (!this.publish(checkpoint, false)) return false;
     const transient = Promise.resolve().then(() => {

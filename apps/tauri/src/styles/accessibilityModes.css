@@ -1,0 +1,194 @@
+/*
+ * Settings reflow (owner 11-03): Settings > Accessibility modes. Each mode is ONE class on <html>, toggled by
+ * game/accessibilityModes.ts from the settings; nothing here applies without its class. Rules are !important because
+ * the component styles they adjust are scoped (higher specificity) and the theme tokens are set inline on :root.
+ *
+ *  sf-reduce-motion   - decorative motion off: entrance pops / drops / spins land at once (their delays and on-screen
+ *                       lifetimes are UNCHANGED, so the 450 ms viewer-visible rule and the roll-beat hold are untouched),
+ *                       the dice tumble is skipped and decorative pulses stop. Loading spinners keep turning (they
+ *                       say "working"), and a splash whose fade IS its lifetime keeps its fade.
+ *  sf-reduce-flashing - no strobing or blinking: flicker, blink and flash keyframes stop (steady state shown).
+ *  sf-high-contrast   - stronger panel borders and text contrast, by token overrides + a panel outline.
+ *  sf-larger-targets  - bigger hit areas for small HUD buttons and chips (min-size / padding only: a size only ever
+ *                       grows - every rule is a minimum, never a fixed width or height).
+ */
+
+/* ---------------------------------------------------------------- reduce motion: entrances land at once */
+html.sf-reduce-motion .coin-lift { animation: none !important; }
+html.sf-reduce-motion .coin,
+html.sf-reduce-motion .wc-die.from-north,
+html.sf-reduce-motion .wc-die.from-south,
+html.sf-reduce-motion .fan-side.home,
+html.sf-reduce-motion .fan-side.away,
+html.sf-reduce-motion .ko-splash,
+html.sf-reduce-motion .ko-outcome,
+html.sf-reduce-motion .ko-name-big,
+html.sf-reduce-motion .ko-dice,
+html.sf-reduce-motion .coin-call,
+html.sf-reduce-motion .coin-caption,
+html.sf-reduce-motion .wc-caption,
+html.sf-reduce-motion .wc-title,
+html.sf-reduce-motion .fan-splash,
+html.sf-reduce-motion .skill-choice,
+html.sf-reduce-motion .followup-chip,
+html.sf-reduce-motion .followup-chip.head-mounted,
+html.sf-reduce-motion .injury-splash,
+html.sf-reduce-motion .ko-toast,
+html.sf-reduce-motion .fall-toast,
+html.sf-reduce-motion .turnover-splash,
+html.sf-reduce-motion .turnstart-splash,
+html.sf-reduce-motion .masterchef-splash,
+html.sf-reduce-motion .opponent-left-toast,
+html.sf-reduce-motion .mvp-screen-portrait,
+html.sf-reduce-motion .mvp-nominate-overlay,
+html.sf-reduce-motion .mvp-nominate-round,
+html.sf-reduce-motion .sendoff-result-panel,
+html.sf-reduce-motion .watch-out-toast,
+html.sf-reduce-motion .launch-splash,
+html.sf-reduce-motion .tour-toast,
+html.sf-reduce-motion .postgame {
+  /* 1 ms, not none: the element still reaches its keyframes' end state (forwards fill), after its usual delay. */
+  animation-duration: 1ms !important;
+}
+/* (scoped components rename their @keyframes, so a mode never names one: it shortens or stops what is there) */
+html.sf-reduce-motion .induce-bought,
+html.sf-reduce-motion .spp-splash { animation: none !important; }
+/* the block-dice tumble (the view also skips it: SpectateView bpReducedMotion) */
+html.sf-reduce-motion .bp-die.bp-die-tumbling img { animation: none !important; }
+
+/* ---------------------------------------------------------------- reduce motion: decorative pulses stop */
+html.sf-reduce-motion .live-dot,
+html.sf-reduce-motion .live-count,
+html.sf-reduce-motion .cine-dismiss-hint,
+html.sf-reduce-motion .induce-underdog,
+html.sf-reduce-motion .induce-choosing .dots i,
+html.sf-reduce-motion .induce-waiting .dots i,
+html.sf-reduce-motion .pg-mvp-pending-dot,
+html.sf-reduce-motion .ord-dot,
+html.sf-reduce-motion .game-browser .gb-live,
+html.sf-reduce-motion .quick-spectator-pause .go-live-dot,
+html.sf-reduce-motion .config-bar .quick-live .quick-live-dot,
+html.sf-reduce-motion .quick-live-header .quick-live-dot,
+html.sf-reduce-motion .tour-arrow,
+html.sf-reduce-motion .bp-team[data-chosen='true'],
+html.sf-reduce-motion .reroll-menu-item[data-chosen='true'],
+html.sf-reduce-motion .splash-continue,
+html.sf-reduce-motion .quick-conn-pulse,
+html.sf-reduce-motion .setup-die-skeleton,
+html.sf-reduce-motion .ind-stencil,
+html.sf-reduce-motion .live-indicator.polling,
+html.sf-reduce-motion .refresh-dot,
+html.sf-reduce-motion .validity-card.is-refreshing::after,
+html.sf-reduce-motion .rejoin-steps li .glyph,
+html.sf-reduce-motion .status-light.loading,
+/* parity with the components' own prefers-reduced-motion rules */
+html.sf-reduce-motion .pg-mvp-spin,
+html.sf-reduce-motion .pg-mvp-awaiting::after,
+html.sf-reduce-motion .sendoff-waiting-line.typing::after {
+  animation: none !important;
+}
+html.sf-reduce-motion .sendoff-waiting-card,
+html.sf-reduce-motion .ind-summary { transition: none !important; }
+/* these dots are invisible between pulses: show them steady */
+html.sf-reduce-motion .mvp-waiting-dots i { animation: none !important; opacity: 1 !important; }
+
+/* ---------------------------------------------------------------- reduce flashing */
+html.sf-reduce-flashing .live-badge[data-flash='true'] .live-dot,
+html.sf-reduce-flashing .live-badge[data-flash='true'] .live-count,
+html.sf-reduce-flashing .config-bar .quick-live[data-flash='true'],
+html.sf-reduce-flashing .pg-mvp-spin,
+html.sf-reduce-flashing .mvp-screen-chip.mvp-flash,
+html.sf-reduce-flashing .ind-stencil,
+html.sf-reduce-flashing .induce-underdog,
+html.sf-reduce-flashing .induce-choosing .dots i,
+html.sf-reduce-flashing .induce-waiting .dots i,
+html.sf-reduce-flashing .sendoff-waiting-line.typing::after,
+html.sf-reduce-flashing .quick-conn-pulse,
+html.sf-reduce-flashing .cine-dismiss-hint {
+  animation: none !important;
+}
+html.sf-reduce-flashing .mvp-waiting-dots i { animation: none !important; opacity: 1 !important; }
+/* the SPP toast's double pulse strobes; the bought-inducement glow throbs: both shown steady */
+html.sf-reduce-flashing .spp-splash,
+html.sf-reduce-flashing .induce-bought { animation: none !important; }
+
+/* ---------------------------------------------------------------- high contrast */
+html.sf-high-contrast {
+  /* secondary text reads as primary text; borders take the text colour (works in a dark or a light scheme) */
+  --ui-muted: var(--ui-text) !important;
+  --ui-text-dim: color-mix(in srgb, var(--ui-text) 82%, var(--ui-surface, #000)) !important;
+  --ui-border: color-mix(in srgb, var(--ui-text) 78%, var(--ui-surface, #000)) !important;
+  --ui-focus-halo: var(--ui-focus) !important;
+}
+html.sf-high-contrast .ui-panel,
+html.sf-high-contrast .coach-panel,
+html.sf-high-contrast .config-bar,
+html.sf-high-contrast .pitch-confirm-panel,
+html.sf-high-contrast .chat-toast,
+html.sf-high-contrast .settings-pane,
+html.sf-high-contrast [role='dialog'],
+html.sf-high-contrast [role='alertdialog'],
+html.sf-high-contrast [role='menu'] {
+  outline: 2px solid var(--ui-border) !important;
+  outline-offset: -2px;
+}
+html.sf-high-contrast :focus-visible { outline: 3px solid var(--ui-focus) !important; outline-offset: 1px; }
+
+/* ---------------------------------------------------------------- larger click targets */
+/* Sol r2: a floor that can only RAISE a size. The generic rules have ZERO specificity (:where) and no !important, so
+   any control that already declares its own minimum (a 76 px confirmation button, a tall chip) keeps it untouched;
+   a control with no minimum of its own (min-width/height: auto) gets the floor. */
+:where(html.sf-larger-targets) :where(.pitch-host button, .pitch-host [role='button'], .config-bar button) {
+  min-width: 34px;
+  min-height: 34px;
+}
+:where(html.sf-larger-targets) :where(.pitch-host [class*='-chip'], .pitch-host [class*='chip-'], .pitch-host .tab, .pitch-host [role='tab']) {
+  min-height: 30px;
+}
+/* Sol r6: controls that DECLARE their own minimum BELOW the floor beat the zero-specificity rule above, so each is raised
+   here explicitly, per dimension, with !important. This is max(own minimum, floor): every one is audited to declare
+   less than 34 px in that dimension (the test re-reads each declaration), and a dimension it declares larger is never
+   named. The panel handles are a fixed 28 x 28 (.ui-grip, .ui-resizer, .ui-reset). */
+html.sf-larger-targets .rr-decline-chip,
+html.sf-larger-targets .log-panel .popout-btn,
+html.sf-larger-targets .log-panel .collapse {
+  min-width: 34px !important;
+}
+html.sf-larger-targets .rr-decline-chip,
+html.sf-larger-targets .bp-opt,
+html.sf-larger-targets .bl-opt,
+html.sf-larger-targets .hud-center.scoreboard .end-turn,
+html.sf-larger-targets .log-panel .popout-btn,
+html.sf-larger-targets .log-panel .collapse {
+  min-height: 34px !important;
+}
+html.sf-larger-targets .ui-reset,
+html.sf-larger-targets .ui-grip,
+html.sf-larger-targets .ui-resizer {
+  min-width: 34px !important;
+  min-height: 34px !important;
+}
+
+/* ---------------------------------------------------------------- visual sound cues (game/visualSoundCues.ts) */
+.sf-sound-cues {
+  position: fixed;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.sf-sound-cue {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border-left: 4px solid var(--ui-heading, #e23a40);
+  background: color-mix(in srgb, var(--ui-surface, #14161a) 92%, transparent);
+  color: var(--ui-text, #e6e9ef);
+  font: 700 max(var(--ui-min-primary-text-size, 16px), 0.9rem) / 1.2 var(--font-body, system-ui, sans-serif);
+  box-shadow: 0 2px 8px #0008;
+  white-space: nowrap;
+}
+html.sf-high-contrast .sf-sound-cue { outline: 2px solid var(--ui-border); outline-offset: -2px; }
