@@ -112,6 +112,21 @@
    variables read the Modern tokens here, so it follows Dark / Light */
 .sf-lm .lm-coach-panel { --ui-old-lace: var(--ui-surface-2); --ui-forest: var(--ui-text); }
 .sf-lm .lm-coach-panel > .lm-body { display: block; } /* the card is a flex item with basis 0: a block parent keeps its 52 px */
+/* owner 11-03 (spec-coach-card-stats): the card's stats row and "More stats" in panel dress; the card fills the panel */
+.sf-lm .lm-coach-panel .coach-card { max-width: none; box-shadow: inset 0 0 0 1px var(--sf-panel-line); border-radius: 2px; }
+.sf-lm .lm-coach-panel .perf-k { font-family: var(--sf-band-font); color: var(--ui-muted); }
+.sf-lm .lm-coach-panel .perf-more { color: var(--ui-accent); }
+.sf-lm .lm-coach-panel .perf-more:focus-visible { outline-color: var(--ui-focus); }
+/* the expanded coach stats dialog (CoachStatsPanel.vue, teleported with .sf-lm on its own root): League Manager panel,
+   band heading, sf-btn filter buttons and sf-table tables; the card's colour variables read the Modern tokens */
+.sf-lm.cs-overlay { --ui-old-lace: var(--ui-surface-2); --ui-forest: var(--ui-text); --font-display: var(--font-heading); }
+.sf-lm.cs-overlay .cs-panel > .hm-band { margin: 0; padding: 10px 16px 8px; }
+.sf-lm.cs-overlay .cs-panel > .hm-band h2 { font-size: 22px; }
+.sf-lm.cs-overlay .cs-section h3 { font: 18px/1.15 var(--sf-band-title-font); color: var(--ui-heading); }
+.sf-lm.cs-overlay .cs-k { font: 11px/1.4 var(--sf-band-font); text-transform: uppercase; letter-spacing: .12em; color: var(--ui-muted); }
+.sf-lm.cs-overlay .cs-filter-btn[aria-pressed="true"] { color: var(--ui-text-on-primary); background: var(--ui-primary); border-color: var(--ui-primary); }
+.sf-lm.cs-overlay :is(.cs-empty, .cs-foot) { color: var(--ui-muted); }
+.sf-lm.cs-overlay .cs-foot { border-top: 2px solid var(--sf-panel-line); }
 
 /* ---- the Details popup inside a Modern blade: the blade's own popup (scoped .details-*) in panel dress */
 .sf-lm .details-card.lm-panel { color: var(--ui-text); background: linear-gradient(var(--sf-panel-top), var(--sf-panel-bottom)), var(--ui-surface); border: 2px solid var(--sf-panel-line); border-radius: 2px; }

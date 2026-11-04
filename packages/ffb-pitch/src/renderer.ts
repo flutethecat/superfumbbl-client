@@ -4264,7 +4264,12 @@ export class PitchRenderer {
   /** owner o66m+: the mover whose reach this path belongs to — lets the preview stamp per-step dodge/rush
    *  chips (client geometry), so #9/#10 "Dodge N+" reads on the exact squares along the auto-path. */
   private o66PathMover: string | null = null;
+  /** FUMBBL Controls (owner 11-03): the plotted path is a HOVER preview (the Automove route under the pointer, numbered
+   *  in the planner route style). Information only: it is never a planned destination (no pass / hand-off origin, no
+   *  right-click waypoint cancel, no "moving" tackle-zone read). */
+  private o66PathIsHover = false;
   setO66Path(squares: [number, number][], moverId?: string | null): void {
+    this.o66PathIsHover = false;
     this.o66PathSquares = squares.slice();
     this.o66PathMover = squares.length > 1 ? (moverId ?? null) : null;
     // Owner 10-13 (pass at destination): an armed Pass card was computed from the throw origin of the moment it was
@@ -4284,8 +4289,18 @@ export class PitchRenderer {
   /** Owner 10-13: the planned DESTINATION of the selected player's plotted Order-66 route (null = no route). A Pass
    *  armed while a route is plotted is thrown from here after the walk, so its card, arrow, Pass/Catch chips and
    *  interceptor tips are computed from this square instead of the thrower's current square. */
+  /** FUMBBL Controls: draw (or clear, with []) the hover preview of the Automove route, [from, ...route]. A real plotted
+   *  route is never replaced by a hover preview. */
+  setO66HoverPath(squares: [number, number][], moverId?: string | null): void {
+    if (!this.o66PathIsHover && this.o66PathSquares.length > 1) return;
+    if (squares.length < 2 && this.o66PathSquares.length < 2) return;
+    this.o66PathSquares = squares.length > 1 ? squares.slice() : [];
+    this.o66PathMover = squares.length > 1 ? (moverId ?? null) : null;
+    this.o66PathIsHover = squares.length > 1;
+    this.redrawOverlays();
+  }
   plannedPassOrigin(): Square | null {
-    if (!this.order66 || this.o66PathSquares.length < 2 || !this.selectedPlayerId) return null;
+    if (!this.order66 || this.o66PathSquares.length < 2 || !this.selectedPlayerId || this.o66PathIsHover) return null;
     if (this.o66PathMover !== this.selectedPlayerId) return null;
     const [x, y] = this.o66PathSquares[this.o66PathSquares.length - 1]!;
     return [x, y];
@@ -5102,6 +5117,17 @@ export class PitchRenderer {
    *  pass/bomb free-select is armed (null off-pitch / on leave). The host drives the throw+catch
    *  tooltip and intercept feed off this; additive — the internal cursor/tip paths are unchanged. */
   onSquareHover: ((coord: [number, number] | null) => void) | null = null;
+  /** FUMBBL Controls (owner 11-03): the on-pitch square under the pointer, on every change (null off the pitch). Feeds
+   *  the Automove hover path; additive, independent of onSquareHover's pass / bomb gate. */
+  onHoverSquare: ((coord: [number, number] | null) => void) | null = null;
+  private hoverSquareLast: string | null = null;
+  /** FUMBBL Controls Right Click (owner 11-03): offered every canvas right-click before the renderer's own handling.
+   *  True = the host took it (the renderer does nothing else). Null = today's right-click. */
+  onRightClick: ((canvasX: number, canvasY: number) => boolean) | null = null;
+  /** FUMBBL Controls (rig g1100 #1): true = a team-mate click in Pass / Hand-off mode is NOT armed as the two-click
+   *  "Throw the pass?" card here; it goes to onPlayerClick, where the host throws / hands off on that one click. Null or
+   *  false = the existing two-click arm (Super FUMBBL Controls unchanged). */
+  oneClickActionTargets: (() => boolean) | null = null;
   /** Controller support P2a: the pad's A on a setup token (dugout reserve or placed player). A mouse press there starts
    *  a drag whose stationary release the host routes to its tap handler; the pad has no drag, so it reports the tap. */
   onSetupTokenTap: ((playerId: string) => void) | null = null;
@@ -6474,6 +6500,9 @@ export class PitchRenderer {
     this.onCue = null;
     this.onActionHover = null;
     this.onSquareHover = null;
+    this.onHoverSquare = null;
+    this.onRightClick = null;
+    this.oneClickActionTargets = null;
     this.onSetupTokenTap = null;
     this.onMiddleClick = null;
     this.stopCrosshairGlide();
@@ -8539,7 +8568,7 @@ export class PitchRenderer {
   /** Right-click is exclusively a waypoint-cancel gesture while either planner owns a plotted route. It clears
    * the complete route in one action and returns true so the canvas handler cannot surface any context menu. */
   dismissWaypointPlanForContextMenu(): boolean {
-    const hasOrder66Waypoints = this.o66PathSquares.length > 1;
+    const hasOrder66Waypoints = this.o66PathSquares.length > 1 && !this.o66PathIsHover;
     if (this.plannedPath.length === 0 && !hasOrder66Waypoints) return false;
     if (this.plannedPath.length > 0) this.setPath([]);
     if (hasOrder66Waypoints) this.setO66Path([]);
@@ -11697,7 +11726,7 @@ export class PitchRenderer {
     const target = this.game.fieldModel.targetSelectionState as { playerId?: unknown; targetSelectionStatus?: unknown } | null | undefined;
     const acknowledgedTarget = !!target && String(target.playerId ?? '') === this.selectedPlayerId
       && String(target.targetSelectionStatus ?? '') === 'SELECTED';
-    const moving = acknowledgedTarget || this.o66PathSquares.length > 1 || Number(acting?.currentMove) > 0;
+    const moving = acknowledgedTarget || (this.o66PathSquares.length > 1 && !this.o66PathIsHover) || Number(acting?.currentMove) > 0;
     return moving ? 'actor' : 'selection';
   }
 
@@ -23966,6 +23995,7 @@ export class PitchRenderer {
         this.squareHoverLast = null;
         this.onSquareHover?.(null);
       }
+      if (this.hoverSquareLast !== null) { this.hoverSquareLast = null; this.onHoverSquare?.(null); }
     };
     this.listenCanvas(canvas, 'pointerleave', (event) => {
       this.cancelShiftSetupPress(event.pointerId); // Astra pass 2: a press that left the canvas never resumes
@@ -23988,6 +24018,7 @@ export class PitchRenderer {
     // One right-click anywhere clears the full plan and is swallowed; context menus exist only without waypoints.
     this.listenCanvas(canvas, 'contextmenu', (event) => {
       event.preventDefault();
+      if (this.onRightClick?.(event.offsetX, event.offsetY)) return; // FUMBBL Controls Right Click (host-owned)
       this.contextAt(event.offsetX, event.offsetY);
     });
   }
@@ -24000,6 +24031,13 @@ export class PitchRenderer {
     const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
     const [sx, sy] = worldToSquare(worldX, worldY);
     this.lastHoverSquare = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS ? [sx, sy] : null;
+    {
+      const hoverKey = this.lastHoverSquare ? `${sx},${sy}` : null;
+      if (hoverKey !== this.hoverSquareLast) {
+        this.hoverSquareLast = hoverKey;
+        this.onHoverSquare?.(this.lastHoverSquare ? [sx, sy] : null);
+      }
+    }
     // Pass/bomb targeting surface (Fives contract 08-12): emit the hovered square so the host can
     // drive the throw/catch tooltip + intercept feed. Fires ahead of the mode-specific handlers
     // below (which early-return) and is purely additive — dedup by key, null off-pitch / on mode-exit.
@@ -24312,6 +24350,7 @@ export class PitchRenderer {
           this.selectedPlayerId &&
           playerId !== this.selectedPlayerId &&
           (this.actionMode === 'handoff' || this.actionMode === 'pass') &&
+          !this.oneClickActionTargets?.() &&
           this.armActionTarget(playerId, [sx, sy])
         ) {
           return;
@@ -24344,6 +24383,29 @@ export class PitchRenderer {
     const dblPid = this.playersBySquare.get(`${sx},${sy}`);
     if (dblPid && this.preSetupCoords.has(dblPid)) return;
     if (dblPid) { this.onPlayerDoubleClick?.(dblPid); return; }
+  }
+
+  /** FUMBBL Controls Right Click "Works like Left Click": the primary tap at a canvas point (the same body a stationary
+   *  left press runs; the pad's A uses it too). False while a real press is in progress. */
+  tapAtCanvas(offsetX: number, offsetY: number): boolean {
+    if (this.pointers.size > 0) return false;
+    this.releaseCinematicForUser();
+    if (this.clickFrozenByCinematic()) return true;
+    this.clearHoverSquareMarker();
+    this.tapAt(offsetX, offsetY, { shift: false, ctrl: false, alt: false }, true);
+    return true;
+  }
+
+  /** FUMBBL Controls Right Click: what is under a canvas point - the player there (none off the pitch), and whether
+   *  the point is off the pitch (the exact inverse, as contextAt). */
+  pitchHitAt(offsetX: number, offsetY: number): { playerId: string | null; square: Square | null; offPitch: boolean } {
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    const ground = projectionInverse()(worldX, worldY);
+    const offPitch = ground.x < 0 || ground.x >= PITCH_COLS || ground.y < 0 || ground.y >= PITCH_ROWS;
+    const playerId = offPitch ? null : (this.playersBySquare.get(`${sx},${sy}`) ?? null);
+    return { playerId: playerId && !this.preSetupCoords.has(playerId) ? playerId : null, square: offPitch ? null : [sx, sy], offPitch };
   }
 
   /** The right-click body, shared by the canvas contextmenu and the pad crosshair's X. */

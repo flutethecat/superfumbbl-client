@@ -201,7 +201,9 @@ async function getBody(fetchFn: CoachProfileFetch, url: string, json: boolean): 
 }
 
 const cache = new Map<string, Promise<FumbblCoachProfile>>();
-const cacheKey = (name: string): string => name.trim().toLowerCase();
+/** One coach name, compared case-insensitively and trimmed (the profile cache key; the coach card's history filter). */
+export const coachNameKey = (name: string): string => name.trim().toLowerCase();
+const cacheKey = coachNameKey;
 
 export function clearFumbblCoachProfileCache(): void { cache.clear(); }
 

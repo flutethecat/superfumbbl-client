@@ -665,6 +665,10 @@ import { LOG_FONT_STACKS, SETTING_PREVIEWS } from './components/settings/setting
 import ForkConnectionRows from './components/settings/ForkConnectionRows.vue';
 import { uiZoomState } from './game/uiZoom';
 import { EDGE_PAN_SPEED, UI_ZOOM } from './game/settings';
+import { fumbblKeyConflict } from './game/settings';
+import { RIGHT_CLICK_BEHAVIOURS, type ControlLayer, type RightClickBehaviour } from './game/controlLayer';
+import { controlLayerSwitchNotice, effectiveControlLayer, installControlLayerWatch, pendingControlLayerSwitch } from './game/controlLayerSwitch';
+import { chordLabel, chordOf, defaultFumbblKeyBindings, FUMBBL_KEY_ACTIONS, fumbblKeyHolder, type FumbblKeyActionId } from './game/fumbblKeys';
 import { restoreSettingsSnapshotTransaction } from './game/assetModUi';
 import {
   SETTINGS_SECTIONS,
@@ -1419,6 +1423,74 @@ const themePreview = computed(() => {
 });
 /** When set, the next keydown rebinds this hotkey. */
 const capturingKey = ref<RebindableKey | null>(null);
+// FUMBBL Controls (owner 11-03, spec-fumbbl-controls-2026-11-03.md §3-§6): Settings > Controls. Every change of the
+// control layer goes through the switch rule (a switch during your own activation waits for it to end).
+installControlLayerWatch(settings);
+const controlLayerName = (layer: ControlLayer): string => (layer === 'fumbbl' ? t('settings.controlLayer.fumbbl') : t('settings.controlLayer.super'));
+const RIGHT_CLICK_LABEL_KEYS: Record<RightClickBehaviour, string> = {
+  super: 'settings.rightClick.super', endAction: 'settings.rightClick.endAction', leftClick: 'settings.rightClick.leftClick',
+  contextMenu: 'settings.rightClick.contextMenu', disabled: 'settings.rightClick.disabled',
+};
+/** The Right Click select edits the value of the layer picked above (values are stored per layer). */
+const rightClickForLayer = computed<RightClickBehaviour>({
+  get: () => settings.rightClickBehaviour[settings.controlLayer],
+  set: (v) => { settings.rightClickBehaviour = { ...settings.rightClickBehaviour, [settings.controlLayer]: v }; },
+});
+const confirmationsLayerName = computed(() => controlLayerName(effectiveControlLayer(settings)));
+/** The FUMBBL shortcut cell waiting for a key (null = none). */
+const capturingFumbblKey = ref<FumbblKeyActionId | null>(null);
+const fumbblKeyRefusal = ref('');
+function startFumbblKeyCapture(id: FumbblKeyActionId): void {
+  capturingKey.value = null;
+  capturingBinding.value = null;
+  fumbblKeyRefusal.value = '';
+  capturingFumbblKey.value = id;
+}
+function captureFumbblKey(event: KeyboardEvent): void {
+  const id = capturingFumbblKey.value;
+  if (!id) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.code === 'Escape') { capturingFumbblKey.value = null; return; }
+  if (event.code === 'Backspace' || event.code === 'Delete') {
+    settings.fumbblKeyBindings = { ...settings.fumbblKeyBindings, [id]: '' };
+    capturingFumbblKey.value = null;
+    return;
+  }
+  const chord = chordOf(event);
+  if (!chord) return; // a modifier alone: keep waiting for the key it modifies
+  capturingFumbblKey.value = null;
+  const refusal = fumbblKeyConflict(id, chord, settings);
+  if (refusal) { fumbblKeyRefusal.value = refusal; return; }
+  fumbblKeyRefusal.value = '';
+  settings.fumbblKeyBindings = { ...settings.fumbblKeyBindings, [id]: chord };
+}
+function fumbblKeyCellText(id: FumbblKeyActionId): string {
+  if (capturingFumbblKey.value === id) return t('settings.controls.capture.pressAKey');
+  return chordLabel(settings.fumbblKeyBindings[id] ?? '', keyLabel);
+}
+function resetFumbblKeys(): void {
+  capturingFumbblKey.value = null;
+  fumbblKeyRefusal.value = '';
+  settings.fumbblKeyBindings = defaultFumbblKeyBindings();
+}
+/** FUMBBL shortcuts that share a key with a bindings-table action (shown while the toggle is on). */
+const fumbblKeyClashes = computed(() => {
+  if (!settings.fumbblShortcuts) return [];
+  const out: { id: FumbblKeyActionId; holder: string }[] = [];
+  for (const a of FUMBBL_KEY_ACTIONS) {
+    const chord = settings.fumbblKeyBindings[a.id];
+    if (!chord || chord.includes('+')) continue;
+    if (fumbblKeyHolder(settings.fumbblKeyBindings, chord, a.id)) continue;
+    for (const action of CONTROL_ACTIONS) {
+      if (action.context !== 'game' && action.context !== 'any') continue;
+      const b = getBinding(settings, action.id).keyboard;
+      if (b.primary === chord || b.secondary === chord) out.push({ id: a.id, holder: action.label });
+    }
+  }
+  return out;
+});
+function dismissControlLayerNotice(): void { controlLayerSwitchNotice.value = null; }
 /** Owner 10-02: why the last rebind was refused (a key another shortcut owns); cleared on the next capture. */
 const keybindRefusal = ref('');
 // JLeav 09-23 (#5): a slider at its maximum looked like it could go further — the default track has no fill.
@@ -2059,6 +2131,7 @@ watch(leaveGamePrompt, (open) => {
 onBeforeUnmount(() => window.removeEventListener('keydown', escLeaveGame, true));
 
 function captureKey(event: KeyboardEvent) {
+  if (capturingFumbblKey.value) { captureFumbblKey(event); return; }
   if (capturingBinding.value) { captureBindingKey(event); return; }
   if (!capturingKey.value) return;
   event.preventDefault();
@@ -2207,7 +2280,7 @@ function resetBindings(): void {
   bindingRefusal.value = '';
   resetControlBindings(settings);
 }
-watch(() => ui.settingsOpen, (open) => { if (!open) { clearCaptureBHold(); capturingBinding.value = null; bindingRefusal.value = ''; } });
+watch(() => ui.settingsOpen, (open) => { if (!open) { clearCaptureBHold(); capturingBinding.value = null; bindingRefusal.value = ''; capturingFumbblKey.value = null; fumbblKeyRefusal.value = ''; } });
 
 /** The main-screen blades in ribbon order (only those the ribbon shows). */
 function visibleBlades(): AppView[] {
@@ -2736,6 +2809,16 @@ onBeforeUnmount(() => {
       :checking="clientVersionChecking" :message="clientVersionMessage"
       @update="void updateFromClientVersionBlock()" @close="dismissClientVersionBlock()" @continue="dismissClientVersionBlock()" />
 
+    <!-- FUMBBL Controls §6: a control-layer switch made during your own activation waits for it to end (OK only). -->
+    <div v-if="controlLayerSwitchNotice" class="modal-backdrop save-prompt-backdrop control-layer-notice" data-testid="control-layer-notice"
+      role="dialog" aria-modal="true" @click.self="dismissControlLayerNotice()">
+      <div class="save-prompt">
+        <p>{{ $t('settings.controlLayer.switchNotice', { layer: controlLayerName(controlLayerSwitchNotice.to), player: controlLayerSwitchNotice.playerName }) }}</p>
+        <div class="save-prompt-actions">
+          <button class="primary" data-testid="control-layer-notice-ok" @click="dismissControlLayerNotice()">{{ $t('settings.controlLayer.ok') }}</button>
+        </div>
+      </div>
+    </div>
     <div v-if="leaveGamePrompt" class="modal-backdrop save-prompt-backdrop"
       :data-dialog-id="LEAVE_GAME_DIALOG_ID" @click.self="cancelLeaveGame()">
       <div class="save-prompt">
@@ -2946,6 +3029,34 @@ onBeforeUnmount(() => {
              Owner 11-03: the Control layer, Right click and FUMBBL keyboard sections arrive with FUMBBL Controls
              (spec-fumbbl-controls-2026-11-03.md), which builds into this tab. -->
         <section v-if="settingsTab === 'controls'" data-testid="settings-controls">
+          <!-- FUMBBL Controls (owner 11-03): the control layer changes INPUT only; Super FUMBBL Controls is the default. -->
+          <fieldset class="settings-group" data-testid="control-layer-settings">
+            <legend>{{ $t('settings.controlLayer.legend') }}</legend>
+            <div class="row row-wide-ctl" data-testid="control-layer-row">
+              <label class="row-main">
+                <span>{{ $t('settings.controlLayer.label') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.controlLayer" data-testid="control-layer">
+                    <option value="super">{{ $t('settings.controlLayer.superDefault') }}</option>
+                    <option value="fumbbl">{{ $t('settings.controlLayer.fumbbl') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.controlLayer.info')" :def="$t('settings.controlLayer.super')" />
+            </div>
+            <p v-if="pendingControlLayerSwitch" class="hint" role="status" data-testid="control-layer-pending">
+              {{ $t('settings.controlLayer.pending', { layer: controlLayerName(pendingControlLayerSwitch.to), player: pendingControlLayerSwitch.playerName }) }}</p>
+            <div v-if="settings.controlLayer === 'fumbbl'" class="row" data-testid="automove-row">
+              <label class="row-main">
+                <span>{{ $t('settings.controlLayer.automove') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.automove" type="checkbox" data-testid="automove" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.controlLayer.automoveInfo')" :def="$t('settings.info.valueOn')" />
+            </div>
+          </fieldset>
+
           <fieldset class="settings-group" data-testid="mouse-settings">
             <legend>{{ $t('settings.general.mouse.mouse') }}</legend>
             <div class="row">
@@ -2986,6 +3097,22 @@ onBeforeUnmount(() => {
                 </span>
               </label>
               <SettingInfo :text="$t('settings.info.declareBlitz')" :def="$t('settings.info.declareBlitzDefault')" />
+            </div>
+          </fieldset>
+
+          <!-- FUMBBL Controls §3: Right Click, stored per control layer. -->
+          <fieldset class="settings-group" data-testid="right-click-settings">
+            <legend>{{ $t('settings.rightClick.legend') }}</legend>
+            <div class="row row-wide-ctl">
+              <label class="row-main">
+                <span>{{ $t('settings.rightClick.label', { layer: controlLayerName(settings.controlLayer) }) }}</span>
+                <span class="row-ctl">
+                  <select v-model="rightClickForLayer" data-testid="right-click-behaviour">
+                    <option v-for="b in RIGHT_CLICK_BEHAVIOURS" :key="b" :value="b">{{ $t(RIGHT_CLICK_LABEL_KEYS[b]) }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.rightClick.info')" />
             </div>
           </fieldset>
 
@@ -3034,6 +3161,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group" data-testid="confirmation-settings">
             <legend>{{ $t('settings.general.confirmations.confirmations') }}</legend>
             <p class="hint">{{ $t('settings.general.confirmations.eachPromptBelowAsks') }}</p>
+            <p v-if="settings.controlLayer === 'fumbbl' || pendingControlLayerSwitch" class="hint" data-testid="confirmations-layer">{{ $t('settings.controlLayer.confirmationsFor', { layer: confirmationsLayerName }) }}</p>
             <template v-for="row in CONFIRMATION_SETTING_ROWS" :key="row.key">
               <div class="row">
                 <label class="row-main">
@@ -3043,6 +3171,44 @@ onBeforeUnmount(() => {
                   </span>
                 </label>
                 <SettingInfo :text="row.hint" />
+              </div>
+            </template>
+          </fieldset>
+
+          <!-- FUMBBL Controls §5: FUMBBL keyboard shortcuts, either control layer. On = WASD camera pan off. -->
+          <fieldset class="settings-group" data-testid="fumbbl-shortcuts">
+            <legend>{{ $t('settings.fumbblKeys.legend') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.fumbblKeys.toggle') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.fumbblShortcuts" type="checkbox" data-testid="fumbbl-shortcuts-enabled" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.fumbblKeys.info')" :def="$t('settings.info.valueOff')" />
+            </div>
+            <template v-if="settings.fumbblShortcuts">
+              <table class="keybind-table bindings-table sf-table" data-testid="fumbbl-key-table">
+                <thead><tr><th scope="col">{{ $t('settings.controls.editBindings.action') }}</th><th scope="col">{{ $t('settings.controls.editBindings.keyboardMouse') }}</th></tr></thead>
+                <tbody>
+                  <tr v-for="a in FUMBBL_KEY_ACTIONS" :key="a.id" :data-fumbbl-key="a.id">
+                    <td>{{ a.label }}</td>
+                    <td>
+                      <button type="button" class="keybind binding-cell" :data-capturing="capturingFumbblKey === a.id"
+                        @click="startFumbblKeyCapture(a.id)">{{ fumbblKeyCellText(a.id) }}</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-if="fumbblKeyRefusal" class="hint keybind-refusal" role="status" data-testid="fumbbl-key-refusal">{{ fumbblKeyRefusal }}</p>
+              <p v-for="c in fumbblKeyClashes" :key="c.id" class="hint keybind-refusal" role="status" data-testid="fumbbl-key-clash">
+                {{ $t('settings.fumbblKeys.clash', { key: fumbblKeyCellText(c.id), action: c.holder }) }}</p>
+              <div class="row">
+                <span class="row-label">{{ $t('settings.fumbblKeys.resetLabel') }}</span>
+                <span class="row-ctl">
+                  <button type="button" class="sf-btn small" data-testid="reset-fumbbl-keys" @click="resetFumbblKeys()">{{ $t('settings.fumbblKeys.reset') }}</button>
+                </span>
+                <SettingInfo :text="$t('settings.fumbblKeys.resetInfo')" />
               </div>
             </template>
           </fieldset>
@@ -5831,6 +5997,7 @@ input, textarea, [contenteditable="true"], .log-panel {
    with .settings-pane = the giant 920x680 window). Compact card, centered by .modal-backdrop, z-ordered
    ABOVE the credentials panel (.creds-menu-backdrop = z 110) so it lands over the top of the join creds. */
 .save-prompt-backdrop { z-index: 200; }
+.control-layer-notice { z-index: 13050; } /* above the Settings window it is opened from */
 .save-prompt {
   display: flex;
   flex-direction: column;

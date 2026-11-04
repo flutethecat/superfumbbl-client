@@ -20,7 +20,7 @@
  * ring with it, so the ring is also a keyboard aid (nothing controller-only). Glyph badges show in controller mode.
  */
 import { ref, shallowRef, type Directive } from 'vue';
-import { activeInput, type ActiveInput } from './controls';
+import { activeInput, setCameraStickDirectionTaker, type ActiveInput } from './controls';
 import type { PadEvent } from './gamepad';
 import { promptCardAcceptsPress } from './promptDodgeDom';
 
@@ -45,7 +45,12 @@ export interface PadFocusOptions {
    *  nothing behind it (a hidden server card, View's End Turn / Confirm Setup) is reachable while it is up. B runs its
    *  cancel / decline when it has one, otherwise it is inert. */
   exclusive?: boolean;
+  /** A scrollable body inside the card: the right stick scrolls it (Up / Down, with the stick's repeat). */
+  scroll?: () => HTMLElement | null;
 }
+
+/** One right-stick step of a card's scrollable body, in pixels. */
+export const PAD_SCROLL_STEP_PX = 80;
 
 /** Host priorities, applied AFTER the mandatory rank (a mandatory server card always comes first): among the rest the
  *  unanswered-prompt panel, then confirmations, then server cards, informational notices last. */
@@ -301,6 +306,14 @@ export function padFocusedControl(): HTMLElement | null {
   return scope && !scope.options.pitch ? ensureFocus(scope) : null;
 }
 
+/** Sol r4: the router keeps the camera stick's directions for the camera, except while the card that owns the pad has a
+ *  `scroll` body - then the right stick's steps come here and scroll it. */
+setCameraStickDirectionTaker((event) => {
+  if (event.type !== 'direction' || event.stick !== 'right' || !controllerMode() || guard()) return false;
+  const scope = activeScope();
+  return !!scope && !scope.options.pitch && !!scope.options.scroll;
+});
+
 /** Pad router interceptor: true = the card consumed the event. */
 export function handlePadFocusEvent(event: PadEvent): boolean {
   if (event.type === 'release') {
@@ -320,7 +333,14 @@ export function handlePadFocusEvent(event: PadEvent): boolean {
     refreshPadFocus();
     return true;
   };
-  if (event.type === 'direction') return event.stick === 'left' ? move(event.direction) : false;
+  if (event.type === 'direction') {
+    if (event.stick === 'left') return move(event.direction);
+    const body = event.stick === 'right' && (event.direction === 'Up' || event.direction === 'Down') ? scope.options.scroll?.() : null;
+    if (!body) return false;
+    body.scrollTop += event.direction === 'Down' ? PAD_SCROLL_STEP_PX : -PAD_SCROLL_STEP_PX;
+    refreshPadFocus();
+    return true;
+  }
   switch (event.input) {
     case 'DpadUp': return move('Up');
     case 'DpadDown': return move('Down');

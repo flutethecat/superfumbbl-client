@@ -22,6 +22,8 @@ import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGam
 export { passDestinationFromGame } from './passiveSpectatorProjection';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
+import { appendCoachGame, coachGameRecord } from './coachGameHistory';
+import { teamDiceTally } from './gameStatRows';
 import { postGameKey } from './postGameProjection';
 import { SpectatorDiceLedger } from './spectatorDiceLedger';
 import { inducementDisplayName, useInducementPrompt } from './useInducementPrompt';
@@ -100,6 +102,7 @@ onSoundError(({ soundId, src, code, message }) => {
   log('system', `⚠ sound "${soundId}" failed to play (${code === null ? '' : `media error ${code}: `}${message}) — ${file}`);
 });
 import { settings } from './settings';
+import { effectiveControlLayer } from './controlLayerSwitch';
 import { effectiveForkHost } from './forkAccess';
 import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
@@ -9507,6 +9510,36 @@ function resetEndGameSettle(): void {
   state.endGameSettled = false;
 }
 
+/**
+ * Owner 11-03 (spec-coach-card-stats): the Play card's LOCAL game history gets one record when a game the local coach
+ * PLAYED reaches its final result. The moment is the end-game SETTLE: the server's final presentation has arrived
+ * (finalPresentationReady = the game finished / its statistics dialog) and every frame before it has been applied, so
+ * the game result, the Statistics totals and the dice tallies are exactly what the end screen shows. A coach seat only
+ * (play.active, a strict seat, never a replay); the history dedupes by game, so a resync's second settle writes nothing.
+ */
+/** The played server's identity for the history dedupe (Sol r1 P5): the target id and the host this seat joined, so two
+ *  Super FUMBBL servers (a hosted one and a local one) never share game ids. */
+function playedServerId(): string {
+  const url = lastConnect?.mode === 'player' ? lastConnect.params.url : '';
+  let host = '';
+  try { host = url ? new URL(url).host : ''; } catch { host = url; }
+  return `${settings.activeServerTarget}|${host}`;
+}
+function recordPlayedGameHistory(): void {
+  const g = game.value;
+  if (!g || !play.active || replay.active || !state.endGame.finalPresentationReady) return;
+  const mySide = blockPresentationSeat(g);
+  if (!mySide) return;
+  try {
+    const record = coachGameRecord({
+      game: g, tallies: { home: teamDiceTally(g, 'home'), away: teamDiceTally(g, 'away') }, mySide,
+      server: settings.activeServerTarget, serverId: playedServerId(), savedAt: Date.now(),
+    });
+    if (record) void appendCoachGame(record);
+  } catch (error) { console.warn('[coachHistory] record failed', error); }
+}
+watch(() => state.endGameSettled, (settled) => { if (settled) recordPlayedGameHistory(); }, { flush: 'sync' });
+
 let penaltyShootoutPresentationState = { ...EMPTY_PENALTY_SHOOTOUT_PRESENTATION };
 
 
@@ -16704,6 +16737,15 @@ function localDecisionCardOpen(opts: { besidesInducementBuy?: boolean } = {}): b
     || state.blitzBlockChoice || state.foulChoiceHold);
 }
 /** Start a declare→move→act plan. `route` excludes the start square (may be empty = 0-waypoint declare→act). */
+/** FUMBBL Controls (spec touch point 7): under the FUMBBL control layer a multi-square path that the planner did not take
+ *  is refused - the whole-path CLIENT_MOVE / CLIENT_BLITZ_MOVE fallback never fires (#99: it skipped per-square rolls).
+ *  The Super FUMBBL layer keeps its fallback exactly as before. */
+function fumbblWholePathRefused(playerId: string): boolean {
+  if (effectiveControlLayer(settings) !== 'fumbbl') return false;
+  log('system', `ignored: ${playerName(game.value, playerId)}'s run could not start square by square (FUMBBL Controls never sends a whole path)`);
+  return true;
+}
+
 function plannerStart(input: {
   playerId: string; actKind: PlanActKind; route: [number, number][];
   targetCoordinate?: [number, number] | null; targetPlayerId?: string | null;
@@ -31708,6 +31750,9 @@ export const gameStore = {
       if (onTheBall) { log('system', 'ignored: On the Ball route could not start'); return false; }
     }
     if (onTheBall) return gameStore.stepMove(playerId, path[0]!);
+    // FUMBBL Controls (spec touch point 7, #99): a multi-square run goes one square per echo through the planner and
+    // NEVER as one whole-path CLIENT_MOVE. When the planner refused it, nothing is sent.
+    if (path.length > 1 && fumbblWholePathRefused(playerId)) return false;
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
     if (!from) return false;
     if (!currentMoveOffer(playerId, path[0]!, minimumOfferRevision)) {
@@ -32796,6 +32841,7 @@ export const gameStore = {
     if (plannerPinned(attackerId)) { log('system', `ignored: ${playerName(game.value, attackerId)} is rooted to the spot and cannot move`); return false; }
     // Multi-square Blitz walks use one CLIENT_BLITZ_MOVE per echo and never fire the block automatically.
     if (path.length > 1 && plannerStart({ playerId: attackerId, actKind: 'blitzWalk', route: path })) return true;
+    if (path.length > 1 && fumbblWholePathRefused(attackerId)) return false; // FUMBBL Controls: never a whole-path send (#99)
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === attackerId)?.playerCoordinate;
     if (!from) return false;
     if (!currentMoveOffer(attackerId, path[0]!, minimumOfferRevision)) {
@@ -33134,6 +33180,8 @@ export const gameStore = {
   isPlanActive(): boolean { return plannerActive(); },
   /** Owner 10-15: a declaration of ours was accepted and its acting-player echo has not been received yet. */
   declarationInFlight(): boolean { void state.declarationRevision; return declarationAwaitingEcho; },
+  /** A system line in the log (FUMBBL Controls: a control-layer switch that waited, then applied). */
+  logSystem(line: string): void { log('system', line); },
   /** Owner 10-16: the receive-time turn mode the End Turn wire field carries (tests). */
   serverTurnMode(): string | null { return srvTurnMode; },
   /** Astra r4 F2: a back-out gesture (Escape's deselect) abandons a declaration queued behind a cancel. */

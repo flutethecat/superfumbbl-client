@@ -477,6 +477,11 @@ export function dispatchPointerStick(x: number, y: number): boolean {
 export type PadInterceptor = (event: PadEvent) => boolean;
 const padInterceptors: Registered<PadInterceptor>[] = [];
 export function registerPadInterceptor(handler: PadInterceptor, priority = CONTROL_PRIORITY_SHELL): () => void { return register(padInterceptors, handler, priority); }
+/** Sol r4: the camera stick's DIRECTION steps are offered to the interceptors only when this says the open focus scope
+ *  asked for them (game/cardFocus.ts: a card with a `scroll` body). Everywhere else the camera keeps the stick. */
+let cameraStickDirectionTaker: (event: PadEvent) => boolean = () => false;
+export function setCameraStickDirectionTaker(fn: ((event: PadEvent) => boolean) | null): void { cameraStickDirectionTaker = fn ?? (() => false); }
+export function cameraStickDirectionTaken(event: PadEvent): boolean { return cameraStickDirectionTaker(event); }
 export function dispatchPadIntercept(event: PadEvent): boolean {
   for (const { handler } of [...padInterceptors]) if (handler(event)) return true;
   return false;
@@ -621,6 +626,8 @@ export interface ControllerRouterDeps {
   context?(): ControlContext | null;
   /** P2b: raw events offered first (defaults to dispatchPadIntercept). */
   intercept?(event: PadEvent): boolean;
+  /** Sol r4: whether a camera-stick direction goes to `intercept` (defaults to cameraStickDirectionTaken). */
+  cameraDirectionTaken?(event: PadEvent): boolean;
   /** P2b: the held-modifier state written (defaults to the exported `heldModifiers`). */
   modifiers?: { value: { LB: boolean; RT: boolean } };
 }
@@ -656,6 +663,7 @@ export function createControllerRouter(deps: ControllerRouterDeps): ControllerRo
   let pointerStickLive = false;
   const hold = deps.dispatchHold ?? dispatchControlHold;
   const intercept = deps.intercept ?? dispatchPadIntercept;
+  const takesCameraDirection = deps.cameraDirectionTaken ?? cameraStickDirectionTaken;
   const modifiers = deps.modifiers ?? heldModifiers;
   const setModifier = (mod: 'LB' | 'RT', held: boolean): void => {
     if (modifiers.value[mod] !== held) modifiers.value = { ...modifiers.value, [mod]: held };
@@ -722,7 +730,9 @@ export function createControllerRouter(deps: ControllerRouterDeps): ControllerRo
     if (state.value !== 'controller') { neutralise(); return; }
     if (event.type === 'press' && (event.input === 'LB' || event.input === 'RT')) setModifier(event.input, true);
     // P2b: an open server card gets the raw event first (focus ring, A / B / its key bindings).
-    if ((event.type === 'press' || event.type === 'release' || (event.type === 'direction' && event.stick !== cameraStick()))
+    // Sol r4: a camera-stick direction goes to the interceptors only when the open focus scope scrolls with it.
+    if ((event.type === 'press' || event.type === 'release'
+      || (event.type === 'direction' && (event.stick !== cameraStick() || takesCameraDirection(event))))
       && !(event.type !== 'direction' && HOLD_INPUT.test(event.input)) && intercept(event)) return;
     if (event.type === 'release') {
       const held = HOLD_INPUT.exec(event.input);

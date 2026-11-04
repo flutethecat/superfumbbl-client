@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { updateHintAfterReport } from '../game/updateSignal';
+import { actingMenuHasOptions, ffbLacksRow, ffbSafePathToPlayer, fumbblStepKeyEffect, fumbblTileIsPassTarget, ttmMateAdjacent, ffbClientAction, ffbMenuLetter, ffbOrderedRows, ffbSafePath, fumbblPlayerClick, fumbblSquareClick, isAdjacent as fumbblAdjacent, rightClickEffect, stepSquareForDirection, type FumbblRuleset, type StepDirection } from '../game/logic/fumbblControls';
+import { rightClickBehaviourFor } from '../game/controlLayer';
+import { activationProbeFrom, clearControlLayerActivationProbe, effectiveControlLayer, recheckPendingControlLayer, setControlLayerActivationProbe } from '../game/controlLayerSwitch';
+import { fumbblKeyActionForEvent, FUMBBL_KEY_MENU_ROW, FUMBBL_STEP_DIRECTION, type FumbblKeyActionId } from '../game/fumbblKeys';
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 import { installMouseEntropy } from '../game/mouseEntropy';
@@ -9040,6 +9044,12 @@ interface MenuItem {
   /** #6 (owner ruling 08-17): resolved skill-icon URL rendered inline next to the label (Jump Up on Move only).
    *  Generic slot — populated only where availableActions supplies CoachAction.icon. */
   icon?: string;
+  /** FUMBBL Controls: the FFB ClientAction this row is (fumbblControls.ts ffbClientAction); null = a row FFB lacks. */
+  ffb?: string | null;
+  /** FUMBBL Controls: a row FFB has no counterpart for at all (hidden under the FUMBBL layer). */
+  ffbHidden?: boolean;
+  /** FUMBBL keyboard shortcuts: the FFB popup letter shown on the row (and the key that picks it). */
+  shortcut?: string;
 }
 const ctxMenu = reactive({ visible: false, x: 0, y: 0, items: [] as MenuItem[], playerId: '' });
 watch(() => ctxMenu.visible, (visible) => {
@@ -9137,6 +9147,294 @@ function o66Ctx(): ClientStateContext {
     blastinReportedTargetId: gameStore.state.blastinBeat?.targetPlayerId ?? null, // S46: second-beat range origin fallback
   };
 }
+// =====================================================================================================================
+// FUMBBL CONTROLS (owner 11-03, spec-fumbbl-controls-2026-11-03.md). The FUMBBL control layer mirrors the FUMBBL
+// client's mouse model; the pure decisions live in game/logic/fumbblControls.ts. ONE predicate gates every
+// walk-then-act site (each carries a `fumbbl-gate:<id>` marker; test/fumbblControlsKeysAndView.test.ts checks the list in game/logic/fumbblControls.ts).
+// Spectate and replay are unaffected (no game input). The Super FUMBBL layer (the default) takes none of these branches.
+// =====================================================================================================================
+function fumbblControls(): boolean {
+  return props.mode === 'play' && !!settings.order66 && gameStore.isPlaying.value && effectiveControlLayer(settings) === 'fumbbl';
+}
+/** A left click on an own player opens its action menu (the Super layer's "Left click opens context menu" setting, or
+ *  always under FUMBBL Controls: SelectLogicModule opens the popup, never a local select). */
+function leftClickMenuMode(): boolean {
+  return settings.leftClickOpensContextMenu || fumbblControls();
+}
+/** The ruleset row of the decision table. The view reads the SERVER's state (a BB2016 Blitz never enters
+ *  selectBlitzTarget), so the derived state already carries the edition difference. */
+const FUMBBL_VIEW_RULESET: FumbblRuleset = 'bb2025';
+/** The acting player's FFB-safe Automove path to `square` (MA minus moves used; no tackle-zone transit). */
+function fumbblSafeRoute(g: GameJson, actingId: string, square: [number, number]): [number, number][] | null {
+  const normal = renderer?.o66Reach(actingId)?.normal ?? 0;
+  return ffbSafePath(g, actingId, square, normal);
+}
+/** A team-mate of the acting player stands on `square`. */
+function fumbblTeammateAt(square: [number, number], actingId: string): boolean {
+  const pid = playerIdAtSquare(square);
+  return !!pid && pid !== actingId && gameStore.iControl(pid);
+}
+/** The in-template team-mate pass from a tile, once the passer's walk is down (the same walking hold as a step). */
+function fumbblHeldThrow(square: [number, number], walkHeld: () => boolean): void {
+  if (!walkHeld()) fumbblThrowAt(square, 'pass');
+}
+/** One-click throw (FFB): the shared nominate / confirm rail, both halves at once - the existing senders only. */
+function fumbblThrowAt(square: [number, number], kind: 'pass' | 'bomb' | 'throwTeamMate'): void {
+  o66PendingPass.value = null;
+  o66PendingThrowKind.value = null;
+  nominateOrConfirmThrow(square, kind);
+  nominateOrConfirmThrow(square, kind);
+}
+/** Fire an adjacent Block / Blitz block at once through the existing commit (the block-kind chooser still asks). */
+function fumbblCommitBlock(kind: 'block' | 'blitz', targetId: string): void {
+  o66AggroStage.value = { kind, target: targetId, stage: 2 };
+  confirmAggroStage();
+}
+let fumbblHoverKey = '';
+/** The pitch square under the pointer (the FUMBBL "S" key acts on the hovered player). */
+let fumbblHoveredSquare: [number, number] | null = null;
+/** The player the FUMBBL "<" / Shift+"<" keys cycled to (FFB's selection square); S / Ctrl+<letter> act on it. */
+let fumbblCycledPlayerId: string | null = null;
+const WASD_CODES: ReadonlySet<string> = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD']);
+/** FUMBBL keyboard shortcuts on = WASD camera pan off (spec §5; the arrow keys, mouse drag and edge scroll still pan). */
+function wasdPanOff(code: string): boolean {
+  return settings.fumbblShortcuts && WASD_CODES.has(code);
+}
+/** A FUMBBL shortcut key press (either control layer). True = consumed. */
+function fumbblKeyDown(event: KeyboardEvent): boolean {
+  if (!settings.fumbblShortcuts || props.mode !== 'play' || !gameStore.isPlaying.value) return false;
+  if (keyboardOwnedByTextControl(event.target)) return false;
+  // An open action menu: its rows' FFB letters pick them (IPlayerPopupMenuKeys).
+  if (ctxMenu.visible && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+    const letter = event.key.toUpperCase();
+    const item = ctxMenu.items.find((row) => row.shortcut === letter && !row.disabled && row.action);
+    if (item) { event.preventDefault(); if (!event.repeat) runMenuItem(item); return true; }
+  }
+  const id = fumbblKeyActionForEvent(settings, event);
+  if (!id) return false;
+  event.preventDefault(); // Ctrl+F / Ctrl+P / Ctrl+J are the game's, never the webview's
+  if (event.repeat) return true;
+  if (pitchHeldByConfirmation() || guardConfirmCard()) return true;
+  runFumbblKey(id);
+  return true;
+}
+/** Sol r1 #8: a FUMBBL step key under Super FUMBBL Controls sends the one square at once (the Super square click would
+ *  only plot it), behind the same holds the square click has; a plotted route is dropped (no wire). */
+function superLayerKeyStep(g: GameJson, actingId: string, to: [number, number]): void {
+  if (!renderer || pitchHeldByConfirmation() || endActConfirm.value || gameStore.cancelInFlight() || o66PendingLeftClickBlitzPlan.value) return;
+  // Sol r2 P1: never step from the previous offer while our declaration (e.g. a Jump re-declare) awaits its echo; the
+  // latch fails open (store watchdog), so the next press goes out once it is released.
+  if (gameStore.declarationInFlight()) return;
+  if (gameStore.state.failedActionHold || gameStore.moveRollHoldQueued()) return;
+  const seen = renderer.movementOnScreen(actingId);
+  if (o66MoveClickGate.swallow(actingId, { inFlight: seen.inFlight || gameStore.isPlanWalking(actingId), progress: seen.progress }, performance.now())) return;
+  if (o66PendingMove.value) { o66PendingMove.value = null; renderer.setO66Path([]); }
+  if (isBlitzMovementState(deriveClientState(g, o66Ctx()))) gameStore.o66BlitzMove(actingId, [to]);
+  else gameStore.o66Move(actingId, [to]);
+}
+/** The player a Ctrl+<letter> / S key acts on: the acting player, else the hovered one, else the cycled one. */
+function fumbblKeyPlayer(preferHover: boolean): string | null {
+  const g = gameStore.game.value;
+  if (!g) return null;
+  const hovered = fumbblHoveredSquare ? playerIdAtSquare(fumbblHoveredSquare) : null;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (preferHover && hovered && gameStore.iControl(hovered)) return hovered; // S never clicks an opponent
+  if (actingId && gameStore.iControl(actingId)) return actingId;
+  if (hovered && gameStore.iControl(hovered)) return hovered;
+  return fumbblCycledPlayerId && gameStore.iControl(fumbblCycledPlayerId) ? fumbblCycledPlayerId : null;
+}
+function runFumbblKey(id: FumbblKeyActionId): void {
+  const g = gameStore.game.value;
+  if (!g || !renderer || !gameStore.myTurn.value) return;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const dir = FUMBBL_STEP_DIRECTION[id];
+  if (dir) {
+    // AbstractClientStateMove.actionKeyPressed: a step key clicks the neighbouring square only when it is a server
+    // move square; the click then takes the ordinary square-click path (holds, gates and senders unchanged).
+    if (!actingId || !gameStore.iControl(actingId)) return;
+    const from = playerSquareById(actingId);
+    const to = from ? stepSquareForDirection(from, dir as StepDirection, (sq) => renderer?.squareToCanvas(sq) ?? null) : null;
+    if (!to) return;
+    const keySt = deriveClientState(g, o66Ctx());
+    const keyEffect = fumbblStepKeyEffect({
+      layer: effectiveControlLayer(settings), serverMoveSquare: serverMoveSquares(g).some((sq) => sq[0] === to[0] && sq[1] === to[1]), state: keySt,
+      puntTargeting: keySt === 'PUNT' && isPuntTargeting(g),
+      // a Jump square or a Ball & Chain aim: the tile handler's own single-square send
+      singleSquarePick: !!(g.actingPlayer as { leaping?: boolean } | undefined)?.leaping || movesRandomly(g, actingId),
+    });
+    if (keyEffect === 'tilePick') renderer.onTilePick?.(to);
+    else if (keyEffect === 'step') superLayerKeyStep(g, actingId, to);
+    return;
+  }
+  if (id === 'cyclePrev' || id === 'cycleNext') {
+    const order = crosshairCycleOrder().map((t) => ('square' in t ? playerIdAtSquare(t.square) : null)).filter((pid): pid is string => !!pid);
+    if (!order.length) return;
+    const at = fumbblCycledPlayerId ? order.indexOf(fumbblCycledPlayerId) : -1;
+    const next = order[(at + (id === 'cycleNext' ? 1 : -1) + order.length * 2) % order.length] ?? order[0]!;
+    fumbblCycledPlayerId = next;
+    if (!actingId) renderer.selectPlayer(next); // FFB's selection square; S opens its menu
+    return;
+  }
+  if (id === 'select') {
+    // S: the hovered player's click (an own player's menu), else the cycled / acting player's.
+    const pid = fumbblKeyPlayer(true);
+    const at = pid ? renderer.playerScreenPos(pid) : null;
+    if (pid) renderer.onPlayerClick?.(pid, at?.x ?? 0, at?.y ?? 0);
+    return;
+  }
+  // Ctrl+M / B / Z / F / P / J / E: the matching row of that player's action menu (FFB menuItemSelected).
+  const row = FUMBBL_KEY_MENU_ROW[id];
+  const pid = fumbblKeyPlayer(false);
+  if (!row || !pid || !gameStore.iControl(pid)) return;
+  const target = renderer.contextTargetFor(pid);
+  if (!target) return;
+  const items = pid === actingId
+    ? assembleActingPlayerRows(target, 0, 0)
+    : o66ActionMenuItems(withoutOwnedWideRailLegacyRows(availableActions(g, o66Ctx(), pid)), pid, () => {});
+  const item = items.find((candidate) => candidate.ffb === row && !candidate.disabled && candidate.action);
+  if (item) runMenuItem(item);
+}
+function clearFumbblHoverPath(): void {
+  fumbblHoverKey = '';
+  renderer?.setO66HoverPath([]);
+}
+/** Hover path (spec §2): hovering a reachable distant square draws the Automove route with step numbers. Info only. */
+function fumbblHover(coord: [number, number] | null): void {
+  fumbblHoveredSquare = coord ? [coord[0], coord[1]] : null;
+  if (!renderer) return;
+  const g = gameStore.game.value;
+  if (!coord || !g || !fumbblControls() || !settings.automove || !gameStore.myTurn.value) { clearFumbblHoverPath(); return; }
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const st = deriveClientState(g, o66Ctx());
+  const moving = !!actingId && gameStore.iControl(actingId) && FUMBBL_HOVER_STATES.has(st) && !movesRandomly(g, actingId)
+    && !(g.actingPlayer as { leaping?: boolean } | undefined)?.leaping && !gameStore.isPlanWalking(actingId);
+  if (!moving || serverMoveSquares(g).some((s) => s[0] === coord[0] && s[1] === coord[1])) { clearFumbblHoverPath(); return; }
+  const from = playerSquareById(actingId);
+  // Sol r1 #10: over an opponent (a Blitz target) the route runs to the nearest free square beside it (FFB
+  // getShortestPathToPlayer); over a free square, to that square.
+  const hoveredId = playerIdAtSquare(coord);
+  const route = !from ? null : hoveredId && !gameStore.iControl(hoveredId)
+    ? ffbSafePathToPlayer(g, actingId, coord, renderer.o66Reach(actingId)?.normal ?? 0)
+    : fumbblSafeRoute(g, actingId, coord);
+  const hoverKey = route && route.length > (hoveredId ? 0 : 1) ? `${actingId}:${route.map((q) => q.join(',')).join(';')}` : '';
+  if (hoverKey === fumbblHoverKey) return;
+  fumbblHoverKey = hoverKey;
+  renderer.setO66HoverPath(hoverKey && from && route ? [from, ...route] : [], actingId);
+}
+const FUMBBL_HOVER_STATES: ReadonlySet<string> = new Set(['SELECT_BLITZ_TARGET', 'MOVE', 'BLITZ', 'FOUL', 'PASS', 'HAND_OVER', 'PUNT', 'THROW_TEAM_MATE', 'KICK_TEAM_MATE', 'GAZE_MOVE', 'PUTRID_REGURGITATION_BLITZ', 'KICK_EM_BLITZ']);
+/** The move-family square click under FUMBBL Controls (MoveLogicModule.fieldInteraction): a server move square steps
+ *  at once; any other square walks the safe Automove path at once (no preview, no waypoint, no confirm); else nothing.
+ *  A multi-square run rides o66Move / o66BlitzMove -> plannerStart (one square per echo), never a whole path. */
+function fumbblMoveFamilyClick(g: GameJson, st: ClientStateId, actingId: string, c: [number, number], blitzWalk: boolean, walkHeld: () => boolean = () => false): void {
+  clearFumbblHoverPath();
+  if (gameStore.declarationInFlight()) return; // Sol r2 P1: same echo gate for the FUMBBL square click (fails open)
+  const effect = fumbblSquareClick({
+    square: c,
+    serverMoveSquares: serverMoveSquares(g),
+    automove: settings.automove,
+    preventAutoMove: movesRandomly(g, actingId) || ON_THE_BALL_MOVE_STATES.has(st),
+    safePath: () => fumbblSafeRoute(g, actingId, c),
+  });
+  if (effect.kind !== 'ignore' && walkHeld()) return; // the token is still landing: this send waits (fails open)
+  if (effect.kind === 'step') {
+    if (blitzWalk) gameStore.sendBlitzMove(actingId, effect.square);
+    else gameStore.stepMove(actingId, effect.square);
+  } else if (effect.kind === 'autoMove') {
+    if (blitzWalk) gameStore.o66BlitzMove(actingId, effect.route);
+    else gameStore.o66Move(actingId, effect.route);
+  }
+}
+/** The game view's probe for a waiting control-layer switch (spec §6): my own activation in progress. */
+function controlLayerActivationProbe() {
+  const g = gameStore.game.value;
+  if (props.mode !== 'play' || !g) return null;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const name = actingId ? ([...g.teamHome.playerArray, ...g.teamAway.playerArray].find((pl) => pl.playerId === actingId)?.playerName ?? actingId) : '';
+  const turn = (g.homePlaying ? g.turnDataHome : g.turnDataAway) as { turnNr?: number } | undefined;
+  return activationProbeFrom({
+    playing: gameStore.isPlaying.value, connectionClosed: !!gameStore.state.connectionClosed,
+    finished: (g as { finished?: unknown }).finished === true, turnMode: String(g.turnMode ?? ''),
+    actingId, myTurn: !!gameStore.myTurn.value, controlsActing: !!actingId && gameStore.iControl(actingId), playerName: name,
+    activationKey: `${String(g.gameId ?? '')}:${g.half ?? ''}:${turn?.turnNr ?? ''}:${g.homePlaying ? 'h' : 'a'}:${actingId}`,
+  });
+}
+
+// Sol r1 #6: when the layer in effect changes, every client-only stage / preview / plan of the old layer is retired
+// (a quick-Blitz stage, a plotted route, a local selection, armed targets) - nothing a server activation owns, and
+// nothing is sent. A switch during an own activation only applies once that activation is over (controlLayerSwitch).
+watch(() => effectiveControlLayer(settings), (layer, prev) => {
+  if (layer === prev) return;
+  clearO66Arms();
+  clearFumbblHoverPath();
+  if (o66LocalSelection.value) { o66LocalSelection.value = null; renderer?.clearSelection(); }
+});
+// Spec §6: a waiting layer switch re-reads this view's probe on every server frame (and the module's watchdog re-reads
+// it on a timer); the view going away releases it. The hover path is retired whenever the acting player moves on.
+onMounted(() => { if (props.mode === 'play') setControlLayerActivationProbe(controlLayerActivationProbe, (line) => gameStore.logSystem(line)); });
+onBeforeUnmount(() => { clearControlLayerActivationProbe(controlLayerActivationProbe); });
+watch(() => {
+  const g = gameStore.game.value;
+  const acting = g?.actingPlayer as { playerId?: string | null; currentMove?: number; playerAction?: string | null } | undefined;
+  return [g, gameStore.isPlaying.value, acting?.playerId ?? '', acting?.currentMove ?? 0, acting?.playerAction ?? '', g?.turnMode ?? '',
+    !!gameStore.state.connectionClosed, (g as { finished?: unknown } | null)?.finished === true] as const;
+}, () => {
+  recheckPendingControlLayer();
+  clearFumbblHoverPath();
+});
+
+/** Right Click "Opens Context Menu" (orchestrator ruling, Sol r1 #2): the player's menu and nothing else - never a
+ *  block, foul, hand-off, pass or move. My acting player: its assembled action menu; another own player: its
+ *  declare menu; an opponent: the existing context menu (the attack-flavor choice, or the router's rows). */
+function openPlayerMenuOnly(playerId: string, x: number, y: number): void {
+  const g = gameStore.game.value;
+  const target = renderer?.contextTargetFor(playerId);
+  if (!g || !target) return;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (gameStore.iControl(playerId) && playerId !== actingId) { showFriendlyLeftClickMenu(playerId, x, y); return; }
+  openO66Menu(target, x, y);
+}
+/** A right-click that an open prompt owns keeps today's meaning (it answers "Go back"): every Right Click behaviour
+ *  defers to it, so no behaviour ever ends or opens anything behind a confirmation. */
+function rightClickOwnedByPrompt(): boolean {
+  return !!endActConfirm.value || endTurnWarnCount.value !== null || !!kickConfirmCard.value || !!passConfirmCard.value
+    || !!setupConfirm.value || !!wideRailActivationPrompt.value || !!gameStore.state.blitzBlockChoice || gameStore.foulChoiceHeld()
+    || gameStore.interactiveDecisionSurfaceOpenExceptKickEmPicker() || !!setupPhase.value;
+}
+/** Settings > Controls > Right Click (spec §3, FFB ClientStateAwt.mouseReleased "Right Click Behaviour"). True = this
+ *  right-click is handled here; false = today's right-click (the Super FUMBBL cascade) runs. */
+function pitchRightClick(x: number, y: number): boolean {
+  if (props.mode !== 'play' || !settings.order66 || !gameStore.isPlaying.value || !renderer) return false;
+  const layer = effectiveControlLayer(settings);
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const myActing = !!actingId && !!gameStore.myTurn.value && gameStore.iControl(actingId);
+  const behaviour = rightClickBehaviourFor(settings, layer);
+  const effect = rightClickEffect({
+    behaviour, layer,
+    promptOpen: behaviour !== 'super' && behaviour !== 'disabled' && rightClickOwnedByPrompt(),
+    onPlayer: !!renderer.pitchHitAt(x, y).playerId,
+    myActingPlayer: myActing,
+    hasSelection: !!o66LocalSelection.value || !!renderer.getSelectedPlayerId(),
+  });
+  if (effect === 'today') return false;
+  // "Opens Context Menu" off my turn keeps today's read-only status menu (nothing is offered then).
+  if (effect === 'playerMenu' && !gameStore.myTurn.value) return false;
+  ctxMenu.visible = false;
+  clearFumbblHoverPath();
+  if (effect === 'leftClick') { renderer.tapAtCanvas(x, y); return true; }
+  if (effect === 'playerMenu') { const pid = renderer.pitchHitAt(x, y).playerId; if (pid) openPlayerMenuOnly(pid, x, y); return true; }
+  if (effect === 'endActivation') {
+    // Same walking hold as today's right-click: never an End while the token is still moving.
+    const seen = renderer.movementOnScreen(actingId);
+    if (o66RightClickGate.swallow(actingId, { inFlight: seen.inFlight || gameStore.isPlanWalking(actingId), progress: seen.progress }, performance.now())) return true;
+    clearO66Arms();
+    requestEndActivation();
+    return true;
+  }
+  if (effect === 'clearSelection') { o66LocalSelection.value = null; renderer.clearSelection(); popup.visible = false; }
+  return true;
+}
+
 // Action locking is enforced at sendCommand; the view only renders lock status.
 const actionLock = computed(() => {
   const g = gameStore.game.value;
@@ -9313,6 +9611,7 @@ function retireStoredBlitzRoute() {
 }
 watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
   if (!plan) return;
+  if (fumbblControls()) { retireStoredBlitzRoute(); return; } // fumbbl-gate:quick-click-blitz (Sol r1 #6: never walks under FUMBBL)
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   // Astra 10-10 (P2): the route belongs to one activation of one player on our turn; any other exit retires it.
   if (!g || storedBlitzRouteOutlived({ playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, actingId, routePlayerId: plan.playerId })) { retireStoredBlitzRoute(); return; }
@@ -9499,6 +9798,8 @@ function o66ActionMenuItems(actions: CoachAction[], playerId: string, _refresh: 
       disabled: !a.enabled,
       hint: a.reason,
       endActivation: a.kind === 'endMove',
+      ffb: ffbClientAction(a),
+      ffbHidden: ffbLacksRow(a),
       icon,
       action: a.kind === 'endMove' ? endActivationFromMenu : () => runO66Action(a, playerId),
     };
@@ -9762,9 +10063,20 @@ useTtmPassRailBoundaries({
     o66PendingThrowKind.value = 'throwTeamMate';
   },
 });
+/** FUMBBL Controls (spec §2): under the FUMBBL layer the action menu shows FFB's rows in FFB's order on one list, rows
+ *  FFB lacks hidden; with FUMBBL keyboard shortcuts on (either layer) each row shows its FFB popup letter. */
+function presentFumbblMenuRows(items: MenuItem[]): MenuItem[] {
+  let out = items;
+  if (fumbblControls() && items.some((item) => item.ffb !== undefined || item.ffbHidden)) {
+    out = ffbOrderedRows(items.map((item) => ({ item, ffb: item.ffb ?? null, hidden: !!item.ffbHidden }))).map((row) => row.item);
+  }
+  for (const item of out) item.shortcut = settings.fumbblShortcuts && !item.disabled ? (ffbMenuLetter(item.ffb ?? null) ?? undefined) : undefined;
+  return out;
+}
 /** Position + show the ctx-menu host at (x,y), clamped inside the pitch host (same placement math the openO66Menu
  *  / #111 / blitz-special menus use). Extracted so #128 Case B and openO66Menu share one placement. */
 function placeCtxMenu(items: MenuItem[], x: number, y: number, playerId = '') {
+  items = presentFumbblMenuRows(items);
   const host = pitchHost.value!;
   const menuH = items.length * 18 + 8;
   const BOTTOM_SAFE = 72;
@@ -9833,7 +10145,7 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
       () => openO66Menu(target, x, y),
     ));
   } else if (ix.kind === 'endMove') {
-    items.push({ label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
+    items.push({ ffb: 'END_MOVE', label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
   }
   {
     const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
@@ -9843,6 +10155,7 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
       if (chompAvailable(g, actingId)) kinds.push('chomp');
       for (const kind of [...new Set(kinds)].reverse()) {
         items.unshift({
+          ffb: ffbClientAction({ action: 'block', kind: 'declare', blockKind: kind }),
           label: `${o66PendingBlitzBlockKind.value === kind ? '✓ ' : ''}${BLOCK_KIND_LABEL[kind]}`,
           action: () => {
             o66PendingBlitzBlockKind.value = kind;
@@ -9859,17 +10172,19 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
     // #252 (owner-fg 07-29): "Throw Pass" arms free-select on the declared passer (Tarkin R-1 a3fca567).
     if (canFreeSelectPass(g, o66Ctx()) && target.playerId === actingId) {
       items.unshift({ get label() { return $t('hud.text.throwPass'); }, action: () => { gameStore.armFreeSelectPass(); ctxMenu.visible = false; } });
+      items[0]!.ffb = 'PASS_ANY_SQUARE'; // FUMBBL Controls: FFB's "Pass Ball (any square)" row
     }
     // S6: Bounding Leap on every upstream Jump-legal movement state; exact CLIENT_USE_SKILL.
     if (target.playerId === actingId && boundingLeapSkillNow.value) {
       items.unshift({
+        ffb: 'BOUNDING_LEAP',
         get label() { return $t('hud.text.boundingLeap'); },
         action: () => { gameStore.useBoundingLeap(); ctxMenu.visible = false; },
       });
     }
     // R3: router, mapped, and fallback sources normalize to one marked cancellation row.
     if (target.playerId === actingId && !items.some((item) => item.endActivation)) {
-      items.push({ label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
+      items.push({ ffb: 'END_MOVE', label: endActivationLabel(target.playerId), endActivation: true, action: endActivationFromMenu });
     }
   }
   return items;
@@ -9935,6 +10250,7 @@ function cancelPlottedRoute(): void {
 /** Owner 10-20 (RickWreckless g1955027): "we need to be sure users can cancel plots" - the rail menu row. */
 function plottedRouteCancelRow(): MenuItem {
   return {
+    ffbHidden: true, // FFB has no plotted route (FUMBBL Controls never plots one)
     label: CANCEL_PLOTTED_ROUTE_LABEL,
     action: () => {
       ctxMenu.visible = false;
@@ -10984,6 +11300,8 @@ function confirmAggroStage(): boolean {
       if (outcome.send) o66SendBlock(actingId, st.target, outcome.blockKind as BlockKind | null);
       return true; // outcome.send===false: card is up; commitBlitzBlock (or a dismiss) owns the terminal next
     }
+    // FUMBBL Controls (Sol r1 #6): no quick-click Blitz composite (declare + walk + block) from a stage, whatever left it.
+    if (fumbblControls()) { o66AggroStage.value = null; return true; } // fumbbl-gate:quick-click-blitz
     if (settings.declareBlitzBehavior !== 'modern') {
       o66AggroStage.value = null;
       showQuickClickBlitzUnavailable(st.target, 'modern');
@@ -11603,6 +11921,8 @@ function onKeydown(event: KeyboardEvent) {
   if (keyOwner === 'textOwns') return; // owner 10-13: typing in a text field never reaches confirm / chat / hotbar / pan
   // Owner 10-02: Esc closes the Helmet roster pop-out first (and does nothing else) — the first step of the gameMenu action.
   if (event.key === 'Escape' && rosterPopoutOpen.value) { event.preventDefault(); runAction('gameMenu', 'keyboard'); return; }
+  // FUMBBL keyboard shortcuts (owner 11-03, either control layer): ahead of the bindings table and the WASD pan.
+  if (fumbblKeyDown(event)) return;
   // Controller support P1 (owner 10-07): every REBINDABLE keyboard binding (Settings > Controls) runs through runAction,
   // the dispatcher the controller uses too — the roster key (default H; owner 10-02: "H should always pop up the roster
   // unless the user is at the play/spectate menu screens", so every in-game screen), the Log enlarge key (default L;
@@ -11638,7 +11958,7 @@ function onKeydown(event: KeyboardEvent) {
   } else if (boundAction === 'confirm') {
     // preventDefault only when we actually consume it (Space would otherwise scroll / re-click a focused button).
     if (runAction('confirm', 'keyboard')) event.preventDefault();
-  } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target)) {
+  } else if (PAN_KEY_ALIASES[event.code] && !keyboardOwnedByTextControl(event.target) && !wasdPanOff(event.code)) {
     // WASD camera navigation (owner 2026-07-03 r3; smooth glide 2026-07-04; arrow keys 09-14): W/A pan
     // toward the top/left (content shifts down/right), S/D the opposite. Held keys
     // drive a smooth velocity glide (setPanDirection) rather than a per-key tile jump.
@@ -12013,16 +12333,18 @@ onMounted(async () => {
         // Owner 11-03 (match upstream BombLogicModule.playerInteraction): the thrower's own token is the action menu,
         // never a bomb target (a Hail Mary Bomb's any-square template included), so it falls through to the router.
         const bombRoute = bombPlayerClickRoute(g, o66Ctx(), playerId);
+        if (bombRoute.kind === 'nominate' && fumbblControls()) { fumbblThrowAt(bombRoute.square, 'bomb'); return; } // fumbbl-gate:two-click-target (one click throws)
         if (bombRoute.kind === 'nominate') { nominateOrConfirmThrow(bombRoute.square, 'bomb'); return; }
         if (bombRoute.kind === 'ignore') return;
         // A self left-click during any Blitz phase is inert. End Activation remains available from the context menu,
         // but only its explicit Blitz confirmation may authorize the terminal wire.
         const clickState = deriveClientState(g, o66Ctx());
         const clickActingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-        if (playerId === clickActingId && requiresBlitzEndConfirmation(clickState)) return;
+        // FUMBBL Controls: the acting player's click opens its menu, or deselects when it has none (MoveLogicModule).
+        if (playerId === clickActingId && requiresBlitzEndConfirmation(clickState) && !fumbblControls()) return;
         // Owner 10-15: with a route plotted during a Hand-off, a teammate click arms the Hand-off card from the route's
         // destination (never the router's one-click hand-off from the current square).
-        if (clickState === 'HAND_OVER' && clickActingId && playerId !== clickActingId && gameStore.iControl(clickActingId)
+        if (clickState === 'HAND_OVER' && !fumbblControls() /* fumbbl-gate:hand-off-at-destination */ && clickActingId && playerId !== clickActingId && gameStore.iControl(clickActingId)
             && gameStore.iControl(playerId) && armHandOffAtDestination(g, clickActingId, playerId)) return;
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
         // Owner 10-15 decision: a PRONE teammate clicked while ours is declared and untouched. No wire: the declared
@@ -12075,7 +12397,7 @@ onMounted(async () => {
           // waits for its server result before deciding refund vs end.
           clearO66Arms();
           gameStore.cancelPlan();
-          if (settings.leftClickOpensContextMenu) {
+          if (leftClickMenuMode()) {
             pendingFriendlyLeftClickMenu.value = { playerId: ix.playerId, x: clickX, y: clickY };
             gameStore.endActivation();
           } else {
@@ -12124,12 +12446,29 @@ onMounted(async () => {
         // Route router endMove intents through endActivation so bespoke states use their exact cancel wire.
         if (ix.kind === 'endMove') {
           if (gameStore.isPlanWalking(playerId)) return;
+          // FUMBBL Controls (Sol r1 #7): the router's rows say "nothing but End", but the assembled menu may still offer
+          // Pass Ball (any square), Bounding Leap or a Blitz flavor - then FFB opens the popup instead of deselecting.
+          if (fumbblControls() && playerId === clickActingId) {
+            const actingTarget = renderer?.contextTargetFor(playerId);
+            if (actingTarget && actingMenuHasOptions(assembleActingPlayerRows(actingTarget, clickX, clickY))) { openO66Menu(actingTarget, clickX, clickY); return; }
+          }
           requestEndActivation();
           return;
         }
         // BLOCK (A.3) and the BLITZ block-commit (A.4) both return `block` — send it with any remembered flavor
         // (a plain blitz carries no flavor → o66PendingBlockKind is null → all flags false).
         if (ix.kind === 'block') {
+          // FUMBBL Controls: an ADJACENT target fires at once through the existing commit (the block-kind chooser still
+          // asks for Stab / Chainsaw / ...); a non-adjacent target does nothing - no walk to contact.
+          // Other block intents (Stab, Putrid Regurgitation, ...) already send on one click below.
+          if (fumbblControls() && (clickState === 'BLOCK' || clickState === 'BLITZ')) { // fumbbl-gate:blitz-to-contact fumbbl-gate:two-click-target
+            swallowBlockTargetSelection(ix.defenderId);
+            const atkSq = playerSquareById(clickActingId);
+            const defSq = playerSquareById(ix.defenderId);
+            const effect = fumbblPlayerClick(clickState, { kind: 'opponent', adjacent: !!atkSq && !!defSq && fumbblAdjacent(atkSq, defSq), standing: true, down: false }, FUMBBL_VIEW_RULESET);
+            if (effect === 'block' && !endActConfirm.value) fumbblCommitBlock(clickState === 'BLITZ' ? 'blitz' : 'block', ix.defenderId);
+            return;
+          }
           // Owner 09-06: the renderer SELECTED the clicked defender before routing here (plannerEnabled is off in
           // o66). The block driver owns that click — hand the selection back to the attacker so nothing persists on
           // the target once the block resolves (its reach/inspect read, and later square clicks acting on it).
@@ -12184,6 +12523,13 @@ onMounted(async () => {
           return;
         }
         if (ix.kind === 'passTarget') {
+          // FUMBBL Controls (PassLogicModule): an in-range team-mate is thrown to on ONE click, from where the passer stands.
+          if (fumbblControls()) { // fumbbl-gate:pass-after-walk fumbbl-gate:two-click-target
+            const inRange = passTargetInTemplate(g, clickActingId, ix.square);
+            swallowBlockTargetSelection(playerId); // the receiver click is the pass's; the passer stays selected
+            if (fumbblPlayerClick(clickState, { kind: 'teammate', adjacent: false, inPassRange: inRange, rightStuff: false }, FUMBBL_VIEW_RULESET) === 'pass') fumbblThrowAt(ix.square, 'pass');
+            return;
+          }
           // Owner 10-13: with a route plotted the throw is from its destination; refuse a target out of range there.
           const plannedFrom = plannedPassDestination();
           if (plannedFrom && !passTargetInRangeFrom(g, plannedFrom, ix.square)) {
@@ -12212,6 +12558,8 @@ onMounted(async () => {
             }
             if (gazeClick === 'arm') {
               if (gameStore.armGazeTarget(playerId)) {
+                // FUMBBL Controls: an adjacent victim is gazed on ONE click.
+                if (fumbblControls()) { confirmArmedGaze(); return; } // fumbbl-gate:two-click-target
                 o66PendingGaze.value = playerId;
                 if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); } // gaze from HERE
               }
@@ -12226,6 +12574,7 @@ onMounted(async () => {
               return;
             }
             if (gazeClick === 'approach') {
+              if (fumbblControls()) return; // fumbbl-gate:gaze-approach (a distant victim does nothing: walk adjacent first)
               const step = gazeApproachClick({
                 victimId: playerId,
                 victimSquare: playerSquareById(playerId),
@@ -12272,6 +12621,9 @@ onMounted(async () => {
               const msq = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
                 .find((d) => d.playerId === playerId)?.playerCoordinate);
               const path = msq ? (renderer?.o66PathToContact(ttmActing, msq) ?? []) : [];
+              // FUMBBL Controls: only an ADJACENT team-mate is picked up; a distant one does nothing (walk next to it first).
+              // Sol r1 #4: decided on the squares, never on the contact path (an unreachable mate's null path became []).
+              if (fumbblControls() && !ttmMateAdjacent(playerSquareById(ttmActing), msq)) return; // fumbbl-gate:ttm-walk
               // ORDER 66 (#6.4): walk-to-contact→pickup via the planner queue (no blind timer; pickup fires from
               // the arrival square). Already declared throwTeamMateMove (menu) → the queue skips the re-declare.
               // The LANDING stays a separate user click (o66ThrowMateLand); o66ThrownMate arms it as before.
@@ -12297,6 +12649,13 @@ onMounted(async () => {
             if (endActConfirm.value) return;
             const vsq = normSquare(fpd?.playerCoordinate);
             const reach = vsq ? renderer?.o66ContactReach(foulActing, vsq) : null;
+            // FUMBBL Controls (FoulLogicModule): an ADJACENT down victim is fouled on ONE click (the execute below, with
+            // no walk); a distant one does nothing.
+            if (fumbblControls()) { // fumbbl-gate:foul-distant
+              const fsq = playerSquareById(foulActing);
+              if (fumbblPlayerClick('FOUL', { kind: 'opponent', adjacent: !!fsq && !!vsq && fumbblAdjacent(fsq, vsq), standing: false, down: true }, FUMBBL_VIEW_RULESET) !== 'foul') return;
+              o66PendingFoul.value = playerId; o66PendingMove.value = null;
+            }
             if (o66PendingFoul.value === playerId) {
               // 2nd click: EXECUTE. Honor a plotted adjacent route; else auto-route to contact.
               const planned = o66PendingMove.value?.route ?? null;
@@ -12328,7 +12687,8 @@ onMounted(async () => {
           // then the activation's ONE declaration (no `move` first).
           const actLocal = o66LocalMover(g);
           const actActingId = actLocal || String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-          if (actActingId && !gameStore.iControl(playerId) && o66SurfaceState(g) === 'MOVE') {
+          // FUMBBL Controls: MoveLogicModule ignores an opponent click (no click-to-act Block / Blitz); it inspects only.
+          if (actActingId && !gameStore.iControl(playerId) && o66SurfaceState(g) === 'MOVE' && !fumbblControls() /* fumbbl-gate:click-to-act-block fumbbl-gate:quick-click-blitz */) {
             const pd = (g.fieldModel.playerDataArray as { playerId: string; playerState?: number; playerCoordinate?: unknown }[]).find((d) => d.playerId === playerId);
             const base = (pd?.playerState ?? 0) & 0xff;
             const enemySq = normSquare(pd?.playerCoordinate);
@@ -12432,7 +12792,10 @@ onMounted(async () => {
           o66PendingBlock.value = null; o66AggroStage.value = null; // any other click cancels a pending preview/stage
         }
         if (ix.kind === 'inspect') {
-          o66InspectedOpponent.value = ix.playerId;
+          // Rig g1100 #2: under FUMBBL Controls an opponent click (MoveLogicModule ignores it) shows its card only - no
+          // inspection latch (it swallowed the next square click) and the acting player keeps the selection.
+          if (fumbblControls()) swallowBlockTargetSelection(ix.playerId);
+          else o66InspectedOpponent.value = ix.playerId;
           autoShowPopup(ix.playerId);
           return;
         }
@@ -12447,7 +12810,7 @@ onMounted(async () => {
           // is selected locally and declares only when its action is committed (after the server's actor clear: the
           // local surface needs no acting player). A declared Blitz / Foul asks first through its End confirmation, as
           // the friendly-switch preference does. A player who HAS acted: no switch and no send (upstream ignores it).
-          if (acting && ix.playerId !== acting && gameStore.iControl(acting) && !settings.leftClickOpensContextMenu) {
+          if (acting && ix.playerId !== acting && gameStore.iControl(acting) && !leftClickMenuMode()) {
             const switchState = deriveClientState(g, o66Ctx());
             const disposition = friendlyActivationSwitchDisposition(g, { ...o66Ctx(), friendlyPlayerSwitch: true }, ix.playerId);
             if (disposition === 'refund') {
@@ -12471,7 +12834,7 @@ onMounted(async () => {
             showMidActivationToast(g, acting);
             return;
           }
-          if (settings.leftClickOpensContextMenu && ix.playerId !== acting) {
+          if (leftClickMenuMode() && ix.playerId !== acting) {
             showFriendlyLeftClickMenu(ix.playerId, clickX, clickY);
             return;
           }
@@ -12481,6 +12844,13 @@ onMounted(async () => {
             o66LocalSelection.value = null;
             if (o66PendingMove.value) { o66PendingMove.value = null; renderer?.setO66Path([]); }
             o66AggroStage.value = null;
+          }
+          if (ix.playerId === acting && deriveClientState(g, o66Ctx()) !== 'SELECT_PLAYER' && fumbblControls()) {
+            // FUMBBL Controls (Sol r1 #7): the acting player's menu is the assembled one (Pass Ball (any square),
+            // Bounding Leap and the Blitz flavors included), in FFB's order.
+            const actingTarget = renderer?.contextTargetFor(ix.playerId);
+            if (actingTarget) openO66Menu(actingTarget, clickX, clickY);
+            return;
           }
           if (ix.playerId === acting && deriveClientState(g, o66Ctx()) !== 'SELECT_PLAYER') {
             const refresh = () => {
@@ -12529,7 +12899,7 @@ onMounted(async () => {
           // coach commits (the first confirmed walk declares `move`, a Block / Blitz target its own action, a rail pick
           // its action). A second click on the selection opens the action menu (upstream's click); players that cannot
           // walk (off-pitch) fall to the popup as before.
-          if (ix.actions.some((a) => a.kind === 'declare')) {
+          if (ix.actions.some((a) => a.kind === 'declare') && !fumbblControls() /* fumbbl-gate:local-select */) {
             const local = o66LocalSelection.value;
             if (selectPlayerLeftClick(g, o66Ctx(), ix.playerId, local) === 'select') {
               if (endActConfirm.value) return;
@@ -12750,12 +13120,19 @@ onMounted(async () => {
         // Route through the pure interaction split so raw `punt` sends CLIENT_FIELD_COORDINATE while `puntMove`
         // continues into the ordinary walk planner below (PuntLogicModule.java:56-69).
         if (st === 'PUNT' && actingId && isPuntTargeting(g)) {
+          if (fumbblControls()) { o66PendingPunt.value = null; nominateOrConfirmPunt(g, actingId, c); } // fumbbl-gate:two-click-target (one click kicks)
           nominateOrConfirmPunt(g, actingId, c);
           return;
         }
         // First click previews a move-family route; the second commits it. Pass targets outside reach are throws.
         const handleMoveFamilyClick = () => {
           if (isGazeMovementState(st) && !gameStore.hasLiveGazeIntent()) return;
+          // Sol r3 P1 / r4 P0: under FUMBBL Controls no client-owned move-family square click - Ball & Chain aim, Jump
+          // square, the client's own throw picks, the FUMBBL walk - acts while our declaration (e.g. a Jump toggle) awaits
+          // its echo; it would go out under the old mode. The Super FUMBBL layer is unchanged (its click still plots /
+          // walks as before). Server-requested picks (square picks, Swoop, Furious Outburst, Hit and Run, Punt) are
+          // handled above and stay live. The latch fails open (store watchdog).
+          if (fumbblControls() && gameStore.declarationInFlight()) return;
           // Owner 10-08: a click elsewhere disarms the gaze victim (the activation stays) - except the click that
           // confirms the plotted walk, which keeps the victim armed for the arrival click.
           {
@@ -12792,6 +13169,7 @@ onMounted(async () => {
           // throw (2-click confirm reusing the 🏈 cue) — takes precedence over the walk reach (no more walking).
           if (isThrowMateState(st) && o66ThrownMate.value) {
             if (!ttmTargetInTemplate(g, actingId, c)) return;
+            if (fumbblControls()) { fumbblThrowAt(c, 'throwTeamMate'); return; } // fumbbl-gate:two-click-target
             nominateOrConfirmThrow(c, 'throwTeamMate');
             return;
           }
@@ -12799,6 +13177,8 @@ onMounted(async () => {
           // Owner 10-20 (g1955027): the first click raises the "Throw to ...?" card; Confirm on the card throws.
           if (st === 'PASS' && gameStore.state.freeSelectPass) {
             if (passTargetInTemplate(g, actingId, c)) nominateFreePass(c);
+            // FUMBBL Controls ("Pass Ball (any square)"): the square click throws at once (the card's Confirm).
+            if (fumbblControls() && passConfirmCard.value) confirmPassCard(); // fumbbl-gate:two-click-target
             return;
           }
           // BOMB is stationary: every legal tile click nominates a bomb target before movement routing. The thrower's
@@ -12810,11 +13190,21 @@ onMounted(async () => {
               const at = renderer?.playerScreenPos(bombTile.playerId);
               renderer?.onPlayerClick?.(bombTile.playerId, at?.x ?? 0, at?.y ?? 0);
             } else if (bombTile.kind === 'nominate') nominateOrConfirmThrow(bombTile.square, 'bomb');
+            // FUMBBL Controls: the same click also confirms it (one click throws).
+            if (bombTile.kind === 'nominate' && fumbblControls()) nominateOrConfirmThrow(bombTile.square, 'bomb'); // fumbbl-gate:two-click-target
             return;
           }
           // Owner ruling: while the end-activation dialog is open, pitch clicks cannot create, extend, or commit a
           // movement route. Non-planner tile interactions above remain available and the dialog owns resolution.
           if (endActConfirm.value) return;
+          // FUMBBL Controls: no route preview, no waypoints, no click-again confirm - a server move square steps, any other
+          // square walks the safe Automove path at once (one square per echo through the planner), else nothing.
+          // Sol r1 #3: a team-mate square inside the armed Pass template arrives here as a tile - it is the pass, not a move.
+          // Rig g1100 (S2b): a click that does nothing (beyond MA, no safe path) never consults the walking hold, so it
+          // cannot arm it and swallow the next real click; a send still waits for the token to land.
+          const fumbblTeammatePass = fumbblControls() && fumbblTileIsPassTarget({ state: st, serverMoveSquare: serverMoveSquares(g).some((q) => q[0] === c[0] && q[1] === c[1]), inTemplate: passTargetInTemplate(g, actingId, c), teammateOnSquare: fumbblTeammateAt(c, actingId) }); // fumbbl-gate:two-click-target
+          if (fumbblControls() && fumbblTeammatePass) { fumbblHeldThrow(c, walkStillOnScreen); return; } // fumbbl-gate:two-click-target
+          if (fumbblControls()) { fumbblMoveFamilyClick(g, st, actingId, c, isBlitzMovementState(st) || fumblerooskieBlitzWalk, walkStillOnScreen); return; } // fumbbl-gate:planner-preview
           if (walkStillOnScreen()) return;
           // Same waypoint-anchored reach the overlay paints (owner 08-18) — the click gate can never admit a square
           //   the tint says is out of budget, and the plotted squares stay clickable (confirm / truncate).
@@ -12932,6 +13322,10 @@ onMounted(async () => {
     if (from) renderer?.setPassRuler(from, rulerTarget);
   };
   renderer.setPassRuler(hailMaryPassRulerFrom(), null);
+  // FUMBBL Controls (owner 11-03): the Automove hover path, and the Right Click section's behaviour (both layers).
+  renderer.onHoverSquare = (coord) => fumbblHover(coord as [number, number] | null);
+  renderer.onRightClick = (x, y) => pitchRightClick(x, y);
+  renderer.oneClickActionTargets = () => fumbblControls(); // rig g1100 #1: one click throws / hands off (no card)
   // Owner 2026-07-04d: bomb/Throw-Keg — clicking the 3×3 blast centre confirms.
   renderer.onBombTarget = (centre) => {
     const attackerId = renderer?.getSelectedPlayerId();
@@ -17481,7 +17875,7 @@ watch(() => [
         <ul v-if="ctxMenu.visible" class="context-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }">
           <li v-for="(item, i) in ctxMenu.items" :key="i" :data-disabled="item.disabled ?? false"
             :data-parent="!!item.children" :title="item.hint" @click="runMenuItem(item)">
-            <img v-if="item.icon" class="ctx-item-icon" :src="item.icon" alt="" />{{ item.label }}<span v-if="item.children" class="submenu-arrow">▸</span>
+            <img v-if="item.icon" class="ctx-item-icon" :src="item.icon" alt="" />{{ item.label }}<span v-if="item.shortcut" class="ctx-shortcut" data-testid="ctx-shortcut">{{ item.shortcut }}</span><span v-if="item.children" class="submenu-arrow">▸</span>
             <ul v-if="item.children" class="submenu">
               <li v-for="(child, j) in item.children" :key="j" :data-disabled="child.disabled ?? false"
                 :title="child.hint" @click.stop="runMenuItem(child)">{{ child.label }}</li>
@@ -23045,6 +23439,7 @@ watch(() => [
 /* #6 (owner ruling 08-17): Jump Up shows ONLY as an inline icon on the Move row — no text prefix. Sized to
    the row's line-box and baseline-aligned via vertical-align (matches row height, no layout shift). */
 .ctx-item-icon { width: 0.6rem; height: 0.6rem; object-fit: contain; vertical-align: -0.05rem; margin-right: 3px; }
+.ctx-shortcut { float: right; margin-left: 10px; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 0.85em; line-height: 1.2; opacity: 0.75; } /* FUMBBL keyboard shortcuts: the FFB popup letter */
 .submenu-arrow { float: right; color: var(--ui-muted); }
 .submenu {
   display: none;

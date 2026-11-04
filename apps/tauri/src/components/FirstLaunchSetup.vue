@@ -374,6 +374,11 @@ function finish(): void {
               </div>
             </div>
           </div>
+          <!-- FUMBBL Controls (owner 11-03): with FUMBBL Controls chosen, the keyboard shortcuts opt-in (unchecked). -->
+          <label v-if="step.id === 'controls' && settings.controlLayer === 'fumbbl'" class="setup-hint setup-controls-shortcuts" data-testid="setup-fumbbl-shortcuts">
+            <input v-model="settings.fumbblShortcuts" type="checkbox" :disabled="picksLocked" />
+            {{ $t('setupWizard.controls.shortcuts') }}
+          </label>
           <p v-if="choiceError" class="setup-error" role="alert">
             {{ choiceError }}
             <button v-if="retryPick" type="button" class="setup-secondary setup-retry" @click="retry">{{ $t('setupWizard.tryAgain') }}</button>

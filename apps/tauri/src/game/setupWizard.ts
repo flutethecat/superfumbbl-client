@@ -29,6 +29,7 @@ export type SetupStepId =
   | 'stadium'
   | 'orientation'
   | 'logStyle'
+  | 'controls'
   | 'login'
   | 'homeLogin'
   | 'modPacks'
@@ -49,7 +50,9 @@ export type SetupSettings = Pick<AppSettings,
   | 'assetPackAssignments'
   | 'language'
   | 'languageChosen'
-  | 'logStyle'>;
+  | 'logStyle'
+  | 'controlLayer'
+  | 'fumbblShortcuts'>;
 
 export interface SetupOption {
   id: string;
@@ -307,6 +310,20 @@ export const SETUP_STEPS: readonly SetupStep[] = [
       { id: 'fumbbl', get title() { return t('settings.display.log.fumbbl'); }, get description() { return t('settings.display.log.theFumbblClientS'); }, images: [], logStylePreview: 'fumbbl', writes: { logStyle: 'fumbbl' } },
     ],
     prefill: (s) => (s.logStyle === 'graphical' || s.logStyle === 'fumbbl' ? s.logStyle : 'text'),
+  },
+  {
+    // FUMBBL Controls (owner 11-03, spec §6): the control layer, after Log Style. Super FUMBBL Controls is preselected;
+    // choosing FUMBBL Controls shows the "Also use FUMBBL keyboard shortcuts" checkbox (unchecked) - FirstLaunchSetup.vue.
+    // No one-time prompt for existing players (owner 11-03): the wizard version is unchanged.
+    id: 'controls',
+    kind: 'choice',
+    get title() { return t('setupWizard.controls.title'); },
+    get lede() { return t('setupWizard.controls.lede'); },
+    options: [
+      { id: 'super', get title() { return t('setupWizard.controls.super'); }, get description() { return t('setupWizard.controls.superDescription'); }, images: [], writes: { controlLayer: 'super' } },
+      { id: 'fumbbl', get title() { return t('setupWizard.controls.fumbbl'); }, get description() { return t('setupWizard.controls.fumbblDescription'); }, images: [], writes: { controlLayer: 'fumbbl' } },
+    ],
+    prefill: (s) => (s.controlLayer === 'fumbbl' ? 'fumbbl' : 'super'),
   },
   {
     id: 'login',

@@ -10,10 +10,12 @@ import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
 import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type ConfirmationSettings } from './confirmationSettings';
+import { applyLayerConfirmations, CONTROL_LAYER_DEFAULTS, normalizeControlLayerSettings, type ControlLayerSettings } from './controlLayer';
+import { chordLabel, defaultFumbblKeyBindings, fumbblKeyAction, fumbblKeyHolder, isFumbblChord, normalizeFumbblKeyBindings, type FumbblKeyActionId, type FumbblKeyBindings } from './fumbblKeys';
 import { STICK_DEADZONE, clampDeadzone } from './gamepad';
 import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
 import { DEFAULT_SPECTATOR_VIEW, normalizeSpectatorView, type SpectatorView } from './spectatorView';
-import { CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
+import { CONTROL_ACTIONS, CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, getBinding, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
 import { $t, mapLegacyEnglish, normalizeLocale, systemLanguageTags, type Locale } from '../i18n';
 
 /**
@@ -193,7 +195,7 @@ export function normalizeReflowFeatures(raw: Partial<SettingsReflowFeatures>, me
 }
 // ============================================ end of SETTINGS REFLOW - NEW FEATURES ==================================
 
-export interface AppSettings extends ConfirmationSettings, SettingsReflowFeatures {
+export interface AppSettings extends ConfirmationSettings, SettingsReflowFeatures, ControlLayerSettings {
   // hotkeys (KeyboardEvent.code values)
   confirmKey: string;
   /** Owner 10-02: toggles the Helmet roster pop-out (KeyboardEvent.code; default H). */
@@ -214,6 +216,9 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   /** Every action's keyboard + controller bindings (game/controls.ts). The keyboard primary of confirm / roster /
    *  log lives in confirmKey / rosterKey / logExpandKey (mirrored here). */
   controlBindings: ControlBindings;
+  /** FUMBBL keyboard shortcuts (owner 11-03): one chord per FFB key action (game/fumbblKeys.ts); live only while
+   *  `fumbblShortcuts` is on. */
+  fumbblKeyBindings: FumbblKeyBindings;
   /** game/controls.ts CONTROL_BINDINGS_REVISION of the stored map (drives default-move migrations). */
   controlBindingsRevision: number;
   /** Settings > Controls: rumble on dice / turnover / casualty (arrives in P4; owner round 2: default on). */
@@ -903,6 +908,8 @@ const DEFAULTS: AppSettings = {
   deferFriendlySwitchEnd: false,
   leftClickOpensContextMenu: false,
   ...CONFIRMATION_DEFAULTS,
+  ...CONTROL_LAYER_DEFAULTS, // FUMBBL Controls (owner 11-03): Super FUMBBL Controls is the default layer
+  fumbblKeyBindings: defaultFumbblKeyBindings(),
   devMode: false,
   coachBrain: 'none',
   flyBrainUrl: 'http://127.0.0.1:8766',
@@ -1453,6 +1460,12 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.deferFriendlySwitchEnd = raw.deferFriendlySwitchEnd === true;
     merged.leftClickOpensContextMenu = raw.leftClickOpensContextMenu === true;
     Object.assign(merged, normalizeConfirmationSettings(raw as Record<string, unknown>)); // only an explicit false turns a prompt off
+    // FUMBBL Controls (owner 11-03): the control layer, Automove, Right Click per layer, the other layer's confirmation
+    // values, FUMBBL keyboard shortcuts. A switch that was still waiting when the app closed applies now (fail open):
+    // the flat confirmation values are moved to the stored layer's.
+    Object.assign(merged, normalizeControlLayerSettings(raw as Record<string, unknown>));
+    applyLayerConfirmations(merged, merged.controlLayer);
+    merged.fumbblKeyBindings = normalizeFumbblKeyBindings(raw.fumbblKeyBindings);
     // v5 (owner 2026-07-14): the theme engine. Existing installs adopt the Black/Red default; a later user
     // change to the theme fields sticks (stamped below).
     if ((raw.settingsVersion ?? 0) < 5) {
@@ -2339,7 +2352,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 
 /** Human-readable label for a KeyboardEvent.code binding. */
 /** Null when `code` may be bound to `which`; otherwise why not. */
-export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey> & { controlBindings?: ControlBindings }): string | null {
+export function hotkeyConflict(which: RebindableKey, code: string, current: Pick<AppSettings, RebindableKey> & { controlBindings?: ControlBindings; fumbblShortcuts?: boolean; fumbblKeyBindings?: FumbblKeyBindings }): string | null {
   if (!code) return 'No key pressed';
   if (UNBINDABLE_CODES.includes(code)) return `${keyLabel(code)} can't be used as a shortcut`;
   if (FIXED_SHORTCUT_CODES.includes(code)) return `${keyLabel(code)} is already a fixed shortcut`;
@@ -2351,6 +2364,10 @@ export function hotkeyConflict(which: RebindableKey, code: string, current: Pick
     const self = REBINDABLE_ACTION[which];
     const holder = bindingConflict({ ...current, controlBindings: current.controlBindings, inputMethod: 'keyboard' } as AppSettings, self, 'keyboard', 'primary', code);
     if (holder) return `${keyLabel(code)} is already bound to ${controlAction(holder).label}`;
+  }
+  if (current.fumbblShortcuts && current.fumbblKeyBindings) {
+    const fumbbl = fumbblKeyHolder(current.fumbblKeyBindings, code);
+    if (fumbbl) return `${keyLabel(code)} is already bound to ${fumbblKeyAction(fumbbl).label}`;
   }
   return null;
 }
@@ -2369,7 +2386,39 @@ export function controlBindingConflict(id: ControlActionId, method: BindingMetho
     if (FIXED_SHORTCUT_CODES.includes(input)) return `${name} is already a fixed shortcut`;
   }
   const holder = bindingConflict(current, id, method, slot, input);
-  return holder ? `${name} is already bound to ${controlAction(holder).label}` : null;
+  if (holder) return `${name} is already bound to ${controlAction(holder).label}`;
+  // FUMBBL keyboard shortcuts (owner 11-03): while they are on, their keys are taken too.
+  if (method === 'keyboard' && current.fumbblShortcuts) {
+    const fumbbl = fumbblKeyHolder(current.fumbblKeyBindings, input);
+    if (fumbbl) return `${name} is already bound to ${fumbblKeyAction(fumbbl).label}`;
+  }
+  return null;
+}
+
+/** WASD: the camera-pan keys a FUMBBL shortcut may take (turning FUMBBL keyboard shortcuts on turns WASD pan off). */
+const WASD_PAN_CODES: readonly string[] = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+/** FUMBBL keyboard shortcuts (owner 11-03): null when `chord` may go in that FUMBBL cell; otherwise why not. The same
+ *  rules as the bindings table: no Tab / modifiers alone / fixed shortcuts (WASD excepted), no key another action
+ *  holds - a bindings-table action, the Confirm / Roster / Log keys, or another FUMBBL shortcut. */
+export function fumbblKeyConflict(id: FumbblKeyActionId, chord: string, current: AppSettings): string | null {
+  if (!chord) return null;
+  if (!isFumbblChord(chord)) return `${chord} can't be used as a shortcut`;
+  const name = chordLabel(chord, keyLabel);
+  const bare = !/\+/.test(chord);
+  if (bare && UNBINDABLE_CODES.includes(chord)) return `${name} can't be used as a shortcut`;
+  if (bare && FIXED_SHORTCUT_CODES.includes(chord) && !WASD_PAN_CODES.includes(chord)) return `${name} is already a fixed shortcut`;
+  const other = fumbblKeyHolder(current.fumbblKeyBindings, chord, id);
+  if (other) return `${name} is already bound to ${fumbblKeyAction(other).label}`;
+  if (bare) {
+    for (const action of CONTROL_ACTIONS) {
+      if (action.context !== 'game' && action.context !== 'any') continue;
+      // Sol r1 #9: camera pan gives W A S D up while FUMBBL shortcuts are on - its fixed WASD is never a clash here.
+      if (action.id === 'cameraPan' && WASD_PAN_CODES.includes(chord)) continue;
+      const b = getBinding(current, action.id as ControlActionId).keyboard;
+      if (b.primary === chord || b.secondary === chord) return `${name} is already bound to ${action.label}`;
+    }
+  }
+  return null;
 }
 
 export function keyLabel(code: string): string {

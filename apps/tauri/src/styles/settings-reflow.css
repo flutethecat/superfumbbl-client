@@ -243,6 +243,10 @@
   border-radius: 2px;
 }
 .settings-pane .settings-content select { max-width: 280px; }
+/* FUMBBL Controls (rig g1100 #4): the control-layer and Right Click selects carry long option names ("Super FUMBBL
+   Controls (default)"): a wider control column, and the select fills it (both UI styles share this sheet). */
+.settings-pane .settings-group div.row.row-wide-ctl { --sr-ctl-w: min(360px, 58%); }
+.settings-pane .settings-group div.row.row-wide-ctl .row-ctl > select { flex: 1 1 auto; width: 100%; max-width: none; }
 .settings-pane .settings-content :is(select, input):disabled { color: var(--ui-muted); border-style: dashed; }
 
 /* Retro only: the bevelled button for .sf-btn (Modern takes lm-theme.css's). */
