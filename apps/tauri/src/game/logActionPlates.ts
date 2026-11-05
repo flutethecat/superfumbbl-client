@@ -173,6 +173,7 @@ export const REPORT_ACTION_KIND: Readonly<Record<string, LogActionKind | null>> 
   extraReRoll: 'brilliantCoaching', cheeringFans: 'kickoff', kickoffDodgySnack: 'dodgySnack', dodgySnackRoll: 'dodgySnack',
   kickoffPitchInvasion: 'kickoff', kickoffThrowARock: 'throwARock', kickoffRiot: 'kickoff', startHalf: 'halfStart',
   turnEnd: 'turnEnd', weatherMageRoll: 'weather', weatherMageResult: 'weather',
+  timeoutEnforced: null, // owner 11-04: the line carries its own 🚨
   // pre / post game
   fanFactor: 'fans', fanFactorRoll: 'fans', spectators: 'fans', dedicatedFans: 'fans', winnings: 'winnings', winningsRoll: 'winnings',
   defectingPlayers: 'defecting', penaltyShootout: 'shootout', masterChefRoll: 'masterChef', riotousRookies: 'rookies', bretonnianPastriesRoll: 'pastries',

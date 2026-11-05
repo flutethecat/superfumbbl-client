@@ -331,7 +331,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     const lines = applyLogEasterEgg(report, next.model, formatReportLines(report, next.model, projection.logContext),
       logEventKey(next.model, report));
     const id = String(report.reportId);
-    if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver', 'apothecaryChoice'].includes(id)
+    if (reportCarriesDisplayedDice(report) || ['modifiedDodgeResultSuccessful', 'modifiedPassResult', 'coinThrow', 'handOver', 'apothecaryChoice', 'timeoutEnforced'].includes(id)
       || (id === 'playerAction' && !!playerActionDescription(report.playerAction)) // Astra 10-16: the declaration shows in replays too
       || (id === 'playerEvent' && typeof report.message === 'string' && report.message.trim())) {
       if (lines.length && captainRows.anchorOf(reportIndex) !== null) {

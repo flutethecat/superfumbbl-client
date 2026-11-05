@@ -1857,6 +1857,7 @@
   "log.join.seatAway": "Away",
   "log.join.seatHome": "Home",
   "log.join.spectating": "{coach} is now spectating the game.",
+  "log.report.timeoutCalled": "🚨 {coach} called a timeout: the turn ends when the current player's action is over",
   "log.text.p0BoughtP1": "{p0} bought {p1}",
   "login.coachName": "Coach name",
   "login.done": "Done",

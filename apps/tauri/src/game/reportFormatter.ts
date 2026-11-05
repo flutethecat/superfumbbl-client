@@ -1016,6 +1016,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   kickoffScatter: (r) => isFieldDirection(r.scatterDirection)
     ? `Kick-off scatters ${dirTag(r.scatterDirection)}${r.rollScatterDirection != null ? ` (${r.rollScatterDirection})` : ''}, ${r.rollScatterDistance ?? '?'} square${r.rollScatterDistance === 1 ? '' : 's'}`
     : `kick-off scatter: direction ${r.rollScatterDirection ?? '?'} · distance ${r.rollScatterDistance ?? '?'}`,
+  // Owner 11-04: the server's ReportTimeoutEnforced (the opponent's Call Timeout is enforced against the playing coach;
+  // upstream TimeoutEnforcedMessage: "Coach X forces a Timeout. The turn will end after the Acting Player has finished
+  // moving."). The coach is the one who CALLED it; the server ends the turn at its next select step.
+  timeoutEnforced: (r) => tEnglish('log.report.timeoutCalled', { coach: String(r.coach ?? '').trim() || 'A coach' }),
   // owner 2026-07-03 r6: surface the 2d6 weather roll alongside the result
   weather: (r) => {
     const roll = Array.isArray(r.weatherRoll) ? ` (rolled ${d6List(r.weatherRoll, ' + ')})` : '';

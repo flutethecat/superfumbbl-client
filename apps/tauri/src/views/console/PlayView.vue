@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import type { GameListEntry } from '@fumbbl40k/ffb-protocol';
 import superFumbblLogoUrl from '../../assets/resources/super-fumbbl-logo.png';
 import { FUMBBL_SITE, activeServerTarget, applyServerTarget, settings } from '../../game/settings';
-import { lmRootClass } from '../../game/lmTheme';
+import { lmGameRootClass, lmRootClass } from '../../game/lmTheme';
 import { gameClockLabel } from '../../game/gameClock';
 import LmResultCard from '../../components/lm/LmResultCard.vue';
 import DisplayCaps from '../../components/DisplayCaps.vue';
@@ -606,7 +606,9 @@ function crestFailed(url: string | null): void {
           <span class="hm-cap"><template v-if="detailsExample">{{ $t('play.detailsModal.exampleGame') }} · </template>{{ $t('lmBlades.teamVsTeam', { home: detailsRow.myTeam, away: detailsRow.opponentTeam }) }}<template v-if="!detailsExample"> · {{ $t('play.detailsModal.p0MatchMatchid', { p0: relativeTime(detailsRow.when), matchId: detailsRow.matchId }) }}</template></span>
           <button class="sf-btn small" type="button" :aria-label="$t('play.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
-        <div class="details-body">
+        <!-- Owner 11-04: the end-of-game pane here takes the selected IN-GAME style (Settings > In-game style), exactly
+             as in a live game: Modern puts the game view's .sf-lm.lm-game root on it, Retro adds nothing. -->
+        <div class="details-body" :class="lmGameRootClass(settings)">
           <p v-if="detailsLoading" class="lm-empty">{{ $t('play.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
@@ -846,7 +848,9 @@ function crestFailed(url: string | null): void {
           <small v-if="!detailsExample" class="details-when">{{ $t('play.detailsModal.p0MatchMatchid', { p0: relativeTime(detailsRow.when), matchId: detailsRow.matchId }) }}</small>
           <button class="details-close" type="button" :aria-label="$t('play.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
-        <div class="details-body">
+        <!-- Owner 11-04: the end-of-game pane here takes the selected IN-GAME style (Settings > In-game style), exactly
+             as in a live game: Modern puts the game view's .sf-lm.lm-game root on it, Retro adds nothing. -->
+        <div class="details-body" :class="lmGameRootClass(settings)">
           <p v-if="detailsLoading" class="empty">{{ $t('play.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" ref="detailsPanel" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away'" :local-side="detailsSnapshot.seat === 'play' ? (detailsSnapshot.game.teamHome.teamId === String(detailsRow.myTeamId) ? 'home' : 'away') : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">

@@ -9718,7 +9718,26 @@ function isAlwaysVisibleEffectReport(r: Record<string, unknown>): boolean {
   // Owner 10-21: the apothecary's own outcome ("<P> is fixed up by the apothecary and returns to the bench." / the KO
   // turned Stunned) is part of the match narrative; without it a Badly Hurt reroll read as the last word.
   if (id === 'apothecaryChoice') return true;
+  // Owner 11-04: a coach calling a time-out (ReportTimeoutEnforced) is part of the match narrative.
+  if (id === 'timeoutEnforced') return true;
   return id === 'playerEvent' && typeof r.message === 'string' && r.message.trim().length > 0;
+}
+
+/** Sol r3/r4 P2 (owner 11-04): the timeout is logged once, even when its frame is delivered again later (dedupeReports
+ *  only remembers the last report). The server enforces at most one timeout per team turn, so the key is the game, the
+ *  half and both turn numbers (works with or without a commandNr). */
+const loggedTimeoutCommands = new Set<string>();
+function timeoutLineAlreadyLogged(report: Record<string, unknown>): boolean {
+  if (String(report.reportId) !== 'timeoutEnforced') return false;
+  const g = game.value;
+  if (!g) return false;
+  // Sol r5 P2: the half and BOTH turn numbers, not whose turn it is - a reaction (Trickster, Blastin') flips homePlaying
+  // without advancing a turn, which made the same timeout log again.
+  const turns = g as { half?: unknown; turnDataHome?: { turnNr?: unknown } | null; turnDataAway?: { turnNr?: unknown } | null };
+  const key = `${String((g as { gameId?: unknown }).gameId ?? '')}:${String(turns.half ?? '')}:${String(turns.turnDataHome?.turnNr ?? '')}:${String(turns.turnDataAway?.turnNr ?? '')}`;
+  if (loggedTimeoutCommands.has(key)) return true;
+  loggedTimeoutCommands.add(key);
+  return false;
 }
 
 /** A live coin result is narrated by the post-cinematic exact-once line, never by the eager debug report lane. */
@@ -11019,6 +11038,9 @@ function applyFrameContents(frame: QueuedFrame) {
         quickSnapExhausted = { limitReached: (report as { limitReached?: unknown }).limitReached === true };
       }
     }
+    // Sol r3/r4 P2 (owner 11-04): a timeout report delivered again logs nothing at all (neither its line nor the FUMBBL
+    // log's own two lines).
+    if (timeoutLineAlreadyLogged(report)) continue;
     if (String(report.reportId) === 'injury') {
       const def = String((report as { defenderId?: unknown }).defenderId ?? (report as { playerId?: unknown }).playerId ?? '');
       const armorRoll = (report as { armorRoll?: unknown }).armorRoll;
@@ -13066,7 +13088,7 @@ function applyFrameContents(frame: QueuedFrame) {
     consumeDeclarationIntent(); // Sol r5: an applied model that shows the requested declaration has answered it
     blitzBlockChoiceOnModelApplied(); // Owner 09-28 (S6 follow-up): retire a stale NO-PLAN blitz-commit hold (plan-owned holds are the planner's own job, just above)
     multiBlockOnModelApplied(); // #58 (ML-7): clear the multi-block selection once the server's state-change lands
-    maybeAutoEndOnTimeout(); // #14b (TB-1…TB-4): client-side timeout auto-end, re-evaluated per model-apply (never a timer)
+    trackTimeoutEnforced(); // owner 11-04: timeout edge bookkeeping only (the client never auto-ends a timed-out turn)
     freeSelectPassOnModelApplied(); // spec-252 R-1: drop the free-select-pass arm once the activation leaves PASS
     gazeSentOnModelApplied(cmd); // owner 10-08: a CLIENT_GAZE spent by a final failed Bloodlust roll gives the gaze back
     gazeIntentOnModelApplied(); // W40: ack the menu declare; clear only after its live gaze activation leaves
@@ -13665,10 +13687,15 @@ function convertGazeIntentForUiMode(mode: 'fumbbl40k' | 'classic') {
   }
 }
 watch(() => settings.uiMode, (mode) => convertGazeIntentForUiMode(mode), { flush: 'sync' });
+// Sol r2 P3 (owner 11-04): the setup error lists are filtered per look (Classic keeps listing an outdated setupError),
+// so a look switch re-derives them at once instead of at the next model frame.
+watch(() => settings.uiMode, () => {
+  const g = game.value;
+  if (!g || !humanSetupSurface()) return;
+  if (state.setupPhase) { try { computeSetupPhase(g); } catch { /* ignore */ } }
+  if (state.swarmingPhase) { try { computeSwarmingPhase(g); } catch { /* ignore */ } }
+});
 
-// Arm timeout auto-end on the received rising edge, allow one send until the server clears it, and re-arm after reconnect.
-/** #14b TB-7 gate (lane review 08-03): SERVER-derived timeout-eligible modes — exactly upstream Game.isTurnTimeEnabled()'s pair (TurnMode wire names 'regular', 'blitz'; TurnMode.java:10,12). */
-const TIMEOUT_ELIGIBLE_TURN_MODES = new Set(['regular', 'blitz']);
 
 /** Respin 7: turn modes where the Move-rail cutover may CLAIM outbound sends. The rail's transaction
  *  requires a model actingPlayer; implicit-declare mini-phases (kickoffReturn/passBlock On the Ball,
@@ -13695,40 +13722,18 @@ function canPlayerEndTurn(turnMode: unknown): boolean {
   return deriveClientState(probe, { mode: 'player', loggedIn: true, myIsHome: true }) === 'UNKNOWN';
 }
 let prevTimeoutEnforced = false;
-let timeoutAutoEndArmed = false;
-/** Astra 10-16 r2 P2: the phase (turn key + mode) the auto-end was last SENT for. A stale send is not latched, so
- *  without this marker every later eligible apply would send again for the same phase; the marker lets exactly one
- *  auto-end go out per applied phase, and a fresh one once the model catches up to the server's mode. */
-let timeoutAutoEndSentFor: string | null = null;
-
-/** Auto-end only our quiet, activation-free timed-out select phase, using received model state. */
-function maybeAutoEndOnTimeout() {
+/** Owner 11-04 (warpstone's bug report, FUMBBL g1960580): the client no longer ends a timed-out turn by itself (the
+ *  08-03 #14b auto-end is removed, upstream parity: FUMBBL's own client sends nothing). The auto-end fired on the quiet
+ *  frame right after a touchdown move, 40 ms before the server's own turnEnd; the live server applied that stale End
+ *  Turn to the coach's empty setup and answered setupError "You placed 0 Players". The server ends a timed-out turn
+ *  itself at StepInitSelecting on the coach's next command. Only the edge bookkeeping stays: the server clearing the
+ *  flag at turn start still acknowledges a manual regular End Turn in flight (TB-5). */
+function trackTimeoutEnforced() {
   const g = game.value;
   if (!g) return;
   const enforced = !!(g as { timeoutEnforced?: unknown }).timeoutEnforced;
-  if (enforced && !prevTimeoutEnforced) timeoutAutoEndArmed = true;   // TB-1 rising edge → arm
-  if (!enforced && prevTimeoutEnforced) { timeoutAutoEndArmed = false; timeoutAutoEndSentFor = null; if (endTurnInFlight && endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; } // TB-1/TB-5 falling edge (server cleared at turn start) → disarm + ack
+  if (!enforced && prevTimeoutEnforced) { if (endTurnInFlight && endTurnInFlightMode === 'regular') ownRegularEndTurnAcked = true; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; } // TB-5 falling edge (server cleared at turn start) -> ack
   prevTimeoutEnforced = enforced;
-  if (!timeoutAutoEndArmed) return;
-  if (endTurnInFlight) return;                                       // #14b TB-5: manual/auto END_TURN already awaits the server turn flip
-  if (!play.active) return;                                           // play mode only
-  if (!g.homePlaying) return;                                         // TB-4: the acting/delinquent side must be US (A-4)
-  if (String(g.turnMode ?? '') === 'endGame' || !!(g as { finished?: unknown }).finished) return; // game over ⇒ nothing to end
-  if (!TIMEOUT_ELIGIBLE_TURN_MODES.has(String(g.turnMode ?? ''))) return; // TB-7g: upstream turn time (and hence timeout machinery) exists ONLY for REGULAR + BLITZ — Game.isTurnTimeEnabled() (Game.java:491-494), echoed by TurnMode.isBasicMode() (TurnMode.java:64-66); timeoutEnforced is consumed at StepInitSelecting (bb2025 shared :483), the select sequence those modes run. TB-7 made a snapshot-tail evaluation possible, so a stale-true flag on a pregame/mini-phase snapshot must not fire.
-  if (String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '')) return; // TB-3: an activation is open ⇒ defer
-  if (g.dialogParameter != null) return;                             // TB-2: a server dialog awaits our answer
-  if ((g as { waitingForOpponent?: unknown }).waitingForOpponent) return; // TB-2: not our quiet point
-  // MD-1 (Meero SR-213): the #173 action-lock is the authoritative withhold for a DECLARE-class command — consult it
-  // for sender-inventory uniformity (unreachable today: TB-2/TB-3 already exclude the locked states). Keep the latch
-  // ARMED on withhold so it defers to the next quiet apply, never a lost enforcement.
-  if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
-  const phase = `${currentTurnKey(g)}|${String(g.turnMode ?? '')}`;
-  if (timeoutAutoEndSentFor === phase) return;                       // Astra r2 P2: one auto-end per applied phase
-  const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
-  if (!accepted) return;
-  timeoutAutoEndSentFor = phase;
-  if (!endTurnStale(String(g.turnMode ?? ''))) { endTurnInFlight = true; endTurnInFlightTurnKey = currentTurnKey(g); endTurnInFlightMode = String(g.turnMode ?? ''); armEndTurnWatchdog(); }
-  log('system', `play: timeout enforced — auto-ending turn (${g.turnMode})`);
 }
 
 /** Astra confirmation (i): a frame whose application throws must not leave the receive queue stuck behind it with no
@@ -14874,6 +14879,7 @@ function resetPlayback() {
   selectPositionHandledInstanceKey = null; state.selectPosition = null; // fresh game - no stale Raise the Dead card
   selectSkillHandledInstanceKey = null; state.selectSkill = null; // fresh game — no stale Intensive Training latch/card
   weatherMageRoll = null;
+  loggedTimeoutCommands.clear(); // owner 11-04: a fresh game logs its own timeouts
   pregameHandled.clear(); // g330: fresh game (incl. a REMATCH on the same connection) — else stale pchoice keys (pickMeUp) auto-decline all game
   pickMeUpUnselected = null; // Astra 10-05: the left-out record never crosses a fresh-game / reconnect seed (same ids + same turn key on a rematch)
   state.blastinBeat = null; state.blastinBeatKey = null; blastinNoticeKey = null; // S46: a second beat never crosses a game boundary or reconnect seed
@@ -14948,7 +14954,7 @@ function resetPlayback() {
   gazeEndRequest = null; // nor does a pending gaze End, or the coach's Yes for it (fresh game / reconnect snapshot)
   state.gazeTargetReveal = null; if (gazeRevealTimer) { cancelGameTimeout(gazeRevealTimer); gazeRevealTimer = null; } // owner 09-15
   state.fumblerooskie = null; // #236: report identity never survives a fresh game/reconnect
-  prevTimeoutEnforced = false; timeoutAutoEndArmed = false; timeoutAutoEndSentFor = null; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
+  prevTimeoutEnforced = false; endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; ownRegularEndTurnAcked = false; // #14b (TB-1/TB-5): fresh game/reconnect — re-arm timeout truth and never carry an END_TURN ack window across sessions
   visibleCasualtyRollProjection = createCasualtyRollProjection(); visibleInjuryOutcomeProjection = createInjuryOutcomeProjection();
   apothecaryAutoReturnSeen.clear(); pastriesSplashSeen.clear(); pendingApothecaryFixUps.clear(); pendingApothecaryResult = null; clearApothecaryResult();
   // #243 + auto-return: fresh game/reconnect — drop captured casualty context and occurrence keys.
@@ -20477,6 +20483,7 @@ export function installSetupErrorRecoveryTestHarness(
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   const logStart = state.log.length;
 
+  loggedTimeoutCommands.clear();
   pregameHandled.clear();
   clearAnsweredDialogInstance();
   lastAppliedCommandNr = 0;
@@ -22569,6 +22576,10 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
       if (cmd.playerId != null) declarationSentAt = Date.now(); else cancelSentAt = Date.now();
       armLatchWatchdog(); // owner 10-16 P0: the latch fails open if the server never answers
     }
+    // Owner 11-04: a setup move, or a saved formation's LOAD (with a name; a bare LOAD only asks for the list), makes
+    // the live setupError describe an older formation (Sol r1 P2-2).
+    if (cmd.netCommandId === NetCommandId.CLIENT_SETUP_PLAYER) noteSetupPlayerSent();
+    else if (cmd.netCommandId === NetCommandId.CLIENT_TEAM_SETUP_LOAD && typeof cmd.setupName === 'string' && cmd.setupName.trim()) noteSetupLoadSent();
     if (outgoingSendProbe && outgoingSendProbe.matches(cmd)) outgoingSendProbe.sent = true;
     // Spec S15B: any accepted GAMEPLAY command consumes a live Activate intent (declareAction arms it only after ITS
     // send). Always-allowed commands (concede, time-out call, chat, ping ...) say nothing about the activation.
@@ -26663,7 +26674,8 @@ function computeSwarmingPhase(g: GameJson) {
     // check remain authoritative.
     countLegal: amount === null || isSwarmingPlacementCountLegal(placedCount, amount),
     error: projectedDialog.countError,
-    setupErrors: projectedDialog.setupErrors,
+    // Sol r1 P2-1 (owner 11-04): the Swarming list honours the same outdated-occurrence mark.
+    setupErrors: setupErrorsOutdated(g) ? [] : projectedDialog.setupErrors,
     recoveredWithoutOffer: projectedDialog.recoveredWithoutOffer,
     seq: (prior?.seq ?? 0) + 1,
   };
@@ -26760,6 +26772,42 @@ function computeSetupPhase(g: GameJson) {
 }
 
 /** SetupError is a local information box upstream, not an election. Preserve its server text and audience. */
+/** Owner 11-04 (warpstone's bug report, g1960580): the setupError occurrence the coach has since moved a player under.
+ *  Upstream SetupMechanic never hides the dialog until a setup is accepted, so its errors (about an OLDER formation)
+ *  were still listed on the Confirm Setup card after a legal re-setup. Modern only; Classic keeps its timing. */
+let setupErrorsOutdatedFor: object | null = null;
+function noteSetupPlayerSent(): void {
+  const dialog = game.value?.dialogParameter as { dialogId?: unknown } | null | undefined;
+  if (dialog?.dialogId === 'setupError' && settings.uiMode !== 'classic') setupErrorsOutdatedFor = dialog as object;
+}
+/** Sol r2 P2: a saved formation's LOAD outdates the errors only once the server has actually moved our players (the
+ *  same formation reloaded, or an unknown name, changes nothing and the errors still apply). */
+let setupLoadPending: { dialog: object; teamId: string; formation: string } | null = null;
+function teamFormationSignature(g: GameJson, teamId: string): string {
+  const team = String(g.teamHome?.teamId ?? '') === teamId ? g.teamHome : String(g.teamAway?.teamId ?? '') === teamId ? g.teamAway : null;
+  const ids = new Set((team?.playerArray ?? []).map((p) => String(p.playerId)));
+  return g.fieldModel.playerDataArray.filter((d) => ids.has(String(d.playerId)))
+    // Sol r3 P2: the state too - a boxed player can keep a pitch coordinate, so placement is coordinate AND state.
+    .map((d) => `${d.playerId}@${JSON.stringify(d.playerCoordinate ?? null)}#${String(d.playerState ?? '')}`).sort().join('|');
+}
+function noteSetupLoadSent(): void {
+  const g = game.value;
+  const dialog = g?.dialogParameter as { dialogId?: unknown } | null | undefined;
+  const teamId = g ? String((myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? '') : '';
+  setupLoadPending = g && teamId && dialog?.dialogId === 'setupError' && settings.uiMode !== 'classic'
+    ? { dialog: dialog as object, teamId, formation: teamFormationSignature(g, teamId) } : null;
+}
+/** The live setupError's errors describe an older formation (Modern): a setup move was sent under it, or a LOAD under
+ *  it has since changed our formation. */
+function setupErrorsOutdated(g: GameJson): boolean {
+  const dialog = g.dialogParameter as object | null | undefined;
+  if (setupLoadPending && setupLoadPending.dialog !== dialog) setupLoadPending = null;
+  if (setupLoadPending && teamFormationSignature(g, setupLoadPending.teamId) !== setupLoadPending.formation) {
+    setupErrorsOutdatedFor = setupLoadPending.dialog;
+    setupLoadPending = null;
+  }
+  return !!dialog && dialog === setupErrorsOutdatedFor && settings.uiMode !== 'classic';
+}
 function ownedSetupErrors(g: GameJson, myTeamId: string | null): string[] {
   const dialog = g.dialogParameter as {
     dialogId?: unknown;
@@ -26767,6 +26815,7 @@ function ownedSetupErrors(g: GameJson, myTeamId: string | null): string[] {
     setupErrors?: unknown;
   } | null | undefined;
   if (!myTeamId || dialog?.dialogId !== 'setupError' || String(dialog.teamId ?? '') !== String(myTeamId)) return [];
+  if (setupErrorsOutdated(g)) return []; // owner 11-04: about an older formation
   if (!Array.isArray(dialog.setupErrors)) return [];
   return dialog.setupErrors.filter(
     (message): message is string => typeof message === 'string' && message.trim().length > 0,
@@ -30875,8 +30924,8 @@ export const gameStore = {
       } catch (e) {
         console.error('[play] drivePregameStep error:', e);
       }
-      // #14b TB-7 (Nom Anor wave-3, reconnect gap): resetPlayback() clears the edge/latches, so evaluate the completed snapshot after its acting-mirror seed + JR-1 upgrade; a still-true timeoutEnforced rises and arms through the unchanged TB-2/TB-3/TB-4 quiet-point guards, #173 lock, and TB-5 in-flight latch.
-      maybeAutoEndOnTimeout();
+      // #14b TB-7: resetPlayback() clears the timeout edge, so the completed snapshot re-seeds it (owner 11-04: edge bookkeeping only).
+      trackTimeoutEnforced();
     });
     session.on('modelSync', (cmd) => { if (thisSession === session) enqueueSync(cmd as Record<string, unknown>); });
     session.on('talk', (cmd) => {

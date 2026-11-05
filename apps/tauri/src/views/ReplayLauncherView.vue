@@ -21,7 +21,7 @@ import DisplayCaps from '../components/DisplayCaps.vue';
 import MatchRow from '../components/MatchRow.vue';
 import PostGamePanel from '../components/PostGamePanel.vue';
 import { loadPostGameSnapshot, postGameSnapshotKeys, recentPostGameSummaries, type PostGameSummary } from '../game/postGameCache';
-import { lmRootClass } from '../game/lmTheme';
+import { lmGameRootClass, lmRootClass } from '../game/lmTheme';
 import { teamLogoUrl } from '../game/teamLogos';
 import { teamTone } from '../game/teamTone';
 import { rowsThatFit } from '../game/lmFit';
@@ -527,7 +527,9 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           <span class="hm-cap">{{ $t('lmBlades.teamVsTeam', { home: detailsRow.left.name, away: detailsRow.right?.name ?? '' }) }}</span>
           <button class="sf-btn small" type="button" :aria-label="$t('replayLauncher.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
-        <div class="details-body">
+        <!-- Owner 11-04: the end-of-game pane here takes the selected IN-GAME style (Settings > In-game style), exactly
+             as in a live game: Modern puts the game view's .sf-lm.lm-game root on it, Retro adds nothing. -->
+        <div class="details-body" :class="lmGameRootClass(settings)">
           <p v-if="detailsLoading" class="lm-empty">{{ $t('replayLauncher.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="lmRosterSide(detailsRow, detailsSnapshot)" :local-side="lmLocalSide(detailsRow, detailsSnapshot)" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <p v-else class="lm-empty">{{ $t('replayLauncher.detailsModal.noDetailsStoredFor') }}</p>
@@ -650,7 +652,9 @@ onMounted(() => { void refreshDetailsKeys(); }); // owner 10-06: nothing is sear
           <small class="details-when">{{ rowWhen(detailsRow).rel }}<template v-if="detailsRow.matchId"> {{ $t('replayLauncher.detailsModal.matchMatchid', { matchId: detailsRow.matchId }) }}</template></small>
           <button class="details-close" type="button" :aria-label="$t('replayLauncher.detailsModal.closeDetails')" @click="closeDetails">&#x2715;</button>
         </header>
-        <div class="details-body">
+        <!-- Owner 11-04: the end-of-game pane here takes the selected IN-GAME style (Settings > In-game style), exactly
+             as in a live game: Modern puts the game view's .sf-lm.lm-game root on it, Retro adds nothing. -->
+        <div class="details-body" :class="lmGameRootClass(settings)">
           <p v-if="detailsLoading" class="note">{{ $t('replayLauncher.detailsModal.loading') }}</p>
           <PostGamePanel v-else-if="detailsSnapshot" :snapshot="detailsSnapshot" embedded :default-roster-side="detailsSide(detailsRow, detailsSnapshot)" :local-side="detailsSnapshot.seat === 'play' ? detailsSide(detailsRow, detailsSnapshot) : null" :skill-mode="settings.skillDisplay === 'markings' ? 'markings' : 'icons'" />
           <div v-else class="details-missing">
