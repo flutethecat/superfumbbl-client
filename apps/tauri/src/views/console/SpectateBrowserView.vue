@@ -13,6 +13,7 @@ import { botGet } from '../../game/forkChallenge';
 import { deriveForkGameRows, routeForkSpectate, type ForkGameRow } from '../../game/forkGames';
 import { competitionLabel, groupByCompetition, missingCompetitionIds, type CompetitionNames } from '../../game/spectateCompetition';
 import { teamLogoUrl } from '../../game/teamLogos';
+import { vFitText } from '../../game/fitText'; // owner 11-05: group headings auto-fit their box
 import { $t, useLiveSet } from '../../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
@@ -362,7 +363,7 @@ onBeforeUnmount(() => {
           <template v-else>
             <template v-for="(group, groupIndex) in lmGroups" :key="group.key">
               <div class="lm-sub-band">
-                <h3 :data-tour="groupIndex === 0 ? 'spectate-league' : undefined" :title="group.label">{{ group.label }}</h3>
+                <h3 v-fit-text :data-tour="groupIndex === 0 ? 'spectate-league' : undefined" :title="group.label">{{ group.label }}</h3>
                 <span class="hm-cap">({{ group.matches.length }})</span>
               </div>
               <LmResultCard v-for="(match, matchIndex) in group.matches" :key="match.id"
@@ -374,7 +375,7 @@ onBeforeUnmount(() => {
           </template>
           <!-- client walkthrough with no live game to point at: the static example card (as the Retro example row) -->
           <template v-if="tourExample && (browserStatus || lmShownCount === 0)">
-            <div class="lm-sub-band" data-testid="spectate-tour-example"><h3 data-tour="spectate-league">{{ $t('spectateBrowser.gameList.exampleLeague') }}</h3><span class="hm-cap">{{ $t('spectateBrowser.gameList.example') }}</span></div>
+            <div class="lm-sub-band" data-testid="spectate-tour-example"><h3 v-fit-text data-tour="spectate-league">{{ $t('spectateBrowser.gameList.exampleLeague') }}</h3><span class="hm-cap">{{ $t('spectateBrowser.gameList.example') }}</span></div>
             <LmResultCard data-tour="spectate-phase" coach-tour="spectate-coach" clock="H2 T3"
               :home="{ name: $t('spectateBrowser.gameList.riversideReavers'), coach: $t('spectateBrowser.gameList.examplecoach'), race: $t('spectateBrowser.gameList.human'), score: 1 }"
               :away="{ name: $t('spectateBrowser.gameList.ironjawKrumpaz'), coach: $t('spectateBrowser.gameList.anothercoach'), race: $t('spectateBrowser.gameList.orc'), score: 1 }">

@@ -64,7 +64,7 @@
 /* a body that fills its panel and shows only what fits (Recently watched), never a scrollbar */
 .sf-lm .lm-fill { flex: 1 1 0; min-height: 0; overflow: hidden; }
 .sf-lm .lm-sub-band { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; padding: 6px 4px; border-bottom: 2px solid var(--sf-panel-line); }
-.sf-lm .lm-sub-band h3 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 18px/1.15 var(--sf-band-title-font); color: var(--ui-heading); }
+.sf-lm .lm-sub-band h3 { margin: 0; min-width: 0; padding-right: 0.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 18px/1.15 var(--sf-band-title-font); color: var(--ui-heading); } /* owner 11-05: v-fit-text shrinks a long heading to fit; the right padding keeps the italic slant inside the clip */
 .sf-lm .lm-muted { margin: 0; color: var(--ui-muted); font-size: 14px; }
 .sf-lm .lm-empty { margin: 0; padding: 14px 0; color: var(--ui-muted); font-size: 15px; }
 .sf-lm .lm-row { display: flex; align-items: center; gap: 10px; min-width: 0; }

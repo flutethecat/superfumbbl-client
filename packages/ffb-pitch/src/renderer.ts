@@ -2804,6 +2804,10 @@ export class PitchRenderer {
   /** Owner 10-21: the movement-remaining badge paints ABOVE every token (never hidden behind a neighbour) while it stays
    *  a child of its token for position (walk tween), decoration scale, alpha and removal - only the paint order moves. */
   private moveBadgeLayer = new RenderLayer();
+  /** Owner 11-05: the block dice preview (dice, dots, OPPONENT'S CHOICE) paints ABOVE every badge and marking - a big
+   *  figure's target badge drew over it. The nodes stay pathLayer children (redrawOverlays clears them); only the
+   *  paint order moves. */
+  private blockPreviewLayer = new RenderLayer();
   /** Queued path: line, step numbers, rush dice, dodge chips — over the tokens. */
   private pathLayer = new Container();
   /** Controller support P2a (owner 10-07): the pad crosshair + its rails. Its own layer so redrawOverlays never
@@ -6324,6 +6328,7 @@ export class PitchRenderer {
       this.markingLayer, // owner 09-15: skill markings over every token, on-pitch and in the dugout
       this.blitzBadgeLayer, // owner 10-09: the Blitz badges over the markings and player labels
       this.moveBadgeLayer, // owner 10-21: the movement-remaining badge over every token
+      this.blockPreviewLayer, // owner 11-05: the block dice preview over every badge and marking
       this.turnTrackLayer, // owner 2026-07-07: SW turn/score/re-roll track
       this.kickBallLayer, // owner 10-05: an airborne kick-off ball, over the dugouts (the trail is in effectsLayer above)
       this.effectsLayer, // F-5 transient effects — never cleared by refresh
@@ -11088,7 +11093,7 @@ export class PitchRenderer {
       g.rect(x, fy - s / 2, s, s).fill({ color });
       g.rect(x, fy - s / 2, s, s).stroke({ color: 0x14161a, width: 1 * scale });
     }
-    this.pathLayer.addChild(g);
+    this.addBlockPreviewNode(g);
   }
 
   /** Draw `dice` block-result cards above a square (the armed block preview
@@ -11111,13 +11116,13 @@ export class PitchRenderer {
         this.fitBlockFaceSprite(sprite, 27 * scale);
         sprite.position.set(anchor.x + (i - (dice - 1) / 2) * spacing, y);
         if (opponentChoice) sprite.tint = 0xff7070; // O2.4/O2.5: uphill dice shade red
-        this.pathLayer.addChild(sprite);
+        this.addBlockPreviewNode(sprite);
         this.blockDiceSprites.push(sprite);
       }
     } else {
       for (let i = 0; i < dice; i++) {
         const x = anchor.x + (i - (dice - 1) / 2) * (21 * scale);
-        this.pathLayer.addChild(this.buildBlockDie(x, y, scale, opponentChoice));
+        this.addBlockPreviewNode(this.buildBlockDie(x, y, scale, opponentChoice));
       }
     }
     if (opponentChoice) {
@@ -11125,8 +11130,15 @@ export class PitchRenderer {
       warning.anchor.set(0.5, 1);
       warning.scale.set(scale);
       warning.position.set(anchor.x, y - 17 * scale);
-      this.pathLayer.addChild(warning);
+      this.addBlockPreviewNode(warning);
     }
+  }
+
+  /** Owner 11-05: a block preview node - a pathLayer child (cleared with the overlays) painted through
+   *  blockPreviewLayer, above the Blitz badges, skill markings and movement badge. */
+  private addBlockPreviewNode(node: Container): void {
+    this.pathLayer.addChild(node);
+    this.blockPreviewLayer.attach(node);
   }
 
   /** Owner 10-13: the displayed side of the armed preview's dice - the chooser's: the acting (blocking) player's
