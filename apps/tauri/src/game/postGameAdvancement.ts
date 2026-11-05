@@ -37,8 +37,11 @@ export function advancementReadiness(sppTotal: number, advancementsTaken: number
   if (!Number.isFinite(sppTotal) || sppTotal <= 0) return null;
   const row = ADVANCEMENT_COSTS[Math.min(Math.max(0, Math.floor(advancementsTaken)), ADVANCEMENT_COSTS.length - 1)]!;
   if (advancementsTaken >= ADVANCEMENT_COSTS.length) return null; // the table ends at the sixth advancement
-  if (sppTotal >= row.characteristic) return { level: 'characteristic', get text() { return t('cards.postGame.text.advancementReadyUpgradeA'); } };
-  if (sppTotal >= row.chosenPrimaryOrRandomSecondary) return { level: 'primaryOrSecondary', get text() { return t('cards.postGame.text.advancementReadyTakeA'); } };
-  if (sppTotal >= row.randomPrimary) return { level: 'primary', get text() { return t('cards.postGame.text.advancementReadyTakeA2'); } };
+  // Owner 11-04: the end-screen line says only that a level is ready, never which kind; `level` still carries the kind.
+  const ready = (level: NonNullable<AdvancementReadiness>['level']): AdvancementReadiness =>
+    ({ level, get text() { return t('cards.postGame.text.readyToLevel'); } });
+  if (sppTotal >= row.characteristic) return ready('characteristic');
+  if (sppTotal >= row.chosenPrimaryOrRandomSecondary) return ready('primaryOrSecondary');
+  if (sppTotal >= row.randomPrimary) return ready('primary');
   return null;
 }
