@@ -114,25 +114,28 @@ export function matchups(games: readonly CoachGameRecord[], n: number | null = n
   return top.map((r) => ({ ...r, best: flag && r.winPct === hi, worst: flag && r.winPct === lo }));
 }
 
-export interface CoachMatchRecord { coach: string; games: number; w: number; d: number; l: number; winPct: number }
+/** `cr` (owner 11-05): the opponent's Coach Rating from the newest game against them that recorded one (`opponentCr`), else null. */
+export interface CoachMatchRecord { coach: string; games: number; w: number; d: number; l: number; winPct: number; cr: number | null }
 
 /** Owner 11-04: the record against each opponent COACH. Names merge case-insensitively (coachNameKey, as the profile
  *  compares names) and show the spelling of the newest game; a record without an opponent name is left out. Most games
  *  first, then win %, then the name. */
 export function opponentCoaches(games: readonly CoachGameRecord[]): CoachMatchRecord[] {
-  const rows = new Map<string, CoachMatchRecord & { seen: number }>();
+  const rows = new Map<string, CoachMatchRecord & { seen: number; crSeen: number }>();
   for (const g of games) {
     const name = (g.opponent?.coach ?? '').trim();
     const key = coachNameKey(name);
     if (!key) continue;
-    const row = rows.get(key) ?? { coach: name, games: 0, w: 0, d: 0, l: 0, winPct: 0, seen: -Infinity };
+    const row = rows.get(key) ?? { coach: name, games: 0, w: 0, d: 0, l: 0, winPct: 0, cr: null, seen: -Infinity, crSeen: -Infinity };
     row.games++;
     if (g.result === 'W') row.w++; else if (g.result === 'D') row.d++; else row.l++;
     if (g.savedAt >= row.seen) { row.coach = name; row.seen = g.savedAt; }
+    // the newest recorded CR wins; a game without a lookup never clears an older one
+    if (typeof g.opponentCr === 'number' && Number.isFinite(g.opponentCr) && g.savedAt >= row.crSeen) { row.cr = g.opponentCr; row.crSeen = g.savedAt; }
     rows.set(key, row);
   }
   return [...rows.values()]
-    .map(({ seen: _seen, ...row }) => ({ ...row, winPct: computeWinPct(row) ?? 0 }))
+    .map(({ seen: _seen, crSeen: _crSeen, ...row }) => ({ ...row, winPct: computeWinPct(row) ?? 0 }))
     .sort((a, b) => b.games - a.games || b.winPct - a.winPct || a.coach.localeCompare(b.coach));
 }
 

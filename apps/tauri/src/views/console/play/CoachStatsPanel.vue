@@ -242,9 +242,9 @@ const padHint = computed(() => padFocusControllerMode());
               <h3 id="cs-coaches-h">{{ t('coachStats.coaches.title') }}</h3>
               <div class="cs-scroll" tabindex="0" data-pad-focus role="region" aria-labelledby="cs-coaches-h" data-scroll="coaches" @keydown="onBoxKeydown">
               <table class="cs-table" :class="{ 'sf-table': modern }">
-                <thead><tr><th scope="col">{{ t('coachStats.coaches.coach') }}</th><th scope="col">{{ t('coachStats.races.games') }}</th><th scope="col">{{ t('coachStats.races.record') }}</th><th scope="col">{{ t('coachStats.races.winPct') }}</th></tr></thead>
+                <thead><tr><th scope="col">{{ t('coachStats.coaches.coach') }}</th><th scope="col">{{ t('coachStats.coaches.cr') }}</th><th scope="col">{{ t('coachStats.races.games') }}</th><th scope="col">{{ t('coachStats.races.record') }}</th><th scope="col">{{ t('coachStats.races.winPct') }}</th></tr></thead>
                 <tbody>
-                  <tr v-for="c in coaches" :key="c.coach.toLowerCase()"><th scope="row">{{ c.coach }}</th><td>{{ c.games }}</td><td>{{ recordText(c) }}</td><td>{{ t('coachStats.winPct', { pct: c.winPct }) }}</td></tr>
+                  <tr v-for="c in coaches" :key="c.coach.toLowerCase()"><th scope="row">{{ c.coach }}</th><td data-cell="cr">{{ c.cr != null ? c.cr : t('coachStats.dice.none') }}</td><td>{{ c.games }}</td><td>{{ recordText(c) }}</td><td>{{ t('coachStats.winPct', { pct: c.winPct }) }}</td></tr>
                 </tbody>
               </table>
               </div>
@@ -392,7 +392,10 @@ const padHint = computed(() => padFocusControllerMode());
 .cs-scroll .cs-table thead th { position: sticky; top: 0; z-index: 1; background: var(--ui-old-lace, #F8F5E7); }
 .cs-scroll-tall { max-height: calc(var(--cs-row) * 13); }
 .cs-group-row th { font-weight: 700; }
-.cs-details { margin-left: 10px; font: inherit; font-size: .85em; cursor: pointer; }
+/* Owner 11-05: the Action row's "More" control is a size down from the panel's other buttons and never wraps under its label. */
+.cs-details { margin-left: 10px; font: inherit; font-size: .85em; cursor: pointer; vertical-align: middle; }
+.cs-table tr[data-row='action'] th { white-space: nowrap; }
+.cs-overlay.sf-lm .cs-details.sf-btn.small { min-height: 28px; padding: 0 8px; font-size: 10px; }
 .cs-unmeasured { opacity: .75; font-size: .9em; white-space: nowrap; }
 .cs-scroll:focus-visible { outline: 2px solid var(--ui-focus, #ff3b3b); outline-offset: 2px; }
 .cs-flag { margin-left: 8px; padding: 0 7px; border-radius: 999px; font-size: .75em; white-space: nowrap; }
@@ -418,6 +421,7 @@ const padHint = computed(() => padFocusControllerMode());
   min-height: 38px; padding: 0 14px; border: 1px solid var(--ui-forest, #1A401C); border-radius: 4px; color: var(--ui-forest, #1A401C);
   background: color-mix(in srgb, var(--ui-forest, #1A401C) 8%, transparent); font: inherit; cursor: pointer;
 }
+.cs-overlay:not(.sf-lm) .cs-details { min-height: 30px; padding: 0 10px; }
 .cs-overlay:not(.sf-lm) .cs-filter-btn[aria-pressed='true'] { color: var(--ui-old-lace, #F8F5E7); background: var(--ui-forest, #1A401C); }
 .cs-overlay:not(.sf-lm) :is(.cs-close, .cs-filter-btn, .cs-details, .cs-extra):focus-visible { outline: 2px solid var(--ui-focus, #ff3b3b); outline-offset: 2px; }
 .cs-overlay:not(.sf-lm) .cs-table th, .cs-overlay:not(.sf-lm) .cs-table td { border-bottom: 1px solid color-mix(in srgb, var(--ui-forest, #1A401C) 18%, transparent); }

@@ -181,6 +181,11 @@
   letter-spacing: .06em;
   color: var(--ui-heading);
 }
+/* owner 11-05: the panel HUD's half indicator a size up in Modern (Retro keeps 1.02rem); the flat HUD keeps its thin
+   line (Sol r2). Follows the primary-text floor. */
+.sf-lm.lm-game .pitch-host .hud-center.scoreboard:not(.flat-hud) .sb-half {
+  font-size: max(var(--ui-min-primary-text-size, 16px), 1.4rem);
+}
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score { font-family: var(--font-heading); color: var(--ui-text); }
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score .score-home { color: var(--sf-seat-home); }
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-score .score-away { color: var(--sf-seat-away); }
