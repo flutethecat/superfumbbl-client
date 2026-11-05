@@ -398,6 +398,17 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .pg-dice-expected { stroke: var(--ui-text); }
 .sf-lm.lm-game .pg-dice-curve, .sf-lm.lm-game .pg-dice-mean { stroke: var(--ui-muted); }
 .sf-lm.lm-game .pg-dice-marker { stroke: var(--ui-heading); }
+/* Owner 11-05: the gauge's corner odds and percentile tag; the Both view's team tints and shaded curves */
+.sf-lm.lm-game .pg-dice-tag { fill: var(--ui-text); stroke: var(--ui-surface-2); }
+.sf-lm.lm-game .pg-dice-odds { color: var(--ui-text); background: var(--ui-surface-2); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-gauge-box { background: color-mix(in srgb, var(--ui-surface) 70%, transparent); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-chart, .sf-lm.lm-game .pg-dice-fact, .sf-lm.lm-game .pg-dice-fact:first-child { background: color-mix(in srgb, var(--ui-surface) 70%, transparent); border-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-dice-gauge-row:nth-child(even) { background: color-mix(in srgb, var(--ui-text) 5%, transparent); }
+.sf-lm.lm-game .pg-dice-area { fill: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-col[data-side='away'] .pg-dice-area { fill: var(--sf-seat-away); }
+.sf-lm.lm-game .pg-dice-grid[data-view='both'] .pg-dice-col[data-side='home'] { background: color-mix(in srgb, var(--sf-seat-home) 9%, transparent); }
+.sf-lm.lm-game .pg-dice-grid[data-view='both'] .pg-dice-col[data-side='away'] { background: color-mix(in srgb, var(--sf-seat-away) 9%, transparent); }
+.sf-lm.lm-game .pg-dice-gauge-value[data-band='luckerDog'] b, .sf-lm.lm-game .pg-dice-gauge-value[data-band='comedyMegaDicing'] b { color: var(--ui-heading); }
 /* the dodge chart's outside counts: the same meanings (passed / after reroll / failed), inks that read on the light panel */
 :root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-first { fill: var(--ui-success); }
 :root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-reroll { fill: var(--sf-seat-home); }
@@ -407,7 +418,7 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .pg-dice-gauge-value b { color: var(--ui-text); }
 .sf-lm.lm-game .pg-dice-gauge-row + .pg-dice-gauge-row,
 .sf-lm.lm-game .pg-dice-fact { border-top-color: var(--sf-panel-line); }
-.sf-lm.lm-game .pg-dice-fact:first-child { border-top-color: transparent; }
+.sf-lm.lm-game .pg-dice-fact:first-child { border-top-color: var(--sf-panel-line); } /* owner 11-05: every fact is a full box now */
 .sf-lm.lm-game .pg-dice-fact-label { font-family: var(--sf-band-font); }
 .sf-lm.lm-game .pg-dice-fact-value { color: var(--ui-heading); }
 .sf-lm.lm-game .pg-dice-fact-detail,

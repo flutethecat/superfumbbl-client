@@ -418,6 +418,8 @@ export function pgGaugeX(z: number): number {
   const off = a <= PG_GAUGE_LINEAR_Z ? a * PG_GAUGE_SLOPE : knee + ((a - PG_GAUGE_LINEAR_Z) / (PG_GAUGE_EDGE_Z - PG_GAUGE_LINEAR_Z)) * (90 - knee);
   return 100 + (z < 0 ? -off : off);
 }
+/** Owner 11-05: the closing edge of the area under the gauge curve (the Both view shades it in the team colour). */
+const PG_GAUGE_AREA_TAIL = ' L190 40 L10 40 Z';
 /** Standard normal curve for the likelihood gauges, drawn through pgGaugeX so the marker always sits under it. */
 export const PG_GAUGE_CURVE = (() => {
   const pts: string[] = [];
@@ -428,6 +430,7 @@ export const PG_GAUGE_CURVE = (() => {
   }
   return pts.join(' ');
 })();
+export const PG_GAUGE_AREA = `${PG_GAUGE_CURVE}${PG_GAUGE_AREA_TAIL}`;
 // Owner 09-17: the headline reads "1 in N". Owner 10-09: a tally with no trial data (cached before the rework) and a
 // row with no rolls both read "—". Astra F1 / F2 (10-09): the odds are for fair dice ON THE ROLLS THAT WERE MADE (never
 // "games"); a result whose one-sided chance is a half or more reads "about average" with the marker on the centre line,
@@ -537,6 +540,97 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
       [{ get label() { return $t('cards.postGame.text.defenderDownAvailable'); }, value: blockGood }, { get label() { return $t('cards.postGame.text.attackerDownForced'); }, value: blockBad }, { get label() { return $t('cards.postGame.text.rolls'); }, value: String(blockLike.n) }],
       $t('pg.extra.block')),
   ];
+}
+/**
+ * Owner 11-05 (Dice pane, Likelihood): each gauge reads three ways -
+ * - a small tag on the marker line: the PERCENTILE the result falls into for fair dice (50th = dead average);
+ * - the "1 in N" in the gauge's top corner, on the side the result fell (right = lucky, left = unlucky);
+ * - a word on the right, by how many standard deviations the result sits from expected:
+ *     under 1 "Just a game of Blood Bowl" · 1-2 "A bit lucky / unlucky" · 2-3 "Nuffle loves / hates you" ·
+ *     3 or more "LUCKER DOG!!!!!" / "Comedy Mega Dicing".
+ * `sigma` is signed lucky-positive, from the same chance the marker and the "1 in N" use (Luck and Turns cut short have
+ * no exact tail: their own standard score). Nothing is invented: it is the row's own Likelihood, re-read.
+ */
+export type PgGaugeBand = 'average' | 'bitLucky' | 'bitUnlucky' | 'nuffleLoves' | 'nuffleHates' | 'luckerDog' | 'comedyMegaDicing';
+export interface PgGaugeReading {
+  sigma: number;
+  /** "84th"; '' when the row has nothing measured */
+  percentile: string;
+  /** the corner "1 in N"; null when there is no rarity to state */
+  odds: string | null;
+  band: PgGaugeBand | null;
+  /** the right-hand word ('—' / "not measured" style text when there is nothing to read) */
+  word: string;
+}
+export function pgGaugeSigma(like: Likelihood): number {
+  if (!like.measured || like.n === 0 || like.zShown === 0) return 0;
+  const sign = Math.sign(like.zShown);
+  if (like.tail < 1) return like.average ? 0 : sign * -normalInv(Math.min(0.5, Math.max(like.tail, 1e-12)));
+  return sign * Math.abs(Number.isFinite(like.z) ? like.z : 0);
+}
+export function pgGaugeBand(sigma: number): PgGaugeBand {
+  const a = Math.abs(sigma);
+  if (a < 1) return 'average';
+  if (a < 2) return sigma > 0 ? 'bitLucky' : 'bitUnlucky';
+  if (a < 3) return sigma > 0 ? 'nuffleLoves' : 'nuffleHates';
+  return sigma > 0 ? 'luckerDog' : 'comedyMegaDicing';
+}
+/** English ordinal suffix of a written number ("84" -> "th", "0.3" -> "rd", "11" -> "th"). */
+function ordinalSuffix(text: string): string {
+  if (text.includes('.')) return 'th'; // Sol r5: a decimal reads "99.2th", "0.3th" (the last digit is not an ordinal)
+  const last = Number(text.slice(-1));
+  const lastTwo = Number(text.replace(/^.*?(\d{1,2})$/, '$1'));
+  if (!text.includes('.') && lastTwo >= 11 && lastTwo <= 13) return 'th';
+  return last === 1 ? 'st' : last === 2 ? 'nd' : last === 3 ? 'rd' : 'th';
+}
+/** The percentile of a lucky-positive standard score: whole numbers, one decimal in the outer 1 %, capped at 0.1 / 99.9. */
+export function pgPercentile(sigma: number): string {
+  const p = 100 * normalCdf(sigma);
+  if (p >= 99.95) return $t('pg.gauge.percentileTop');
+  if (p < 0.05) return $t('pg.gauge.percentileBottom');
+  // one decimal only in the outer 1 %; a value that rounds onto a whole number drops its ".0" (Sol r1: never "1.0th")
+  const text = (p >= 99 || p < 1 ? p.toFixed(1) : String(Math.round(p))).replace(/\.0$/, '');
+  return $t('pg.gauge.percentile', { p: text, suffix: ordinalSuffix(text) });
+}
+export function pgGaugeWord(band: PgGaugeBand): string {
+  switch (band) {
+    case 'average': return $t('pg.gauge.band.average');
+    case 'bitLucky': return $t('pg.gauge.band.bitLucky');
+    case 'bitUnlucky': return $t('pg.gauge.band.bitUnlucky');
+    case 'nuffleLoves': return $t('pg.gauge.band.nuffleLoves');
+    case 'nuffleHates': return $t('pg.gauge.band.nuffleHates');
+    case 'luckerDog': return $t('pg.gauge.band.luckerDog');
+    default: return $t('pg.gauge.band.comedyMegaDicing');
+  }
+}
+/** The gauge's spoken text: the word and the percentile, then the odds sentence (just the sentence with nothing measured). */
+export function pgGaugeAria(row: PgLikelihoodRow, g: PgGaugeReading, spoken: string): string {
+  // Sol r2: Luck and Turns cut short speak counts, not odds - their "1 in N" box is spoken here (the box is aria-hidden)
+  const sentence = (row.key === 'luck' || row.key === 'cut') && g.odds ? $t('pg.gauge.ariaOdds', { sentence: spoken, odds: g.odds }) : spoken;
+  return g.percentile
+    ? $t('pg.gauge.aria', { label: row.label, word: g.word, pct: $t('pg.gauge.percentileTitle', { p: g.percentile }), sentence })
+    : $t('pg.gauge.ariaPlain', { label: row.label, sentence });
+}
+/** The word's hover text: Luck and Turns cut short keep their counts here (they used to be the right-hand figure). */
+export function pgGaugeTitle(row: PgLikelihoodRow): string {
+  const counts = row.key === 'luck' || row.key === 'cut' ? row.value : '';
+  const rest = row.valueTitle ?? row.detail;
+  return counts && rest ? $t('pg.gauge.titleJoin', { a: counts, b: rest }) : counts || rest;
+}
+export function pgGaugeReading(row: PgLikelihoodRow): PgGaugeReading {
+  const like = row.like;
+  if (!like.measured || like.n === 0) return { sigma: 0, percentile: '', odds: null, band: null, word: '—' };
+  // Sol r1: Injury dice is a normal approximation - its own z, not the z read back from the derived tail (that round
+  // trip lands a hair inside a band edge: z = 3 read as 2.99998)
+  const sigma = row.key === 'turns' && like.zShown !== 0 && Number.isFinite(like.z) ? Math.sign(like.zShown) * Math.abs(like.z) : pgGaugeSigma(like);
+  let odds: string | null;
+  if (row.key === 'turns') odds = like.average ? null : row.value ?? null; // "1 in N games" (pgInjuryDiceRow)
+  else if (row.key === 'luck' || row.key === 'cut') {
+    const tail = sigma === 0 ? 1 : 1 - normalCdf(Math.abs(sigma));
+    odds = tail >= 0.5 ? null : pgOdds({ ...like, tail, average: false });
+  } else odds = like.average ? null : pgOdds(like);
+  const band = pgGaugeBand(sigma);
+  return { sigma, percentile: pgPercentile(sigma), odds, band, word: pgGaugeWord(band) };
 }
 /** A signed figure to one decimal: "+6.2", "−3.1" (a minus sign, not a hyphen), "0.0" at zero. */
 export function pgSigned(v: number): string {

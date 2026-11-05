@@ -19,7 +19,7 @@ import { luckChart } from '../game/luckChart';
 import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
-  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeX, pgHasMarker, pgOdds, pgOddsSentence, pgPlayerDetail, pgTeamBreaks,
+  PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_AREA, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeAria, pgGaugeReading, pgGaugeTitle, pgGaugeX, pgHasMarker, pgOddsSentence, pgPlayerDetail, pgTeamBreaks,
   postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
 import { $t, terms } from '../i18n';
@@ -71,9 +71,12 @@ const postGamePhase = defineModel<'mvp' | 'stats' | 'roster'>('phase', { default
 // top right, fun facts bottom right. A header selector picks whose distributions fill the left column.
 const diceModalOpen = ref(false);
 const diceSide = ref<Side>('home');
+/** Owner 11-05: a third header tab shows BOTH teams side by side - Likelihood on top, distributions below (home left,
+ *  blue; away right, red). Fun facts stay in the one-team view. */
+const diceBoth = ref(false);
 const selectedRosterTeam = ref<Side>(props.defaultRosterSide);
 watch(() => props.snapshot.key, () => {
-  postGamePhase.value = 'mvp'; diceModalOpen.value = false; diceSide.value = 'home';
+  postGamePhase.value = 'mvp'; diceModalOpen.value = false; diceSide.value = 'home'; diceBoth.value = false;
   selectedRosterTeam.value = props.defaultRosterSide;
 });
 watch(() => props.defaultRosterSide, (s) => { selectedRosterTeam.value = s; });
@@ -114,6 +117,10 @@ const pgDice = computed(() => ({
 }));
 const pgDiceNote = computed(() => pgDiceCoverage(props.snapshot));
 const pgDiceSelected = computed(() => (diceSide.value === 'home' ? pgDice.value.home : pgDice.value.away));
+/** The columns the pane draws: the selected team, or both (home first). */
+const diceCols = computed(() => (diceBoth.value
+  ? [{ side: 'home' as Side, data: pgDice.value.home }, { side: 'away' as Side, data: pgDice.value.away }]
+  : [{ side: diceSide.value, data: pgDiceSelected.value }]));
 const dedFansMod = (mod: number) => (mod > 0 ? '+' + mod : String(mod));
 
 // Owner 10-10: the numbers behind each Likelihood row moved off the row into a popover on an "i" beside the row title.
@@ -274,7 +281,7 @@ function listenForDiceTipDismiss(on: boolean): void {
   }
 }
 watch(() => diceTip.key !== null, listenForDiceTipDismiss, { flush: 'sync' });
-watch([diceModalOpen, diceSide, () => props.showStats], closeDiceTip);
+watch([diceModalOpen, diceSide, diceBoth, () => props.showStats], closeDiceTip);
 
 // Owner 10-16: the LUCK CHART - a "By turn" button (owner 10-22: on the Luck row, under its label) opens a subpane inside
 // the dice pane plotting each team's net luck per team turn (dashed) and its running average (solid) - game/luckChart.ts.
@@ -319,7 +326,7 @@ function onLuckPaneKeydown(event: KeyboardEvent): void {
   if (event.shiftKey && (at === first || !luckPaneEl.value.contains(at))) { event.preventDefault(); last.focus(); }
   else if (!event.shiftKey && (at === last || !luckPaneEl.value.contains(at))) { event.preventDefault(); first.focus(); }
 }
-watch([diceModalOpen, diceSide, () => props.showStats], () => closeLuckChart(false));
+watch([diceModalOpen, diceSide, diceBoth, () => props.showStats], () => closeLuckChart(false));
 onBeforeUnmount(() => { closeDiceTip(); listenForDiceTipDismiss(false); });
 
 // Owner 10-15: the "i" in the header toggles a short note on how the expected figures are worked out. Escape (which
@@ -512,9 +519,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
             </span>
             <!-- Owner 09-17 (r3): a coach selector in the header picks whose distributions fill the left column. -->
             <div class="pg-dice-switch" role="tablist" :aria-label="$t('cards.postGamePanel.pgDiceModal.diceDistributionCoach')">
-              <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'">
+              <button v-for="side in [pgDice.home, pgDice.away]" :key="side.team" type="button" role="tab" :data-side="side === pgDice.home ? 'home' : 'away'" :aria-selected="!diceBoth && diceSide === (side === pgDice.home ? 'home' : 'away')" @click="diceSide = side === pgDice.home ? 'home' : 'away'; diceBoth = false">
                 <img v-if="side.logo" :src="side.logo" alt="" /><span>{{ side.team }}</span>
               </button>
+              <!-- Owner 11-05: both teams side by side -->
+              <button type="button" role="tab" data-side="both" :aria-selected="diceBoth" :aria-label="$t('cards.postGamePanel.pgDiceModal.bothTeamsLabel')" @click="diceBoth = true"><span>{{ $t('cards.postGamePanel.pgDiceModal.bothTeams') }}</span></button>
             </div>
             <span class="pg-dice-actions">
               <!-- Owner 10-15: an "i" in the top-right corner folds out how the expected figures are worked out. -->
@@ -559,16 +568,21 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
               </div>
             </div>
           </div>
-          <div class="pg-dice-grid">
+          <div class="pg-dice-grid" :data-view="diceBoth ? 'both' : 'side'">
             <section class="pg-dice-left">
               <h3>{{ $t('cards.postGamePanel.pgDiceModal.diceDistribution') }}</h3>
-              <div class="pg-dice-cols pg-dice-cols-charts">
-                <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col" :data-side="diceSide">
-                  <div v-for="row in side.charts" :key="row.key" class="pg-dice-block">
+              <!-- Owner 11-05: one grid row per chart and one cell per team shown, so both teams' charts line up. -->
+              <div class="pg-dice-cols pg-dice-cols-charts" :data-cols="diceCols.length">
+                <template v-for="(chartRow, ri) in diceCols[0]!.data.charts" :key="chartRow.key">
+                <!-- Sol r1 (owner 11-05 Both view): Dodges by target is its own grid row, so a team without it leaves an
+                     empty cell and the Dodge dice charts stay side by side. -->
+                <template v-if="chartRow.key === 'dodge' && diceCols.some((c) => c.data.dodgeTargets)">
+                <div v-for="col in diceCols" :key="'dt-' + col.side" class="pg-dice-col pg-dodge-cell" :data-side="col.side" :role="diceBoth ? 'group' : undefined" :aria-label="diceBoth ? col.data.team : undefined">
+                  <template v-for="side in [col.data]" :key="col.side">
+                  <div v-if="side.dodgeTargets" class="pg-dice-block pg-dodge-block">
                     <!-- Owner 10-01 (S67): dodges BY TARGET, above the Dodge dice faces. Bottom to top: green = passed without a
                          re-roll, blue = passed after a re-roll, red = failed even after a re-roll; the outline is every attempt
                          (its empty part failed with no re-roll); dashed = expected passes. -->
-                    <template v-if="row.key === 'dodge' && side.dodgeTargets">
                       <h4>{{ $t('cards.postGamePanel.pgDiceModal.dodgesByTarget') }} <span class="pg-dice-n">{{ $t('cards.postGamePanel.pgDiceModal.passedAttemptsPassedExpected', { passed: side.dodgeTargets.passed, attempts: side.dodgeTargets.attempts }) }} <b>{{ side.dodgeTargets.expected.toFixed(1) }}</b></span></h4>
                       <svg class="pg-dice-chart pg-dodge-targets" :viewBox="`0 0 ${PG_CHART_W} ${PG_CHART_H}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.dodgesByTargetNumber')">
                         <g v-for="(b, i) in side.dodgeTargets.bars" :key="i">
@@ -587,7 +601,13 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                           class="pg-dodge-seg-n" :class="[l.inside ? 'pg-dodge-seg-in' : `pg-dodge-seg-out pg-dodge-seg-${l.kind}`]">{{ l.n }}</text>
                       </svg>
                       <p class="pg-dodge-legend"><span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-first" />{{ $t('cards.postGamePanel.pgDiceModal.passed') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-reroll" />{{ $t('cards.postGamePanel.pgDiceModal.afterReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-fail" />{{ $t('cards.postGamePanel.pgDiceModal.failedWReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-none" />{{ $t('cards.postGamePanel.pgDiceModal.noReroll') }}</span> <span class="pg-dodge-entry"><span class="pg-dodge-key pg-dodge-key-exp" />{{ $t('cards.postGamePanel.pgDiceModal.expected') }}</span></p>
-                    </template>
+                  </div>
+                  </template>
+                </div>
+                </template>
+                <div v-for="col in diceCols" :key="col.side" class="pg-dice-col" :data-side="col.side" :role="diceBoth ? 'group' : undefined" :aria-label="diceBoth ? col.data.team : undefined">
+                  <template v-for="side in [col.data]" :key="col.side">
+                  <div v-for="row in side.charts.slice(ri, ri + 1)" :key="row.key" class="pg-dice-block">
                     <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ $t('postGame.dice.blocks', { count: side.blocks }) }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? $t('postGame.dice.rolls') : $t('postGame.dice.dice') }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
                     <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${row.block ? PG_CHART_H + PG_BLOCK_FACE_EXTRA : PG_CHART_H}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.titleDistribution', { title: row.title })">
                       <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
@@ -606,22 +626,26 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                       <text v-for="(b, i) in row.chart.bars" :key="'c' + i" :x="b.x + b.w / 2" :y="Math.max(PG_CHART_TOP + 8, b.y - 3)" class="pg-dice-count">{{ b.count }}</text>
                     </svg>
                   </div>
+                  </template>
                 </div>
+                </template>
               </div>
             </section>
             <div class="pg-dice-right">
               <section class="pg-dice-right-top">
                 <h3>{{ $t('cards.postGamePanel.pgDiceModal.likelihood') }}</h3>
-                <div class="pg-dice-cols pg-dice-cols-single">
-                  <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
-                    <div class="pg-dice-block">
+                <div class="pg-dice-cols pg-dice-cols-single" :data-cols="diceCols.length" :style="{ '--pg-like-rows': diceCols[0]!.data.likelihoods.length }">
+                  <!-- Sol r3: in Both each column is a named group (the team), so a screen reader knows whose results it reads -->
+                  <div v-for="col in diceCols" :key="col.side" class="pg-dice-col pg-dice-col-single" :data-side="col.side" :role="diceBoth ? 'group' : undefined" :aria-label="diceBoth ? col.data.team : undefined">
+                    <div v-for="side in [col.data]" :key="col.side" class="pg-dice-block">
                       <!-- Owner 10-09: each row measures RESULTS against their fair chance (armour broken, rolls passed, what the
                            block dice offered); a game cached before that reads "not measured". Owner 10-10: the plain numbers
                            are no longer a line under the gauge - the "i" beside the title opens them in a popover. -->
                       <div v-for="row in side.likelihoods" :key="row.key" class="pg-dice-gauge-row" :data-row="row.key" :data-measured="row.like.measured">
+                        <template v-for="g in [pgGaugeReading(row)]" :key="row.key">
                         <span class="pg-dice-gauge-head" :data-chart="row.key === 'luck' && row.like.measured">
                           <span class="pg-dice-gauge-label">{{ row.label }}</span>
-                          <button type="button" class="pg-dice-info" :aria-label="$t('cards.postGamePanel.pgDiceModal.labelDetails', { label: row.label })"
+                          <button v-if="!diceBoth" type="button" class="pg-dice-info" :aria-label="$t('cards.postGamePanel.pgDiceModal.labelDetails', { label: row.label })"
                             :aria-expanded="diceTip.key === row.key" :aria-describedby="diceTip.key === row.key ? diceTipId(row.key) : undefined"
                             :data-open="diceTip.key === row.key" :data-pinned="diceTip.key === row.key && diceTip.pinned"
                             @pointerenter="onDiceInfoEnter(row.key, $event)" @pointerleave="onDiceInfoLeave(row.key)"
@@ -629,20 +653,30 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                             @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
                           <!-- Owner 10-22: the Luck chart's button sits on the row, under the word "Luck" (it was the last line of the
                                popover). After the "i" in the DOM, so Tab reads the row's title, its details, then "By turn". -->
-                          <button v-if="row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @click="openLuckChart">{{ $t('cards.postGamePanel.pgDiceModal.byTurn') }}</button>
+                          <button v-if="!diceBoth && row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @click="openLuckChart">{{ $t('cards.postGamePanel.pgDiceModal.byTurn') }}</button>
                         </span>
-                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="`${row.label}: ${row.sentence ?? pgOddsSentence(row.like)}`">
+                        <!-- Owner 11-05: the percentile rides the marker as a small tag; the "1 in N" sits in a small box in the
+                             gauge's top-right corner; each gauge is its own small box; the right-hand column is a word. -->
+                        <span class="pg-dice-gauge-box">
+                        <svg class="pg-dice-gauge" viewBox="0 0 200 44" role="img" :aria-label="pgGaugeAria(row, g, row.sentence ?? pgOddsSentence(row.like))">
+                          <path v-if="diceBoth" :d="PG_GAUGE_AREA" class="pg-dice-area" />
                           <path :d="PG_GAUGE_CURVE" class="pg-dice-curve" />
                           <line x1="100" y1="6" x2="100" y2="40" class="pg-dice-mean" />
                           <line v-if="pgHasMarker(row.like)" :x1="pgGaugeX(row.like.zShown)" y1="4" :x2="pgGaugeX(row.like.zShown)" y2="42" class="pg-dice-marker" />
+                          <text v-if="pgHasMarker(row.like) && g.percentile" class="pg-dice-tag" :x="pgGaugeX(row.like.zShown) + (row.like.zShown > 0 ? -3 : 3)" y="38"
+                            :text-anchor="row.like.zShown > 0 ? 'end' : 'start'">{{ g.percentile }}</text>
                         </svg>
-                        <span class="pg-dice-gauge-value" :data-average="row.like.measured && row.like.n > 0 && (row.valueAverage ?? (row.value ? row.value.startsWith('0.0') : row.like.average))" :title="row.valueTitle ?? row.detail"><b>{{ row.value ?? pgOdds(row.like) }}</b></span>
+                        <!-- owner 11-05 (later): the "1 in N" always top right, in a small box -->
+                        <span v-if="g.odds" class="pg-dice-odds" aria-hidden="true">{{ g.odds }}</span>
+                        </span>
+                        <span class="pg-dice-gauge-value" :data-band="g.band ?? undefined" :data-average="g.band === 'average'" :title="pgGaugeTitle(row)"><b>{{ g.word }}</b></span>
+                        </template>
                       </div>
                     </div>
                   </div>
                 </div>
               </section>
-              <section class="pg-dice-right-bottom">
+              <section v-if="!diceBoth" class="pg-dice-right-bottom">
                 <h3>{{ $t('cards.postGamePanel.pgDiceModal.funFacts') }}</h3>
                 <div class="pg-dice-cols pg-dice-cols-single">
                   <div v-for="side in [pgDiceSelected]" :key="side.team" class="pg-dice-col pg-dice-col-single" :data-side="diceSide">
@@ -1085,9 +1119,36 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-switch button[aria-selected='true'][data-side='home'] { border-bottom-color: #3d7cff; }
 .pg-dice-switch button[aria-selected='true'][data-side='away'] { border-bottom-color: #f2363c; }
 /* Owner 09-17 (r4): a single scrollable stack of charts on the left (chart width as before), likelihood + fun facts in the middle. */
-.pg-dice-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: clamp(380px, 27vw, 640px) minmax(0, 1fr); gap: 0.75em 1.5em; padding: 0.75em 1em 0.9em; }
+.pg-dice-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: clamp(420px, 34vw, 800px) minmax(0, 1fr); /* owner 11-05: a wider distributions column - bigger charts, better spacing */ gap: 0.75em 1.5em; padding: 0.75em 1em 0.9em; }
 .pg-dice-left { min-height: 0; overflow: auto; padding-right: 6px; }
-.pg-dice-cols.pg-dice-cols-charts { grid-template-columns: 1fr; }
+.pg-dice-cols.pg-dice-cols-charts { grid-template-columns: 1fr; gap: 0 1.5em; }
+/* Owner 11-05: the Both view - Likelihood on top, the distributions below, home left (blue) and away right (red). */
+
+.pg-dice-grid[data-view='both'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: max-content max-content; overflow-y: auto; } /* Sol r4: one scrolling stack, so the distributions are always reachable below Likelihood on a small window */
+.pg-dice-grid[data-view='both'] > .pg-dice-left, .pg-dice-grid[data-view='both'] > .pg-dice-right, .pg-dice-grid[data-view='both'] .pg-dice-right-top { overflow: visible; min-height: auto; }
+.pg-dice-grid[data-view='both'] > .pg-dice-right { order: -1; display: block; }
+.pg-dice-grid[data-view='both'] .pg-dice-col[data-side='home'] { background: color-mix(in srgb, #3d7cff 9%, transparent); }
+.pg-dice-grid[data-view='both'] .pg-dice-col[data-side='away'] { background: color-mix(in srgb, #f2363c 9%, transparent); }
+.pg-dice-grid[data-view='both'] .pg-dice-gauge { height: clamp(36px, 4.6vh, 80px); }
+.pg-dice-grid[data-view='both'] .pg-dice-gauge-label { font-size: 1.05em; white-space: normal; overflow-wrap: anywhere; }
+.pg-dice-grid[data-view='both'] .pg-dice-col-single .pg-dice-gauge-value b { font-size: clamp(0.85em, 1.1vw, 1.15em); } /* small windows: the half-width columns need smaller words */
+.pg-dice-grid[data-view='both'] .pg-dice-odds { font-size: 0.66em; }
+.pg-dice-grid[data-view='both'] .pg-dice-chart { height: clamp(110px, 17vh, 240px); }
+.pg-dice-area { fill: #3d7cff; opacity: 0.22; stroke: none; }
+.pg-dice-col[data-side='away'] .pg-dice-area { fill: #f2363c; }
+/* Owner 11-05: small text on the gauge - the "1 in N" in the top corner, the percentile tag on the marker */
+.pg-dice-tag { fill: var(--ui-text); font-weight: 700; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--ui-surface-2); stroke-width: 2px; stroke-linejoin: round; }
+.pg-dice-odds, .pg-dice-tag { font-family: var(--font-body, 'Helvetica Neue', Arial, sans-serif); letter-spacing: 0; text-transform: none; }
+/* owner 11-05 (later): each gauge in a small box, the "1 in N" in a small box at its top right, the rows zebra-striped */
+.pg-dice-gauge-box { position: relative; display: block; min-width: 0; padding: 2px 6px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-surface) 65%, transparent); }
+.pg-dice-gauge-box .pg-dice-gauge { display: block; width: 100%; }
+.pg-dice-odds { position: absolute; top: 3px; right: 4px; padding: 1px 6px; border: 1px solid var(--ui-border); border-radius: 4px; background: var(--ui-surface-2); color: var(--ui-text); font-size: 0.72em; font-weight: 700; line-height: 1.25; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pg-dice-gauge-row:nth-child(even) { background: color-mix(in srgb, var(--ui-text) 5%, transparent); } /* plain face: the display lettering does not read this small */
+.pg-dice-grid[data-view='both'] .pg-dice-cols-single[data-cols='2'] { grid-template-rows: repeat(var(--pg-like-rows, 7), auto); } /* Sol r2: both teams' rows share one row track each (subgrid), so a wrapped word on one side never shifts the other side's gauges */
+.pg-dice-grid[data-view='both'] .pg-dice-cols-single[data-cols='2'] > .pg-dice-col,
+.pg-dice-grid[data-view='both'] .pg-dice-cols-single[data-cols='2'] > .pg-dice-col > .pg-dice-block { display: grid; grid-row: 1 / -1; grid-template-rows: subgrid; }
+.pg-dice-grid[data-view='both'] .pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.6fr) minmax(0, 1.3fr); }
+.pg-dice-tag { font-size: 8px; }
 .pg-dice-cols-charts .pg-dice-col { display: flex; flex-direction: column; }
 /* Owner 10-09: five rows, each with its numbers under the gauge - the block may take most of the column, then scrolls; the fun facts keep the rest. */
 .pg-dice-right { min-height: 0; display: grid; grid-template-rows: fit-content(72%) minmax(0, 1fr); gap: 12px; }
@@ -1102,22 +1163,19 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-right-bottom .pg-dice-col-single .pg-dice-block { border-top: 0; }
 /* Owner 09-17 (r5): likelihood + fun facts follow the selector (one coach), so everything can come up a size. */
 .pg-dice-cols.pg-dice-cols-single { grid-template-columns: 1fr; }
+.pg-dice-cols.pg-dice-cols-single[data-cols='2'], .pg-dice-cols.pg-dice-cols-charts[data-cols='2'] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 1.5em; }
 .pg-dice-col-single .pg-dice-block { border-top: 3px solid #3d7cff; padding: 0.6em 1em 0.5em; }
 .pg-dice-col-single[data-side='away'] .pg-dice-block { border-top-color: #f2363c; }
-.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 1em; padding: 0.1em 0; } /* symmetric: the curve sits dead centre of the panel */
-.pg-dice-col-single .pg-dice-gauge-value { text-align: right; max-width: none; }
+.pg-dice-col-single .pg-dice-gauge-row { grid-template-columns: 1fr 2fr 1fr; gap: 1em; padding: 0.2em 0.6em; } /* symmetric: the curve sits dead centre of the panel */
+.pg-dice-col-single .pg-dice-gauge-value { text-align: right; max-width: none; white-space: normal; overflow-wrap: break-word; line-height: 1.15; } /* owner 11-05: the words may take two lines */
 .pg-dice-col-single .pg-dice-gauge-label { font-size: 1.3em; }
-.pg-dice-col-single .pg-dice-gauge { height: clamp(48px, 6.5vh, 104px); } /* owner 10-09: shorter. Owner 10-10: the numbers line under it is gone, so the rows sit tighter still */
+.pg-dice-col-single .pg-dice-gauge { height: clamp(42px, 5.6vh, 94px); } /* owner 10-09: shorter. Owner 10-10: the numbers line under it is gone, so the rows sit tighter still */
 .pg-dice-col-single .pg-dice-curve { stroke-width: 1.6; }
 .pg-dice-col-single .pg-dice-marker { stroke-width: 3.5; }
-.pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.5em; }
+.pg-dice-col-single .pg-dice-gauge-value b { font-size: 1.15em; } /* owner 11-05: a word now, not odds */
+.pg-dice-gauge-value[data-band='luckerDog'] b, .pg-dice-gauge-value[data-band='comedyMegaDicing'] b { color: var(--ui-accent); }
 .pg-dice-col-single .pg-dice-gauge-value[data-average='true'] b { font-size: 1.15em; } /* "about average" is words, not odds: quieter */
-/* Owner 10-22: the Luck and Turns cut short values are sentences on BOTH sides ("25 lucky breaks (25.5 expected)"), so
-   they take one size whether or not that side's result is near its expectation - the quieter "about average" rule above
-   is for the odds rows only. Before this, the side whose luck sat near expected read smaller than the other side's. */
-.pg-dice-col-single .pg-dice-gauge-row[data-row='luck'] .pg-dice-gauge-value b,
-.pg-dice-col-single .pg-dice-gauge-row[data-row='cut'] .pg-dice-gauge-value b { font-size: 1.15em; }
-.pg-dice-col-single .pg-dice-fact { padding: 0.3em 0; gap: 0.1em 1em; }
+.pg-dice-col-single .pg-dice-fact { padding: 0.35em 0.75em; gap: 0.1em 1em; }
 .pg-dice-col-single .pg-dice-fact-label { font-size: 1.3em; }
 .pg-dice-col-single .pg-dice-fact-value { font-size: 1.5em; }
 .pg-dice-col-single .pg-dice-fact-detail { font-size: 1.05em; }
@@ -1140,6 +1198,10 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-n { font-family: inherit; font-weight: 400; font-size: 0.85em; color: var(--ui-muted); letter-spacing: 0; }
 .pg-dice-n b { color: var(--ui-accent); font-weight: 800; }
 .pg-dice-chart { width: 100%; height: auto; display: block; }
+/* owner 11-05 ("I really like the content boxes, let's add those to everything"): every distribution chart and every fun
+   fact sits in the same small box as the Likelihood gauges */
+.pg-dice-chart { box-sizing: border-box; padding: 3px 4px; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-surface) 65%, transparent); }
+.pg-dice-fact, .pg-dice-fact:first-child { margin: 0 0 0.4em; border: 1px solid color-mix(in srgb, var(--ui-border) 80%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--ui-surface) 65%, transparent); }
 .pg-dice-bar { fill: #3d7cff; opacity: 0.85; }
 .pg-dice-col[data-side='away'] .pg-dice-bar { fill: #f2363c; }
 .pg-dice-bar-block { opacity: 0.75; }
@@ -1174,7 +1236,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-mean { stroke: var(--ui-muted); stroke-width: 1; stroke-dasharray: 2 2; }
 .pg-dice-marker { stroke: var(--ui-accent); stroke-width: 2.5; stroke-linecap: round; }
 .pg-dice-gauge-value { line-height: 1.2; font-variant-numeric: tabular-nums; font-size: 0.85rem; color: var(--ui-muted); max-width: 11em; }
-.pg-dice-gauge-value b { white-space: nowrap; }
+.pg-dice-gauge-value b { white-space: normal; } /* owner 11-05: the band words may wrap (was nowrap for the odds) */
 .pg-dice-gauge-value b { font-size: 0.95rem; color: var(--ui-text); }
 /* Owner 10-10: the plain numbers behind the row left the row; an "i" beside the title opens them (hover, focus or click).
    The button is a quiet ring in the pane's own tokens; the popover is the app's teleported bubble (.skill-tip), left-aligned. */
