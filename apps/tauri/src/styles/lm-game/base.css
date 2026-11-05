@@ -37,6 +37,15 @@
    League Manager's dark success green, which reads on the light faces. Fills and lines keep --ui-success. */
 .sf-lm.lm-game { --lmg-done-ink: #7ee59a; }
 :root[data-ui-color-scheme="light"] .sf-lm.lm-game { --lmg-done-ink: var(--ui-success); }
+/* ---- team colours (owner 11-04: "Away colors in general are wrong on the modern look. Let's be sure all of the
+   surfaces match the away colors in Retro"): inside the game view the League Manager seat colours are the client's
+   own team tokens (App.vue :root --seat-home-* / --seat-away-*, the sprite-sampled blues and reds Retro uses), so
+   every Modern surface that reads --sf-seat-home / --sf-seat-away shows Retro's team colours. Dark takes Retro's text
+   tones (the colours Retro uses for team ink); the light scheme takes Retro's mid tones, which read on the light
+   faces. */
+.sf-lm.lm-game { --sf-seat-home: var(--seat-home-text); --sf-seat-away: var(--seat-away-text); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game { --sf-seat-home: var(--seat-home-mid); --sf-seat-away: var(--seat-away-mid); }
+
 /* ---- panel headers (owner 11-04: "Header text is too small across all the panels ... Did we increase their size?"):
    every in-game panel, card, dialog, notice and waiting-modal header that the skins draw in the band faces is 20px
    (the League Manager band heading size) through the primary text-size floor, and a long title wraps (balanced)

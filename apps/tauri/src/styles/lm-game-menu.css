@@ -23,11 +23,16 @@
   border: 2px solid var(--sf-panel-line); border-radius: 2px; box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 3px 0 var(--sf-panel-drop);
 }
 .sf-lm.lm-game-menu .pg-stat-col-head { border-bottom-color: var(--sf-panel-line); box-shadow: none; }
-.sf-lm.lm-game-menu .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top-color: var(--sf-seat-home); }
-.sf-lm.lm-game-menu .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top-color: var(--sf-seat-away); }
+.sf-lm.lm-game-menu .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top-color: var(--seat-home-text); }
+.sf-lm.lm-game-menu .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top-color: var(--seat-away-text); }
 .sf-lm.lm-game-menu .pg-stat-cell { border-top-color: var(--sf-panel-line); }
-.sf-lm.lm-game-menu .pg-stat-cell.pg-h { color: var(--sf-seat-home); }
-.sf-lm.lm-game-menu .pg-stat-cell.pg-a { color: var(--sf-seat-away); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-h { color: var(--seat-home-text); }
+.sf-lm.lm-game-menu .pg-stat-cell.pg-a { color: var(--seat-away-text); }
+/* Sol r1 P2: Retro's pale inks read ~2:1 on the Light panel - Light takes the darker seat tones (Retro's mid blue/red). */
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game-menu .pg-stat-cell.pg-h { color: var(--seat-home-mid); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game-menu .pg-stat-cell.pg-a { color: var(--seat-away-mid); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game-menu .pg-stat-col[data-side='home'] .pg-stat-col-head { border-top-color: var(--seat-home-mid); }
+:root[data-ui-color-scheme="light"] .sf-lm.lm-game-menu .pg-stat-col[data-side='away'] .pg-stat-col-head { border-top-color: var(--seat-away-mid); }
 .sf-lm.lm-game-menu .pg-stat-cell.pg-stat-label { font-family: var(--sf-band-font); letter-spacing: .08em; color: color-mix(in srgb, var(--ui-muted) 50%, var(--ui-text)); }
 /* A disabled Concede reads as disabled: the vendored .sf-btn.danger rule follows .sf-btn:disabled at equal weight and
    would keep the scarlet face, so the menu restates the League Manager disabled face for it. */

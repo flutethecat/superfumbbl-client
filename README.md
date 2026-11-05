@@ -167,6 +167,8 @@ the assets or putting them on merchandise, credit FUMBBL with a link and indicat
 - **FUMBBL logo** — used under FUMBBL's branding guidelines.
 - **KrisB block dice faces** — © Kristofer Bengtsson (KrisB), used with permission; not under the Super FUMBBL Media
   License (`packages/ffb-pitch/assets/blockdice-krisb/`, `apps/tauri/src/assets/blockdice-log-krisb/`).
+- **FUMBBL block dice** — by WhatBall, used with permission (credit required); not under the Super FUMBBL Media
+  License (`packages/ffb-pitch/assets/blockdice-fumbbl/`, `apps/tauri/src/assets/blockdice-log-fumbbl/`).
 
 **Super FUMBBL original art — Super FUMBBL Media License.** Everything else (sprites, star players, crests, skill badges,
 decorations, pitches, banners, the default block dice, the wordmark) is original Super FUMBBL art, produced with PixelLab and the OpenAI,

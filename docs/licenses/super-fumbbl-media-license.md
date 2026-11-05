@@ -9,6 +9,9 @@ third-party licence in this folder.
 The KrisB block dice faces (the "Rick dice (built-in)" block dice option) are © Kristofer Bengtsson (KrisB), used with
 permission, and are NOT covered by this licence.
 
+The FUMBBL block dice (the "FUMBBL dice (built-in)" block dice option) are by WhatBall, used with permission, and are
+NOT covered by this licence.
+
 It follows the Modern FUMBBL Media License, with Super FUMBBL as the licensor. (Owner ruling 2026-09-10; this
 supersedes the earlier statement that the original art was MIT-licensed. The client's code remains MIT, see
 `LICENSE` at the repository root.)

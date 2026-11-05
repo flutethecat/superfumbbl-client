@@ -26,6 +26,7 @@ import type { BugReportHost } from '../game/bugReportHost';
 import { bugReportSettingsSnapshot, collectBugReportEnv } from '../game/bugReportSettings';
 import { focusReportDialogIn, onReportModalKeydown } from '../game/reportModalKeys';
 import BugReportScreenshotPanel from './BugReportScreenshotPanel.vue';
+import { rememberBugReport } from '../game/bugReportUpdates';
 import { $t, useLiveSet } from '../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
@@ -218,7 +219,9 @@ async function submitReport() {
       context: { ...props.host.context(), settings: bugReportSettingsSnapshot(settings, collectBugReportEnv(props.host.pitch()?.element)) },
     });
     // Owner ruling 11-01: public reports go to the baked default host's config-web, flag or no flag (bugReportBaseUrl).
-    const { screenshotDropped } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, bugReportBaseUrl());
+    const { screenshotDropped, response } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, bugReportBaseUrl());
+    // Owner 11-04: keep the server's { id, receipt } so the reporter sees its updates (nothing from an older server).
+    void rememberBugReport(response, description);
     reportText.value = '';
     if (screenshotDropped) {
       // Astra: the relay refused the picture as too large (413) and the report went again without it. Say so in the

@@ -177,7 +177,7 @@ import {
   strictBlockPresentationSeat,
 } from './blockChooser';
 import { leaveGameTeardownSteps, type LeaveGameTeardownStep } from './leaveGameLifecycle';
-import { forgetGameLoadRankPanelGame } from './gameLoadRankPanel';
+import { forgetGameLoadRankPanelGame, rankPanelOpponentCr } from './gameLoadRankPanel';
 import {
   buildBribesCommand,
   buildUseInducementCommand,
@@ -1608,6 +1608,8 @@ const spectatorNoticesRetiredFor = shallowRef<SpectatorPublishedPosition | null>
 function retireSpectatorNotices(): void {
   spectatorNoticesRetiredFor.value = spectatorPublication.position.value;
 }
+/** Owner 11-04: the touchback waiting notice is hidden while the kick-off ball is still on its way out (holdTouchbackCard). */
+const touchbackCardHeld = ref(false);
 const state = new Proxy(legacyState, {
   get(target, key, receiver) {
     const position = spectatorPublication.position.value;
@@ -1663,6 +1665,8 @@ const state = new Proxy(legacyState, {
         return Reflect.get(spectatorNeutralState, key);
       }
     }
+    // Owner 11-04: the live / replay touchback notice waits behind the kick-off ball (holdTouchbackCard).
+    if (key === 'touchbackWaiting' && touchbackCardHeld.value) return null;
     return Reflect.get(target, key, receiver);
   },
   set(target, key, value, receiver) {
@@ -8928,6 +8932,103 @@ function dropSpectatorBlockCardHold(): void {
   presentation.queue = presentation.queue.filter((e) => e.kind !== 'prompt' || e.label !== SPECTATOR_BLOCK_CARD_PROMPT);
 }
 
+/** Owner 11-04 ("This modal should wait until the ball bounce resolves and the touchback icon is displayed."): the
+ *  server sends the kick-off's flight, its bounce out and the touchback dialog in one burst (g1949714 cmds 1599-1601,
+ *  corpus-sidestep-defender cmds 40-43, a few ms apart), so the receiving coach's pick card (and every other seat's
+ *  "X is choosing" notice) came up while the #67 FIFO was still flying / bouncing the ball, before the TOUCHBACK stamp.
+ *  The card now waits behind the kick-off ball chain on the FIFO (KICK flight, kickoffBounce, the ballOut hop + stamp
+ *  read, a staged kick-off catch): a prompt queued behind them re-drives the dialog handler, which then arms the pick.
+ *  The same hold hides the waiting notice. Presentation only: the dialog frame has applied; the card is never answered
+ *  for the coach. Fail-open (latches fail open): a plain, unscaled 5 s timer releases it whatever the FIFO does;
+ *  catch-up shows it at once; a reset / seek / snapshot releases it on the next tick. One hold per touchback dialog: once
+ *  shown it is never held again until the dialog closes. The published spectator route needs no hold: it publishes the
+ *  dialog's event only after the bounce event's present() and the renderer's idle wait (the stamp is a visual effect).
+ *  Classic keeps its timing. */
+const TOUCHBACK_CARD_HOLD_CAP_MS = 5000;
+const TOUCHBACK_CARD_PROMPT = 'touchbackCard';
+let touchbackCardHold: { redrive: boolean; timer: ReturnType<typeof setTimeout>; fifoPassed: boolean } | null = null;
+/** The current touchback dialog has been shown: it is not held again until the dialog closes. */
+let touchbackCardShown = false;
+/** The kick-off ball is still flying / bouncing / leaving the pitch on the #67 FIFO (queued or on screen). */
+function kickoffBallChainPresenting(): boolean {
+  const presenting = presentation.presenting;
+  return presenting?.kind === 'kickDescend'
+    || (presenting?.kind === 'beat' && (presenting.id === 'kickoffBounce' || presenting.id === 'ballOut'))
+    || presentation.queue.some((e) => e.kind === 'authoritativeKick' || e.kind === 'kickArc' || e.kind === 'kickoffBounce' || e.kind === 'ballOut')
+    || kickoffCatchPresentationPending();
+}
+/** Sol r1 P2-1: a reconnect between the KICK and its bounce loses the kick-off occurrence, so the leaving hop + stamp
+ *  play on the ball-out FIFO (enqueueBallOutStep) instead of the #67 FIFO. */
+function ballOutFifoBusy(): boolean {
+  return ballOutFifoTimer !== null || ballOutFifo.length > 0;
+}
+/** true = the touchback card / notice waits (a hold is running or was just started); false = show it now.
+ *  `redrive`: the coach's own pick card - the release re-runs the dialog handler, which re-checks the dialog. */
+function holdTouchbackCard(redrive: boolean): boolean {
+  if (touchbackCardHold) {
+    // Sol r1 P2-2: catch-up / Classic reached while held shows it now (the caller arms; no nested re-drive).
+    if (playback.catchingUp || settings.uiMode === 'classic') {
+      const held = touchbackCardHold;
+      held.redrive = false;
+      releaseTouchbackCardHold(held);
+      return false;
+    }
+    touchbackCardHold.redrive ||= redrive;
+    return true;
+  }
+  if (touchbackCardShown || playback.catchingUp || settings.uiMode === 'classic' || (!kickoffBallChainPresenting() && !ballOutFifoBusy())) {
+    touchbackCardShown = true;
+    return false;
+  }
+  const hold = { redrive, fifoPassed: false, timer: setTimeout(() => releaseTouchbackCardHold(hold), TOUCHBACK_CARD_HOLD_CAP_MS) };
+  touchbackCardHold = hold;
+  touchbackCardHeld.value = true;
+  enqueuePromptBehind(TOUCHBACK_CARD_PROMPT, () => {
+    hold.fifoPassed = true;
+    if (!ballOutFifoBusy()) releaseTouchbackCardHold(hold); // else the ball-out FIFO's drain wakes it
+  });
+  return true;
+}
+/** The ball-out FIFO drained: a hold whose #67 prompt already passed is released (wake, not poll). */
+function wakeTouchbackCardHold(): void {
+  const hold = touchbackCardHold;
+  if (hold?.fifoPassed && !ballOutFifoBusy()) releaseTouchbackCardHold(hold);
+}
+// Sol r1 P2-2: switching to Classic while a card is held shows it now (Classic keeps its timing).
+watch(() => settings.uiMode, (mode) => {
+  if (mode === 'classic' && touchbackCardHold) releaseTouchbackCardHold(touchbackCardHold);
+});
+function releaseTouchbackCardHold(hold: typeof touchbackCardHold): void {
+  if (!hold || hold !== touchbackCardHold) return;
+  clearTimeout(hold.timer);
+  touchbackCardHold = null;
+  touchbackCardHeld.value = false;
+  touchbackCardShown = true;
+  presentation.queue = presentation.queue.filter((e) => e.kind !== 'prompt' || e.label !== TOUCHBACK_CARD_PROMPT);
+  if (hold.redrive) redriveTouchbackDialog();
+}
+/** Re-run the dialog handler for a touchback dialog that is still open (it arms the pick: the hold is over). */
+function redriveTouchbackDialog(): void {
+  const dialog = game.value?.dialogParameter as { dialogId?: string } | null | undefined;
+  if (!play.active || !play.autoPregame || dialog?.dialogId !== 'touchback') return;
+  try { drivePregameStep(); } catch (e) { console.error('[play] touchback card re-drive error:', e); }
+}
+/** The touchback dialog closed: forget its hold (nothing to show) and allow the next one to be held. */
+function endTouchbackCardOccurrence(): void {
+  if (touchbackCardHold) clearTimeout(touchbackCardHold.timer);
+  touchbackCardHold = null;
+  touchbackCardHeld.value = false;
+  touchbackCardShown = false;
+  presentation.queue = presentation.queue.filter((e) => e.kind !== 'prompt' || e.label !== TOUCHBACK_CARD_PROMPT);
+}
+/** A reset / seek / snapshot drops the FIFO: a held card fails open on the next tick (never inside the reset). */
+function releaseTouchbackCardOnReset(): void {
+  const hold = touchbackCardHold;
+  if (!hold) return;
+  clearTimeout(hold.timer);
+  hold.timer = setTimeout(() => releaseTouchbackCardHold(hold), 0);
+}
+
 // ── Authoritative pass destination ───────────────────────────────────────────────────────────────────
 // This is intentionally action/dialog agnostic. Upstream publishes passCoordinate for ordinary passes, bombs,
 // Throw Team-Mate reroll decisions, and the later Swoop election. The client only validates and displays it.
@@ -9034,6 +9135,7 @@ function resetPresentation(): void {
   modalOfferHoldTeardown.value++;
   flushPendingUpstreamLogs(); // FUMBBL-only rows waiting behind a fireball beat keep their content
   dropSpectatorBlockCardHold(); // owner 10-22: teardown drops a spectator block card held behind a walk
+  releaseTouchbackCardOnReset(); // owner 11-04: a touchback card held behind the kick-off ball fails open
   presentation.queue.length = 0;
   if (presentation.presenting) {
     presentation.presenting.release(presentation.presenting.kind === 'rollBeat');
@@ -9534,6 +9636,7 @@ function recordPlayedGameHistory(): void {
     const record = coachGameRecord({
       game: g, tallies: { home: teamDiceTally(g, 'home'), away: teamDiceTally(g, 'away') }, mySide,
       server: settings.activeServerTarget, serverId: playedServerId(), savedAt: Date.now(),
+      opponentCr: rankPanelOpponentCr(playedServerId(), (g as { gameId?: unknown }).gameId), // owner 11-04: the rank bar's own lookup
     });
     if (record) void appendCoachGame(record);
   } catch (error) { console.warn('[coachHistory] record failed', error); }
@@ -13930,7 +14033,7 @@ function drainBallOutFifo(): void {
   const next = ballOutFifo.shift();
   if (!next) return;
   next.run();
-  ballOutFifoTimer = scheduleGameTimeout(() => { ballOutFifoTimer = null; drainBallOutFifo(); }, next.ms);
+  ballOutFifoTimer = scheduleGameTimeout(() => { ballOutFifoTimer = null; drainBallOutFifo(); wakeTouchbackCardHold(); }, next.ms);
 }
 function resetBallOutFifo(): void {
   if (ballOutFifoTimer) cancelGameTimeout(ballOutFifoTimer);
@@ -13938,6 +14041,8 @@ function resetBallOutFifo(): void {
   ballOutFifo.length = 0;
   ballOutFifoEndsAt = 0;
   lastBallScatter = null;
+  // Owner 11-04: a touchback card waiting on this FIFO is not stranded by its reset (next tick: never inside a reset).
+  if (touchbackCardHold) setTimeout(wakeTouchbackCardHold, 0);
 }
 let lastBallScatter: { square: [number, number]; dir: [number, number] } | null = null;
 function rememberBallOutExit(cue: BallOutCue): void {
@@ -14717,6 +14822,7 @@ function resetPlayback() {
   stagedCatchReadUntil = 0; // Astra r1 P2 (10-21): never crosses a reset / seek / snapshot
   stagedCatchTimer = null;
   dropSpectatorBlockCardHold(); // owner 10-22: a held spectator block card never crosses a reset / seek / snapshot
+  releaseTouchbackCardOnReset(); // owner 11-04: a held touchback card fails open across a reset / seek / snapshot
   failedMoveHold = null;
   moveRollHeldBacklog = false;
   state.moveRollHoldBusy = false;
@@ -21241,6 +21347,10 @@ export function installKickoffPresentationTestHarness(
   modelBall(): unknown;
   /** The real replay seek/stop reset (replayPresentationReset). */
   replayReset(): void;
+  /** Owner 11-04: the real dialog handler on this seat (play.frame's drivePregameStep), a human surface. */
+  drivePregame(): void;
+  playerPick(): typeof state.playerPick;
+  touchbackWaiting(): typeof state.touchbackWaiting;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -21263,8 +21373,14 @@ export function installKickoffPresentationTestHarness(
   const priorPendingWinnerKickoff = pendingWinnerKickoff;
   const priorLastReportSig = lastReportSig;
   const priorLastReportCommandNr = lastReportCommandNr;
+  const priorInteractiveSetup = interactiveSetup;
+  const priorHandled = [...pregameHandled];
+  const priorPlayerPick = state.playerPick;
+  const priorPlayerPickResolver = playerPickResolver;
 
   resetPresentation();
+  endTouchbackCardOccurrence();
+  pregameHandled.clear();
   kickoffPresentationOccurrence = null; unboundKickCommandNr = null;
   acceptedAuthoritativeKicks.clear();
   acceptedKickoffScatterReveals.clear();
@@ -21328,7 +21444,20 @@ export function installKickoffPresentationTestHarness(
     event: () => state.kickoffCine,
     modelBall: () => game.value?.fieldModel.ballCoordinate,
     replayReset: () => replayPresentationReset(0),
+    drivePregame() {
+      play.autoPregame = true;
+      interactiveSetup = true;
+      drivePregameStep();
+    },
+    playerPick: () => state.playerPick,
+    touchbackWaiting: () => state.touchbackWaiting,
     dispose() {
+      endTouchbackCardOccurrence();
+      interactiveSetup = priorInteractiveSetup;
+      pregameHandled.clear();
+      for (const key of priorHandled) pregameHandled.add(key);
+      state.playerPick = priorPlayerPick;
+      playerPickResolver = priorPlayerPickResolver;
       resetPresentation();
       clearAllGameTimeouts();
       pendingMasterChef = null; blockingSplashCine.value = null;
@@ -25352,7 +25481,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // auto-answered (the human owns it). Bots/headless leave interactiveReRolls off →
   // fall through to the auto-decline below.
   if ((dlg === 'bribes' || dlg === 'argueTheCall') && humanReRollSurface() && (dp?.teamId ?? myTeamId) === myTeamId) {
-    surfaceSendOff(g, dp);
+    // Sol r3 P2 (owner 11-04): an occurrence already answered (Bribe / Pass on the bribes offer) never resurfaces on
+    // an unrelated frame, so a late click cannot answer the server's NEXT offer unseen. A re-ask is a new occurrence.
+    if (!dialogAlreadyAnswered()) surfaceSendOff(g, dp);
     return;
   }
   // Headless / bot: decline the send-off options so a driven game never hangs.
@@ -26738,6 +26869,9 @@ function syncOnTheBallWaiting(g: GameJson): void {
   const myTeamId = play.active ? String((myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? '') || null : null;
   state.chargeWaiting = playback.catchingUp ? null : chargeWaitingFromGame(g, myTeamId);
   state.touchbackWaiting = playback.catchingUp ? null : touchbackWaitingFromGame(g, myTeamId);
+  // Owner 11-04: the touchback notice (and the receiving coach's card, case 'touchback') waits behind the kick-off ball.
+  if ((g.dialogParameter as { dialogId?: string } | null | undefined)?.dialogId !== 'touchback') endTouchbackCardOccurrence();
+  else if (legacyState.touchbackWaiting) holdTouchbackCard(false);
   state.kickoffWaiting = playback.catchingUp ? null : kickoffWaitingFromGame(g, myTeamId);
   // Sol r1: frames still draining after a socket close never re-raise it (offerTransportAlive: false from close to the next session).
   state.keywordWaiting = playback.catchingUp || !offerTransportAlive ? null : keywordWaitingFromGame(g, myTeamId);
@@ -27602,6 +27736,8 @@ function drivePregameStep() {
         ? myOnFieldPlayers(g).filter((d) => d.playerCoordinate).map((d) => d.playerId)
         : [];
       if (eligible.length > 0 && !pregameHandled.has('touchback')) {
+        // Owner 11-04: the card waits until the kick-off ball has bounced out and the TOUCHBACK stamp shows.
+        if (holdTouchbackCard(true)) return;
         armPlayerPick({
           key: 'touchback',
           prompt: 'Touchback — give the ball to one of your players',
@@ -27911,7 +28047,9 @@ function drivePregameStep() {
   }
   if (SETUP_TURN_MODES.has(g.turnMode ?? '')) {
     // Clear kickoff dedup keys on each new drive's setup, not during Solid Defence.
-    if (g.turnMode === 'setup') { pregameHandled.delete('kickoff-pick'); pregameHandled.delete('kickoff'); }
+    // Sol r1 P1 (owner 11-04 lane): 'touchback' too - the latch outlived its drive, so a second touchback in the same
+    // game armed no card and sent nothing (the server waited on the coach forever).
+    if (g.turnMode === 'setup') { pregameHandled.delete('kickoff-pick'); pregameHandled.delete('kickoff'); pregameHandled.delete('touchback'); }
     const mySideId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
     const mySide = mySideId === (g.teamHome as { teamId?: string }).teamId ? 'home' : 'away';
     const myTurn = !!g.homePlaying === (mySide === 'home');
@@ -28755,6 +28893,9 @@ export const gameStore = {
   catchUpSignal: computed(() => catchUpRev.value),
   /** Owner 10-20 (game-load rank panel, Astra r3): the game server THIS game came from - the live / spectate connect URL,
    *  or the server-replay download URL. null for a file replay (origin unverifiable), the demo, or no game. */
+  /** Owner 11-04 (Sol r1 P2): the identity the history record of a PLAYED game stores (target id + joined host); the
+   *  rank bar keys the opponent's CR by it, so a CR never crosses to a same-numbered game on another server. */
+  playedServerId: (): string => playedServerId(),
   gameServerUrl: (): string | null => {
     if (replay.active) return replay.source === 'server' ? gameConnectionUrl : null;
     if (state.demoMode) return null;
@@ -29594,7 +29735,7 @@ export const gameStore = {
     const dp = g?.dialogParameter as Record<string, unknown> | undefined;
     if (!so?.canBribe || !g || dp?.dialogId !== 'bribes') return;
     // ffb-client-logic/.../DialogBribesHandler.java:69-80 echoes the selected offered player ids for a spend.
-    sendCommand(buildBribesCommand(bribesOfferFromDialog(g, dp), [so.playerId]));
+    sendAnsweredDialogCommand(buildBribesCommand(bribesOfferFromDialog(g, dp), [so.playerId]), liveDialogInstance(), g.dialogParameter as object);
     state.sendOff = null;
   },
 
@@ -29603,7 +29744,18 @@ export const gameStore = {
    *  a later bribes-dialog resurface for the same instance can never show Argue again. */
   sendOffPass() {
     const so = state.sendOff;
-    if (!so || sendOffAnsweredKey === so.playerId) return;
+    if (!so) return;
+    // Owner 11-04 (Puente, g1960569 seq 1491-1498): on the bribes offer, Pass is the bribe DECLINE (upstream
+    // DialogBribesHandler.dialogClosed: sendUseInducement(type, null)). It used to send the argue decline, which
+    // StepBribes ignores and re-asks for, so Bribe was the only answer that moved the game on.
+    const g = game.value;
+    const dp = g?.dialogParameter as Record<string, unknown> | undefined;
+    if (g && dp?.dialogId === 'bribes') {
+      sendAnsweredDialogCommand(buildBribesCommand(bribesOfferFromDialog(g, dp), []), liveDialogInstance(), g.dialogParameter as object);
+      state.sendOff = null;
+      return;
+    }
+    if (sendOffAnsweredKey === so.playerId) return;
     sendOffAnsweredKey = so.playerId;
     sendCommand({ netCommandId: NetCommandId.CLIENT_ARGUE_THE_CALL, playerIds: [] });
     state.sendOff = null;

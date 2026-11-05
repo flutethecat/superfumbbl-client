@@ -11,6 +11,8 @@ import { computed, ref } from 'vue';
 import { teamLogoUrl } from '../../game/teamLogos';
 import { teamTone } from '../../game/teamTone';
 import { $t, terms } from '../../i18n';
+import { coachTitleBadgeUrl } from '../../game/fumbblCoachProfile';
+import { settings } from '../../game/settings';
 
 export interface LmCardSide {
   name: string;
@@ -21,6 +23,10 @@ export interface LmCardSide {
   score?: number | null;
   logoUrl?: string;
   baseIconPath?: string;
+  /** Owner 11-04: the coach's FUMBBL status title ("Star") - drawn as its rank badge (our art) beside the coach */
+  coachTitle?: string;
+  /** Owner 11-04: the coach's FUMBBL Overall CR, as FUMBBL sent it */
+  coachCr?: number;
 }
 
 const props = defineProps<{
@@ -52,6 +58,11 @@ function initials(name: string | undefined): string {
   if (!words.length) return '?';
   return words.length === 1 ? words[0]!.slice(0, 2).toUpperCase() : words.slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
 }
+/** The rank badge art for a coach title; a badge whose image failed is dropped (the CR text stays). */
+function badge(side: LmCardSide | null): string | null {
+  const url = side?.coachTitle ? coachTitleBadgeUrl(side.coachTitle, settings.coachBadgeStyle) : undefined;
+  return url && !failed.value.has(url) ? url : null;
+}
 const homeCrest = computed(() => crest(props.home, 'home'));
 const awayCrest = computed(() => crest(props.away, 'away'));
 const mode = computed(() => props.scoreMode ?? 'score');
@@ -78,8 +89,12 @@ const sides = computed(() => [
           <span v-else class="lm-crest lm-initials" aria-hidden="true">{{ initials(s.side?.name || s.side?.coach) }}</span>
           <span class="lm-who">
             <span class="lm-name">{{ s.side?.name || (s.key === 'away' && awayPlaceholder) || '—' }}</span>
-            <span v-if="s.side?.coach" class="lm-coach" :data-tour="s.key === 'home' ? coachTour : undefined">{{ s.side.coach }}</span>
-            <span v-if="size !== 'sm' && (s.side?.race || s.side?.tv)" class="lm-meta">{{ [s.side?.race ? terms(s.side.race) : '', s.side?.tv ?? ''].filter(Boolean).join(' · ') }}</span>
+            <span v-if="s.side?.coach" class="lm-coach-line">
+              <img v-if="badge(s.side)" class="lm-coach-badge" :data-retro="settings.coachBadgeStyle === 'retro'" :src="badge(s.side)!" :alt="s.side.coachTitle" :title="s.side.coachTitle" @error="onCrestError(badge(s.side))" />
+              <span class="lm-coach" :data-tour="s.key === 'home' ? coachTour : undefined">{{ s.side.coach }}</span>
+              <span v-if="s.side.coachCr !== undefined" class="lm-cr">{{ $t('lmBlades.card.crP0', { p0: s.side.coachCr }) }}</span>
+            </span>
+            <span v-if="s.side?.race || s.side?.tv" class="lm-meta">{{ [s.side?.race ? terms(s.side.race) : '', s.side?.tv ?? ''].filter(Boolean).join(' · ') }}</span>
           </span>
         </div>
       </template>

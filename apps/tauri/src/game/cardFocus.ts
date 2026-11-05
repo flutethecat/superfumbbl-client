@@ -45,8 +45,9 @@ export interface PadFocusOptions {
    *  nothing behind it (a hidden server card, View's End Turn / Confirm Setup) is reachable while it is up. B runs its
    *  cancel / decline when it has one, otherwise it is inert. */
   exclusive?: boolean;
-  /** A scrollable body inside the card: the right stick scrolls it (Up / Down, with the stick's repeat). */
-  scroll?: () => HTMLElement | null;
+  /** A scrollable body inside the card: the right stick scrolls it (Up / Down, with the stick's repeat). Given the
+   *  step's direction, so a card with nested scroll boxes can hand the step to the box that can still move that way. */
+  scroll?: (direction: 'Up' | 'Down') => HTMLElement | null;
 }
 
 /** One right-stick step of a card's scrollable body, in pixels. */
@@ -335,7 +336,7 @@ export function handlePadFocusEvent(event: PadEvent): boolean {
   };
   if (event.type === 'direction') {
     if (event.stick === 'left') return move(event.direction);
-    const body = event.stick === 'right' && (event.direction === 'Up' || event.direction === 'Down') ? scope.options.scroll?.() : null;
+    const body = event.stick === 'right' && (event.direction === 'Up' || event.direction === 'Down') ? scope.options.scroll?.(event.direction) ?? null : null;
     if (!body) return false;
     body.scrollTop += event.direction === 'Down' ? PAD_SCROLL_STEP_PX : -PAD_SCROLL_STEP_PX;
     refreshPadFocus();

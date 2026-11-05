@@ -169,6 +169,13 @@
 .sf-lm .lm-name { font: 16px/1.2 var(--sf-team-name-font); text-transform: uppercase; letter-spacing: .04em; color: var(--sf-team-name-ink); text-shadow: var(--sf-team-name-shadow);
   overflow: hidden; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .sf-lm .lm-coach { font-size: 14px; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Owner 11-04: coach line = rank badge, name, CR (the away side mirrors it) */
+.sf-lm .lm-coach-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sf-lm .lm-card-team.away .lm-coach-line { flex-direction: row-reverse; }
+.sf-lm .lm-coach-line .lm-coach { min-width: 0; }
+.sf-lm .lm-coach-badge { flex: none; width: 22px; height: 22px; object-fit: contain; }
+.sf-lm .lm-coach-badge[data-retro="true"] { image-rendering: pixelated; }
+.sf-lm .lm-cr { flex: none; font-size: 13px; color: var(--ui-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sf-lm .lm-meta { font-size: 13px; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-lm .lm-centre { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
 .sf-lm .lm-clock { font: 12px/1.2 var(--sf-band-font); text-transform: uppercase; letter-spacing: .12em; color: var(--ui-text); white-space: nowrap; }

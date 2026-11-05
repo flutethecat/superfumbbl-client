@@ -218,6 +218,38 @@ fn append_with(dir: &Path, records: &str, copy_aside: impl Fn(&Path) -> Result<(
     Ok(CoachHistoryAppend { written, text })
 }
 
+/// Owner 11-04 (Sol r1 P3): a CR that the rank bar's lookup returned AFTER its game's record was written. Under the
+/// lock: read -> find the ONE valid record of `<server_id>|<game_id>` -> when it names `coach` as its opponent
+/// (case-insensitive) and has no `opponentCr` yet, set ONLY `opponentCr` -> atomic write. Nothing else in the file
+/// changes (no dedupe, merge, cap or quarantine). Ok(false) = nothing to patch (no such record, another opponent, a CR
+/// already there, no history, or a non-finite CR).
+fn patch_opponent_cr_in(dir: &Path, server_id: &str, game_id: &str, coach: &str, cr: f64) -> Result<bool, String> {
+    if !cr.is_finite() {
+        return Ok(false);
+    }
+    let _lock = lock_coach_history(dir)?;
+    let mut games = match read_locked(dir)? {
+        Read::Ok(_, games) => games,
+        _ => return Ok(false),
+    };
+    let key = format!("{server_id}|{game_id}");
+    let wanted = coach.trim().to_lowercase();
+    let Some(entry) = games.iter_mut().find(|g| valid_record(g) && record_key(g).as_deref() == Some(key.as_str())) else {
+        return Ok(false);
+    };
+    let opponent = entry["opponent"]["coach"].as_str().unwrap_or("").trim().to_lowercase();
+    if opponent.is_empty() || opponent != wanted || entry.get("opponentCr").map_or(false, |v| v.as_f64().map_or(false, f64::is_finite)) {
+        return Ok(false);
+    }
+    entry["opponentCr"] = serde_json::json!(cr);
+    let text = serde_json::json!({ "version": 1, "games": games }).to_string();
+    if text.len() as u64 > MAX_COACH_HISTORY_BYTES {
+        return Err(coach_err("history too large"));
+    }
+    super::atomic_write(dir, COACH_HISTORY_FILE, &text).map_err(coach_err)?;
+    Ok(true)
+}
+
 fn history_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     super::settings_dir(app).map_err(coach_err)
 }
@@ -230,6 +262,11 @@ pub fn coach_history_load(app: tauri::AppHandle) -> Result<CoachHistoryLoad, Str
 #[tauri::command]
 pub fn coach_history_append(app: tauri::AppHandle, records: String) -> Result<CoachHistoryAppend, String> {
     append_in(&history_dir(&app)?, &records)
+}
+
+#[tauri::command]
+pub fn coach_history_patch_opponent_cr(app: tauri::AppHandle, server_id: String, game_id: String, coach: String, cr: f64) -> Result<bool, String> {
+    patch_opponent_cr_in(&history_dir(&app)?, &server_id, &game_id, &coach, cr)
 }
 
 #[cfg(test)]
@@ -287,6 +324,29 @@ mod tests {
             t.join().unwrap();
         }
         assert_eq!(ids(&load_in(&path).unwrap().text.unwrap()).len(), 8);
+    }
+
+    #[test]
+    fn patch_opponent_cr_sets_only_that_field_on_the_matching_record() {
+        let dir = tempfile::tempdir().unwrap();
+        append_in(dir.path(), &format!("[{},{}]", rec("fumbbl", "1", 1), rec("fork", "1", 2))).unwrap();
+        let before: serde_json::Value = serde_json::from_str(&load_in(dir.path()).unwrap().text.unwrap()).unwrap();
+        // another opponent, another server's same game id, an unknown game: nothing
+        assert!(!patch_opponent_cr_in(dir.path(), "fumbbl|host", "1", "someone", 1500.0).unwrap());
+        assert!(!patch_opponent_cr_in(dir.path(), "fumbbl|other", "1", "o", 1500.0).unwrap());
+        assert!(!patch_opponent_cr_in(dir.path(), "fumbbl|host", "9", "o", 1500.0).unwrap());
+        assert!(!patch_opponent_cr_in(dir.path(), "fumbbl|host", "1", "o", f64::NAN).unwrap());
+        assert!(patch_opponent_cr_in(dir.path(), "fumbbl|host", "1", "O", 1612.0).unwrap());
+        assert!(!patch_opponent_cr_in(dir.path(), "fumbbl|host", "1", "o", 1700.0).unwrap()); // never overwritten
+        let after: serde_json::Value = serde_json::from_str(&load_in(dir.path()).unwrap().text.unwrap()).unwrap();
+        let (b, a) = (before["games"].as_array().unwrap(), after["games"].as_array().unwrap());
+        assert_eq!(a.len(), 2);
+        assert_eq!(a[0]["opponentCr"], serde_json::json!(1612.0));
+        let mut patched = a[0].clone();
+        patched.as_object_mut().unwrap().remove("opponentCr");
+        assert_eq!(patched, b[0]); // nothing else changed
+        assert_eq!(a[1], b[1]);
+        assert!(a[1].get("opponentCr").is_none());
     }
 
     #[test]

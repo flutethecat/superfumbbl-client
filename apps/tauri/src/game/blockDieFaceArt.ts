@@ -7,7 +7,8 @@ export type BlockDiceFamily = AppSettings['blockDiceFamily'];
 
 // The client's block-die face art (the 64 px content-trimmed faces the log draws, see BlockDieFace.vue), by face
 // value 1..6. Owner 10-01 (S71): the end-game Block dice chart labels its columns with these faces.
-// Owner 10-06: one set per bundled block-dice family — 'krisb' = Kristofer Bengtsson's faces.
+// Owner 10-06: one set per bundled block-dice family — 'krisb' = Kristofer Bengtsson's faces; owner 11-04: 'fumbbl' =
+// WhatBall's FUMBBL dice (the symbol with its dark rim, nearest-neighbour 2x; scripts/gen-fumbbl-block-dice.py).
 export const BLOCK_DIE_FACE_SYMBOL_URLS: Readonly<Record<BlockDiceFamily, Readonly<Record<BlockDieLogSymbol, string>>>> = {
   default: {
     'attacker-down': new URL('../assets/blockdice-log/attacker-down-64.png', import.meta.url).href,
@@ -22,6 +23,13 @@ export const BLOCK_DIE_FACE_SYMBOL_URLS: Readonly<Record<BlockDiceFamily, Readon
     push: new URL('../assets/blockdice-log-krisb/push-64.png', import.meta.url).href,
     'defender-stumbles': new URL('../assets/blockdice-log-krisb/defender-stumbles-64.png', import.meta.url).href,
     pow: new URL('../assets/blockdice-log-krisb/pow-64.png', import.meta.url).href,
+  },
+  fumbbl: {
+    'attacker-down': new URL('../assets/blockdice-log-fumbbl/attacker-down-64.png', import.meta.url).href,
+    'both-down': new URL('../assets/blockdice-log-fumbbl/both-down-64.png', import.meta.url).href,
+    push: new URL('../assets/blockdice-log-fumbbl/push-64.png', import.meta.url).href,
+    'defender-stumbles': new URL('../assets/blockdice-log-fumbbl/defender-stumbles-64.png', import.meta.url).href,
+    pow: new URL('../assets/blockdice-log-fumbbl/pow-64.png', import.meta.url).href,
   },
 };
 

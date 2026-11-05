@@ -13,18 +13,22 @@ export const BLOCK_STAMP_FACE_INDEX: Readonly<Record<string, number>> = { 'attac
 export interface BlockStampArtSources {
   /** The pack-bound face for a tumble index (the user-files pack, else the assigned block-dice pack); null = none. */
   packFaceUrl(faceIndex: number): string | null;
-  family: 'default' | 'krisb';
+  family: 'default' | 'krisb' | 'fumbbl';
   /** KrisB's original (plate-less) faces in tumble order. */
   krisbFaceUrls(): readonly string[];
+  /** Owner 11-04: the FUMBBL dice's plate-less symbols (their glyphs: the die tile knocked out) in tumble order. */
+  fumbblFaceUrls(): readonly string[];
   /** The Super FUMBBL plain result symbols, by symbol. */
   plainSymbolUrls: Readonly<Record<string, string>>;
 }
 
-/** The bundled (no pack) stamp art of a symbol: KrisB's plate-less face, else the plain Super FUMBBL symbol. */
+/** The bundled (no pack) stamp art of a symbol: KrisB's plate-less face, the FUMBBL glyph, else the plain Super
+ *  FUMBBL symbol. */
 export function bundledBlockStampUrl(symbol: string, sources: BlockStampArtSources): string | null {
   const index = BLOCK_STAMP_FACE_INDEX[symbol];
   if (index === undefined) return null;
   if (sources.family === 'krisb') return sources.krisbFaceUrls()[index] ?? null;
+  if (sources.family === 'fumbbl') return sources.fumbblFaceUrls()[index] ?? null;
   return sources.plainSymbolUrls[symbol] ?? null;
 }
 

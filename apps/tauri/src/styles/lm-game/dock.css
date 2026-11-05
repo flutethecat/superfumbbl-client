@@ -239,12 +239,12 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
 .sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-time { color: var(--ui-muted); opacity: 1; }
 /* Owner 11-04 (Modern review): "The side bars should match the color of the team." The 5px side bar and the wash take
    the speaker's own seat colour (--chat-bubble-seat, written by game/chatBubbles.ts), not its pale edge tint.
-   "The red is too muted here and should move toward scarlet": the away seat is pulled toward --ui-scarlet.
+   Owner 11-04 (later): the away bar "should also match Retro's red" - no scarlet pull; every seat takes its own
+   seat colour, the same one Retro tints that coach with.
    "Spectators should be green": spectator bubbles take Retro's spectator-chat green. Names stay a light tint of the
    bar so they read on the dark dock in both schemes. */
 .sf-lm.lm-game { --lmg-chat-spectator: #9fd49f; }
 .sf-lm.lm-game .chat-log .chat-bubble { --lmg-bubble-bar: var(--chat-bubble-seat, var(--sf-panel-line)); }
-.sf-lm.lm-game .chat-log .chat-bubble[data-side='away'] { --lmg-bubble-bar: color-mix(in srgb, var(--chat-bubble-seat, var(--ui-scarlet)) 35%, var(--ui-scarlet)); }
 .sf-lm.lm-game .chat-log .chat-bubble[data-side='spectator'] { --lmg-bubble-bar: var(--lmg-chat-spectator); }
 .sf-lm.lm-game .chat-log .chat-bubble[data-side] {
   background:
@@ -253,6 +253,28 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
   border-left-color: var(--lmg-bubble-bar);
 }
 .sf-lm.lm-game .chat-log .chat-bubble[data-side] .chat-bubble-name { color: color-mix(in srgb, var(--lmg-bubble-bar) 55%, white); }
+/* Owner 11-04: "Let's not do the gradient to black for the chat bubbles as well, let's do scarlet to the current red."
+   Away bubbles are a red fill, scarlet into Retro's away red (--seat-away-mid), with no dark panel base; the text,
+   name and time take light inks that read on it.
+   Sol r1 P2: the fills key off data-tone (the viewer-relative seat colour, game/chatBubbles.ts), the same mapping as the
+   side bar, never the raw server data-side: a local AWAY coach's own lines are blue like everything else of theirs. */
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='away'] {
+  background: linear-gradient(180deg, var(--ui-scarlet), var(--seat-away-mid));
+  border-color: var(--seat-away-deep);
+  border-left-color: var(--lmg-bubble-bar);
+}
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='away'] .chat-bubble-text,
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='away'] .chat-bubble-time { color: var(--ui-scarlet-contrast); }
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='away'] .chat-bubble-name { color: color-mix(in srgb, var(--ui-scarlet-contrast) 82%, var(--seat-away-text)); }
+/* Owner 11-04: "Yes, let's do blue to retro blue" - home bubbles the same way: Retro's bright blue into its mid blue. */
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='home'] {
+  background: linear-gradient(180deg, var(--seat-home-bright), var(--seat-home-mid));
+  border-color: var(--seat-home-deep);
+  border-left-color: var(--lmg-bubble-bar);
+}
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='home'] .chat-bubble-text,
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='home'] .chat-bubble-time { color: var(--ui-scarlet-contrast); }
+.sf-lm.lm-game .chat-log .chat-bubble[data-tone='home'] .chat-bubble-name { color: color-mix(in srgb, var(--ui-scarlet-contrast) 82%, var(--seat-home-text)); }
 .sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-text { color: var(--ui-text); }
 /* the entry: a square themed field on the dock's strip colour */
 .sf-lm.lm-game form.chat textarea {

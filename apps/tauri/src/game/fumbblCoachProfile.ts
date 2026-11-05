@@ -205,7 +205,136 @@ const cache = new Map<string, Promise<FumbblCoachProfile>>();
 export const coachNameKey = (name: string): string => name.trim().toLowerCase();
 const cacheKey = coachNameKey;
 
-export function clearFumbblCoachProfileCache(): void { cache.clear(); }
+/**
+ * Owner 11-04 ("reducing the number of calls is important... persist it across the 30 games and only discard when it
+ * exceeds the list"): profiles that carry data are also SAVED (localStorage), so a restart does not fetch them again.
+ * No time expiry: an entry stays until its coach drops out of the recent-games list (pruneStoredCoachProfiles, called
+ * by the Play blade with a non-empty list), a forced Refresh replaces it, or the store passes COACH_PROFILE_STORE_MAX
+ * entries (least recently used goes first; other screens save profiles too). A failed / empty lookup is never saved.
+ * v2 (Sol r1): each entry carries `at`, its last save / use, for the LRU cap.
+ */
+export const COACH_PROFILE_STORE_KEY = 'sf.fumbblCoachProfiles.v2';
+/** The 11-04 first cut (entries were bare profiles); carried into v2, then removed once v2 is written (Sol r2/r3). */
+export const COACH_PROFILE_STORE_KEY_V1 = 'sf.fumbblCoachProfiles.v1';
+export const COACH_PROFILE_STORE_MAX = 64;
+/** `reserved`: a placeholder written BEFORE a lookup to prove the store has room (reserveCoachProfileSlot); never a hit. */
+interface StoredProfile { profile: FumbblCoachProfile; at: number; reserved?: true }
+type ProfileStore = Record<string, StoredProfile>;
+/** The v1 store as v2 entries (bare profiles with data, stamped 0). */
+function v1Entries(raw: string | null): ProfileStore {
+  const out: ProfileStore = {};
+  try {
+    const old = raw ? JSON.parse(raw) as unknown : null;
+    if (old && typeof old === 'object' && !Array.isArray(old)) {
+      for (const [key, p] of Object.entries(old as Record<string, unknown>)) {
+        const profile = p as FumbblCoachProfile | null;
+        if (profile && typeof profile === 'object' && typeof profile.name === 'string' && hasData(profile)) out[key] = { profile, at: 0 };
+      }
+    }
+  } catch { /* unreadable v1: nothing to carry */ }
+  return out;
+}
+/**
+ * Sol r2/r3: v1 is migrated by WRITING v2 first and only then deleting v1. If the v2 write fails (quota), v1 stays
+ * and reads are served from it (readStore), so its coaches still cost no request; the next successful v2 write
+ * (writeStore) carries them over and deletes v1.
+ */
+function migrateV1(ls: Storage): void {
+  try {
+    const raw = ls.getItem(COACH_PROFILE_STORE_KEY_V1);
+    if (raw === null) return;
+    if (ls.getItem(COACH_PROFILE_STORE_KEY) === null) ls.setItem(COACH_PROFILE_STORE_KEY, JSON.stringify(v1Entries(raw)));
+    ls.removeItem(COACH_PROFILE_STORE_KEY_V1);
+  } catch { /* no room for v2: keep v1 and read from it */ }
+}
+function readStore(): ProfileStore {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return {};
+    migrateV1(ls);
+    const raw = ls.getItem(COACH_PROFILE_STORE_KEY);
+    if (raw === null) return v1Entries(ls.getItem(COACH_PROFILE_STORE_KEY_V1));
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: ProfileStore = {};
+    for (const [key, entry] of Object.entries(parsed as Record<string, unknown>)) {
+      const e = entry as Partial<StoredProfile> | null;
+      if (e && typeof e === 'object' && e.profile && typeof e.profile.name === 'string' && typeof e.at === 'number') out[key] = e as StoredProfile;
+    }
+    return out;
+  } catch { return {}; }
+}
+/** A saved, non-placeholder profile. */
+function savedEntry(key: string): StoredProfile | undefined {
+  const e = readStore()[key];
+  return e && !e.reserved ? e : undefined;
+}
+/** false when the store could not be written (quota, blocked storage, no localStorage). */
+function writeStore(store: ProfileStore): boolean {
+  try {
+    const ls = globalThis.localStorage;
+    if (!ls) return false;
+    // Sol r3: placeholders never count against the cap and never push a real profile out
+    const all = Object.entries(store);
+    const real = all.filter(([, e]) => !e.reserved).sort((x, y) => y[1].at - x[1].at).slice(0, COACH_PROFILE_STORE_MAX);
+    const reserved = all.filter(([key, e]) => e.reserved && !real.some(([k]) => k === key));
+    ls.setItem(COACH_PROFILE_STORE_KEY, JSON.stringify(Object.fromEntries([...real, ...reserved])));
+    if (ls.getItem(COACH_PROFILE_STORE_KEY_V1) !== null) ls.removeItem(COACH_PROFILE_STORE_KEY_V1); // v1 now carried
+    return true;
+  } catch { return false; }
+}
+function hasData(p: FumbblCoachProfile): boolean {
+  return p.title !== undefined || p.cr !== undefined || p.record !== undefined;
+}
+/** Save (or re-stamp) one profile; false when the store cannot be written. */
+function saveProfile(key: string, profile: FumbblCoachProfile): boolean {
+  return writeStore({ ...readStore(), [key]: { profile, at: Date.now() } });
+}
+/** Sol r4: save a profile the caller already holds (the opponent session's own copy); false when it cannot be saved.
+ *  A profile without data is not saved (true: nothing to do). */
+export function saveCoachProfile(name: string, profile: FumbblCoachProfile): boolean {
+  const key = coachNameKey(name);
+  return !key || !hasData(profile) || saveProfile(key, profile);
+}
+/** Is this coach's profile saved (no request needed)? */
+export function hasSavedCoachProfile(name: string): boolean {
+  return !!savedEntry(coachNameKey(name));
+}
+/**
+ * Sol r2 (persist-then-fetch): before an EXTRA lookup (a recent-games opponent), write a placeholder as large as a full
+ * profile under the coach's key. false = the store has no room / cannot be written, so the caller must not fetch.
+ * The real profile replaces it on success; a lookup that returns nothing removes it.
+ * Sol r3: a coach with a SAVED profile is never reserved over (the save would clobber it): true without writing - the
+ * refreshed profile replaces an entry of the same size, and a failed save there still breaks the cache.
+ */
+export function reserveCoachProfileSlot(name: string): boolean {
+  const key = coachNameKey(name);
+  if (!key) return false;
+  if (savedEntry(key)) return true;
+  const filler: FumbblCoachProfile = { name, id: 999_999_999, title: 'Emerging Star', cr: 9999.99, record: { w: 9999, d: 9999, l: 9999 }, winPct: 100 };
+  return writeStore({ ...readStore(), [key]: { profile: filler, at: Date.now(), reserved: true } });
+}
+function dropReservation(key: string): void {
+  const store = readStore();
+  if (store[key]?.reserved) { delete store[key]; writeStore(store); }
+}
+/** Keep only the saved profiles of these coach names (the coach and the recent-games list's opponents). An empty list
+ *  (a failed or transient load) prunes nothing. */
+export function pruneStoredCoachProfiles(names: Iterable<string>): void {
+  const keep = new Set([...names].map(coachNameKey).filter(Boolean));
+  if (!keep.size) return;
+  const store = readStore();
+  const kept = Object.fromEntries(Object.entries(store).filter(([key]) => keep.has(key)));
+  if (Object.keys(kept).length !== Object.keys(store).length) writeStore(kept);
+}
+
+/** Tests: forget the in-memory cache only (what an app restart does), keeping the saved profiles. */
+export function clearFumbblCoachProfileMemoryCache(): void { cache.clear(); }
+
+export function clearFumbblCoachProfileCache(): void {
+  cache.clear();
+  try { globalThis.localStorage?.removeItem(COACH_PROFILE_STORE_KEY); globalThis.localStorage?.removeItem(COACH_PROFILE_STORE_KEY_V1); } catch { /* ignore */ }
+}
 
 async function loadProfile(name: string, fetchFn: CoachProfileFetch): Promise<FumbblCoachProfile> {
   const profile: FumbblCoachProfile = { name };
@@ -236,20 +365,43 @@ async function loadProfile(name: string, fetchFn: CoachProfileFetch): Promise<Fu
 }
 
 /**
- * The coach card's data. Cached per (case-insensitive) name for the session; `force` re-fetches (the Refresh
+ * The coach card's data. Cached per (case-insensitive) name for the session and saved across restarts (above); `force` re-fetches (the Refresh
  * button). Never throws, never retries: a failure is cached like any result until the next forced refresh.
  */
 export function fetchFumbblCoachProfile(
   name: string,
   fetchFn: CoachProfileFetch,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; onSaveFailed?: () => void } = {},
 ): Promise<FumbblCoachProfile> {
   const trimmed = name.trim();
   if (!trimmed) return Promise.resolve({ name: '' });
   const key = cacheKey(trimmed);
   const cached = cache.get(key);
-  if (cached && !options.force) return cached;
-  const request = loadProfile(trimmed, fetchFn);
+  if (cached && !options.force) {
+    // write-through (Sol r1): a profile pruned from the store while still in memory is saved again on use
+    void cached.then((profile) => {
+      if (!hasData(profile)) { dropReservation(key); return; } // Sol r3: an empty memory hit leaves no placeholder
+      if (!savedEntry(key) && !saveProfile(key, profile)) options.onSaveFailed?.();
+    });
+    return cached;
+  }
+  const previous = savedEntry(key)?.profile;
+  const saved = options.force ? undefined : previous;
+  if (saved) {
+    saveProfile(key, saved); // re-stamp: recently used
+    const hit = Promise.resolve(saved);
+    cache.set(key, hit);
+    return hit;
+  }
+  const request = loadProfile(trimmed, fetchFn).then((profile) => {
+    if (!hasData(profile)) {
+      dropReservation(key);
+      // Sol r3: a Refresh that comes back empty keeps (and shows) the profile already saved
+      return previous ?? profile;
+    }
+    if (!saveProfile(key, profile)) options.onSaveFailed?.();
+    return profile;
+  });
   cache.set(key, request);
   return request;
 }

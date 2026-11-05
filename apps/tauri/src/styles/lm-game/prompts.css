@@ -90,6 +90,10 @@
 .sf-lm.lm-game .yesno-card:not(.prayer-choice-wait) .yesno-text,
 .sf-lm.lm-game .pitch-confirm-panel.action-modal .yesno-text,
 .sf-lm.lm-game .on-the-ball-waiting p { color: var(--ui-text); text-shadow: none; }
+/* Owner 11-04: "Text on the Push modal where we're waiting is too small in modern look." The waiting notices
+   (OnTheBallWaitingModal: push, On the Ball, Charge, Solid Defence, Swarming, Quick Snap, Pick-Me-Up, inducements,
+   reroll, touchback, kick-off, keyword) read their message at 18px in the sans, under the 20px header (base.css). */
+.sf-lm.lm-game .on-the-ball-waiting p { font-size: max(var(--ui-min-primary-text-size, 16px), 18px); }
 .sf-lm.lm-game .pitch-confirm-panel.opponent-setup-notice:not(.ind-lock-panel) .pitch-confirm-body { color: var(--lmg-ink-2); }
 .sf-lm.lm-game .pitch-confirm-panel:not(.ind-lock-panel) .pick-count,
 .sf-lm.lm-game .player-pick-bar .pick-count { color: var(--lmg-ink-2); font-family: var(--sf-band-font); letter-spacing: .06em; }
@@ -505,6 +509,17 @@
 .sf-lm.lm-game .setup-template-panel .setup-collapse-button { text-transform: none; letter-spacing: normal; }
 .sf-lm.lm-game .setup-panel.setup-card .setup-close-button:hover,
 .sf-lm.lm-game .setup-template-panel .setup-close-button:hover { color: var(--ui-text); }
+
+/* Owner 11-04: "I'm seeing my saved setups with an away color, these should always be home for the local player."
+   The setup surfaces are only ever the local coach's own (the Formations / Saved setups window, the setup and swarming
+   cards), so their accents (heading bar and titles, active tab, hovered / chosen card) take the home seat colour
+   instead of the League Manager red, which reads as the away side. */
+.sf-lm.lm-game .setup-template-panel,
+.sf-lm.lm-game .setup-panel.setup-card {
+  --ui-heading: var(--sf-seat-home);
+  --ui-primary: var(--seat-home-mid);
+  --ui-text-on-primary: var(--ui-scarlet-contrast);
+}
 
 /* ---- Formations / Saved setups window. The mini pitch and its token dots are data colours and stay. */
 .sf-lm.lm-game .setup-template-panel::after {

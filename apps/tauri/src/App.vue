@@ -60,6 +60,8 @@ import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
 import FieldManual from './components/FieldManual.vue';
 import BugReportModal from './components/BugReportModal.vue';
+import BugUpdateNotice from './components/BugUpdateNotice.vue';
+import { checkBugReportUpdatesOnce } from './game/bugReportUpdates';
 import ClientVersionBlockModal from './components/ClientVersionBlockModal.vue';
 import { bladeLabel, createShellReportHost, rememberWireLogFile } from './game/bugReportHost';
 import { detectSecondClient, launchSecondClient, secondClientRowVisible, secondClientSupported } from './game/secondClient';
@@ -2345,6 +2347,9 @@ watch(() => !!gameStore.game.value, (inGame) => {
 watch(shellReportOpen, (open) => { ui.reportOpen = open; });
 const shellReportHost = createShellReportHost({ blade: () => view.value, settings, state: gameStore.state });
 const shellReportTitle = computed(() => t('app.shellReportTitle.reportAnIssueFrom', { p0: bladeLabel(view.value) }));
+// Owner 11-04: the reporter's bug report updates - one status call per launch (none with no stored reports), silent
+// on failure; the BUG UPDATE notice stacks above the Report button (components/BugUpdateNotice.vue).
+onMounted(() => { void checkBugReportUpdatesOnce(); });
 function openShellReport(): void {
   shellReportModal.value?.openReport();
 }
@@ -2562,7 +2567,10 @@ onBeforeUnmount(() => {
       </nav>
       <span class="sf-chip lm-beta" :aria-label="$t('app.betaRelease')">{{ $t('app.beta') }}</span>
       <div class="lm-topbar-end">
-        <button class="sf-btn" type="button" data-testid="ribbon-report" :title="shellReportTitle" :disabled="shellReportOpen" @click="openShellReport">{{ $t('app.report') }}</button>
+        <span class="report-stack">
+          <BugUpdateNotice :modern="true" />
+          <button class="sf-btn" type="button" data-testid="ribbon-report" :title="shellReportTitle" :disabled="shellReportOpen" @click="openShellReport">{{ $t('app.report') }}</button>
+        </span>
         <span v-if="settings.coach.trim()" class="lm-coach-name" :title="$t('lmBlades.signedInCoach')">{{ settings.coach.trim() }}</span>
         <button class="sf-btn lm-icon-btn" type="button" data-testid="open-settings-menu" :aria-label="$t('lmBlades.openSettings')" :title="$t('lmBlades.openSettings')" @click="openSettings()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -2598,8 +2606,12 @@ onBeforeUnmount(() => {
       <!-- Owner 10-12: BETA stamp right after the last blade (Replay, or Team in the fork edition). -->
       <span class="alpha-stamp ribbon-beta" :aria-label="$t('app.betaRelease')">{{ $t('app.beta') }}</span> <!-- owner 09-24: was ALPHA RELEASE -->
       <!-- Owner 10-13: Report on every blade, both editions, at the ribbon's right edge (the blades stay left). -->
-      <button class="ribbon-report" type="button" data-testid="ribbon-report" :title="shellReportTitle"
-        :disabled="shellReportOpen" @click="openShellReport"><span class="ribbon-report-bug" aria-hidden="true">🐞</span>{{ $t('app.report') }}</button>
+      <!-- Owner 11-04: the BUG UPDATE notice sits directly above Report (shown only with an unseen update). -->
+      <span class="report-stack">
+        <BugUpdateNotice :modern="false" />
+        <button class="ribbon-report" type="button" data-testid="ribbon-report" :title="shellReportTitle"
+          :disabled="shellReportOpen" @click="openShellReport"><span class="ribbon-report-bug" aria-hidden="true">🐞</span>{{ $t('app.report') }}</button>
+      </span>
       <!-- Owner 11-03: Settings from the main menu - the menu button at the ribbon's far right (as on the Modern top bar). -->
       <button class="ribbon-menu" type="button" data-testid="open-settings-menu" :aria-label="$t('lmBlades.openSettings')" :title="$t('lmBlades.openSettings')" @click="openSettings()">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -5127,6 +5139,7 @@ onBeforeUnmount(() => {
               </span>
             </li>
             <li><span>{{ $t('settings.creditsList.credits.krisbBlockDiceFaces') }}</span></li>
+            <li><span>{{ $t('settings.creditsList.credits.fumbblBlockDice') }}</span></li>
             <li><span>{{ $t('settings.creditsList.credits.kickoffBannersStadiumSkybox') }}</span></li>
             <li><span>{{ $t('settings.creditsList.credits.homeAndAwayBrushed') }}</span></li>
             <li><span>{{ $t('settings.creditsList.credits.fumbblLogoUsedUnder') }}</span></li>
@@ -5802,6 +5815,10 @@ input, textarea, [contenteditable="true"], .log-panel {
   white-space: nowrap;
   cursor: pointer;
 }
+/* Owner 11-04: Report with the BUG UPDATE notice stacked directly above it (the notice is absent most of the time). */
+.report-stack { display: inline-flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 3px; }
+.blade-ribbon .report-stack { flex: 0 0 auto; align-self: center; margin-left: auto; }
+.blade-ribbon .report-stack .ribbon-report { margin-left: 0; }
 .blade-ribbon .ribbon-report:hover:not(:disabled) { color: var(--ui-text); background: var(--ui-hover); }
 .blade-ribbon .ribbon-report:disabled { opacity: 0.6; cursor: default; }
 .blade-ribbon .ribbon-report-bug { font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }

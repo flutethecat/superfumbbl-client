@@ -145,6 +145,9 @@ export interface TurnsAttackRecord {
 
 export interface DiceStats {
   gameId: string | null;
+  /** Owner 11-04 (jumpKind): the player whose Leap / Pogo use was just reported, and the last jump's kind (its reroll). */
+  leapSkillBy?: string | null;
+  lastJump?: { playerId: string | null; kind: string } | null;
   seen: Set<number>;
   teams: Record<string, DiceTally>;
   players: Record<string, DiceTally>;
@@ -515,7 +518,7 @@ function koWeightFor(game: GameJson | null, team: TeamLike | null): number {
 
 /** A D6 against a stated minimum is one action trial for the roller - every roll, a rerolled one included.
  *  No stated minimum (absent, or the 0 an unset one serialises as) = not a trial. */
-function pushActionLuck(tallies: DiceTally[], r: Record<string, unknown>, ruleUnknown = false): void {
+function pushActionLuck(tallies: DiceTally[], r: Record<string, unknown>, ruleUnknown = false, kind = String(r.reportId ?? '') || 'unknown'): void {
   const minimum = Number(r.minimumRoll);
   if (!isD6(r.roll) || r.minimumRoll == null || !Number.isInteger(minimum) || minimum < 1 || typeof r.successful !== 'boolean') return;
   // Astra N6: whether a roll is measured must not depend on how the die fell. `ruleUnknown` is decided from the
@@ -523,13 +526,29 @@ function pushActionLuck(tallies: DiceTally[], r: Record<string, unknown>, ruleUn
   // it fired on none of the 518 target rolls in the capture fixtures.
   const trial = ruleUnknown ? null : actionTrial(minimum, r.roll, r.successful);
   for (const t of tallies) {
-    const bucket = luckOf(t, 'action');
-    // UNMEASURED: the roll's rule is not "a 6 always passes, a 1 always fails, else roll >= minimum"
-    if (!trial) { bucket.unmeasured += 1; continue; }
-    addTrial(bucket, trial.key, trial.x6);
-    addCount(bucket, 'passed', r.successful ? 1 : 0);
-    addCount(bucket, 'expected', trial.p);
+    // owner 11-04: the roll kind's own sub-bucket, under the same rule (the Coach Stats Action breakdown)
+    const kinds = ((t.luck ??= emptyLuck()).actionKinds ??= {});
+    for (const bucket of [luckOf(t, 'action'), kinds[kind] ??= emptyBucket()]) {
+      // UNMEASURED: the roll's rule is not "a 6 always passes, a 1 always fails, else roll >= minimum"
+      if (!trial) { bucket.unmeasured += 1; continue; }
+      addTrial(bucket, trial.key, trial.x6);
+      addCount(bucket, 'passed', r.successful ? 1 : 0);
+      addCount(bucket, 'expected', trial.p);
+    }
   }
+}
+
+/** Owner 11-04: the breakdown kind of a jump. Upstream reports EVERY jump as `leapRoll` (ReportId.JUMP_ROLL's wire id;
+ *  report/ReportJumpRoll.java, server step bb2025/move/StepJump.java), with no field naming the skill. The one server
+ *  signal is the `skillUse` report StepJump adds when the jumper uses Leap / Pogo to ignore the jump modifiers
+ *  (SkillUse PASS_JUMP_WITHOUT_MODIFIERS, or the after-roll choice): such a jump is `leapRoll:leap`, any other `leapRoll`.
+ *  A reroll of the jump keeps the kind of the roll it rerolls. */
+function jumpKind(stats: DiceStats, r: Record<string, unknown>, playerId: string | null): string {
+  if (r.reRolled === true && stats.lastJump && stats.lastJump.playerId === playerId) return stats.lastJump.kind;
+  const kind = playerId && stats.leapSkillBy === playerId ? 'leapRoll:leap' : 'leapRoll';
+  stats.leapSkillBy = null;
+  stats.lastJump = { playerId, kind };
+  return kind;
 }
 
 /** A pass or a throw / kick of a team-mate by a player with no Passing stat fumbles on EVERY face, whatever minimum
@@ -941,8 +960,33 @@ function advanceTurnAttacks(stats: DiceStats, game: GameJson, clock: TurnClock):
 }
 /** A `turnEnd` report's KO recovery rolls (bb2025 StepEndTurn.recoverKnockout): each roll of a player whose KO an
  *  attacker is credited with is that attacker's trial (see turnsLost.ts header). */
+/**
+ * Owner 11-04 (Coach Stats "KO recoveries"): one entry of the turnEnd report's `knockoutRecoveryArray` (upstream
+ * KnockoutRecovery: playerId, recovering, roll, bloodweiserBabes, bugmansXXXXXXModifier; step/bb2025/StepEndTurn.java
+ * recoverKnockout) is one trial for the player's team. The report states no target: it is derived from the report's
+ * OWN modifiers (kegs + Bugman's, never re-read from the team) by the server's rule (DiceInterpreter
+ * .isRecoveringFromKnockout: roll > 1 and roll + modifier > 3, i.e. 4+ base, 3+ / 2+ with +1 / +2, a 1 always fails).
+ * A roll whose stated result disagrees with that rule is counted unmeasured.
+ */
+function noteKoRecoveryRoll(stats: DiceStats, game: GameJson, roll: Record<string, unknown>): void {
+  const playerId = typeof roll.playerId === 'string' ? roll.playerId : null;
+  const team = teamOf(game, playerId);
+  if (!team || typeof roll.recovering !== 'boolean') return;
+  const modifier = (Number(roll.bloodweiserBabes ?? roll.bloodweiserKegs) || 0) + (Number(roll.bugmansXXXXXXModifier) || 0);
+  const target = Math.max(2, 4 - modifier);
+  const trial = isD6(roll.roll) ? actionTrial(target, roll.roll, roll.recovering) : null;
+  for (const t of tallyFor(stats, team.teamId, playerId)) {
+    const b = (t.luck ??= emptyLuck()).koRecovery ??= emptyBucket();
+    if (!trial) { b.unmeasured += 1; continue; }
+    addTrial(b, trial.key, trial.x6);
+    addCount(b, 'passed', roll.recovering ? 1 : 0);
+    addCount(b, 'expected', trial.p);
+  }
+}
+
 function noteKoRecoveries(stats: DiceStats, game: GameJson | null, r: Report, clock: TurnClock | null): void {
   const list = Array.isArray(r.knockoutRecoveryArray) ? (r.knockoutRecoveryArray as Record<string, unknown>[]) : [];
+  if (game) for (const roll of list) noteKoRecoveryRoll(stats, game, roll);
   if (!game || !clock || !list.length) return;
   for (const roll of list) {
     const playerId = typeof roll.playerId === 'string' ? roll.playerId : null;
@@ -1878,6 +1922,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     // (Astra chart r5: unless the push it leaves may still go into the crowd)
     if (id === 'skillUse' && r.used === true) {
       const skill = String(r.skill ?? '').toLowerCase();
+      if (/^(leap|pogo)/.test(skill) && playerId) stats.leapSkillBy = playerId; // owner 11-04: see jumpKind
       if (skill === 'wrestle' || (skill === 'dodge' && !stats.turnsCrowd && !stats.turnsChain)) stats.turnsPending = [];
     }
     if (id === 'steadyFootingRoll') noteSteadyFootingTurns(stats, playerId, r);
@@ -2065,7 +2110,7 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
         const tested = id === 'bretonnianPastriesRoll' ? pastriesAsTest(r) : bf === null ? r : { ...r, successful: bf };
         pushTest(tallies, tested);
         const ruleUnknown = passingRuleUnknown(game, id, playerId ?? actingId);
-        pushActionLuck(tallies, tested, ruleUnknown);
+        pushActionLuck(tallies, tested, ruleUnknown, id === 'leapRoll' ? jumpKind(stats, r, playerId ?? actingId) : id);
         noteActionBreak(stats, game, id, tested, playerId ?? actingId, ruleUnknown, rollClock());
       }
       if (id === 'chainsawRoll') noteChainsawTurns(stats, game, playerId ?? actingId, r, rollClock());

@@ -266,10 +266,11 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
    *  'default' = the flat badges ("Built-in default"), 'illustrated' = the illustrated set ("Illustrated - Default"). */
   skillBadgeFamily: 'default' | 'illustrated';
   /** Owner 10-06: which BUNDLED block-dice face family serves when no pack is assigned to the block-dice slot —
-   *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("Rick dice (built-in)"). */
-  blockDiceFamily: 'default' | 'krisb';
+   *  'default' = the Super FUMBBL faces ("Built-in default"), 'krisb' = Kristofer Bengtsson's faces ("Rick dice (built-in)"),
+   *  'fumbbl' (owner 11-04) = WhatBall's FUMBBL dice ("FUMBBL dice (built-in)"). */
+  blockDiceFamily: 'default' | 'krisb' | 'fumbbl';
   /** Owner 10-06: the plate the bundled block-die faces sit on — 'auto' (default) matches the face set (black for the
-   *  Super FUMBBL faces, white for KrisB; resolveBlockDieSurface), or an explicit 'black' / 'white'. Pack-bound faces
+   *  Super FUMBBL and FUMBBL faces, white for KrisB; resolveBlockDieSurface), or an explicit 'black' / 'white'. Pack-bound faces
    *  are complete images and are drawn as they are. Owner 10-13: 'team' = "Brushed metal, home and away" - the dice
    *  of the displayed home side (the local coach in play, the server home team for spectators) on the blue blank, the
    *  away side's on the red one; dice with no known owner keep the 'auto' surface. */
@@ -1433,7 +1434,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       blockDice: installedIdentity(rawAssignments?.blockDice),
     };
     merged.skillBadgeFamily = raw.skillBadgeFamily === 'default' ? 'default' : 'illustrated'; // owner 09-10: illustrated unless the flat set was chosen
-    merged.blockDiceFamily = raw.blockDiceFamily === 'krisb' ? 'krisb' : 'default'; // owner 10-06: default unless KrisB was chosen
+    merged.blockDiceFamily = raw.blockDiceFamily === 'krisb' || raw.blockDiceFamily === 'fumbbl' ? raw.blockDiceFamily : 'default'; // owner 10-06: default unless KrisB (11-04: or FUMBBL) was chosen
     merged.blockDiceSurface = raw.blockDiceSurface === 'black' || raw.blockDiceSurface === 'white' || raw.blockDiceSurface === 'team' ? raw.blockDiceSurface : 'auto'; // owner 10-06: explicit picks kept, else per face set (10-13: + team)
     // Owner 2026-07-05 migration: FORCE the new defaults onto pre-v2 installs (whose
     // persisted settings still carry the old walk / 60% values). Runs once — after

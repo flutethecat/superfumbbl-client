@@ -1,5 +1,5 @@
 {
-  "_about": "The shell's command set (S51 E1). `version` MUST equal the version of the shell being built whenever `commands` change (bump it in the set-version step of that release): app patches require shell >= version (app-patch.json shell.min). A Rust test (app_patch.rs) fails when generate_handler! differs from `commands`; apps/tauri/test/shellApi.test.ts fails when the web app invokes a name missing here. Exception: an OPTIONAL command the page feature-detects and fails open without (launch_flags 1.0.206, fumbbl_home_history 1.0.258, launch_second_instance 1.0.267, coach_history_load / coach_history_append: the coach card falls back to localStorage) may be listed without bumping `version`, so existing installs keep patching.",
+  "_about": "The shell's command set (S51 E1). `version` MUST equal the version of the shell being built whenever `commands` change (bump it in the set-version step of that release): app patches require shell >= version (app-patch.json shell.min). A Rust test (app_patch.rs) fails when generate_handler! differs from `commands`; apps/tauri/test/shellApi.test.ts fails when the web app invokes a name missing here. Exception: an OPTIONAL command the page feature-detects and fails open without (launch_flags 1.0.206, fumbbl_home_history 1.0.258, launch_second_instance 1.0.267, coach_history_load / coach_history_append: the coach card falls back to localStorage; coach_history_patch_opponent_cr: without it a late opponent CR shows for the session only; bug_receipts_load / bug_receipts_update: the bug report updates fall back to localStorage) may be listed without bumping `version`, so existing installs keep patching.",
   "version": "1.0.163",
   "commands": [
     "app_patch_activate",
@@ -24,9 +24,12 @@
     "asset_draft_put_walk_sheet",
     "asset_draft_remove_binding",
     "asset_draft_update",
+    "bug_receipts_load",
+    "bug_receipts_update",
     "clear_account_session",
     "coach_history_append",
     "coach_history_load",
+    "coach_history_patch_opponent_cr",
     "discord_presence_available",
     "discord_presence_clear",
     "discord_presence_set",

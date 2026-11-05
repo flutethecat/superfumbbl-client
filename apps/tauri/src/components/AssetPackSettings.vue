@@ -334,19 +334,23 @@ const ILLUSTRATED_BUILTIN = 'builtin:illustrated';
  *  default"; pack-less (assignment ''), the family lives in `settings.blockDiceFamily`. An installed pack still wins
  *  over the family, so picking one leaves the family alone. */
 const KRISB_BUILTIN = 'builtin:krisb';
+/** Owner 11-04: and "FUMBBL dice (built-in)" (WhatBall's FUMBBL block dice), the same way. */
+const FUMBBL_BUILTIN = 'builtin:fumbbl';
 function assignmentSelectValue(capability: AssetAssignmentCapability): string {
   const id = settings.assetPackAssignments[capability];
   if (capability === 'blockDice' && id === '' && settings.blockDiceFamily === 'krisb') return KRISB_BUILTIN;
+  if (capability === 'blockDice' && id === '' && settings.blockDiceFamily === 'fumbbl') return FUMBBL_BUILTIN;
   return capability === 'skillIcons' && id === '' && settings.skillBadgeFamily === 'illustrated' ? ILLUSTRATED_BUILTIN : id;
 }
 async function changeAssignment(capability: AssetAssignmentCapability, event: Event): Promise<void> {
   const value = (event.target as HTMLSelectElement).value;
-  const builtin = value === ILLUSTRATED_BUILTIN || value === KRISB_BUILTIN;
+  const builtin = value === ILLUSTRATED_BUILTIN || value === KRISB_BUILTIN || value === FUMBBL_BUILTIN;
   const next = { ...settings.assetPackAssignments, [capability]: builtin ? '' : value };
   if (!await publishAssignments(next)) { editorError.value = assetMods.error; return; }
   if (capability === 'skillIcons') settings.skillBadgeFamily = builtin ? 'illustrated' : 'default';
   if (capability === 'blockDice') {
     if (value === KRISB_BUILTIN) settings.blockDiceFamily = 'krisb';
+    else if (value === FUMBBL_BUILTIN) settings.blockDiceFamily = 'fumbbl';
     else if (value === '') settings.blockDiceFamily = 'default';
   }
 }
@@ -466,6 +470,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
         <option value="">{{ capability.key === 'skillIcons' ? $t('settings.assetPacks.assetPacks.flatBadgesBuiltIn') : $t('settings.assetPacks.assetPacks.builtInDefault') }}</option>
         <option v-if="capability.key === 'skillIcons'" :value="ILLUSTRATED_BUILTIN">{{ $t('settings.assetPacks.assetPacks.illustratedBuiltInDefault') }}</option>
         <option v-if="capability.key === 'blockDice'" :value="KRISB_BUILTIN">{{ $t('settings.assetPacks.assetPacks.rickDiceBuiltIn') }}</option>
+        <option v-if="capability.key === 'blockDice'" :value="FUMBBL_BUILTIN">{{ $t('settings.assetPacks.assetPacks.fumbblDiceBuiltIn') }}</option>
         <option v-for="pack in installedPacks.filter((candidate) => packSupports(candidate, capability.key))"
           :key="pack.installId" :value="pack.installId">{{ pack.name }} {{ pack.version }}</option>
       </select>

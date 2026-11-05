@@ -37,12 +37,16 @@
   --lmg-sp-lift: #ffffff;
   --lmg-sp-scrim: #000000b3;
   --lmg-cine-ink-shadow: 0 2px 0 #000000cc, 0 0 14px #000000b3;
-  --lmg-sp-home-band: color-mix(in srgb, var(--sf-seat-home) var(--lmg-sp-share), var(--lmg-sp-base));
-  --lmg-sp-home-deep: color-mix(in srgb, var(--sf-seat-home) var(--lmg-sp-share-deep), var(--lmg-sp-base));
-  --lmg-sp-home-line: color-mix(in srgb, var(--sf-seat-home) 72%, var(--lmg-sp-lift));
-  --lmg-sp-away-band: color-mix(in srgb, var(--sf-seat-away) var(--lmg-sp-share), var(--lmg-sp-base));
-  --lmg-sp-away-deep: color-mix(in srgb, var(--sf-seat-away) var(--lmg-sp-share-deep), var(--lmg-sp-base));
-  --lmg-sp-away-line: color-mix(in srgb, var(--sf-seat-away) 72%, var(--lmg-sp-lift));
+  /* Owner 11-04: "the splash for turn change has changed colors. This should be bound to the color of the home/away
+     teams in the other views": the seat bands (turnover, turn start, turn toast, injury, reroll toasts) take the
+     client's team tokens (--seat-home-* / --seat-away-*, the sprite-sampled blues and reds the coach panels,
+     scoreboard and Retro use), in both schemes. */
+  --lmg-sp-home-band: var(--seat-home-mid);
+  --lmg-sp-home-deep: var(--seat-home-deep);
+  --lmg-sp-home-line: var(--seat-home-text);
+  --lmg-sp-away-band: var(--seat-away-mid);
+  --lmg-sp-away-deep: var(--seat-away-deep);
+  --lmg-sp-away-line: var(--seat-away-text);
   --lmg-sp-red-band: color-mix(in srgb, var(--ui-scarlet) 62%, var(--lmg-sp-base));
   --lmg-sp-red-deep: color-mix(in srgb, var(--ui-scarlet) 34%, var(--lmg-sp-base));
   --lmg-sp-red-line: color-mix(in srgb, var(--ui-scarlet) 70%, var(--lmg-sp-lift));

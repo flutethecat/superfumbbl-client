@@ -9,6 +9,7 @@ use tauri::{Emitter, Manager, State};
 mod app_patch;
 mod art_pack;
 mod coach_history;
+mod bug_receipts;
 // The edition.json grammar the build script enforces; only its shared-vector test is compiled here (cargo test).
 #[cfg(test)]
 #[path = "../edition_grammar.rs"]
@@ -1064,6 +1065,9 @@ pub fn run() {
             settings_purge_recovery,
             coach_history::coach_history_load,
             coach_history::coach_history_append,
+            coach_history::coach_history_patch_opponent_cr,
+            bug_receipts::bug_receipts_load,
+            bug_receipts::bug_receipts_update,
             asset_mods::list_asset_packs,
             asset_mods::inspect_asset_pack,
             asset_mods::install_asset_pack,

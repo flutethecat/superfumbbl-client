@@ -37,7 +37,8 @@ import { loadPostGameSnapshot, postGameSnapshotKeys } from '../../game/postGameC
 import { postGameKey, type PostGameSnapshot } from '../../game/postGameProjection';
 import CreateGameModal from './play/CreateGameModal.vue';
 import CoachCard from './play/CoachCard.vue';
-import { fetchFumbblCoachProfile, type FumbblCoachProfile } from '../../game/fumbblCoachProfile';
+import { fetchFumbblCoachProfile, pruneStoredCoachProfiles, type FumbblCoachProfile } from '../../game/fumbblCoachProfile';
+import { loadRecentOpponentProfiles, recentOpponentProfiles } from '../../game/recentOpponentProfiles';
 import { EXAMPLE_GAME_ID, exampleSnapshot } from '../../game/clientTourExample';
 import { forkFeaturesEnabled } from '../../game/forkAccess'; // owner 10-31: runtime fork gate (public: --fork-server)
 import { $t, terms, useLiveSet } from '../../i18n';
@@ -112,6 +113,7 @@ function openLobby(): void {
 async function refreshAll(): Promise<void> {
   openLobby();
   void refreshCoachProfile(true);
+  loadOpponentProfiles(true); // Sol r1: Refresh also re-reads the listed opponents (serial, within the session cap)
   await refreshActive();
 }
 
@@ -158,6 +160,9 @@ async function refreshRecent(): Promise<void> {
     const { matches, teamCap } = await fetchRecentFumbblMatches(coach.value, inTauri ? (tauriFetch as (u: string) => Promise<Response>) : fetch, 30, localPlayedTeamIds(coach.value));
     recent.value = matches;
     recentTeamCap.value = teamCap;
+    // owner 11-04: saved coach profiles live as long as their coach is in this list (fumbblCoachProfile.ts); an empty
+    // list (a transient load) prunes nothing
+    if (matches.length) pruneStoredCoachProfiles([coach.value, ...matches.map((row) => row.opponentCoach)]);
     recentError.value = '';
   } catch (error) {
     liveSetHere(recentError, 'value', () => $t('play.text.couldNotLoadYour2', { p0: error instanceof Error ? error.message : String(error) }));
@@ -370,6 +375,23 @@ function formatTeamValue(value: number | undefined): string | undefined {
 }
 function myRecent(row: FumbblRecentMatch): 'W' | 'L' | 'D' { return resultLetter(row.myScore, row.opponentScore); }
 
+// Owner 11-04 ("add a little detail to these cards: race name, TV values, and coach rating/badge"): each recent card's
+// coach line carries the coach's FUMBBL status badge and CR. Mine is the coach card's profile (no new request). The
+// opponents come from game/recentOpponentProfiles.ts: one session-wide queue and 10-opponent budget, saved profiles
+// first, nothing fetched when profiles cannot be saved. Modern only - Retro's rows do not show them, so it fetches none.
+function loadOpponentProfiles(force = false): void {
+  if (!modern.value || !recent.value.length) return;
+  const fetcher = (inTauri ? (tauriFetch as typeof fetch) : fetch) as typeof fetch;
+  void loadRecentOpponentProfiles(recent.value.map((row) => row.opponentCoach), coach.value, fetcher, { force, eligible: () => modern.value });
+}
+watch([recent, modern], () => loadOpponentProfiles());
+function coachRank(name: string): { coachTitle?: string; coachCr?: number } {
+  const key = name.trim().toLowerCase();
+  const mine = coachProfile.value && key === coach.value.trim().toLowerCase() ? coachProfile.value : null;
+  const profile = mine ?? recentOpponentProfiles.value.get(key);
+  return profile ? { coachTitle: profile.title, coachCr: profile.cr } : {};
+}
+
 // Owner 10-02: My Active Games rows get the Recent/Spectate row treatment — MY team in the left box, the opponent in
 // the right box, status over turn over score in the centre, and Join/Rejoin in the right action slot. The game id
 // stays out of the visible text (tooltip only; owner removed ids from the Spectate page).
@@ -541,8 +563,8 @@ function crestFailed(url: string | null): void {
           <p v-else-if="!recent.length" class="lm-empty">{{ $t('play.listCard.noRecentGames') }}</p>
           <template v-else>
           <LmResultCard v-for="row in recent" :key="row.matchId" size="sm" :data-cached="hasDetails(row)"
-            :home="{ name: row.myTeam, coach, race: row.myRace, score: row.myScore }"
-            :away="{ name: row.opponentTeam, coach: row.opponentCoach, race: row.opponentRace, score: row.opponentScore }">
+            :home="{ name: row.myTeam, coach, race: row.myRace, tv: formatTeamValue(row.myTv), score: row.myScore, ...coachRank(coach) }"
+            :away="{ name: row.opponentTeam, coach: row.opponentCoach, race: row.opponentRace, tv: formatTeamValue(row.opponentTv), score: row.opponentScore, ...coachRank(row.opponentCoach) }">
             <template #actions>
               <span class="lm-res" :data-result="myRecent(row)" :aria-label="$t('lmBlades.play.result', { r: myRecent(row) })">{{ myRecent(row) }}</span>
               <button class="sf-btn small" type="button" :data-tour="row === recent[0] ? 'play-details' : undefined" :title="hasDetails(row) ? $t('play.listCard.endOfGameDetails', { matchId: row.matchId }) : $t('play.listCard.noStoredDetailsFor', { matchId: row.matchId })" @click="openDetails(row)">{{ $t('play.listCard.details') }}</button>

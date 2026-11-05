@@ -14,6 +14,7 @@ import { gameStore } from '../game/store';
 import { fumbblLobbyGames } from '../game/jnlpRouting';
 import WaitingVsBanner from '../components/WaitingVsBanner.vue';
 import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
+import HeadToHeadLine from '../components/HeadToHeadLine.vue';
 import { PAD_FOCUS_PRIORITY, vPadFocus } from '../game/cardFocus';
 import {
   clearFumbblTeamCache, coachStatsLine, projectWaitingBanner, withCoachStats, type CoachStatsLine, resolveBannerTeams, waitingBanner, type FumbblTeamInfo,
@@ -144,6 +145,8 @@ onBeforeUnmount(() => {
     <div v-if="gameStore.state.waitingForMatch && !joinWindowOpen" class="waiting-board-overlay" role="alertdialog" aria-modal="true">
       <!-- Owner 10-09: the match-up sits directly above the waiting box, on top of the scrim (never shaded by it). -->
       <WaitingVsBanner v-if="banner" :model="banner" inline />
+      <!-- Owner 11-04: the local coach's record against this opponent (a waiting board is always a coach seat). -->
+      <HeadToHeadLine v-if="banner" seated :me="banner.mine.coach" :opponent="banner.opponent.coach" :game-id="gameStore.state.waitingForMatch?.gameId" />
       <div v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.card }" class="waiting-board-card">
         <!-- Owner 10-21: the room name is hidden until "Show room name" (bottom-right of the card) is pressed. -->
         <WaitingMatchCardBody :wait="gameStore.state.waitingForMatch" @cancel="gameStore.disconnect()" />

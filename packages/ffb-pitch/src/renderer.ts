@@ -7,7 +7,7 @@ import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { CROWD_STOMP_FANS, CROWD_STOMP_STAGGER_MS, PIPELINE_TIMINGS } from './blockPipeline';
 import { isCrowdSquare, surfLandingSquare, surfOutward } from './crowdSurf';
-import { blockFacesReady, clearStoredBlockFaces, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSide, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
+import { blockFacesReady, clearStoredBlockFaces, normalizeBlockDieGlyphFamily, evictComposedBlockFaces, persistComposedBlockFaces, composeBlockFaces, composedBlockFaceUrls, nativeBlockDieSurface, normalizeBlockDieSurfaceSetting, resolveBlockDieSurface, type BlockDieSide, type BlockDieSurface, type BlockDieSurfaceSetting } from './blockDieSurface';
 import { RING_TYPE_COLORS, ringTypeForName } from './positionTypes';
 import { displayDiceSide, playerServerSide, type ServerSide } from './diceSide';
 import { SETUP_LOS_X, SETUP_OWN_HALF_MAX_X, WIDE_ZONE_WIDTH } from './setup';
@@ -2015,7 +2015,7 @@ type TokenDecoFollow = {
 };
 
 type BlockFace = 'skull' | 'bothdown' | 'push' | 'powpush' | 'pow';
-export type BlockFaceFamily = 'default' | 'krisb';
+export type BlockFaceFamily = 'default' | 'krisb' | 'fumbbl';
 
 /**
  * SNES-style 3/4-view pitch renderer (App15/App16). Placeholder token art
@@ -2145,7 +2145,9 @@ export class PitchRenderer {
   static originalBlockFaceUrls(family: BlockFaceFamily): string[] {
     return PitchRenderer.BLOCK_FACE_NAMES.map((name) => family === 'krisb'
       ? new URL(`../assets/blockdice-krisb/${name}.png`, import.meta.url).href
-      : new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
+      : family === 'fumbbl' // owner 11-04: WhatBall's FUMBBL dice (complete black faces)
+        ? new URL(`../assets/blockdice-fumbbl/${name}.png`, import.meta.url).href
+        : new URL(`../assets/blockdice/${name}.png`, import.meta.url).href);
   }
   /** The resolved surface of the active family under the active setting (owner 10-13: for a die of `side`). */
   static activeBlockDieSurface(side?: BlockDieSide | null): BlockDieSurface {
@@ -2209,11 +2211,12 @@ export class PitchRenderer {
     for (const instance of PitchRenderer.instances) void instance.loadBlockFaceTextures();
     return true;
   }
-  /** Owner 10-06: switch the bundled fallback face family ('krisb' = Kristofer Bengtsson's faces). Pack bindings
+  /** Owner 10-06: switch the bundled fallback face family ('krisb' = Kristofer Bengtsson's faces; owner 11-04:
+   *  'fumbbl' = WhatBall's FUMBBL dice). Pack bindings
    *  still win per face. Same reload semantics as `setBlockFaceSources`: every live instance reloads its textures;
    *  DOM surfaces and the 3D die re-read `blockFaceUrls()` on the app's block-dice revision. */
   static setBlockFaceFamily(family: BlockFaceFamily): Promise<unknown> {
-    const next: BlockFaceFamily = family === 'krisb' ? 'krisb' : 'default';
+    const next: BlockFaceFamily = normalizeBlockDieGlyphFamily(family);
     if (next === PitchRenderer.blockFaceFamily) return Promise.resolve();
     PitchRenderer.blockFaceFamily = next;
     return PitchRenderer.reloadBlockFacesWhenReady(); // owner 10-06: composed on the active surface first (cached)

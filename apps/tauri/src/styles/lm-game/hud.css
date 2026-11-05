@@ -33,8 +33,9 @@
   --lmg-bar-bottom: rgb(208 209 212 / var(--hud-quickbar-opacity, 0.9));
 }
 .sf-lm.lm-game {
-  --lmg-seat-home-fill: color-mix(in srgb, var(--sf-seat-home) 66%, #000000);
-  --lmg-seat-away-fill: color-mix(in srgb, var(--sf-seat-away) 62%, #000000);
+  /* owner 11-04: the seat fills are Retro's team mid tones (the scoreboard pills, Current Player tag...), both schemes */
+  --lmg-seat-home-fill: var(--seat-home-mid);
+  --lmg-seat-away-fill: var(--seat-away-mid);
   --lmg-on-seat: #ffffff;
   --lmg-on-gold: #1a1200;
   /* small captions on the HUD panels: the muted ink brightened toward the text ink (4.5:1 and above on the panels) */
@@ -46,8 +47,8 @@
   --lmg-flat-shadow: #000000e0;
 }
 :root[data-ui-color-scheme="light"] .sf-lm.lm-game {
-  --lmg-seat-home-fill: var(--sf-seat-home);
-  --lmg-seat-away-fill: var(--sf-seat-away);
+  --lmg-seat-home-fill: var(--seat-home-mid);
+  --lmg-seat-away-fill: var(--seat-away-mid);
   --lmg-on-gold: #ffffff;
 }
 
@@ -210,12 +211,12 @@
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn[data-active='true'] { opacity: 1; filter: none; color: var(--lmg-on-seat); }
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.home[data-active='true'] {
   background: var(--lmg-seat-home-fill);
-  border-color: color-mix(in srgb, var(--sf-seat-home) 55%, black);
+  border-color: var(--seat-home-deep);
   box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop), 0 0 8px color-mix(in srgb, var(--sf-seat-home) 45%, transparent);
 }
 .sf-lm.lm-game .pitch-host .hud-center.scoreboard .sb-turn.away[data-active='true'] {
   background: var(--lmg-seat-away-fill);
-  border-color: color-mix(in srgb, var(--sf-seat-away) 55%, black);
+  border-color: var(--seat-away-deep);
   box-shadow: var(--sf-bevel), 0 2px 0 var(--sf-panel-drop), 0 0 8px color-mix(in srgb, var(--sf-seat-away) 45%, transparent);
 }
 

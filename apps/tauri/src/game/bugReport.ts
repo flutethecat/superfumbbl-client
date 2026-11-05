@@ -216,6 +216,16 @@ export function sanitizeSettingsJsonForReport(json: string | null | undefined): 
   }
 }
 
+/** The server's cap on gameId / clientVersion (config-web METADATA_FIELD_CAP). */
+export const BUG_REPORT_METADATA_MAX = 64;
+
+/** The game id as the server takes it: text of at most 64 characters, else null. */
+export function reportGameIdText(gameId: number | string | null | undefined): string | null {
+  if (gameId == null) return null;
+  const text = String(gameId).trim();
+  return text && text.length <= BUG_REPORT_METADATA_MAX ? text : null;
+}
+
 export function buildBugReportPayload(input: BugReportInput): Record<string, unknown> {
   const description = input.description.slice(0, BUG_REPORT_DESCRIPTION_MAX);
   const wireLogText = input.wireLog ? truncateKeepingTail(input.wireLog.text) : null;
@@ -226,9 +236,11 @@ export function buildBugReportPayload(input: BugReportInput): Record<string, unk
     ...(input.publicEdition ? { publicEdition: true } : { passwordMd5: md5Hex(input.creds.password) }),
     description,
     // Explicit null (not omitted) so the server can tell "no game" from "an old client that never sent it".
-    gameId: input.gameId ?? null,
+    // Owner 11-04 (config-web 831d6aec): the server takes gameId and clientVersion as strings of at most 64 characters
+    // and answers 400 otherwise, so the id rides as text (an id too long to be one rides as null: the report still goes).
+    gameId: reportGameIdText(input.gameId),
     gameService: input.gameService,
-    clientVersion: input.clientVersion,
+    clientVersion: input.clientVersion.slice(0, BUG_REPORT_METADATA_MAX),
     context: {
       ...(input.context ?? {}),
       // Owner 10-17 (txuri on 1.0.227 a day after 1.0.232): triage sees the shell, the embedded page and the active patch
@@ -259,13 +271,15 @@ export function buildBugReportPayload(input: BugReportInput): Record<string, unk
 
 /**
  * POST the report. Throws with a tester-readable message on any failure — the caller keeps the
- * tester's text on screen so a failed send never eats the report they just wrote.
+ * tester's text on screen so a failed send never eats the report they just wrote. Resolves the
+ * success body (owner 11-04: it carries `{ id, receipt }` for the reporter's updates, game/bugReportUpdates.ts;
+ * `{}` when the body is not JSON). Never logged: the receipt is a secret.
  */
 export async function sendBugReport(
   payload: Record<string, unknown>,
   transport: BugReportTransport,
   baseUrl: string,
-): Promise<void> {
+): Promise<unknown> {
   const url = `${baseUrl}/api/bug-reports`;
   let response: Response;
   try {
@@ -281,6 +295,7 @@ export async function sendBugReport(
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     throw new BugReportHttpError(response.status, String(data.error ?? `The server rejected the report (HTTP ${response.status}).`));
   }
+  return (await response.json().catch(() => ({}))) as unknown;
 }
 
 /** A non-OK answer from config-web; `status` lets the caller tell a too-large body (413) from anything else. */
@@ -300,14 +315,14 @@ export async function sendBugReportWithScreenshotFallback(
   payload: Record<string, unknown>,
   transport: BugReportTransport,
   baseUrl: string,
-): Promise<{ screenshotDropped: boolean }> {
+): Promise<{ screenshotDropped: boolean; response: unknown }> {
   try {
-    await sendBugReport(payload, transport, baseUrl);
-    return { screenshotDropped: false };
+    const response = await sendBugReport(payload, transport, baseUrl);
+    return { screenshotDropped: false, response };
   } catch (error) {
     if (!(error instanceof BugReportHttpError) || error.status !== 413 || !('screenshot' in payload)) throw error;
   }
   const { screenshot: _dropped, ...withoutScreenshot } = payload;
-  await sendBugReport(withoutScreenshot, transport, baseUrl);
-  return { screenshotDropped: true };
+  const response = await sendBugReport(withoutScreenshot, transport, baseUrl);
+  return { screenshotDropped: true, response };
 }

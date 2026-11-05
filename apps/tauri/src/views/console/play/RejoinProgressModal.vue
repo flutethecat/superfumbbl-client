@@ -10,6 +10,8 @@ import { formatTeamValue } from '../../../game/teamChoice';
 import { ui } from '../../../game/ui';
 import { waitingBanner } from '../../../game/waitingVsBanner';
 import WaitingVsBanner from '../../../components/WaitingVsBanner.vue';
+import HeadToHeadLine from '../../../components/HeadToHeadLine.vue';
+import { gameStore } from '../../../game/store';
 import { $t, terms } from '../../../i18n';
 
 const modal = computed(() => deriveRejoinModal(rejoinFlow.launch, storeRejoinSnapshot()));
@@ -34,6 +36,9 @@ function chooseTeam(teamId: string): void {
     <!-- Owner 10-09: the Team v Team match-up sits directly above this box, over the backdrop (it was across the top
          of the board, shaded by it). Shown whenever the waiting board has one. -->
     <WaitingVsBanner v-if="waitingBanner" :model="waitingBanner" inline />
+    <!-- Owner 11-04: the local coach's record against this opponent under the match-up (a join is a coach seat). -->
+    <HeadToHeadLine v-if="waitingBanner" seated :me="waitingBanner.mine.coach" :opponent="waitingBanner.opponent.coach"
+      :game-id="gameStore.state.waitingForMatch?.gameId" />
     <div class="save-prompt rejoin-progress">
       <h3 id="rejoin-progress-title">{{ modal.title }}</h3>
       <ul class="rejoin-steps">

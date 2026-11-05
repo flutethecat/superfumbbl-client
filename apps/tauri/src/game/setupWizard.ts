@@ -205,9 +205,11 @@ export const SETUP_STEPS: readonly SetupStep[] = [
     options: [
       { id: 'default', get title() { return t('setupWizard.setupSteps.superFumbblDefault'); }, images: DICE_FACES.map((f) => `dice-default-${f}`), writes: { blockDiceFamily: 'default' }, clearsAssignment: 'blockDice' },
       { id: 'krisb', get title() { return t('setupWizard.setupSteps.rickDice'); }, images: DICE_FACES.map((f) => `dice-krisb-${f}`), writes: { blockDiceFamily: 'krisb' }, clearsAssignment: 'blockDice' },
+      // Owner 11-04: WhatBall's FUMBBL block dice (used with permission).
+      { id: 'fumbbl', get title() { return t('setupWizard.setupSteps.fumbblDice'); }, images: DICE_FACES.map((f) => `dice-fumbbl-${f}`), writes: { blockDiceFamily: 'fumbbl' }, clearsAssignment: 'blockDice' },
     ],
     // An installed block-dice pack wins over either family, so neither card is "current" while one is assigned.
-    prefill: (s) => (s.assetPackAssignments.blockDice ? null : s.blockDiceFamily === 'krisb' ? 'krisb' : 'default'),
+    prefill: (s) => (s.assetPackAssignments.blockDice ? null : s.blockDiceFamily === 'krisb' || s.blockDiceFamily === 'fumbbl' ? s.blockDiceFamily : 'default'),
   },
   {
     // Owner 10-06: "the user should be able to select their Block die face type as well as whether it's on a white or
@@ -369,7 +371,7 @@ export function setupOption(stepId: SetupStepId, optionId: string): SetupOption 
 }
 
 /** The title a card shows. Block die surface (owner 10-06): " (Default)" is appended to the card that is the chosen
- *  face set's own surface (resolveBlockDieSurface(family, 'auto')) — Black for Super FUMBBL, White for KrisB. */
+ *  face set's own surface (resolveBlockDieSurface(family, 'auto')) — Black for Super FUMBBL and FUMBBL, White for KrisB. */
 export function setupOptionTitle(stepId: SetupStepId, option: SetupOption, s: SetupSettings): string {
   if (stepId === 'blockDiceSurface' && option.id === resolveBlockDieSurface(s.blockDiceFamily, 'auto')) return t('setupWizard.text.titleDefault', { title: option.title });
   return option.title;

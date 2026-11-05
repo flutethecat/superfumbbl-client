@@ -108,6 +108,11 @@ Art contributed directly to Super FUMBBL (not part of the FUMBBL mirror above), 
 
 - **Kristofer Bengtsson (KrisB)** — Block dice faces (the "Rick dice (built-in)" block dice option), used with
   permission.
+- **WhatBall** — FUMBBL block dice (the "FUMBBL dice (built-in)" block dice option), used with permission. The
+  permission covers bundling these faces in the client as a block dice option, with credit to WhatBall required
+  (here and in the in-app Contributions and Credits); it extends to no other FUMBBL art. The faces ship inside the
+  client and are never fetched from FUMBBL (`packages/ffb-pitch/assets/blockdice-fumbbl/`,
+  `apps/tauri/src/assets/blockdice-log-fumbbl/`, `apps/tauri/src/assets/onboarding/dice-fumbbl-*.png`).
 - **Controller button prompts** (`apps/tauri/src/assets/glyphs/`) — an original, generic SVG set drawn for Super FUMBBL
   (coloured-letter face buttons, bumper / trigger pills, D-pad, sticks, View / Menu; a ✕ ○ □ △ shape set for Sony
   pads). They are NOT Microsoft's or Sony's artwork. When the official Xbox controller button images are dropped in,

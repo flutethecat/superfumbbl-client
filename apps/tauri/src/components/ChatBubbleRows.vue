@@ -22,7 +22,7 @@ defineProps<{
 }>();
 </script>
 
-<template><span v-for="(row, i) in rows" :key="keys?.[i] ?? i" class="chat-bubble" data-kind="talk" :data-side="row.side" :data-chained="row.chained ? 'true' : undefined" :style="row.style"><span v-if="(row.name && !row.chained) || (timestamps && times[i])" class="chat-bubble-head"><span v-if="row.name && !row.chained" class="chat-bubble-name">{{ row.name }}</span><span v-if="timestamps && times[i]" class="chat-bubble-time">{{ times[i] }}</span></span><span class="chat-bubble-text"><ChatEmojiText :text="row.rest" /></span></span></template>
+<template><span v-for="(row, i) in rows" :key="keys?.[i] ?? i" class="chat-bubble" data-kind="talk" :data-side="row.side" :data-tone="row.tone" :data-chained="row.chained ? 'true' : undefined" :style="row.style"><span v-if="(row.name && !row.chained) || (timestamps && times[i])" class="chat-bubble-head"><span v-if="row.name && !row.chained" class="chat-bubble-name">{{ row.name }}</span><span v-if="timestamps && times[i]" class="chat-bubble-time">{{ times[i] }}</span></span><span class="chat-bubble-text"><ChatEmojiText :text="row.rest" /></span></span></template>
 
 <style scoped>
 .chat-bubble {

@@ -31,7 +31,8 @@ defineEmits<{ dragStart: [event: PointerEvent] }>();
     :title="draggable ? $t('hud.pitchConfirmationPanel.pitchConfirmPanel.dragToMove') : undefined"
     @pointerdown="draggable && $emit('dragStart', $event)">
     <div v-if="title || $slots.title" class="pitch-confirm-title"><slot name="title">{{ title }}</slot></div>
-    <div class="pitch-confirm-body"><slot /></div>
+    <!-- a title-only panel (a tag, e.g. the opponent setup notice, owner 11-04) renders no empty body row -->
+    <div v-if="$slots.default" class="pitch-confirm-body"><slot /></div>
     <div v-if="$slots.actions" class="pitch-confirm-actions"><slot name="actions" /></div>
   </section>
 </template>

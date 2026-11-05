@@ -1,6 +1,7 @@
 import { ref, shallowRef, watch, type Ref } from 'vue';
 import { fetchFumbblCoachProfile, type CoachProfileFetch, type FumbblCoachProfile } from './fumbblCoachProfile';
 import { FUMBBL_WS_URL } from './settings';
+import { patchCoachGameOpponentCr, type CoachOpponentCr } from './coachGameHistory';
 
 /**
  * Game-load rank panel (owner 10-20: "a small panel like this appear at game load showing both your local rank panel
@@ -64,6 +65,9 @@ export interface GameLoadRankPanelDeps {
   fetchFn: () => CoachProfileFetch;
   /** true only when this game verifiably comes from the official FUMBBL server (see officialFumbblGameServer) */
   lookupAllowed: () => boolean;
+  /** owner 11-04 (Sol r1 P2): the played server's identity (store.playedServerId), read when a lookup starts; absent =
+   *  no opponent CR is remembered */
+  serverId?: () => string | null;
   durationMs: () => number;
   /** spectate / replay only: the hold from the first board paint (the view's presentationMs(6000); default 6000) */
   holdMs?: () => number;
@@ -74,6 +78,17 @@ export interface GameLoadRankPanelDeps {
 }
 
 const sessionShown = new Set<string>();
+/** Owner 11-04 (Coach Stats "Win rate vs coach rating"): the opponent's FUMBBL CR as the rank bar's OWN lookup returned
+ *  it, for a game this client PLAYS (`live:` key: the opponent is on the right). Keyed by gameId for the session; the
+ *  history record of that game reads it (store.ts). No request of its own: only what the bar already fetched. */
+const opponentCrs = new Map<string, CoachOpponentCr>();
+const crKey = (serverId: string, gameId: unknown) => `${serverId}|${String(gameId ?? '')}`;
+/** Sol r1 P2: keyed by the played server's identity (the record's `serverId`) AND the gameId. */
+export function rankPanelOpponentCr(serverId: string, gameId: unknown): CoachOpponentCr | null {
+  return opponentCrs.get(crKey(serverId, gameId)) ?? null;
+}
+/** Test seam. */
+export function clearRankPanelOpponentCrs(): void { opponentCrs.clear(); }
 /** Bumped by every explicit leave: a panel created before it never marks its game afterwards. */
 let leaveGeneration = 0;
 /** Test seam: forget which games showed the panel this session. */
@@ -129,6 +144,8 @@ export interface RankPanelStore {
   catchUpSignal: { value: number };
   /** the game server this game came from (live / spectate connect URL, server-replay URL); null for file replays / demo */
   gameServerUrl: () => string | null;
+  /** owner 11-04: the identity a played game's history record stores (store.playedServerId) */
+  playedServerId?: () => string;
   /** a decision card addressed to the local coach is on screen (store.ts localDecisionCardOpen) */
   localDecisionCardOpen: () => boolean;
   replay: { active: boolean; status?: { cursor?: number } };
@@ -150,7 +167,7 @@ export function officialFumbblGameServer(url: string | null | undefined): boolea
     return false;
   }
 }
-export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPanelDeps, 'gameKey' | 'teams' | 'mySeat' | 'catchingUp' | 'catchUpSignal' | 'inputPending' | 'endGameActive' | 'phaseToken' | 'lookupAllowed'> {
+export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPanelDeps, 'gameKey' | 'teams' | 'mySeat' | 'catchingUp' | 'catchUpSignal' | 'inputPending' | 'endGameActive' | 'phaseToken' | 'lookupAllowed' | 'serverId'> {
   type Team = { coach?: unknown; teamName?: unknown; race?: unknown } | undefined;
   const text = (v: unknown): string => (typeof v === 'string' ? v : '');
   return {
@@ -194,6 +211,7 @@ export function storeRankPanelDeps(store: RankPanelStore): Pick<GameLoadRankPane
       return parts.join('|');
     },
     lookupAllowed: () => officialFumbblGameServer(store.gameServerUrl()),
+    serverId: () => store.playedServerId?.() ?? null,
   };
 }
 
@@ -339,7 +357,17 @@ export function useGameLoadRankPanel(deps: GameLoadRankPanelDeps): {
     if (!current || !deps.lookupAllowed()) return;
     const name = current[which].coach;
     if (!name) return;
+    const key = current.key;
+    const serverId = key.startsWith('live:') && which === 'right' ? deps.serverId?.() ?? null : null;
     void fetchFumbblCoachProfile(name, deps.fetchFn()).then((profile) => {
+      // owner 11-04: a game I play remembers the opponent's CR for its history record (even if the bar has moved on),
+      // keyed by server + game (Sol r1 P2); a record already written without it (the game ended before this answer)
+      // gets ONLY its opponentCr patched in (Sol r1 P3). No request beyond this lookup.
+      if (serverId && typeof profile?.cr === 'number' && Number.isFinite(profile.cr)) {
+        const found: CoachOpponentCr = { serverId, gameId: key.slice('live:'.length), coach: name, cr: profile.cr };
+        opponentCrs.set(crKey(serverId, found.gameId), found);
+        void patchCoachGameOpponentCr(found);
+      }
       if (!current || current.seq !== mySeq || current[which].coach !== name) return;
       current = { ...current, [which]: { ...current[which], profile } };
       if (!paused) panel.value = current;

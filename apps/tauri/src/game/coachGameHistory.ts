@@ -24,6 +24,8 @@ import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import type { DiceTally } from './diceStats';
 import type { Likelihood } from './diceLuck';
 import { teamStatTotals } from './gameStatRows';
+import { coachNameKey } from './fumbblCoachProfile';
+import { STORED_KIND_MAX_COUNT, validKinds } from './diceLuck';
 import { pgLikelihoodRows } from './postGameProjection';
 
 export const COACH_HISTORY_VERSION = 1;
@@ -36,6 +38,12 @@ export type CoachResult = 'W' | 'D' | 'L';
 export type CoachServerKind = 'fumbbl' | 'super';
 export type CoachLuckKey = 'all' | 'block' | 'armour' | 'action';
 export const COACH_LUCK_KEYS: readonly CoachLuckKey[] = ['all', 'block', 'armour', 'action'];
+/** Owner 11-04: the per-game counts a record carries in `stats`, in the panel's PER GAME order. All but `dodges` are
+ *  the end screen's Statistics totals (gameStatRows.teamStatTotals over the server's PlayerResults); `dodges` is the
+ *  Statistics pane's Dodges attempts (the dice tally's `dodges`, one per first dodge roll the server reported). */
+export const COACH_STAT_KEYS = ['touchdowns', 'casualties', 'blocks', 'fouls', 'dodges', 'spp'] as const;
+export type CoachStatKey = typeof COACH_STAT_KEYS[number];
+export type CoachStatPair = { for: number; against: number };
 
 /** One Dice pane row's Likelihood, as stored (the fields the stats read; `zShown` > 0 = lucky, the pane's sign). */
 export type CoachLuckFigure = Pick<Likelihood, 'measured' | 'n' | 'score' | 'expected' | 'z' | 'zShown' | 'average'>;
@@ -62,10 +70,29 @@ export interface CoachGameRecord {
   conceded: 'me' | 'opponent' | null;
   tds: { for: number; against: number };
   cas: { for: number; against: number };
+  /** Owner 11-04: OPTIONAL (records written before it have none, and still load): mine / the opponent's count of each
+   *  COACH_STAT_KEYS stat. Never part of the record check; a reader takes only well-formed pairs. */
+  stats?: Partial<Record<CoachStatKey, CoachStatPair>>;
+  /** Owner 11-04: OPTIONAL - my team's Action dice row split by roll kind (the server report id; a Leap / Pogo jump is
+   *  `leapRoll:leap`): the sub-bucket diceStats keeps alongside the action bucket, so the kinds sum to the Action row. */
+  actionKinds?: Record<string, CoachActionKind>;
+  /** Owner 11-04: OPTIONAL - the opponent's FUMBBL Coach Rating as the game-load rank bar fetched it (no request of its
+   *  own); absent when the bar did not run, the lookup failed, or the server is not FUMBBL's. */
+  opponentCr?: number;
+  /** Owner 11-04: OPTIONAL - the KO recovery rolls of my team (`for`) and the opponent's (`against`) in this game, from
+   *  the turnEnd reports' knockoutRecoveryArray (diceStats koRecovery). Old records have none. */
+  koRecovery?: { for?: CoachActionKind; against?: CoachActionKind };
   luck: Record<CoachLuckKey, CoachLuckFigure>;
   /** The Armour row's counters: the team's armour rolls against the opponent, broken, and the fair expectation. */
   armourBreaks: { actual: number; rolls: number; expected: number } | null;
 }
+
+/** One roll kind's luck bucket as stored: the measured trials (n, x6 in sixths, the fair-distribution kinds), the rolls
+ *  seen but not measured, and the passed / expected counters - enough to rebuild the bucket and merge it across games. */
+export interface CoachActionKind { n: number; x6: number; unmeasured: number; kinds: Record<string, number>; passed: number; expected: number }
+
+/** Owner 11-04: the opponent's CR as the rank bar's lookup found it, for ONE game on ONE server (Sol r1 P2). */
+export interface CoachOpponentCr { serverId: string; gameId: string; coach: string; cr: number }
 
 export interface CoachHistoryFile { version: typeof COACH_HISTORY_VERSION; games: CoachGameRecord[] }
 
@@ -92,6 +119,9 @@ function luckFigure(like: Likelihood): CoachLuckFigure {
  */
 export function coachGameRecord(input: {
   game: GameJson; tallies: { home: DiceTally; away: DiceTally }; mySide: Side; server: string; serverId: string; savedAt: number;
+  /** owner 11-04: the rank bar's lookup of the opponent (gameLoadRankPanel.rankPanelOpponentCr); kept only when its
+   *  server, game and opponent are this record's (Sol r1 P2) */
+  opponentCr?: CoachOpponentCr | null;
 }): CoachGameRecord | null {
   const { game, mySide } = input;
   const result = game?.gameResult;
@@ -109,6 +139,23 @@ export function coachGameRecord(input: {
   const rows = pgLikelihoodRows(tally);
   const row = (key: CoachLuckKey) => luckFigure(rows.find((r) => r.key === key)!.like);
   const armour = tally.luck?.armour.c;
+  const kindBuckets = tally.luck?.actionKinds;
+  const actionKinds = kindBuckets ? Object.fromEntries(Object.entries(kindBuckets).map(([kind, b]) => [kind, {
+    n: b.n, x6: b.x6, unmeasured: b.unmeasured, kinds: { ...b.kinds }, passed: count(b.c.passed), expected: count(b.c.expected),
+  } satisfies CoachActionKind])) : null;
+  const bucketOf = (b: { n: number; x6: number; unmeasured: number; kinds: Record<string, number>; c: Record<string, number> } | undefined): CoachActionKind | undefined =>
+    b && b.n + b.unmeasured > 0 ? { n: b.n, x6: b.x6, unmeasured: b.unmeasured, kinds: { ...b.kinds }, passed: count(b.c.passed), expected: count(b.c.expected) } : undefined;
+  const koFor = bucketOf(tally.luck?.koRecovery), koAgainst = bucketOf(input.tallies[oppSide]?.luck?.koRecovery);
+  const koRecovery = koFor || koAgainst ? { ...(koFor ? { for: koFor } : {}), ...(koAgainst ? { against: koAgainst } : {}) } : null;
+  const oppCoach = text(team(oppSide)?.coach);
+  const opponentCr = crMatches(input.opponentCr, input.serverId, String(game.gameId), oppCoach) ? input.opponentCr!.cr : null;
+  const stats: Partial<Record<CoachStatKey, CoachStatPair>> = {};
+  for (const key of COACH_STAT_KEYS) {
+    if (key === 'dodges') {
+      const mine = input.tallies[mySide]?.dodges, theirs = input.tallies[oppSide]?.dodges;
+      if (Number.isFinite(mine) && Number.isFinite(theirs)) stats.dodges = { for: mine, against: theirs };
+    } else stats[key] = { for: count(myTotals[key]), against: count(theirTotals[key]) };
+  }
   return {
     gameId: String(game.gameId),
     finished: typeof game.finished === 'string' ? game.finished : null,
@@ -127,7 +174,17 @@ export function coachGameRecord(input: {
     cas: { for: myTotals.casualties ?? 0, against: theirTotals.casualties ?? 0 },
     luck: { all: row('all'), block: row('block'), armour: row('armour'), action: row('action') },
     armourBreaks: armour ? { actual: count(armour.theirBroken), rolls: count(armour.theirRolls), expected: count(armour.theirExpected) } : null,
+    stats,
+    ...(actionKinds ? { actionKinds } : {}),
+    ...(koRecovery ? { koRecovery } : {}),
+    ...(opponentCr != null ? { opponentCr } : {}),
   };
+}
+
+/** The CR lookup belongs to this game: the same server identity, the same gameId and the same opponent (Sol r1 P2). */
+function crMatches(found: CoachOpponentCr | null | undefined, serverId: string, gameId: string, opponent: string): boolean {
+  return !!found && typeof found.cr === 'number' && Number.isFinite(found.cr) && found.serverId === serverId && String(found.gameId) === gameId
+    && !!opponent && coachNameKey(found.coach) === coachNameKey(opponent);
 }
 
 // ---- record format ----
@@ -161,12 +218,41 @@ export function isCoachGameRecord(value: unknown): value is CoachGameRecord {
     && (breaks === null || (isObj(breaks) && isNum(breaks.actual) && isNum(breaks.rolls) && isNum(breaks.expected)));
 }
 
+/** Sol r2: a stored bucket - finite counters, and `kinds` exactly as the writer makes them (validKinds: every
+ *  distribution key parses to the writer's grammar, counts positive integers) whose counts add up to `n`. */
+const isActionKind = (v: unknown): boolean => isObj(v) && isNum(v.n) && isNum(v.x6) && isNum(v.unmeasured) && isNum(v.passed) && isNum(v.expected)
+  && validKinds(v.kinds, STORED_KIND_MAX_COUNT) && Object.values(v.kinds).reduce((a, c) => a + c, 0) === v.n;
+/**
+ * Sol r1 P1: the OPTIONAL fields (`stats`, `actionKinds`, `opponentCr`, `koRecovery`) are never part of the record check; a malformed
+ * one is DROPPED from the record (a malformed entry inside `stats` / `actionKinds` drops just that entry) and the rest
+ * of the record stays. Applied to every record read (file, localStorage) and every record written.
+ */
+export function sanitizeCoachRecord(r: CoachGameRecord): CoachGameRecord {
+  const raw = r as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...raw };
+  delete out.stats; delete out.actionKinds; delete out.opponentCr; delete out.koRecovery;
+  if (isObj(raw.koRecovery)) {
+    const ko = Object.fromEntries(Object.entries(raw.koRecovery).filter(([side, k]) => (side === 'for' || side === 'against') && isActionKind(k)));
+    if (Object.keys(ko).length) out.koRecovery = ko;
+  }
+  if (isObj(raw.stats)) {
+    const stats = Object.fromEntries(Object.entries(raw.stats).filter(([key, pair]) => (COACH_STAT_KEYS as readonly string[]).includes(key) && isPair(pair)));
+    if (Object.keys(stats).length) out.stats = stats;
+  }
+  if (isObj(raw.actionKinds)) {
+    const kinds = Object.fromEntries(Object.entries(raw.actionKinds).filter(([, k]) => isActionKind(k)));
+    if (Object.keys(kinds).length) out.actionKinds = kinds;
+  }
+  if (isNum(raw.opponentCr)) out.opponentCr = raw.opponentCr;
+  return out as unknown as CoachGameRecord;
+}
+
 /** The text as a history: its valid records and how many it holds that are not; null = not a history at all. */
 export function readCoachHistory(raw: string): { games: CoachGameRecord[]; invalid: number } | null {
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch { return null; }
   if (!isObj(parsed) || parsed.version !== COACH_HISTORY_VERSION || !Array.isArray(parsed.games)) return null;
-  const games = parsed.games.filter(isCoachGameRecord);
+  const games = parsed.games.filter(isCoachGameRecord).map(sanitizeCoachRecord);
   return { games, invalid: parsed.games.length - games.length };
 }
 
@@ -212,6 +298,9 @@ export type CoachHistoryLoad = { state: 'missing' } | { state: 'corrupt' } | { s
 export interface CoachHistoryBackend {
   load(): Promise<CoachHistoryLoad>;
   append(records: readonly CoachGameRecord[]): Promise<{ written: number; text: string }>;
+  /** Sol r1 P3: sets ONLY `opponentCr` on the stored record of (serverId, gameId) when that record exists, names this
+   *  opponent and has none yet; nothing else changes. Resolves whether it patched. */
+  patchOpponentCr?(found: CoachOpponentCr): Promise<boolean>;
 }
 
 export type CoachHistoryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
@@ -239,7 +328,7 @@ export function localStorageCoachHistoryBackend(storage: CoachHistoryStorage | n
       for (const key of keys) {
         let value: unknown = null;
         try { value = JSON.parse(s.getItem(key) ?? 'null'); } catch { value = null; }
-        if (isCoachGameRecord(value) && key === COACH_HISTORY_KEY_PREFIX + historyKey(value)) out.push({ key, record: value });
+        if (isCoachGameRecord(value) && key === COACH_HISTORY_KEY_PREFIX + historyKey(value)) out.push({ key, record: sanitizeCoachRecord(value) });
       }
       return out.sort((a, b) => a.record.savedAt - b.record.savedAt);
     } catch (error) { throw new CoachHistoryUnavailable(String(error)); }
@@ -267,6 +356,18 @@ export function localStorageCoachHistoryBackend(storage: CoachHistoryStorage | n
         held = held.slice(drop.length);
       }
       return { written, text: historyText(held.map((e) => e.record)) };
+    },
+    async patchOpponentCr(found) {
+      const s = need();
+      const key = COACH_HISTORY_KEY_PREFIX + historyKey({ serverId: found.serverId, gameId: found.gameId });
+      try {
+        let value: unknown = null;
+        try { value = JSON.parse(s.getItem(key) ?? 'null'); } catch { return false; }
+        if (!isCoachGameRecord(value) || isNum((value as { opponentCr?: unknown }).opponentCr)) return false;
+        if (!crMatches(found, value.serverId, value.gameId, value.opponent.coach)) return false;
+        s.setItem(key, JSON.stringify({ ...(value as object), opponentCr: found.cr }));
+        return true;
+      } catch (error) { throw new CoachHistoryUnavailable(`write failed: ${String(error)}`); }
     },
     entries() { try { return scan(); } catch { return null; } },
     remove(keys) { for (const key of keys) storage?.removeItem(key); },
@@ -327,6 +428,17 @@ export function shellCoachHistoryBackend(fallback: ReturnType<typeof localStorag
   return {
     load: () => viaShell(loadAndMigrate, () => fallback.load()),
     append: (records) => viaShell(() => shellAppend(records), () => fallback.append(records)),
+    // Sol r1 P3: the shell's locked patch; a shell from before the command patches nothing on disk (the session copy
+    // still shows the CR) and never counts as "no history commands" for load / append
+    patchOpponentCr: async (found) => {
+      if (olderShell) return (await fallback.patchOpponentCr?.(found)) === true;
+      try {
+        return await invokeShell<boolean>('coach_history_patch_opponent_cr', { serverId: found.serverId, gameId: found.gameId, coach: found.coach, cr: found.cr }) === true;
+      } catch (error) {
+        if (isShellHistoryError(error)) throw new CoachHistoryUnavailable(String((error as { message?: unknown })?.message ?? error));
+        return false;
+      }
+    },
   };
 }
 
@@ -379,9 +491,31 @@ export function ensureCoachHistoryLoaded(): Promise<void> {
   return loading;
 }
 
+/**
+ * Sol r1 P3: a CR that arrives AFTER its game's record was written (the game ended - a concession - before the rank
+ * bar's lookup answered). Patches ONLY `opponentCr` into that record, in memory and through the backend's own locked
+ * write, when the record exists for this server + game, names this opponent and has no CR yet. No request; never an
+ * append (no dedupe bypass). A record not written yet is left alone: its write reads the CR itself (store.ts).
+ */
+export function patchCoachGameOpponentCr(found: CoachOpponentCr): Promise<boolean> {
+  if (!found || !isNum(found.cr)) return Promise.resolve(false);
+  return ensureCoachHistoryLoaded().then(() => (chain = chain.then(async () => {
+    const key = historyKey({ serverId: found.serverId, gameId: found.gameId });
+    const at = coachHistory.games.findIndex((g) => historyKey(g) === key);
+    const held = at >= 0 ? coachHistory.games[at]! : null;
+    if (!held || isNum(held.opponentCr) || !crMatches(found, held.serverId, held.gameId, held.opponent.coach)) return false;
+    const games = [...coachHistory.games];
+    games[at] = { ...held, opponentCr: found.cr };
+    coachHistory.games = games;
+    if (!coachHistory.persisting) return false;
+    try { return (await store().patchOpponentCr?.(found)) === true; } catch (error) { goMemoryOnly(error); return false; }
+  })) as Promise<boolean>);
+}
+
 /** Appends one finished game (the store's merge, never a whole-history write). Resolves whether it was stored; with
  *  the store unavailable the game is still shown this session (memory only). */
 export function appendCoachGame(record: CoachGameRecord): Promise<boolean> {
+  record = sanitizeCoachRecord(record);
   return ensureCoachHistoryLoaded().then(() => (chain = chain.then(async () => {
     const remember = () => { const next = withCoachGame(coachHistory.games, record); if (next) coachHistory.games = next; };
     if (!coachHistory.persisting) { remember(); return false; }

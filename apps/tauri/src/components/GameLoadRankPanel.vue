@@ -20,6 +20,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import CoachBadge from '../views/console/play/CoachBadge.vue';
 import WaitingVsBanner from './WaitingVsBanner.vue';
+import HeadToHeadLine from './HeadToHeadLine.vue';
 import { coachProfileStatLines, coachProfileStatParts, coachTitleSlug } from '../game/fumbblCoachProfile';
 import type { RankPanelSide, RankPanelState } from '../game/gameLoadRankPanel';
 import type { BannerSide, WaitingBannerModel } from '../game/waitingVsBanner';
@@ -73,6 +74,11 @@ const model = computed<WaitingBannerModel | null>(() => (props.panel
   ? { mine: bannerSide(props.panel.left), opponent: bannerSide(props.panel.right) }
   : null));
 const kits = computed(() => (props.panel ? { mine: props.panel.left.side, opponent: props.panel.right.side } : undefined));
+/** Owner 11-04: the head-to-head line under the bar, on a COACH seat only (the `live:` key: the local coach is on the
+ *  left, the opponent on the right); a spectated game or a replay shows none. The opponent is the server's coach name
+ *  for that seat, and the current game never counts itself. */
+const seated = computed(() => !!props.panel?.key.startsWith('live:'));
+const gameId = computed(() => (seated.value ? props.panel!.key.slice('live:'.length) : null));
 
 const layout = computed(() => {
   layoutRuns += 1;
@@ -206,6 +212,7 @@ watch(() => settings.uiFont, fontsChanged);
               v-if="i < line.length - 1"> · </template></template></span></span>
           </template>
         </WaitingVsBanner>
+        <HeadToHeadLine v-if="seated" seated :me="panel.left.coach" :opponent="panel.right.coach" :game-id="gameId" />
       </div>
     </div>
   </Transition>
@@ -228,7 +235,7 @@ watch(() => settings.uiFont, fontsChanged);
   position: absolute; inset: 0; z-index: 55;
   pointer-events: none; user-select: none;
 }
-.rank-bar-slot { position: absolute; left: 0; right: 0; display: flex; justify-content: center; }
+.rank-bar-slot { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .rank-title-chip {
   padding: 3px 10px; border-radius: 999px; color: #101010; background: #efc957;
   font-family: var(--font-display); font-size: 0.9em; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;

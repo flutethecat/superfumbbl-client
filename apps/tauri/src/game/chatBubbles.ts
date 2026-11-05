@@ -25,6 +25,9 @@ export type ChatBubbleRow = {
   style: Record<string, string>;
   /** The dark shade at the bottom of the bubble (also the --chat-bubble-deep value). */
   deep: string;
+  /** Sol r1 P2: the speaker's VIEWER-RELATIVE colour ('home' = blue, 'away' = red; `role` mapping), the same mapping as
+   *  --chat-bubble-seat, so the Modern fills agree with the side bars for a local away coach. Undefined for others. */
+  tone?: 'home' | 'away';
 };
 
 /** The background the dark shades mix towards (near-black, slightly cool, like the toast frame). */
@@ -78,6 +81,8 @@ export function chatBubbleRows(
       ? (seatColor(side) ?? ROLE_FALLBACK[role(side)])
       : CHAT_BUBBLE_NEUTRAL;
     const shades = chatBubbleShades(seat);
+    const r = side === 'home' || side === 'away' ? role(side) : undefined;
+    const tone = r === 'blue' ? 'home' as const : r === 'red' ? 'away' as const : undefined;
     const chained = !!name && !!prev && prev.name === name && prev.side === side;
     rows.push({
       name,
@@ -85,6 +90,7 @@ export function chatBubbleRows(
       side,
       chained,
       deep: shades.deep,
+      ...(tone ? { tone } : {}),
       style: { '--chat-bubble-deep': shades.deep, '--chat-bubble-mid': shades.mid, '--chat-bubble-edge': shades.edge, '--chat-bubble-seat': seat },
     });
     prev = { name, side };

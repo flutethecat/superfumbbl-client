@@ -86,3 +86,10 @@ export function blitzTargetCostText(traits: readonly string[]): string {
   const joined = traits.length === 1 ? traits[0]! : `${traits.slice(0, -1).join(', ')} and ${traits[traits.length - 1]}`;
   return `${base} ${joined} ${traits.length === 1 ? 'is' : 'are'} rolled now; the Blitz is used even if ${traits.length === 1 ? 'the roll' : 'a roll'} fails.`;
 }
+
+/** Owner 11-04: the one-line cost note of the "Choose a Blitz target" prompt (the full note stays on the Confirm Blitz bar). */
+export function blitzTargetCostShortText(traits: readonly string[]): string {
+  if (traits.length === 0) return "Uses your team's Blitz.";
+  const joined = traits.length === 1 ? traits[0]! : `${traits.slice(0, -1).join(', ')} or ${traits[traits.length - 1]}`;
+  return `Uses your team's Blitz, even if ${joined} fails.`;
+}

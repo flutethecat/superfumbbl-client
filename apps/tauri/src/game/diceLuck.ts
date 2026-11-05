@@ -35,6 +35,14 @@ export interface DiceLuck {
   /** Owner 10-15: TURNS LOST (turnsLost.ts) - one trial per attack on the opponent, scored in sixths of a turn. Not a dice
    *  row: it is not part of "All dice". Absent on tallies kept before it (the row reads "not measured"). */
   turns?: LuckBucket;
+  /** Owner 11-04 (the Coach Stats Action breakdown): the `action` bucket split by roll kind - the server report id
+   *  (`dodgeRoll`, `goForItRoll`, `leapRoll` ...; a jump made with Leap / Pogo is `leapRoll:leap`). Every roll the
+   *  action bucket takes lands in exactly one of these, under the same rule, so they sum to it. Absent on tallies kept
+   *  before it. */
+  actionKinds?: Record<string, LuckBucket>;
+  /** Owner 11-04 (Coach Stats "KO recoveries"): every KO recovery roll a team's players made at a kick-off, one binary
+   *  trial each (counters `passed` = recovered, `expected`). Not part of any dice row. Absent on tallies kept before it. */
+  koRecovery?: LuckBucket;
 }
 export const LUCK_ROWS: readonly LuckRow[] = ['armour', 'injury', 'action', 'block'];
 
@@ -51,6 +59,56 @@ export function distKey(den: number, points: readonly (readonly [number, number]
 }
 /** A pass / fail trial: score 6 with chance num/den, else 0. */
 export function binaryKey(num: number, den: number): string { return distKey(den, [[0, den - num], [6, num]]); }
+
+/** Sol r2 (stored history): the bounds of a distribution key the writers can produce. */
+export const DIST_MAX_DEN = 1_000_000_000;
+export const DIST_MAX_SCORE6 = 6000;
+/** Sol r3: the widest score span (highest minus lowest s6) of one key; the largest real one is 96 (turns lost). */
+export const DIST_MAX_SPAN6 = 2000;
+export const DIST_MAX_POINTS = 64;
+/** A trial count above this is not data any game made (live tallies and merged windows). */
+export const KIND_MAX_COUNT = 1_000_000;
+/** Sol r3: one STORED game's count of one key (the largest real one is 67). */
+export const STORED_KIND_MAX_COUNT = 10_000;
+const DIST_KEY_RE = /^(\d{1,10})\|(-?\d{1,6}:\d{1,10}(?:,-?\d{1,6}:\d{1,10})*)$/;
+/**
+ * Sol r2: is `key` exactly what distKey writes - `<den>|<s6>:<count>,...` with a positive integer denominator, integer
+ * scores (|s6| <= DIST_MAX_SCORE6) strictly ascending, positive integer counts summing to the denominator, at most
+ * DIST_MAX_POINTS points? Anything else (a stored history edited or damaged) is not a distribution.
+ */
+const VALID_KEYS = new Set<string>();
+export function validDistKey(key: unknown): key is string {
+  if (typeof key !== 'string' || key.length > 2000) return false;
+  if (VALID_KEYS.has(key)) return true;
+  if (!checkDistKey(key)) return false;
+  if (VALID_KEYS.size < 100_000) VALID_KEYS.add(key);
+  return true;
+}
+function checkDistKey(key: string): boolean {
+  const m = DIST_KEY_RE.exec(key);
+  if (!m) return false;
+  const den = Number(m[1]);
+  if (!Number.isSafeInteger(den) || den < 1 || den > DIST_MAX_DEN) return false;
+  const parts = m[2]!.split(',');
+  if (parts.length > DIST_MAX_POINTS) return false;
+  let sum = 0, last = -Infinity;
+  for (const part of parts) {
+    const [a, b] = part.split(':');
+    const s6 = Number(a), count = Number(b);
+    if (!Number.isSafeInteger(s6) || Math.abs(s6) > DIST_MAX_SCORE6 || s6 <= last) return false;
+    if (!Number.isSafeInteger(count) || count < 1 || count > DIST_MAX_DEN) return false;
+    last = s6; sum += count;
+  }
+  const first = Number(parts[0]!.split(':')[0]);
+  return sum === den && last - first <= DIST_MAX_SPAN6; // Sol r3
+}
+/** Sol r2: a bucket's `kinds` map: every key a valid distribution, every count a positive integer up to `maxCount`
+ *  (KIND_MAX_COUNT for live / merged buckets; a stored game's record uses STORED_KIND_MAX_COUNT, Sol r3). */
+export function validKinds(kinds: unknown, maxCount = KIND_MAX_COUNT): kinds is Record<string, number> {
+  if (!kinds || typeof kinds !== 'object' || Array.isArray(kinds)) return false;
+  return Object.entries(kinds as Record<string, unknown>).every(([key, count]) => validDistKey(key)
+    && typeof count === 'number' && Number.isSafeInteger(count) && count >= 1 && count <= maxCount);
+}
 
 export interface Dist { points: { s6: number; p: number }[]; mean6: number; var36: number; min6: number }
 const DIST_CACHE = new Map<string, Dist>();
@@ -396,6 +454,11 @@ export function normalInv(p: number): number {
  *  there, and cheap). Certain trials (a 2+ armour, a result with one possible score) carry no spread: they never
  *  count towards the switch and never enter the convolution (Astra F8). */
 export const LUCK_EXACT_MAX_TRIALS = 2000;
+/** Sol r2: the exact convolution's largest lattice (array length); beyond it, the normal tail. */
+export const LUCK_MAX_LATTICE = 4_000_000;
+/** Sol r3: the exact convolution's WORK budget (sum over its steps of lattice width x points); beyond it, the normal
+ *  tail. The largest real bucket (the capture fixtures, turns lost) needs about 90,000. */
+export const LUCK_MAX_WORK = 5_000_000;
 
 function gcd(a: number, b: number): number { a = Math.abs(a); b = Math.abs(b); while (b) { [a, b] = [b, a % b]; } return a; }
 
@@ -428,6 +491,16 @@ export function luckTail(kinds: Record<string, number>, x6: number): LuckTail {
   // one shared lattice: every score minus its distribution's lowest, in units of their common divisor
   let step = 0, offset = fixed6;
   for (const e of open) { offset += e.count * e.dist.min6; for (const pt of e.dist.points) step = gcd(step, pt.s6 - e.dist.min6); }
+  // Sol r2: the lattice is bounded (valid keys keep it small); a total beyond this takes the normal tail, never a
+  // typed array no machine can hold
+  // Sol r3: and so is the WORK - each step walks the lattice so far once per point
+  let length = 1, work = 0;
+  for (const e of open) {
+    const span = Math.max(0, ...e.dist.points.map((pt) => Math.round((pt.s6 - e.dist.min6) / step)));
+    work += e.dist.points.length * (e.count * length + span * e.count * (e.count - 1) / 2);
+    length += e.count * span;
+  }
+  if (!Number.isFinite(length) || length > LUCK_MAX_LATTICE || !Number.isFinite(work) || work > LUCK_MAX_WORK) return { n, mean6, var36, direction, tail: 1 - normalCdf(Math.abs(dev) / Math.sqrt(var36)), exact: false };
   let dp = new Float64Array([1]);
   for (const e of open) {
     const pts = e.dist.points.map((pt) => ({ at: Math.round((pt.s6 - e.dist.min6) / step), p: pt.p }));
@@ -472,6 +545,11 @@ export const NOT_MEASURED: Likelihood = { measured: false, n: 0, unmeasured: 0, 
 /** A row over one or more buckets (the "All dice" row sums the four: deviations and variances add). */
 export function likelihoodOf(buckets: readonly (LuckBucket | undefined)[]): Likelihood {
   if (buckets.some((b) => !b)) return NOT_MEASURED;
+  // Sol r2: a bucket from storage that is not what the writers produce is "not measured", never a throw
+  if (buckets.some((b) => !validKinds(b!.kinds) || !Number.isFinite(b!.x6) || !Number.isFinite(b!.unmeasured))) return NOT_MEASURED;
+  try { return likelihoodOfValid(buckets as LuckBucket[]); } catch { return NOT_MEASURED; }
+}
+function likelihoodOfValid(buckets: readonly LuckBucket[]): Likelihood {
   const kinds: Record<string, number> = {};
   let x6 = 0, unmeasured = 0;
   for (const b of buckets as LuckBucket[]) {

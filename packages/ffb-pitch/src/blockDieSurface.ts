@@ -1,8 +1,10 @@
 /**
  * Owner 10-06: the block die SURFACE — the bundled block-die faces drawn on a black or a white plate, independent of
- * the face family (Super FUMBBL default / KrisB). Assets come from scripts/gen-block-die-glyphs.py:
+ * the face family (Super FUMBBL default / KrisB / FUMBBL). Assets come from scripts/gen-block-die-glyphs.py
+ * (default, KrisB) and scripts/gen-fumbbl-block-dice.py (FUMBBL):
  *   assets/blockdice/glyph/face_*.png        default glyphs (tile knocked out), registered on the 1254 px tile
  *   assets/blockdice-krisb/glyph/face_*.png  KrisB glyphs (KrisB faces carry no tile; faint backing haze removed)
+ *   assets/blockdice-fumbbl/glyph/face_*.png FUMBBL glyphs (WhatBall's black die tile knocked out, symbol + dark rim)
  *   assets/blockdice/plate/plate_{black,white}.png  the baked default tile without its glyph, and its cream recolour
  *
  * The family's NATIVE look is never recomposed: default-on-black is the original baked face art (byte-identical to
@@ -18,7 +20,12 @@ export type BlockDieSide = 'home' | 'away';
 /** The stored setting: 'auto' (default) = the face set's own surface (see resolveBlockDieSurface); 'team' (owner 10-13,
  *  "Brushed metal, home and away") = the blue blank for a die of the displayed home side, the red blank for away. */
 export type BlockDieSurfaceSetting = 'auto' | 'black' | 'white' | 'team';
-export type BlockDieGlyphFamily = 'default' | 'krisb';
+export type BlockDieGlyphFamily = 'default' | 'krisb' | 'fumbbl';
+
+/** Owner 11-04: the bundled face families, tolerant - anything unknown is the Super FUMBBL default. */
+export function normalizeBlockDieGlyphFamily(value: unknown): BlockDieGlyphFamily {
+  return value === 'krisb' || value === 'fumbbl' ? value : 'default';
+}
 
 /** Face order everywhere: the renderer's tumble order. */
 export const BLOCK_DIE_SURFACE_FACES = ['skull', 'bothdown', 'push', 'powpush', 'pow'] as const;
@@ -39,6 +46,8 @@ export const BLOCK_DIE_SURFACE_COLOURS: Readonly<Record<BlockDieSurface, { fill:
 export const BLOCK_GLYPH_RECT: Readonly<Record<BlockDieGlyphFamily, readonly [number, number, number, number]>> = {
   default: [0, 0, 1, 1],
   krisb: [0.13, 0.125, 0.74, 0.74],
+  // Owner 11-04: the FUMBBL glyphs keep their place on WhatBall's 35 px die, which the plate replaces edge for edge
+  fumbbl: [0, 0, 1, 1],
 };
 
 /** Edge (px) of a composed face. The on-pitch dice and the 3D die draw well below this. */
@@ -58,7 +67,8 @@ export function isTeamBlockDieSurface(surface: BlockDieSurface): surface is Bloc
 }
 
 /** THE resolver (owner 10-06 follow-up): the surface a family is drawn on for a setting. 'auto' = per face set —
- *  black for the Super FUMBBL default faces, white for KrisB. Every surface reads through this.
+ *  black for the Super FUMBBL default faces, white for KrisB, black for the FUMBBL faces (owner 11-04: WhatBall's
+ *  dice are black-only, their native art). Every surface reads through this.
  *  Owner 10-13: 'team' resolves to the die's displayed side (blue home / red away); a die with NO known owner (and
  *  every side-less reader: Classic, previews) keeps the face set's own 'auto' surface, so no die ever claims a side
  *  it does not belong to. */
@@ -144,15 +154,19 @@ export function glyphOutlinePixels(glyph: Uint8ClampedArray, width: number, rgb:
   return out;
 }
 
-/** The surface a family's original bundled art already is (null: the art has no plate and is always composed). */
+/** The surface a family's original bundled art already is (null: the art has no plate and is always composed).
+ *  Owner 11-04: the FUMBBL faces are complete black dice, so black draws them as supplied; white / team compose the
+ *  FUMBBL glyph on that plate, exactly as the Super FUMBBL default does. */
 export function nativeBlockDieSurface(family: BlockDieGlyphFamily): BlockDieSurface | null {
-  return family === 'default' ? 'black' : null;
+  return family === 'default' || family === 'fumbbl' ? 'black' : null;
 }
 
 export function blockGlyphUrls(family: BlockDieGlyphFamily): string[] {
   return BLOCK_DIE_SURFACE_FACES.map((face) => family === 'krisb'
     ? new URL(`../assets/blockdice-krisb/glyph/face_${face}.png`, import.meta.url).href
-    : new URL(`../assets/blockdice/glyph/face_${face}.png`, import.meta.url).href);
+    : family === 'fumbbl'
+      ? new URL(`../assets/blockdice-fumbbl/glyph/face_${face}.png`, import.meta.url).href
+      : new URL(`../assets/blockdice/glyph/face_${face}.png`, import.meta.url).href);
 }
 
 export function blockPlateUrl(surface: BlockDieSurface): string {

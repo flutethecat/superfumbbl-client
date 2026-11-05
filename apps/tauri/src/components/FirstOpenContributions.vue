@@ -27,6 +27,7 @@ const FUMBBL_ASSET_GROUPS: ReadonlyArray<{ group: string; names: string }> = [
 const SUPER_FUMBBL: ReadonlyArray<{ name: string; role: string }> = [
   { name: 'Flutethecat', get role() { return t('contributions.superFumbbl.superFumbblProjectLead'); } },
   { name: 'Kristofer Bengtsson (KrisB)', get role() { return t('contributions.superFumbbl.blockDiceFaceArt'); } },
+  { name: 'WhatBall', get role() { return t('contributions.superFumbbl.fumbblBlockDice'); } }, // owner 11-04
   { name: 'Eduardo Tunni', get role() { return t('contributions.superFumbbl.graduateTypefaceMenuAnd'); } },
   { get name() { return t('contributions.group.superFumbblContributors'); }, get role() { return t('contributions.superFumbbl.everyoneCreditedInThe'); } },
 ];

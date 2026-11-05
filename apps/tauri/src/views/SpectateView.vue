@@ -48,7 +48,7 @@ import {
   bundledStadiumPacks,
   type MarkLabelRequest,
   PLAYER_MARK_LABEL_MAX_CHARS, SQUARE_MARK_LABEL_MAX_CHARS,
-  PLACEMENT_TURN_MODES, resolveBlockDieSurface, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, serverMoveSquareRolls, squareAnchor, worldToSquare,
+  PLACEMENT_TURN_MODES, resolveBlockDieSurface, blockGlyphUrls, PITCH_COLS, PITCH_ROWS, sentenceCaseLine, serverMoveSquareRolls, squareAnchor, worldToSquare,
   displayDiceSide, playerServerSide, teamServerSide, disturbingPresenceTagText, type BlockDieSide, pitchLabel } from '@fumbbl40k/ffb-pitch';
 import type { PlayerJson, GameJson } from '@fumbbl40k/ffb-protocol';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
@@ -215,7 +215,7 @@ import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
 import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
-import { blitzTargetCostText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
+import { blitzTargetCostText, blitzTargetCostShortText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
 import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned } from '../game/logic/availableActions';
 import { rootedBlitzEndServerConfirmed, rootedBlitzReadyArm, rootedBlitzReadyReconcile, rootedBlitzReadyStageLive } from '../game/logic/rootedBlitzReady';
@@ -4793,9 +4793,11 @@ const reactivePromptStyle = (key: ReactivePromptDragKey, anchored?: { x: number;
   return anchored ? { left: `${anchored.x}px`, top: `${anchored.y}px`, ...(anchored.leftEdge ? { transform: 'none' } : {}) } : undefined;
 };
 // Owner 09-06: the On the Ball waiting notice docks under the top-centre panel at that panel's width; a drag wins.
-// Owner 10-13: the kick-off aim card sits under the scoreboard; with the pitch-flip badge hanging there it drops below
-// the badge (centerPanelBox.bottom includes the scoreboard's overhang). The CSS 76px stays the default.
-const kickAimModalStyle = computed(() => ((settings.pitchFlipped || settings.autoDirector) && centerPanelBox.value
+// Owner 10-13: the kick-off aim card sits under the scoreboard (centerPanelBox.bottom includes the hanging badges).
+// Owner 11-04 ("Move this so the top edge is below the center panel"): always docked under the measured centre panel,
+// badges or not, since the panel's height varies with the style and text size; the CSS 76px is the fallback before
+// the first measure.
+const kickAimModalStyle = computed(() => (centerPanelBox.value
   ? { top: `${Math.max(76, Math.round(centerPanelBox.value.bottom + 8))}px` }
   : undefined));
 const onTheBallWaitingStyle = computed(() => {
@@ -4952,6 +4954,7 @@ function blockStampArt(symbol: string): { url: string; fallbackUrl: string | nul
     packFaceUrl: (faceIndex) => PitchRenderer.packBlockFaceUrl(faceIndex),
     family: settings.blockDiceFamily,
     krisbFaceUrls: () => PitchRenderer.originalBlockFaceUrls('krisb'),
+    fumbblFaceUrls: () => blockGlyphUrls('fumbbl'), // owner 11-04: the FUMBBL dice's symbols, die tile knocked out
     plainSymbolUrls: BLOCK_STAMP_URLS,
   });
 }
@@ -7678,9 +7681,10 @@ function pushBlitzTokens() {
   renderer?.setBlitzTokens(t ? { blitzerId: t.blitzerId, targetId: t.targetId } : null);
 }
 watch(() => [gameStore.state.blitzTokens?.seq, gameStore.state.blitzTokens?.targetId, settings.blitzTargetMarker], pushBlitzTokens);
-// The acting-token target-declaration prompt. Owner 10-08: Gaze left it - no victim is named at declare.
-const o66TargetDeclarePos = anchorRef<{ x: number; y: number } | null>(null);
-let targetDeclareRaf = 0;
+// The target-declaration prompt. Owner 10-08: Gaze left it - no victim is named at declare.
+// Owner 11-04 (Rick's bug report: "the text box covered how many dice i was getting vs adjacent players"): it no longer
+// rides above the blitzer, where it hid the block-dice dots of the targets next to him; it sits in a fixed slot at the
+// top centre of the pitch with a one-line cost note (the full note stays on the Confirm Blitz bar).
 const targetDeclarePrompt = computed(() => {
   const g = gameStore.game.value;
   if (!g || !settings.order66 || !gameStore.isPlaying.value) return null;
@@ -7697,6 +7701,42 @@ const blitzCostNote = computed(() => {
   if (actingTeamBlitzUsed(g, actingId) === true) return null;
   return blitzTargetCostText(blitzTargetRollTraits(g, actingId));
 });
+/** Sol r3 P2 (owner 11-04): the prompt's top inside the pitch host - its fixed slot (76px, 120px under the Fumblerooskie
+ *  banner), pushed below the scoreboard and the badges hanging under it when they reach over the prompt's column (the
+ *  scoreboard's height follows the HUD layout and text size, and it can be dragged). Measured when the prompt opens. */
+const blitzPromptEl = ref<HTMLElement | null>(null);
+const blitzPromptTop = ref<number | null>(null);
+function placeBlitzTargetPrompt(): void {
+  const el = blitzPromptEl.value;
+  const parent = el?.offsetParent as HTMLElement | null | undefined;
+  if (!el || !parent) { blitzPromptTop.value = null; return; }
+  const host = parent.getBoundingClientRect();
+  const half = el.offsetWidth / 2;
+  const left = host.width / 2 - half;
+  const right = host.width / 2 + half;
+  let top = fumblerooskieActive.value ? 120 : 76;
+  for (const node of Array.from(parent.ownerDocument.querySelectorAll<HTMLElement>('.hud-center, .hud-center [data-panel-overhang]'))) {
+    const r = node.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    if (r.right - host.left <= left || r.left - host.left >= right) continue; // not over the prompt's column
+    if (r.top - host.top >= top + el.offsetHeight) continue; // wholly below the prompt
+    top = Math.max(top, r.bottom - host.top + 8);
+  }
+  blitzPromptTop.value = top;
+}
+// Sol r4 P2: the element itself is watched too, so a prompt already up when the view mounts (a rejoin, Classic ->
+// Modern) is placed as well; post-flush, the DOM is current.
+watch([targetDeclarePrompt, () => fumblerooskieActive.value, blitzPromptEl], ([prompt]) => {
+  if (prompt) placeBlitzTargetPrompt();
+  else blitzPromptTop.value = null;
+}, { flush: 'post' });
+/** The target prompt's one-line form of the cost note (owner 11-04). */
+const blitzCostNoteShort = computed(() => {
+  const g = gameStore.game.value;
+  if (!g || !blitzCostNote.value) return null;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  return blitzTargetCostShortText(blitzTargetRollTraits(g, actingId));
+});
 /** The Confirm Blitz bar is up and the team's Blitz is not yet spent: the note sits above it. */
 const blitzConfirmCostNote = computed(() => {
   if (aggroConfirmKind.value !== 'confirmBlitz' && o66PendingConfirmKind.value !== 'blitz') return null; // kinds, not labels
@@ -7704,31 +7744,6 @@ const blitzConfirmCostNote = computed(() => {
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (actingTeamBlitzUsed(g, actingId) === true) return null;
   return blitzCostNote.value;
-});
-function trackTargetDeclaration() {
-  cancelAnimationFrame(targetDeclareRaf);
-  const step = () => {
-    const g = gameStore.game.value;
-    const host = pitchHost.value;
-    if (!targetDeclarePrompt.value || !g || !renderer || !host) { o66TargetDeclarePos.value = null; return; }
-    const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    const sq = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
-      .find((d) => d.playerId === actingId)?.playerCoordinate);
-    const p = sq ? renderer.squareToCanvas(sq) : null;
-    if (p) o66TargetDeclarePos.value = {
-      // The cost line makes the prompt up to ~340px wide, so keep its centre half that from each edge.
-      x: Math.min(Math.max(p.x, blitzCostNote.value ? 175 : 90), Math.max(host.clientWidth - (blitzCostNote.value ? 175 : 90), blitzCostNote.value ? 175 : 90)),
-      // The cost line adds up to ~4 wrapped lines above the anchor; keep the whole prompt on screen.
-      y: Math.max(p.y - 48, blitzCostNote.value ? 120 : 8),
-    };
-    targetDeclareRaf = requestAnimationFrame(step);
-  };
-  step();
-}
-watch(targetDeclarePrompt, (prompt) => {
-  if (prompt) {
-    trackTargetDeclaration();
-  } else { cancelAnimationFrame(targetDeclareRaf); o66TargetDeclarePos.value = null; }
 });
 // Owner o66aa: the 2-click target CUE for pass / hand-off / foul — 🏈 over a pass/hand-off target, the armour-
 // break roll over a foul victim. RAF-follows the camera; shown while a pending target awaits its confirm click.
@@ -15459,7 +15474,8 @@ function sendChat() {
   if (text) {
     // Owner 2026-07-08: a leading '/' routes to the DEV CONSOLE (e.g. /stuck to pass a
     // stuck turn) instead of being sent as chat.
-    if (text.startsWith('/')) gameStore.devCommand(text);
+    // Owner 11-04: the chat slash commands are a dev console; the public build has none, the text goes out as chat.
+    if (FORK_EDITION && text.startsWith('/')) gameStore.devCommand(text);
     else gameStore.sendTalk(text);
     chatInput.value = '';
     void nextTick(growChatInput);
@@ -16218,7 +16234,7 @@ watch(() => [
               </button>
             </div>
             <form v-if="!reviewChatHidden" class="chat" @submit.prevent="sendChat">
-              <textarea ref="chatInputEl" v-model="chatInput" data-pad-action="virtualKeyboard" rows="1" :placeholder="gameStore.spectatorReview.value.active ? $t('hud.logPanel.liveChatEnter') : $t('hud.logPanel.chatEnterHelpFor')" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
+              <textarea ref="chatInputEl" v-model="chatInput" data-pad-action="virtualKeyboard" rows="1" :placeholder="gameStore.spectatorReview.value.active ? $t('hud.logPanel.liveChatEnter') : (FORK_EDITION ? $t('hud.logPanel.chatEnterHelpFor') : $t('hud.logPanel.chatEnter'))" :disabled="gameStore.state.sessionState !== 'joined'" @input="growChatInput" @keydown="onChatKeydown"></textarea>
             </form>
           </ChatDock>
         </div>
@@ -16565,11 +16581,12 @@ watch(() => [
              legality conditions (green/red), and Done / Concede. (Auto-fill deprecated
              08-13 per owner — templates + Saved Setups are the fill path; the
              setupAutoFill store machinery is retained for template apply's reuse.) -->
+        <!-- Owner 11-04: "Let's drop 'WAITING FOR THEIR FORMATION' here and make it just a tag with the 'OPPONENT IS
+             SETTING UP' text ... roughly visually the same size. Maybe two lines?" A title-only tag, narrow enough that
+             the title balances onto two lines (both in-game styles). -->
         <PitchConfirmationPanel v-if="opponentSetupNotice" class="opponent-setup-notice"
           :title="$t('hud.opponentSetupNotice.opponentIsSettingUp')" :label="$t('hud.opponentSetupNotice.opponentIsSettingUp')" compact
-          :position-style="{ top: '18%', right: 'max(18px, env(safe-area-inset-right))', left: 'auto', transform: 'none', width: 'min(280px, calc(100% - 36px))', minWidth: '0', maxWidth: 'none' }">
-          {{ $t('hud.opponentSetupNotice.waitingForTheirFormation') }}
-        </PitchConfirmationPanel>
+          :position-style="{ top: '18%', right: 'max(18px, env(safe-area-inset-right))', left: 'auto', transform: 'none', width: 'min(180px, calc(100% - 36px))', minWidth: '0', maxWidth: 'none' }" />
 
         <!-- Owner 2026-07-14 (setup overhaul #1): the big left SETUP WINDOW is deprecated — the reserve CHIPS
              are gone (reserves are now dragged straight from the dugout "reserves box" on the right, cond-b),
@@ -16959,7 +16976,7 @@ watch(() => [
               <li v-for="problem in setupConfirm.problems" :key="problem">{{ problem }}</li>
             </ul>
           </template>
-          <template v-else>{{ $t('hud.lockInTheSetup') }}</template>
+          <!-- Owner 11-04: no "Lock in the setup?" line; the title and the larger Confirm Setup button say it. -->
           <!-- Astra review 10-03: a rejection from the server is shown here too, not only in the pane. -->
           <div v-if="setupConfirm.refereeErrors.length" class="setup-confirm-referee">
             {{ $t('hud.theRefereeRejectedThe') }}
@@ -16968,7 +16985,7 @@ watch(() => [
             </ul>
           </div>
           <template #actions>
-            <button v-if="!setupConfirm.problems.length" class="rr-use" data-pad-key="View" @click="confirmSetupNow()">{{ $t('hud.confirmSetup2') }}</button>
+            <button v-if="!setupConfirm.problems.length" class="rr-use setup-confirm-go" data-pad-key="View" @click="confirmSetupNow()">{{ $t('hud.confirmSetup2') }}</button>
             <button class="rr-decline" data-pad-cancel @click="cancelSetupConfirm()">{{ $t('hud.goBack') }}</button>
           </template>
         </PitchConfirmationPanel>
@@ -17082,7 +17099,7 @@ watch(() => [
           :key="gameStore.state.pregameWait.seq" class="yesno-card coin-wait-card">
           <div class="coin-wait-spinner" />
           <div class="yesno-text">{{ gameStore.state.pregameWait.text }}</div>
-          <div class="coin-wait-sub">{{ $t('hud.yesnoCard.waiting') }}</div>
+          <!-- Owner 11-04: no "Waiting…" line; the spinner and the sentence say it. -->
         </div>
 
         <!-- Gate Kick/Receive behind the queued coin-result cine so result always precedes the choice. -->
@@ -17504,8 +17521,8 @@ watch(() => [
           :style="{ left: m.x + 'px', top: m.y + 'px' }"></div>
 
         <!-- The blitz target-declaration prompt anchored over the acting player. -->
-        <div v-if="o66TargetDeclarePos && targetDeclarePrompt" class="blitz-target-prompt"
-          :style="{ left: o66TargetDeclarePos.x + 'px', top: o66TargetDeclarePos.y + 'px' }">{{ targetDeclarePrompt }}<small v-if="blitzCostNote" class="blitz-cost-line" data-testid="blitz-target-cost">{{ blitzCostNote }}</small></div>
+        <div v-if="targetDeclarePrompt" ref="blitzPromptEl" class="blitz-target-prompt"
+          :style="{ top: (blitzPromptTop ?? (fumblerooskieActive ? 120 : 76)) + 'px' }">{{ targetDeclarePrompt }}<small v-if="blitzCostNoteShort" class="blitz-cost-line" data-testid="blitz-target-cost">{{ blitzCostNoteShort }}</small></div>
 
         <!-- #207/SR-241: NEW pre-roll surface. The planner has already held the chosen target, but no block command
              has fired. Only the four property-derived offers carried by the store are rendered; a plain player never
@@ -20840,9 +20857,14 @@ watch(() => [
    (StepInitMoving.java:270-278 / StepResetFumblerooskie.java:89-117), so it never owns input or cancellation. */
 .fumblerooskie-badge { cursor: default; pointer-events: none; }
 .blitz-target-prompt {
+  /* Owner 11-04: a fixed slot at the top centre of the pitch, off the blitzer and his targets' dice dots; its top
+     (76px, below the scoreboard when that reaches further) is set inline by placeBlitzTargetPrompt. */
   position: absolute;
   z-index: 13;
-  transform: translate(-50%, -100%);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  text-align: center;
   padding: 4px 10px;
   border-radius: 6px;
   background: rgba(20, 22, 26, 0.92);
@@ -20855,7 +20877,7 @@ watch(() => [
   box-shadow: 0 3px 8px rgba(0, 0, 0, 0.6);
 }
 .blitz-target-prompt .blitz-cost-line {
-  display: block; width: max-content; max-width: min(320px, 80vw); white-space: normal; text-align: center;
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
   font-size: max(var(--ui-min-secondary-text-size, 13px), 0.7rem); font-weight: 600; color: var(--ui-text);
 }
 .blitz-confirm-cost {
@@ -23258,6 +23280,8 @@ watch(() => [
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem);
 }
 .rr-use { background: var(--ui-accent); color: #1a1305; }
+/* Owner 11-04: Confirm Setup is the card's one answer, so it reads larger than Go Back (both looks; size only). */
+.setup-confirm-go { font-size: 1.2em; padding: 10px 26px; }
 .rr-use:hover { background: #d4ad3a; }
 .rr-decline { background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); }
 .rr-decline:hover { background: var(--ui-hover); }

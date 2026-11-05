@@ -167,7 +167,7 @@ export function buildConfiguredAssets(input: {
   soundCatalog: readonly { id: string; label: string }[];
   raceLogos: Readonly<Record<string, string>>;
   /** Owner 10-06: the bundled block-dice family serving faces no pack/user file covers, and its face art by face id. */
-  blockDiceFamily?: 'default' | 'krisb';
+  blockDiceFamily?: 'default' | 'krisb' | 'fumbbl';
   bundledBlockFaceUrls?: Readonly<Record<string, string>>;
 }): ConfiguredAssetsState {
   const spritePack = selectedPack(input.installed, input.assignments.playerSprites);
@@ -237,7 +237,8 @@ export function buildConfiguredAssets(input: {
       face: face!, label: label!, url: user ?? packed ?? input.bundledBlockFaceUrls?.[face!] ?? null,
       source: user ? t('assets.blockDice.yourFile') : packed && blockDicePack
         ? `${blockDicePack.name} ${blockDicePack.version}`
-        : input.blockDiceFamily === 'krisb' ? t('assets.blockDice.builtInRickDice') : t('assets.blockDice.builtInSuperFumbbl'),
+        : input.blockDiceFamily === 'krisb' ? t('assets.blockDice.builtInRickDice')
+          : input.blockDiceFamily === 'fumbbl' ? t('assets.blockDice.builtInFumbblDice') : t('assets.blockDice.builtInSuperFumbbl'),
       userOverride: !!user,
     };
   });
