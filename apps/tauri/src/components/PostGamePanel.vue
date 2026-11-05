@@ -454,9 +454,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                   <!-- Owner 10-10: the player's value at the line's right end, in the roster's value style. -->
                   <div class="pg-mvp-card-spp"><span class="card-spp">{{ $t('cards.postGamePanel.pgMvpCard.sppSpp', { spp: card.spp }) }}</span><span v-if="card.sppGain > 0" class="card-spp-gain"> +{{ card.sppGain }}</span><span
                     v-if="formatPlayerValue(card.value)" class="pg-mvp-card-value" :title="$t('cards.postGamePanel.pgMvpCard.playerValue')">{{ formatPlayerValue(card.value) }}</span></div>
-                  <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
                   <PlayerDetailSkillList v-if="mvpCardSkills(card).length" :skills="mvpCardSkills(card)" :mode="skillMode" :icon-style="iconStyle"
                     :position-id="card.positionId" :side="side.which" mark-added />
+                  <!-- Owner 11-05: the level line is the card's last line, pinned to its bottom edge, so both teams' cards
+                       show it level with each other however long the name wraps. -->
+                  <div v-if="card.advancement" class="pg-mvp-advance">{{ card.advancement.text }}</div>
                 </div>
               </div>
             </div>
@@ -984,7 +986,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 /* Owner 09-14: MVP rows select; the selected winner's portrait card sits under the list. */
 /* Owner 09-14 UAT: the portrait is a FIXED box (never stretched by a long name / advancement line) and its sprite is
    fitted inside it (the in-game card's 1.35 zoom crop is not applied here) so the MVP tab never overflows or scrolls. */
-.pg-mvp-card { display: flex; gap: 12px; margin-top: 6px; padding: 8px; align-items: flex-start; }
+.pg-mvp-card { display: flex; gap: 12px; margin-top: 6px; padding: 8px; align-items: stretch; } /* owner 11-05: the info column runs the portrait's full height so the level line can sit at the bottom */
 .pg-mvp-card .card-portrait { flex: 0 0 auto; width: 6.8em; height: 8em; min-height: 0; } /* (0,2,0) beats the later .card-portrait { flex: 1 } */
 .pg-mvp-card .card-portrait img { height: 100%; max-height: 100%; width: auto; transform: none; } /* (0,2,1) beats the later .card-portrait img rule */
 .pg-mvp-card-name { line-height: 1.15; }
@@ -1007,7 +1009,8 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-mvp-card-name[data-side='away'] { color: #ff7a7e; }
 .pg-mvp-card-pos { color: var(--ui-muted); }
 .pg-mvp-card-spp { line-height: 1.1; }
-.pg-mvp-advance { color: var(--ui-accent); font-weight: 800; }
+/* Owner 11-05: pinned to the card's bottom edge (the info column stretches to the portrait's height). */
+.pg-mvp-advance { margin-top: auto; padding-top: 6px; color: var(--ui-accent); font-weight: 800; }
 /* #25-v2 roster CSS moved to PostGameRoster.vue (owner 10-02). */
 
 /* #25-v2: MVP roulette reveal (presentation only — lands on the server award) */
