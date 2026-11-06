@@ -41,6 +41,9 @@ import { FORK_EDITION } from './game/edition';
 import { applyLaunchForkFlag, forkFeaturesEnabled, launchFlagsSettled, markLaunchFlagsSettled } from './game/forkAccess';
 import { createJnlpIntakeHold } from './game/jnlpIntakeHold';
 import { requestForkRegistration } from './game/forkRegistration';
+import { isOnboardingRequired } from './game/configWebErrors';
+import { clientOnboarding, requestClientOnboarding } from './game/clientOnboardingPrompt';
+import ClientOnboardingDialog from './components/ClientOnboardingDialog.vue';
 import FirstOpenLegalNotice from './components/FirstOpenLegalNotice.vue';
 import FirstOpenContributions from './components/FirstOpenContributions.vue';
 import ClientTour from './components/ClientTour.vue';
@@ -807,6 +810,14 @@ async function registerForkAccount() {
     // query string (and so never enters an access or proxy log). See game/settings.ts.
     const outcome = await requestForkRegistration({ coach, password }, inTauri ? tauriFetch as typeof fetch : fetch);
     if (!outcome.ok) {
+      // Owner 11-06: config-web's onboarding gate is not a dead end: the in-client welcome step opens instead of the
+      // error; once the coach accepts, the line says so and the coach presses Register again (nothing is re-sent).
+      if (isOnboardingRequired(outcome)) {
+        registerStatus.value = '';
+        // No `coach`: config-web gates /api/fork/register on the SESSION's coach, not the coach being registered.
+        requestClientOnboarding({ reason: 'gate', onComplete: () => liveSetHere(registerStatus, 'value', () => t('onboarding.done.register')) });
+        return;
+      }
       // Sol r3: no fork host = the actionable message as is (nothing was sent); a server refusal keeps its prefix.
       if (outcome.hostUnavailable) liveSetHere(registerStatus, 'value', () => outcome.message);
       else liveSetHere(registerStatus, 'value', () => t('app.text.couldnTRegisterMessage', { message: outcome.message }));
@@ -5256,6 +5267,10 @@ onBeforeUnmount(() => {
     <!-- Owner 10-06: "Run first-launch setup again" (Settings → General) — the same wizard as the first-launch gate,
          drawn over the live shell. (It replaced the first-run account-setup splash that lived here.) -->
     <FirstLaunchSetup v-if="ui.setupWizardRerunOpen" overlay @finish="finishSetupWizard" />
+
+    <!-- Owner 11-06: the in-client welcome step (privacy notice + profile) for config-web's onboarding gate; opened by
+         game/clientOnboardingPrompt.ts from any surface that meets the gate, and by Settings > Account. -->
+    <ClientOnboardingDialog v-if="clientOnboarding.open" @open-account-settings="openSettings('account')" />
 
     <!-- Owner 2026-07-04: tabbed LOGIN CREDENTIALS menu — FUMBBL (official account)
          + Super FUMBBL (fork account), each entered separately. Opened by the button

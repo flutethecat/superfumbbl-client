@@ -8,7 +8,7 @@ import { ForkHostUnavailableError } from './forkBase';
 
 export type ForkRegistrationOutcome =
   | { ok: true }
-  | { ok: false; hostUnavailable: boolean; message: string };
+  | { ok: false; hostUnavailable: boolean; message: string; status?: number; onboarding?: boolean };
 
 export async function requestForkRegistration(
   params: { coach: string; password: string },
@@ -23,8 +23,12 @@ export async function requestForkRegistration(
   }
   try {
     const res = await transport(url);
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    if (!res.ok || data.error) return { ok: false, hostUnavailable: false, message: data.error || `HTTP ${res.status}` };
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; onboarding?: boolean };
+    // Owner 11-06: status + the gate marker ride along, so the caller can tell config-web's onboarding 428
+    // (configWebErrors.ts isOnboardingRequired) from a real refusal.
+    if (!res.ok || data.error) {
+      return { ok: false, hostUnavailable: false, message: data.error || `HTTP ${res.status}`, status: res.status, onboarding: data.onboarding === true };
+    }
     return { ok: true };
   } catch (error) {
     return { ok: false, hostUnavailable: false, message: error instanceof Error ? error.message : String(error) };

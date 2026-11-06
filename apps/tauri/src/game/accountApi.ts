@@ -15,8 +15,16 @@ import {
   configWebBearerHeaders,
   configWebCoordinationIdentity,
   configWebSessionOrigin,
+  ensureConfigWebToken,
+  captureConfigWebSession,
+  configWebSessionIs,
+  configWebBearerHeadersFor,
+  type ConfigWebSessionHandle,
 } from './configWebAuth';
 import { configWebOrigin, isDefaultConfigWebOrigin } from './forkAccess';
+import { configWebHttpError } from './configWebErrors';
+
+export { ConfigWebHttpError, isOnboardingRequired, ONBOARDING_REQUIRED_MESSAGE } from './configWebErrors';
 
 /** Sol r9/r11: the config-web this run talks to (absolute; throws when there is none). Account sessions are scoped to
  *  its ORIGIN: the in-memory token is only ever sent back to the origin that issued it. ONLY the default origin
@@ -71,19 +79,30 @@ function desktopFetch(): FetchLike {
     : fetch;
 }
 
-/** Sol r12: every account request runs against ONE base captured by its operation (default: read once, here). */
-async function jsonRequest<T>(path: string, init: RequestInit = {}, fetchFn: FetchLike = desktopFetch(), base: string = accountBase()): Promise<T> {
+/** Sol r12: every account request runs against ONE base captured by its operation (default: read once, here).
+ *  Sol r2 P2 (onboarding): with an explicit `session` the request carries exactly that session's token (never whatever
+ *  is held by the time it is sent); a session another origin issued is refused before anything goes out. */
+async function jsonRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  fetchFn: FetchLike = desktopFetch(),
+  base: string = accountBase(),
+  session?: ConfigWebSessionHandle,
+): Promise<T> {
+  if (session && session.origin !== configWebOrigin(base)) throw new Error('Config-Web session belongs to another server.');
   const response = await fetchFn(`${base}${path}`, {
     credentials: 'include',
     ...init,
     headers: {
       ...(init.body ? { 'content-type': 'application/json' } : {}),
-      ...configWebBearerHeaders(base),
+      ...(session ? configWebBearerHeadersFor(session, base) : configWebBearerHeaders(base)),
       ...(init.headers ?? {}),
     },
   });
   const body = await response.json().catch(() => ({})) as T & { error?: string };
-  if (!response.ok) throw new Error(body.error || `Config-Web returned HTTP ${response.status}.`);
+  // Owner 11-06: the status rides along (ConfigWebHttpError), so the onboarding gate's 428 and a 429 are recognisable;
+  // the message stays the server's `error` text verbatim.
+  if (!response.ok) throw configWebHttpError(response, body, `Config-Web returned HTTP ${response.status}.`);
   return body;
 }
 
@@ -129,12 +148,26 @@ export function hasAccountSession(): boolean {
   try { return hasSessionFor(accountBase()); } catch { return false; }
 }
 
-function getAccountAt(base: string, fetchFn?: FetchLike): Promise<AccountIdentity> {
-  return jsonRequest<AccountIdentity>('/api/account', {}, fetchFn ?? desktopFetch(), base);
+function getAccountAt(base: string, fetchFn?: FetchLike, session?: ConfigWebSessionHandle): Promise<AccountIdentity> {
+  return jsonRequest<AccountIdentity>('/api/account', {}, fetchFn ?? desktopFetch(), base, session);
 }
 
-export function getAccount(fetchFn?: FetchLike): Promise<AccountIdentity> {
-  return getAccountAt(accountBase(), fetchFn);
+/** `session` (optional): read the account of exactly that captured session (see captureAccountSession). */
+export function getAccount(fetchFn?: FetchLike, session?: ConfigWebSessionHandle): Promise<AccountIdentity> {
+  return getAccountAt(accountBase(), fetchFn, session);
+}
+
+export type { ConfigWebSessionHandle };
+
+/** Sol r2 P2: a handle on the session held now for the current config-web (null = none). Pass it to getAccount /
+ *  getOnboarding / completeOnboarding to bind them to this one session. */
+export function captureAccountSession(): ConfigWebSessionHandle | null {
+  try { return captureConfigWebSession(accountBase()); } catch { return null; }
+}
+
+/** Is the captured session still the held one? False once a login, exchange or sign-out replaced it. */
+export function accountSessionIs(session: ConfigWebSessionHandle | null): boolean {
+  return configWebSessionIs(session);
 }
 
 export async function rehydrateAccountSession(fetchFn?: FetchLike): Promise<AccountIdentity | null> {
@@ -213,6 +246,70 @@ export function updateAccount(
     headers: { 'X-CW-Auth': '1' },
     body: JSON.stringify(patch),
   }, fetchFn ?? desktopFetch());
+}
+
+/** Owner 11-06 (client onboarding): config-web's new-user view, GET/POST /api/me/onboarding (config-web
+ *  src/auth/onboarding.ts OnboardingView). `reaccept` = an earlier privacy notice was accepted (only the privacy step). */
+export interface OnboardingPhone { number: string; country?: string; label?: string }
+export interface OnboardingView {
+  needed: boolean;
+  reaccept: boolean;
+  prefill: {
+    preferredName: string;
+    email: string | null;
+    emailSource: 'discord' | 'user';
+    country: string | null;
+    phones: OnboardingPhone[];
+    leagueContact: boolean;
+  };
+  privacyVersion: string;
+  leagueContactText: string;
+  leagueContactVersion: string;
+}
+
+/** The POST body: config-web refuses any other key ("Unknown field"). `email` must be present (null = none); `phones`
+ *  / `leagueContact` absent = keep what is stored; `privacyVersion` = the view's (a stale one is refused). */
+export interface OnboardingSubmission {
+  preferredName: string;
+  email: string | null;
+  country?: string;
+  phones?: Array<{ number: string; country?: string }>;
+  leagueContact?: boolean;
+  privacyAccepted: true;
+  privacyVersion: string;
+}
+
+export const ONBOARDING_BODY_KEYS = ['preferredName', 'email', 'country', 'phones', 'leagueContact', 'privacyAccepted', 'privacyVersion'] as const;
+
+/** The /app/privacy page on the config-web this run talks to (the full notice; opened in the system browser). */
+export function privacyNoticeUrl(): string {
+  return `${configWebOrigin(accountBase())}/app/privacy`;
+}
+
+/** A config-web session for the onboarding calls: the held one when this config-web issued it, else one exchanged from
+ *  the fork account's saved credentials (the same exchange every guarded fork call makes, configWebAuth.ts). False
+ *  when neither is available (the coach signs in under Settings > Account). */
+export async function ensureOnboardingSession(creds: { coach: string; password: string }, fetchFn?: FetchLike): Promise<boolean> {
+  const base = accountBase();
+  if (hasSessionFor(base)) return true;
+  const token = await ensureConfigWebToken(creds, fetchFn ?? desktopFetch(), base).catch(() => null);
+  return Boolean(token) && hasSessionFor(base);
+}
+
+export function getOnboarding(fetchFn?: FetchLike, session?: ConfigWebSessionHandle): Promise<OnboardingView> {
+  return jsonRequest<OnboardingView>('/api/me/onboarding', {}, fetchFn ?? desktopFetch(), accountBase(), session);
+}
+
+export function completeOnboarding(body: OnboardingSubmission, fetchFn?: FetchLike, session?: ConfigWebSessionHandle): Promise<OnboardingView> {
+  // Only the allowed keys leave, whatever the caller built (config-web answers 400 "Unknown field" to anything else).
+  const clean: Record<string, unknown> = {};
+  for (const key of ONBOARDING_BODY_KEYS) if (key in body && body[key] !== undefined) clean[key] = body[key];
+  if (!('email' in clean)) clean.email = null;
+  return jsonRequest<OnboardingView>('/api/me/onboarding', {
+    method: 'POST',
+    headers: { 'X-CW-Auth': '1' },
+    body: JSON.stringify(clean),
+  }, fetchFn ?? desktopFetch(), accountBase(), session);
 }
 
 /** Browser-only SSO entry retained for config-web pages and compatibility tests. */

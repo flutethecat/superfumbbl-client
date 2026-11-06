@@ -15,6 +15,8 @@ import { coachPassword } from './credentials';
 import { authorizeForkRequest, shouldRetryAfterUnauthorized } from './configWebAuth';
 import { t, liveSet, disposeLive } from '../i18n';
 import { requireForkBaseUrl } from './forkBase';
+import { configWebHttpError, isOnboardingRequired } from './configWebErrors';
+import { requestClientOnboarding } from './clientOnboardingPrompt';
 
 export type ForkPayload = Record<string, unknown>;
 export type ForkTransport = (input: string, init?: RequestInit) => Promise<Response>;
@@ -74,7 +76,8 @@ export function errText(error: unknown): string {
 
 async function readPayload(response: Response): Promise<ForkPayload> {
   const data = (await response.json().catch(() => ({}))) as ForkPayload;
-  if (!response.ok || data.error) throw new Error(String(data.error ?? `HTTP ${response.status}`));
+  // Owner 11-06: keeps the status (ConfigWebHttpError) so the onboarding gate's 428 is recognisable; same message.
+  if (!response.ok || data.error) throw configWebHttpError(response, { ...data, error: String(data.error ?? `HTTP ${response.status}`) });
   return data;
 }
 
@@ -198,7 +201,7 @@ export async function botDownloadText(
     }
     if (!response.ok) {
       const data = (await response.json().catch(() => ({}))) as ForkPayload;
-      throw new Error(String(data.error ?? `HTTP ${response.status}`));
+      throw configWebHttpError(response, { ...data, error: String(data.error ?? `HTTP ${response.status}`) });
     }
     const disposition = response.headers.get('content-disposition') ?? '';
     const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
@@ -311,6 +314,9 @@ interface ChallengeControllerOptions {
   onMatched?: (payload: ForkPayload) => void | Promise<void>;
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
+  /** Owner 11-06: config-web's onboarding gate answered (428 "Complete your profile first."). Default: open the in-client
+   *  welcome step (clientOnboardingPrompt.ts). `onComplete` = the coach accepted; nothing is re-sent automatically. */
+  onOnboardingRequired?: (onComplete: () => void, coach: string) => void;
 }
 
 export interface ChallengeController {
@@ -329,6 +335,9 @@ export function createChallengeController(
   const onMatched = options.onMatched ?? (() => undefined);
   const setIntervalFn = options.setIntervalFn ?? setInterval;
   const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+  // The gated coach is the one the refused call named (config-web gates the credentialed `coach` parameter).
+  const onOnboardingRequired = options.onOnboardingRequired
+    ?? ((onComplete: () => void, coach: string) => requestClientOnboarding({ reason: 'gate', coach, onComplete }));
   /** i18n (Astra r3 #11): this controller's live-message registrations; released by dispose(). */
   const liveOwner = {};
   let request: ChallengeRequest | null = null;
@@ -359,13 +368,29 @@ export function createChallengeController(
     }
   }
 
+  /** Owner 11-06: the onboarding gate is not an error line. The challenge stops (idle, no message), the welcome step
+   *  opens, and once the coach accepts the line says the profile is complete; the coach sends the challenge again. */
+  function blockedByOnboarding(ticket: number): void {
+    stopPolling();
+    state.phase = 'idle';
+    state.message = '';
+    state.error = null;
+    onOnboardingRequired(() => {
+      if (ticket !== generation || state.phase !== 'idle') return;
+      liveSet(state, 'message', () => t('onboarding.done.challenges'), liveOwner);
+    }, request?.coach ?? '');
+  }
+
   async function pollOnce(): Promise<void> {
     if (state.phase !== 'waiting' || !request) return;
     const ticket = generation;
     try {
       const payload = await api.get('matchstatus', { coach: request.coach });
       if (payload.status === 'matched') await landMatch(payload, ticket);
-    } catch { /* transient: keep polling */ }
+    } catch (error) {
+      // The gate is not transient: polling it again would only spin. Anything else: keep polling.
+      if (ticket === generation && state.phase === 'waiting' && isOnboardingRequired(error)) blockedByOnboarding(ticket);
+    }
   }
 
   function startPolling(): void {
@@ -402,6 +427,7 @@ export function createChallengeController(
       startPolling();
     } catch (error) {
       if (ticket !== generation) return;
+      if (isOnboardingRequired(error)) { blockedByOnboarding(ticket); return; }
       state.phase = 'error';
       state.error = errText(error);
       liveSet(state, 'message', () => t('login.text.couldnTStartThe', { error: state.error }), liveOwner);

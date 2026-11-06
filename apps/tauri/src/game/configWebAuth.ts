@@ -88,6 +88,36 @@ export function heldTokenFor(coach: string, now = Date.now(), origin?: string): 
   return held.token;
 }
 
+/**
+ * Sol r2 P2 (client onboarding): an opaque handle on ONE held session, so a multi-request flow (check the account, read,
+ * then write) can bind every request to the session it checked, even if a login / token exchange replaces the held
+ * session meanwhile. The handle carries the issuing origin and coach only; its token stays in this module (a WeakMap).
+ */
+export interface ConfigWebSessionHandle { readonly origin: string; readonly coach: string }
+const handleTokens = new WeakMap<ConfigWebSessionHandle, string>();
+
+/** A handle on the session held right now for `origin` (null when none is held, or another origin issued it). */
+export function captureConfigWebSession(origin: string, now = Date.now()): ConfigWebSessionHandle | null {
+  if (!held || held.expiresAt - RENEW_MARGIN_MS <= now) return null;
+  if (!held.origin || held.origin !== configWebOrigin(origin)) return null;
+  const handle: ConfigWebSessionHandle = Object.freeze({ origin: held.origin, coach: held.coach });
+  handleTokens.set(handle, held.token);
+  return handle;
+}
+
+/** Is `handle` still the held session (same token, not expired)? False once a login or sign-out replaced it. */
+export function configWebSessionIs(handle: ConfigWebSessionHandle | null, now = Date.now()): boolean {
+  if (!handle || !held || held.expiresAt - RENEW_MARGIN_MS <= now) return false;
+  return held.origin === handle.origin && held.token === handleTokens.get(handle);
+}
+
+/** The Bearer header for exactly the captured session, and only toward the origin that issued it ({} otherwise). */
+export function configWebBearerHeadersFor(handle: ConfigWebSessionHandle, origin: string): Record<string, string> {
+  const token = handleTokens.get(handle);
+  if (!token || handle.origin !== configWebOrigin(origin)) return {};
+  return { authorization: `Bearer ${token}` };
+}
+
 /** Read-only snapshot for coordination UI. The secret token never leaves this module. */
 export function configWebCoordinationIdentity(now = Date.now()): Omit<ConfigWebCoordinationIdentity, 'token' | 'origin'> | null {
   if (!held || held.expiresAt - RENEW_MARGIN_MS <= now) return null;

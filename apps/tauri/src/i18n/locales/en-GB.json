@@ -81,5 +81,6 @@
   "tournaments.contentPanel.serverAuthorized": "SERVER-AUTHORISED",
   "ui.accountSettings.text.discordSignInCancelled": "Discord sign-in cancelled.",
   "ui.accountSettings.text.waitingForDiscordAuthorization": "Waiting for Discord authorisation for {coach}…",
-  "ui.assetPackSettings.text.ownerAuthorizedExternalMod": "Owner-authorised external mod"
+  "ui.assetPackSettings.text.ownerAuthorizedExternalMod": "Owner-authorised external mod",
+  "onboarding.details.preferredNameHelp": "What organisers and other coaches call you."
 }

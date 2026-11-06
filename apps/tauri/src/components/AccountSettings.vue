@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { settings } from '../game/settings';
-import { authenticateAccount, getAccount, rehydrateAccountSession, signInWithDiscordAccount, signOutAccount, updateAccount, type AccountIdentity } from '../game/accountApi';
+import {
+  authenticateAccount, getAccount, getOnboarding, privacyNoticeUrl, rehydrateAccountSession, signInWithDiscordAccount, signOutAccount,
+  updateAccount, type AccountIdentity,
+} from '../game/accountApi';
+import { requestClientOnboarding } from '../game/clientOnboardingPrompt';
+import { openExternal } from '../game/openExternal';
 import { DesktopSignInCancelled } from '../game/desktopAuth';
 import { startTournamentNotificationPolling } from '../game/tournamentNotificationClient';
 import { FORK_EDITION } from '../game/edition';
@@ -37,6 +42,7 @@ async function authenticate() {
     loginPassword.value = '';
     liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSavingChangesRequires'));
     if (FORK_EDITION) startTournamentNotificationPolling(); // fork edition only (compile-time; the poller also refuses)
+    void checkOnboarding();
   } catch (error) { status.value = error instanceof Error ? error.message : String(error); }
   finally { busy.value = false; }
 }
@@ -72,6 +78,7 @@ async function openDiscordSso() {
     const ffbCoachId = account.value.ffbCoachId;
     liveSetHere(status, 'value', () => t('ui.accountSettings.text.signedInAsFfbcoachid', { ffbCoachId }));
     if (FORK_EDITION) startTournamentNotificationPolling(); // fork edition only (compile-time; the poller also refuses)
+    void checkOnboarding();
   } catch (error) {
     status.value = error instanceof DesktopSignInCancelled ? t('ui.accountSettings.text.discordSignInCancelled') : error instanceof Error ? error.message : String(error);
   } finally {
@@ -81,6 +88,31 @@ async function openDiscordSso() {
 }
 
 function cancelDiscordSso() { discordAbort?.abort(); }
+
+/** Owner 11-06: after a sign-in or a restored session, config-web's welcome step opens in the client when the coach
+ *  has not accepted the current privacy notice (ClientOnboardingDialog.vue). A failed read stays silent: config-web's
+ *  gate still answers the next write, and that opens the step too. */
+async function checkOnboarding() {
+  try {
+    const view = await getOnboarding();
+    if (view.needed) requestClientOnboarding({ reason: 'signIn', coach: account.value?.ffbCoachId, onComplete: () => liveSetHere(status, 'value', () => t('onboarding.done.settings')) });
+  } catch { /* silent: see above */ }
+}
+
+/** "Review privacy notice": the welcome step (re-acceptance) only while one is needed, else the notice page itself in
+ *  the system browser. */
+async function reviewPrivacy() {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    const view = await getOnboarding();
+    if (view.needed) { requestClientOnboarding({ reason: 'review', coach: account.value?.ffbCoachId, onComplete: () => liveSetHere(status, 'value', () => t('onboarding.done.settings')) }); return; }
+    await openExternal(privacyNoticeUrl());
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : String(error);
+    try { await openExternal(privacyNoticeUrl()); } catch { /* no config-web: the status line says why */ }
+  } finally { busy.value = false; }
+}
 
 async function signOut() {
   busy.value = true;
@@ -107,7 +139,10 @@ async function saveProfile() {
 onMounted(async () => {
   try {
     const restored = await rehydrateAccountSession();
-    if (restored) { account.value = restored; loadEditor(restored); liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSessionRestored')); }
+    if (restored) {
+      account.value = restored; loadEditor(restored); liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticatedSessionRestored'));
+      void checkOnboarding();
+    }
     else if (settings.coach40k.trim()) liveSetHere(status, 'value', () => t('ui.accountSettings.text.authenticateAsP0To', { p0: settings.coach40k.trim() }));
   } catch { liveSetHere(status, 'value', () => t('ui.accountSettings.text.yourSessionExpiredAuthenticate')); }
 });
@@ -136,6 +171,7 @@ onBeforeUnmount(() => discordAbort?.abort());
         <button type="button" :disabled="busy" @click="openDiscordSso">{{ account.identities.discordUserId ? $t('settings.account.accountCard.account.reAuthenticateDiscord') : $t('settings.account.accountCard.account.linkDiscordInBrowser') }}</button>
         <button type="button" :disabled="busy" @click="refresh">{{ $t('settings.account.accountCard.account.refreshIdentity') }}</button>
         <button type="button" :disabled="busy" @click="signOut">{{ $t('settings.account.accountCard.account.signOut') }}</button>
+        <button type="button" :disabled="busy" data-testid="account-review-privacy" @click="reviewPrivacy">{{ $t('onboarding.settings.reviewPrivacy') }}</button>
       </div>
       <p class="hint">{{ $t('settings.account.accountCard.account.coachAndExternalIdentities') }}</p>
 
