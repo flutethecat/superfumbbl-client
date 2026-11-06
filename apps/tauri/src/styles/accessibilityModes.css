@@ -192,3 +192,6 @@ html.sf-larger-targets .ui-resizer {
   white-space: nowrap;
 }
 html.sf-high-contrast .sf-sound-cue { outline: 2px solid var(--ui-border); outline-offset: -2px; }
+/* Owner 11-05: the end-game tab panes' fade + slide (PostGamePanel.vue pg-tab-*) */
+html.sf-reduce-motion .pg-tab-fwd-enter-active, html.sf-reduce-motion .pg-tab-back-enter-active,
+html.sf-reduce-motion .pg-tab-fwd-leave-active, html.sf-reduce-motion .pg-tab-back-leave-active { transition: none !important; }

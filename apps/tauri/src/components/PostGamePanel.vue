@@ -67,6 +67,15 @@ function portrait(playerId: string): string | null {
 
 // the MVP-nominate Continue (SpectateView) lands on Statistics — the phase is a model the parent may drive
 const postGamePhase = defineModel<'mvp' | 'stats' | 'roster'>('phase', { default: 'mvp' });
+/** Owner 11-05: the tab pane slides toward the tab picked - forward (from the right) for a tab further along, back
+ *  (from the left) for an earlier one. */
+const PG_TAB_ORDER = ['mvp', 'stats', 'roster'] as const;
+const pgTabMotion = ref<'pg-tab-fwd' | 'pg-tab-back'>('pg-tab-fwd');
+/** Sol r2: the pane fading out takes no focus or clicks while it overlaps the new one. */
+function pgTabLeaving(el: Element): void { el.setAttribute('inert', ''); }
+watch(postGamePhase, (next, prev) => {
+  pgTabMotion.value = PG_TAB_ORDER.indexOf(next) >= PG_TAB_ORDER.indexOf(prev) ? 'pg-tab-fwd' : 'pg-tab-back';
+}, { flush: 'sync' });
 // Owner 09-17: the Dice tab opens its own PANE (an overlay with an X): distributions left, the likelihood graphs
 // top right, fun facts bottom right. A header selector picks whose distributions fill the left column.
 const diceModalOpen = ref(false);
@@ -418,6 +427,9 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
         </nav>
       </header>
 
+      <!-- Owner 11-05: switching tabs fades and slides (~12px toward the tab picked) instead of popping; off with reduced
+           motion (the OS setting or Settings > Reduce motion). -->
+      <Transition :name="pgTabMotion" @before-leave="pgTabLeaving">
       <!-- Phase: MVP (server-decided award, see postGameSide's `mvps`) -->
       <section v-if="postGamePhase === 'mvp'" class="pg-mvp">
         <!-- Owner 10-10: each team column is the roster pane's team header (PostGameRoster pinned to the team, no rows,
@@ -495,6 +507,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 
       <!-- Owner 10-02: the end-game roster lives in PostGameRoster.vue (shared with the in-game Helmet pop-out). -->
       <PostGameRoster v-else v-model:side="selectedRosterTeam" :teams="pg" :portrait="portrait" :local-side="localSide" :skill-mode="skillMode" :icon-style="iconStyle" />
+      </Transition>
     </div>
 
     <!-- Owner 08-19: spectate-seat MVP-PENDING placeholder — sits exactly where the Statistics & MVP window will land. -->
@@ -789,7 +802,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
    strip) so the Stats/MVP window below gets the remaining height and the MVP cards fit without scrolling at the
    default scale; stats still scrolls internally only when the viewport is genuinely too short. */
 .pg-window-result { flex: 0 0 auto; }
-.pg-window-stats { flex: 0 1 auto; min-height: 0; max-height: calc(88vh / var(--pg-scale)); } /* owner 09-15 (2nd): hug the content — the SCALE fills the height, not empty window */
+.pg-window-stats { position: relative; scrollbar-gutter: stable; flex: 0 1 auto; min-height: 0; max-height: calc(88vh / var(--pg-scale)); overflow-x: hidden; } /* Sol r1: the 12px tab slide never adds a horizontal scrollbar */ /* owner 09-15 (2nd): hug the content — the SCALE fills the height, not empty window */
 .pg-head {
   display: flex;
   align-items: center;
@@ -874,6 +887,17 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 @media (prefers-reduced-motion: reduce) {
   .pg-mvp-pending-dot { animation: none; }
 }
+/* Owner 11-05: tab panes fade + slide 12px (out 90 ms, in 160 ms) instead of popping */
+.pg-tab-fwd-enter-active, .pg-tab-back-enter-active { transition: opacity 160ms ease-out, transform 160ms ease-out; }
+.pg-tab-fwd-leave-active, .pg-tab-back-leave-active { transition: opacity 90ms ease-in, transform 90ms ease-in; position: absolute; left: 0; right: 0; pointer-events: none; }
+/* (a cross-fade: the old pane leaves on top, out of the flow, while the new one enters - the queued "out-in" mode left
+   the window EMPTY after a few fast clicks, Vue never recovering) */
+.pg-tab-fwd-enter-from, .pg-tab-back-leave-to { opacity: 0; transform: translateX(12px); }
+.pg-tab-fwd-leave-to, .pg-tab-back-enter-from { opacity: 0; transform: translateX(-12px); }
+@media (prefers-reduced-motion: reduce) {
+  .pg-tab-fwd-enter-active, .pg-tab-back-enter-active, .pg-tab-fwd-leave-active, .pg-tab-back-leave-active { transition: none; }
+}
+/* Settings > Reduce motion: styles/accessibilityModes.css (a scoped :global() selector here dropped the pane classes, Sol r1) */
 @keyframes pg-mvp-pending-pulse {
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
