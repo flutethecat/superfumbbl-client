@@ -112,6 +112,8 @@ import {
   setWalkSpriteSnap,
   WALKER_SPRITE_SCALE,
   releaseWalkersOwnedBy,
+  clearWalkCycles,
+  pruneWalkCycles,
   tickWalkers,
   walkersNeedTick,
   markWalkersDirty,
@@ -6726,7 +6728,7 @@ export class PitchRenderer {
       try {
         token = this.buildPlayerToken(player, { ...data, playerCoordinate: [x, y], playerState: hold.playerState }, isHome, team, baselines.get(player.positionId));
         this.tokenLayer.addChild(token);
-        registerLiveWalker(token);
+        registerLiveWalker(token, true);
       } catch (error) {
         if (token && !token.destroyed) token.destroy({ children: true });
         throw error;
@@ -6898,6 +6900,7 @@ export class PitchRenderer {
     this.stadiumDrawKey = null; // P3: the memoised stadium output is now incomplete (signs gone) → next setGame redraws
     this.trailNumberNodes = []; // persistent trail numbers live in effectsLayer too
     this.moveTweens.clear();
+    clearWalkCycles(this.walkerOwnerId); // owner 11-06: no kept stride crosses a game change / presentation teardown
     this.activationFades.clear(); this.activationFadePaint.clear(); // item3
     this.pushOptionPulse = []; this.pushCrosshairs = []; this.pushOptionCoords = []; this.pickCrosshairs = []; this.quickSnapCrosshairs = []; this.pickArrows = [];
     // Owner 10-14: the viewer's manual marks (Shift+click players / squares and their labels) are NOT presentation
@@ -7255,7 +7258,7 @@ export class PitchRenderer {
       // SELECTED_BLITZ_TARGET 🎯 (addBlitzTargetCrosshair) doubled it and is retired; the flag
       // still suppresses the block-target cue (showBlockTargetCrosshair).
       this.tokenLayer.addChild(token);
-      registerLiveWalker(token);
+      registerLiveWalker(token, true); // owner 11-06: a pitch token - its walk cycle survives the next rebuild
       } catch (error) {
         if (!tokenWasPreserved && token! && !token.destroyed) token.destroy({ children: true });
         throw error;
@@ -8230,6 +8233,8 @@ export class PitchRenderer {
       }
       this.purgeFailedRefresh(error);
     } finally {
+      // Owner 11-06: a player with no pitch token after this refresh (left the pitch / failed generation) keeps no stride.
+      pruneWalkCycles(this.walkerOwnerId);
       if (refreshCompleted) this.refreshFailureLogged = false;
       if (refreshCompleted) this.tilePickMarksStale = false; // a thrown refresh painted no marks: keep them owed
       if (refreshCompleted && this.game) {

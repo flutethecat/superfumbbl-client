@@ -341,6 +341,14 @@ interface WalkerTokenRecord {
   settledTween?: TweenView | null;
   /** Owner 09-06: motion state at the previous tick — the settle edge (true -> false) lands the idle facing. */
   wasInMotion?: boolean;
+  /** Owner 11-06 (walk-cycle continuity): a PITCH token (registered with carriesWalkCycle) - its motion clock is kept in
+   *  `walkCycles` so the token rebuilt by the next model sync resumes the stride instead of restarting it. */
+  carriesWalkCycle?: boolean;
+  /** Owner 11-06: the inherited walk-cycle check ran (once, on the record's first tick). */
+  walkCycleSeeded?: boolean;
+  /** Owner 11-06: the frame clock origin inherited from the previous token of this player while its motion is still
+   *  continuous; the frame counts from it instead of a carried / re-eased tween's start. null once the motion settles. */
+  cycleOrigin?: number | null;
   token: Container;
   asset: WalkerAsset;
   sprite: Sprite;
@@ -1063,9 +1071,12 @@ export function buildWalkerToken(args: WalkerTokenArgs): Container {
   return token;
 }
 
-export function registerLiveWalker(token: Container): void {
-  if (liveWalkers.has(token)) return;
+/** `carriesWalkCycle` (owner 11-06): the token is the player's PITCH token - its walk-cycle clock survives the per-sync
+ *  token rebuild (see walkCycles). Dugout / box tokens leave it off and never inherit or keep a pitch stride. */
+export function registerLiveWalker(token: Container, carriesWalkCycle = false): void {
   const record = walkerTokens.get(token);
+  if (record && carriesWalkCycle) record.carriesWalkCycle = true;
+  if (liveWalkers.has(token)) return;
   if (!record || token.destroyed) return;
   liveWalkers.set(token, record);
   if (record.baseSpriteScale && spriteSnap !== 1) record.sprite.scale.set(record.baseSpriteScale * spriteSnap);
@@ -1089,6 +1100,68 @@ const MOTION_HOLD_MS = 120;
 /** Owner 09-05: a walker keeps its direction of TRAVEL across token rebuilds until its activation ends; then the
  *  idle facing resets (face-camera / forward). playerId -> last motion-derived facing. */
 const travelFacing = new Map<string, Dir8>();
+
+/** Owner 11-06 (walk-cycle continuity; interim fix ahead of the render ledger): PitchRenderer.refresh() rebuilds every
+ *  player token on every model sync (owner 10-21: a deliberate compromise), and a rebuilt walker got a fresh record -
+ *  inside the motion-hold window it flashed the idle column, and a carried tween re-eased toward a moved square
+ *  restarted the stride at frame 1. Like `travelFacing`, the motion clock now outlives the token: renderer owner ->
+ *  playerId -> the motion window and the frame-clock origin of the player's last in-motion tick. The entry exists only
+ *  while that motion is continuous; it is dropped when the motion settles, on the activation-end / turnover settle,
+ *  when the player has no pitch token after a refresh, on clearEffects (game change) and on renderer teardown. Every
+ *  invalidation is scoped to ONE renderer owner: the replayer and the live view never reset each other's stride.
+ *  Only a STANDING walker with the walk animation on keeps an entry (a prone / stunned walker shows its lying frame,
+ *  and with the animation off nothing ticks the entry out), and an entry is adopted only on a fresh hand-off. */
+interface WalkCycleState {
+  motionStart: number | null;
+  movingUntil: number | null;
+  origin: number;
+  /** The tick that stored it: the predecessor was in motion at this instant. */
+  at: number;
+}
+const walkCycles = new Map<symbol, Map<string, WalkCycleState>>();
+
+/** Owner 11-06: the longest gap between the predecessor's last in-motion tick and the rebuilt token's first tick that
+ *  still counts as the SAME continuous motion (a rebuild lands between two frames; a slow frame stays well inside). A
+ *  longer gap means nothing ticked meanwhile (ticker idle / paused): the kept clock is stale and is discarded. */
+const WALK_CYCLE_HANDOFF_MS = 250;
+
+function dropWalkCycle(ownerId: symbol, playerId: string): void {
+  const byPlayer = walkCycles.get(ownerId);
+  if (byPlayer?.delete(playerId) && byPlayer.size === 0) walkCycles.delete(ownerId);
+}
+
+function storeWalkCycle(record: WalkerTokenRecord, inMotion: boolean, origin: number, now: number): void {
+  if (!inMotion || !walkAnimation || record.prone) {
+    dropWalkCycle(record.ownerId, record.playerId);
+    return;
+  }
+  let byPlayer = walkCycles.get(record.ownerId);
+  if (!byPlayer) walkCycles.set(record.ownerId, byPlayer = new Map());
+  byPlayer.set(record.playerId, { motionStart: record.motionStart ?? null, movingUntil: record.movingUntil ?? null, origin, at: now });
+}
+
+/** Owner 11-06: drop every kept walk cycle of this renderer (game change / clearEffects). */
+export function clearWalkCycles(ownerId: symbol): void {
+  walkCycles.delete(ownerId);
+}
+
+/** Owner 11-06: after a refresh, drop the kept walk cycle of every player that no longer has a live pitch token
+ *  (taken off the pitch), so a later token of that player can never resume a stale stride. */
+export function pruneWalkCycles(ownerId: symbol): void {
+  const byPlayer = walkCycles.get(ownerId);
+  if (!byPlayer) return;
+  const onPitch = new Set<string>();
+  for (const record of liveWalkers.values()) {
+    if (record.ownerId === ownerId && record.carriesWalkCycle && !record.token.destroyed) onPitch.add(record.playerId);
+  }
+  for (const playerId of [...byPlayer.keys()]) if (!onPitch.has(playerId)) byPlayer.delete(playerId);
+  if (byPlayer.size === 0) walkCycles.delete(ownerId);
+}
+
+/** Test / rig inspection: the kept walk-cycle origin for a player of this renderer (undefined = none kept). */
+export function walkCycleOriginProbe(ownerId: symbol, playerId: string): number | undefined {
+  return walkCycles.get(ownerId)?.get(playerId)?.origin;
+}
 
 /** Owner 09-06: the ACTIVE player per renderer owner. Only the active walker keeps its travel facing while it
  *  pauses; every other walker settles back to the idle facing the moment its motion stops (see tickWalkers). */
@@ -1409,6 +1482,26 @@ export function tickWalkers(
       liveWalkers.delete(token);
       continue;
     }
+    // Owner 11-06: a pitch token's first tick inherits the motion clock its predecessor (destroyed by the per-sync
+    // rebuild) left behind, so a stride in progress carries on. Adopted only on a fresh hand-off of the same pose: the
+    // predecessor was in motion within WALK_CYCLE_HANDOFF_MS, this token stands (a player rebuilt lying down shows his
+    // lying frame, never a walk column) and the animation is on. Anything else discards the entry. If nothing keeps
+    // the adopted walker in motion now (no live tween, hold window elapsed) it settles below.
+    if (!record.walkCycleSeeded) {
+      record.walkCycleSeeded = true;
+      const kept = record.carriesWalkCycle ? walkCycles.get(ownerId)?.get(record.playerId) : undefined;
+      if (kept) {
+        const fresh = now >= kept.at && now - kept.at <= WALK_CYCLE_HANDOFF_MS;
+        if (fresh && !record.prone && walkAnimation && record.lastPos == null) {
+          record.motionStart = kept.motionStart;
+          record.movingUntil = kept.movingUntil;
+          record.cycleOrigin = kept.origin;
+          record.wasInMotion = true;
+        } else {
+          dropWalkCycle(ownerId, record.playerId);
+        }
+      }
+    }
     // Owner 09-05: FACING follows the token's REAL motion (position delta since the last tick) so every mover
     // path — planner tween, confirmed presentation step, post-step correction, reconcile, direct placement —
     // turns the sprite, and it does so even with the walk animation OFF. FRAME CYCLING keeps its tween-timed
@@ -1448,8 +1541,19 @@ export function tickWalkers(
       record.facing = restFacing(record);
     }
     record.wasInMotion = inMotion;
+    if (!inMotion) {
+      record.motionStart = null;
+      record.cycleOrigin = null;
+    }
+    // Owner 11-06 (Sol r2): an adopted origin only bridges a rebuild while the stride is DRAWN; with the animation off
+    // it is dropped, so motion that ends unanimated never hands its old clock to the next tween.
+    if (!walkAnimation) record.cycleOrigin = null;
+    // Frame clock: a valid ground tween cycles from its start, other motion from the first observed motion - unless this
+    // token inherited a stride in progress (owner 11-06), which keeps counting from the ORIGINAL origin while the motion
+    // stays continuous (a carried tween re-eased from the pixel has a new start; it must not restart the cycle).
+    const origin = record.cycleOrigin ?? (tweenValid ? tween.start : record.motionStart ?? now);
+    if (record.carriesWalkCycle) storeWalkCycle(record, inMotion, origin, now);
     if (!inMotion || !walkAnimation) {
-      if (!inMotion) record.motionStart = null;
       setWalkerFrame(record, record.asset.spec.idleColumn);
       continue;
     }
@@ -1459,13 +1563,10 @@ export function tickWalkers(
       const a = tween.waypoints[segment]!;
       const b = tween.waypoints[segment + 1]!;
       if (!moved && !record.pinnedSouth) { record.facing = dir8(b.x - a.x, b.y - a.y, record.facing); travelFacing.set(record.playerId, record.facing); }
-      const fps = walkFps ?? record.asset.spec.fps;
-      setWalkerFrame(record, 1 + Math.floor(elapsed / (1000 / fps)) % (record.asset.spec.columns - 1));
-    } else {
-      const elapsed = Math.max(0, now - (record.motionStart ?? now));
-      const fps = walkFps ?? record.asset.spec.fps;
-      setWalkerFrame(record, 1 + Math.floor(elapsed / (1000 / fps)) % (record.asset.spec.columns - 1));
     }
+    const elapsed = Math.max(0, now - origin);
+    const fps = walkFps ?? record.asset.spec.fps;
+    setWalkerFrame(record, 1 + Math.floor(elapsed / (1000 / fps)) % (record.asset.spec.columns - 1));
     anyAnimating = true;
   }
   if (anyAnimating) dirtyOwners.add(ownerId);
@@ -1481,10 +1582,12 @@ export function settleWalkersIdle(ownerId: symbol, moveTweens: ReadonlyMap<strin
     if (record.ownerId !== ownerId || record.token.destroyed) continue;
     record.movingUntil = null;
     record.motionStart = null;
+    record.cycleOrigin = null;
     record.lastPos = { x: record.token.position.x, y: record.token.position.y };
     record.settledTween = moveTweens.get(record.playerId) ?? null;
     setWalkerFrame(record, record.asset.spec.idleColumn);
   }
+  walkCycles.delete(ownerId); // owner 11-06: a settled walker's next token starts at rest
   dirtyOwners.add(ownerId);
 }
 
@@ -1492,6 +1595,8 @@ export function settleWalkersIdle(ownerId: symbol, moveTweens: ReadonlyMap<strin
  *  `null` resets every walker (game switch / teardown). */
 export function resetWalkerFacing(playerId: string | null): void {
   if (playerId == null) travelFacing.clear(); else travelFacing.delete(playerId);
+  // Owner 11-06 (Sol r1): this reset is not owner-scoped, so it never touches the kept walk cycles - every caller
+  // pairs it with its own renderer's settleWalkersIdle, which drops that owner's cycles only.
   for (const record of liveWalkers.values()) {
     if (playerId != null && record.playerId !== playerId) continue;
     record.facing = restFacing(record);
@@ -1514,6 +1619,7 @@ export function refreshWalkerFacing(ownerId: symbol, geometry: FacingGeometry): 
 export function releaseWalkersOwnedBy(ownerId: symbol): void {
   travelFacing.clear();
   activeWalkerByOwner.delete(ownerId);
+  walkCycles.delete(ownerId);
   for (const [token, record] of [...liveWalkers]) {
     if (record.ownerId !== ownerId) continue;
     if (!token.destroyed) token.destroy({ children: true });
@@ -1524,7 +1630,12 @@ export function releaseWalkersOwnedBy(ownerId: symbol): void {
 
 export function setWalkAnimation(on: boolean): void {
   walkAnimation = on;
+  if (!on) walkCycles.clear(); // owner 11-06: no stride is kept while the animation is off (nothing would tick it out)
   for (const record of liveWalkers.values()) {
+    // Owner 11-06 (Sol r2): either edge drops every live token's frame clock (an adopted origin included), so the next
+    // motion cycles fresh from its own start instead of an origin kept from before the toggle.
+    record.cycleOrigin = null;
+    record.motionStart = null;
     setWalkerFrame(record, record.asset.spec.idleColumn);
     dirtyOwners.add(record.ownerId);
   }
