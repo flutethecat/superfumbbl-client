@@ -114,6 +114,21 @@ export function stadiumStandFacing(cell: { x: number; y: number }, pitch: { x: n
   return dx > 0 ? 'sideR' : 'sideL';
 }
 
+/** Owner 11-06: which way the seated crowd looks in each colour's baked-crowd SIDE tile (stand_<colour>_side.png),
+ *  as drawn. Blue, red and yellow look LEFT; green looks RIGHT (Sol review of 1.0.315, every column checked). A side
+ *  stand's crowd must look at the pitch: 'sideR' = the pitch is to the cell's right, 'sideL' = to its left; the tile is
+ *  mirrored when the art looks the other way. Until 1.0.315 the mirror sat on 'sideL' for every colour, so in the crowd
+ *  stand style the long stands (blue, red) faced away from the pitch. */
+export type StadiumStandColour = 'blue' | 'red' | 'yellow' | 'green';
+export const STADIUM_SIDE_ART_FACES: Readonly<Record<StadiumStandColour, 'left' | 'right'>> = {
+  blue: 'left', red: 'left', yellow: 'left', green: 'right',
+};
+export function stadiumStandMirror(facing: StadiumStandFacing, colour: StadiumStandColour): boolean {
+  if (facing !== 'sideL' && facing !== 'sideR') return false;
+  const mustLook = facing === 'sideR' ? 'right' : 'left';
+  return STADIUM_SIDE_ART_FACES[colour] !== mustLook;
+}
+
 /** Deterministic crowd variant for a cell: 0 (empty) when the cell's noise sits above the fan density, else one of the
  *  crowd columns. Same noise seeds as the old sprite sprinkle so a roster's fan factor fills the stands the same way. */
 export function stadiumStandVariant(

@@ -157,7 +157,7 @@ import { shadedPlayerPickArrowIds } from './playerPickPresentation';
 import { CROSSHAIR_GLIDE_MS, RAIL_COLOR, crosshairTargetKey, easeOutCubic, railLanes, type PitchCrosshairTarget } from './crosshairRail';
 import { rushTargetForPlayer } from './rushTarget';
 import { MOVE_BADGE_MAX, activationShowsMoveBadge, moveBadgeIndex, moveBadgeNormalLeft, moveBadgeSide } from './moveRemaining';
-import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
+import { STADIUM_STAND_TILE, stadiumRiserEdge, stadiumStandFacing, stadiumStandTileColumn, stadiumStandTileTransform, stadiumStandTileUpright, stadiumStandMirror, type StadiumStandColour, stadiumStandVariant, type StadiumStandSide } from './stadiumTiles';
 import { broadcastCameraPlacements } from './stadiumProps';
 import { onPitchLabelsChanged, pitchLabel, pitchLabelRevision } from './pitchLabels'; // i18n 10-23: drawn display words
 import { FONT_DISPLAY_FAMILY } from './fontStacks'; // owner 10-23: Cyrillic/CJK system faces behind Nuffle on every pitch label
@@ -19544,7 +19544,7 @@ export class PitchRenderer {
         if (setTexture) {
           const columns = Math.max(1, Math.round(setTexture.width / STADIUM_STAND_TILE));
           const column = stadiumStandVariant(x, y, density, columns, turfNoise);
-          const up = stadiumStandTileUpright({ corners: raisedCorners, textureHeight: setTexture.height, tileSize: STADIUM_STAND_TILE, column, mirror: facing === 'sideL' });
+          const up = stadiumStandTileUpright({ corners: raisedCorners, textureHeight: setTexture.height, tileSize: STADIUM_STAND_TILE, column, mirror: stadiumStandMirror(facing, textureName.replace('stand_', '') as StadiumStandColour) });
           // textureSpace 'global': Pixi's default ('local') stretches the WHOLE atlas to the polygon's bounds, which is why
           // an unadjusted fill drew every cell as a four-column smear; global maps texture pixels through the matrix.
           graphics.poly(points).fill({ texture: setTexture, textureSpace: 'global', matrix: new Matrix(up.a, up.b, up.c, up.d, up.translateX, up.translateY) });

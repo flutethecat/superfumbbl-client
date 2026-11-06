@@ -159,8 +159,10 @@ function reportShown(): void {
   emit('flip-shown', props.progress.occurrenceKey ?? '');
 }
 
+/** Owner 11-06: each face turns on its own now, so the end of the turn is the BACK face's transform transition. */
 function onTransitionEnd(event: TransitionEvent): void {
-  if (event.target !== event.currentTarget || !flipped.value) return;
+  const target = event.target as HTMLElement | null;
+  if (!flipped.value || !target?.classList?.contains('back') || target.parentElement !== event.currentTarget) return;
   if (event.propertyName && event.propertyName !== 'transform') return;
   reportShown();
 }
@@ -315,7 +317,10 @@ const dieLabel = computed(() => {
   pointer-events: none;
   background: transparent;
 }
-/* Owner 10-30 (approved mock v6): the card turns on its Y axis; both faces share one grid cell. */
+/* Owner 10-30 (approved mock v6): the card turns on its Y axis; both faces share one grid cell.
+   Owner 11-06 (Linux report: the opponent's foul card read backwards): the turn no longer relies on preserve-3d. Where
+   WebKitGTK draws without compositing it flattens a preserve-3d card, so the whole card turned and showed its FRONT face
+   mirrored. Each face now turns itself with its own perspective, so the result face reads correctly either way. */
 .sendoff-waiting {
   box-sizing: border-box;
   width: min(560px, calc(100% - 32px));
@@ -325,10 +330,7 @@ const dieLabel = computed(() => {
 }
 .sendoff-waiting-card {
   display: grid;
-  transform-style: preserve-3d;
-  transition: transform 640ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.sendoff-waiting.flipped .sendoff-waiting-card { transform: rotateY(180deg); }
 .sendoff-waiting-face {
   grid-area: 1 / 1;
   box-sizing: border-box;
@@ -339,17 +341,22 @@ const dieLabel = computed(() => {
   box-shadow: 0 10px 34px #000d, inset 0 1px 0 #ffffff1a;
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
+  transform: perspective(1400px) rotateY(0deg);
+  transition: transform 640ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.sendoff-waiting-face.back { transform: rotateY(180deg); }
+.sendoff-waiting-face.back { transform: perspective(1400px) rotateY(-180deg); }
+.sendoff-waiting.flipped .sendoff-waiting-face.front { transform: perspective(1400px) rotateY(180deg); }
+.sendoff-waiting.flipped .sendoff-waiting-face.back { transform: perspective(1400px) rotateY(0deg); }
 .sendoff-waiting-face.back.overturned {
   border-color: #4fbf6a;
   background: linear-gradient(135deg, rgba(12, 48, 24, 0.98), rgba(8, 16, 14, 0.98) 62%);
   box-shadow: 0 10px 34px #000d, 0 0 28px #4fbf6a55, inset 0 1px 0 #ffffff1a;
 }
 /* Reduced motion: a cross-fade instead of the turn. */
-.sendoff-waiting.reduced-motion .sendoff-waiting-card { transition: none; transform: none; }
 .sendoff-waiting.reduced-motion .sendoff-waiting-face { transition: opacity 240ms ease; }
-.sendoff-waiting.reduced-motion .sendoff-waiting-face.back { transform: none; opacity: 0; }
+.sendoff-waiting.reduced-motion .sendoff-waiting-face.front,
+.sendoff-waiting.reduced-motion .sendoff-waiting-face.back { transform: none; }
+.sendoff-waiting.reduced-motion .sendoff-waiting-face.back { opacity: 0; }
 .sendoff-waiting.reduced-motion.flipped .sendoff-waiting-face.front { opacity: 0; }
 .sendoff-waiting.reduced-motion.flipped .sendoff-waiting-face.back { opacity: 1; }
 .sendoff-waiting-head {
@@ -485,7 +492,7 @@ const dieLabel = computed(() => {
   text-transform: uppercase;
 }
 @media (prefers-reduced-motion: reduce) {
-  .sendoff-waiting-card { transition: none; }
+  .sendoff-waiting-face { transition: none; }
   .sendoff-waiting-line.typing::after { animation: none; }
 }
 @media (max-width: 480px) {

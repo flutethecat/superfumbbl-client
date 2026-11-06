@@ -87,8 +87,10 @@ html.sf-reduce-motion .pg-mvp-awaiting::after,
 html.sf-reduce-motion .sendoff-waiting-line.typing::after {
   animation: none !important;
 }
-html.sf-reduce-motion .sendoff-waiting-card,
 html.sf-reduce-motion .ind-summary { transition: none !important; }
+/* owner 11-06: the send-off card turns its FACES now (no 3D card); Reduce motion keeps only the cross-fade, also when
+   it is switched on while a card is up (the component reads the setting at mount) */
+html.sf-reduce-motion .sendoff-waiting-face { transition: opacity 240ms ease !important; }
 /* these dots are invisible between pulses: show them steady */
 html.sf-reduce-motion .mvp-waiting-dots i { animation: none !important; opacity: 1 !important; }
 
