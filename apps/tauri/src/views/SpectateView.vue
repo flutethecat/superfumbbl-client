@@ -16583,10 +16583,13 @@ watch(() => [
              setupAutoFill store machinery is retained for template apply's reuse.) -->
         <!-- Owner 11-04: "Let's drop 'WAITING FOR THEIR FORMATION' here and make it just a tag with the 'OPPONENT IS
              SETTING UP' text ... roughly visually the same size. Maybe two lines?" A title-only tag, narrow enough that
-             the title balances onto two lines (both in-game styles). -->
+             the title balances onto two lines (both in-game styles).
+             Owner 11-06: the tag grows with the UI text size - it hugs its title, and the title wraps at a width set in
+             its OWN font size (.opponent-setup-notice title max-width), so a larger text size widens the tag instead of
+             splitting OPPONENT across lines. -->
         <PitchConfirmationPanel v-if="opponentSetupNotice" class="opponent-setup-notice"
           :title="$t('hud.opponentSetupNotice.opponentIsSettingUp')" :label="$t('hud.opponentSetupNotice.opponentIsSettingUp')" compact
-          :position-style="{ top: '18%', right: 'max(18px, env(safe-area-inset-right))', left: 'auto', transform: 'none', width: 'min(180px, calc(100% - 36px))', minWidth: '0', maxWidth: 'none' }" />
+          :position-style="{ top: '18%', right: 'max(18px, env(safe-area-inset-right))', left: 'auto', transform: 'none', width: 'max-content', minWidth: '0', maxWidth: 'calc(100% - 36px)' }" />
 
         <!-- Owner 2026-07-14 (setup overhaul #1): the big left SETUP WINDOW is deprecated — the reserve CHIPS
              are gone (reserves are now dragged straight from the dugout "reserves box" on the right, cond-b),
@@ -20116,7 +20119,12 @@ watch(() => [
    never intercept one. */
 .pitch-instruction { pointer-events: none; }
 .opponent-setup-notice :deep(.pitch-confirm-title) {
-  overflow-wrap: anywhere;
+  /* owner 11-06: two balanced lines at any UI text size - the wrap width is in the title's own em, so the tag grows
+     with it. Sol P3: never narrower than its longest word (Welsh GWRTHWYNEBYDD, Dutch TEGENSTANDER pass 9em), so a
+     long word widens the tag instead of splitting; prompts.css keeps the Modern skin from breaking words anywhere */
+  max-width: 9em;
+  min-width: min-content;
+  overflow-wrap: break-word;
   text-wrap: balance;
   white-space: normal;
 }
