@@ -172,6 +172,8 @@
 .settings-pane .settings-group div.row .row-ctl > input:not([type]) { flex: 1 1 auto; min-width: 0; }
 .settings-pane .settings-group div.row .row-ctl > span:not([class]) { flex: none; min-width: 3.2em; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
 .settings-pane .settings-group div.row .row-note { color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
+/* Owner 11-07 (Sol r2): a line under the row (the temporary portraits flip note) spans every column, wide or stacked. */
+.settings-pane .settings-group div.row > .row-span { grid-column: 1 / -1; }
 .settings-pane .settings-group div.row .creds-status { margin: 0; text-align: left; }
 .settings-pane .settings-group div.row.locked .row-ctl { opacity: 0.62; }
 

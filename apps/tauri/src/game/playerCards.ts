@@ -10,32 +10,69 @@
  *  - 'auto'   = cards on: a click on a player opens their card (how the client always behaved), and
  *  - 'called' = cards off: pitch clicks open no card; an open card closes; the explicit opens still work (a roster
  *    row).
- * The setting is the ordinary persisted one, so the choice survives a restart.
+ * Owner 11-07 (Train's report: "The Player Portraits setting keeps turning itself off seemingly at random"): the middle
+ * click no longer writes the saved setting. A flip is TEMPORARY, kept until the app closes (it survives leaving a game
+ * for a spectate); Settings > UI "Player portraits" is the saved choice and overrides it - changing it there drops the
+ * flip, and so does a saved value that no longer matches the one the flip was taken from.
  *
  * Shipped first as the 1.0.168 hotfix (fixed middle button); with the controls registry the bound actions come from
  * the binding table (Settings > Controls: "Player portraits on / off", default Middle mouse, rebindable) and the
  * action runs through the in-game action runner. The hotfix's ownership rule below is kept whole.
  */
+import { reactive, watch } from 'vue';
 import type { ControlActionId } from './controls';
 import { isAssignTouchdownPickKey, isMvpPickKey } from './endGamePick';
 
 export type PlayerCardMode = 'auto' | 'called';
-export const PLAYER_CARDS_ON_NOTICE = 'Player portraits on';
-export const PLAYER_CARDS_OFF_NOTICE = 'Player portraits off';
+/** Catalogue keys of the notice (owner 11-07: shown in the player's language, logged in English through lt()). */
+export const PLAYER_CARDS_ON_NOTICE = 'hud.playerCards.on';
+export const PLAYER_CARDS_OFF_NOTICE = 'hud.playerCards.off';
+/** Owner 11-07: a flip away from the saved choice says it is temporary. */
+export const PLAYER_CARDS_ON_SESSION_NOTICE = 'hud.playerCards.onSession';
+export const PLAYER_CARDS_OFF_SESSION_NOTICE = 'hud.playerCards.offSession';
+
+/** Owner 11-07: the temporary flip, app-wide (module state: it outlives a view, never reaches the settings file).
+ *  `base` = the saved mode when the flip was taken; a different saved mode means Settings changed and wins. */
+export const playerCardOverride = reactive<{ mode: PlayerCardMode | null; base: PlayerCardMode | null }>({ mode: null, base: null });
+
+/** The mode in force: the temporary flip while it still belongs to the saved choice, else the saved setting. */
+export function effectivePlayerCardMode(saved: PlayerCardMode): PlayerCardMode {
+  return playerCardOverride.mode !== null && playerCardOverride.base === saved ? playerCardOverride.mode : saved;
+}
+
+/** The saved choice changed (App.vue watches it, whatever wrote it) or Settings' "Use saved setting": the saved
+ *  choice overrides any temporary flip. */
+export function clearPlayerCardOverride(): void {
+  playerCardOverride.mode = null;
+  playerCardOverride.base = null;
+}
+
+/** Owner 11-07: drop the temporary flip on EVERY change of the saved choice. Synchronous (Sol r2 P3): a batched watch
+ *  saw no change when the saved value went auto -> called -> auto in one tick, and the stale flip came back. The
+ *  toggle never writes the saved value, so the toggle itself never triggers this. Returns the stop handle. */
+export function clearPlayerCardOverrideOnSavedChange(saved: () => PlayerCardMode): () => void {
+  return watch(saved, () => clearPlayerCardOverride(), { flush: 'sync' });
+}
 
 export interface PlayerCardToggleDeps {
   settings: { playerCardMode: PlayerCardMode };
   /** Close the card that is open (cards were just turned off). */
   closeCard(): void;
-  /** The small corner notice. */
-  notice(text: string): void;
+  /** The small notice; `key` is one of the PLAYER_CARDS_*_NOTICE catalogue keys. */
+  notice(key: string): void;
 }
-/** Flip the mode; returns the new one. */
+/** Flip the mode in force for this session (the saved setting is never written); returns the new one. Flipping back
+ *  to the saved choice ends the temporary flip. */
 export function togglePlayerCardMode(deps: PlayerCardToggleDeps): PlayerCardMode {
-  const next: PlayerCardMode = deps.settings.playerCardMode === 'called' ? 'auto' : 'called';
-  deps.settings.playerCardMode = next;
+  const saved = deps.settings.playerCardMode;
+  const next: PlayerCardMode = effectivePlayerCardMode(saved) === 'called' ? 'auto' : 'called';
+  if (next === saved) clearPlayerCardOverride();
+  else { playerCardOverride.mode = next; playerCardOverride.base = saved; }
   if (next === 'called') deps.closeCard();
-  deps.notice(next === 'auto' ? PLAYER_CARDS_ON_NOTICE : PLAYER_CARDS_OFF_NOTICE);
+  const temporary = next !== saved;
+  deps.notice(next === 'auto'
+    ? (temporary ? PLAYER_CARDS_ON_SESSION_NOTICE : PLAYER_CARDS_ON_NOTICE)
+    : (temporary ? PLAYER_CARDS_OFF_SESSION_NOTICE : PLAYER_CARDS_OFF_NOTICE));
   return next;
 }
 

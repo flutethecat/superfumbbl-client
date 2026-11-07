@@ -33382,7 +33382,7 @@ export const gameStore = {
   /** Owner 10-15: a declaration of ours was accepted and its acting-player echo has not been received yet. */
   declarationInFlight(): boolean { void state.declarationRevision; return declarationAwaitingEcho; },
   /** A system line in the log (FUMBBL Controls: a control-layer switch that waited, then applied). */
-  logSystem(line: string): void { log('system', line); },
+  logSystem(line: string | LocalText): void { log('system', line); }, // owner 11-07: lt() lines (English stored, shown localised)
   /** Owner 10-16: the receive-time turn mode the End Turn wire field carries (tests). */
   serverTurnMode(): string | null { return srvTurnMode; },
   /** Astra r4 F2: a back-out gesture (Escape's deselect) abandons a declaration queued behind a cancel. */

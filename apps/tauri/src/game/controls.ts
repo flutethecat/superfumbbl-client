@@ -64,7 +64,7 @@ export const CONTROL_ACTIONS = [
   { id: 'playerCard', get label() { return $t('settings.controlActions.playerCard'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('Y') },
   // Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits"; restated:
   // "The middle mouse button for player portrait should disable player portraits" - the first press turns them OFF. Flips
-  // Settings > UI "Player card" between Show automatically and Only when called. A mouse / keyboard feature (no pad
+  // player portraits on / off for this session (owner 11-07: Settings > UI "Player portraits" stays the saved choice). A mouse / keyboard feature (no pad
   // default, not behind the controller box).
   { id: 'playerCardsToggle', get label() { return $t('settings.controlActions.playerPortraitsOnOff'); }, group: 'Game', context: 'game', keyboard: pair(MOUSE_MIDDLE), controller: pair() },
   { id: 'cyclePlayerPrev', get label() { return $t('settings.controlActions.previousPlayerWhoCan'); }, group: 'Game', context: 'game', keyboard: pair(), controller: pair('DpadLeft') },

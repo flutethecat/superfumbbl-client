@@ -87,6 +87,7 @@ import PadOverlay from './components/PadOverlay.vue';
 import { browserHapticPads, hapticForSound } from './game/haptics';
 import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
 import { applyServerTarget, noteForkUrlEdited, onServerTargetSwitch, realignServerConnection, rebaseSettingsSnapshotConnection, serverSwitchGenerationNow, serverTargets, botConfigBaseUrl, controlBindingConflict, flushSettingsFile, secondClientEnabled, secondClientEnabledElsewhere, setAllowSecondClient, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { clearPlayerCardOverride, clearPlayerCardOverrideOnSavedChange, playerCardOverride } from './game/playerCards'; // owner 11-07: Settings overrides a temporary middle-click flip
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
 import { SKILL_CONFIG_AS_SKILL, SKILL_CONFIG_NAMES, iconWriteKey, isStarPlayerTrait, skillConfigEntryFor } from './game/skillConfigRows';
@@ -2477,6 +2478,9 @@ function onControllerBoxChange(event: Event): void {
   box.checked = settings.controllerSupportEnabled; // the box shows the SETTING: still off until the notice is acknowledged
 }
 watch(() => ui.settingsOpen, (open) => { if (!open) controllerOptIn.dismiss(); });
+// Owner 11-07: Settings overrides a temporary middle-click portraits flip - any change to the saved choice (the select,
+// a settings reload or reset) drops it.
+clearPlayerCardOverrideOnSavedChange(() => settings.playerCardMode);
 const controllerNoticeOk = ref<HTMLButtonElement | null>(null);
 const controllerNoticeDialog = ref<HTMLElement | null>(null);
 /** Astra P3 10-10: Tab / Shift+Tab stay inside the notice (it is modal over Settings). The dialog's own keydown trap
@@ -4088,6 +4092,12 @@ onBeforeUnmount(() => {
                 </span>
               </label>
               <SettingInfo :text="$t('settings.info.playerPortraits')" :def="$t('settings.info.valueOn')" />
+              <!-- Owner 11-07 (Sol P2): the select shows the SAVED choice, so while a middle click has flipped portraits for
+                   the session it says so, with a way back to the saved choice (re-picking the shown option fires no change). -->
+              <p v-if="playerCardOverride.mode" class="hint row-span" data-testid="player-card-temporary">
+                {{ $t(playerCardOverride.mode === 'called' ? 'settings.ui.hudLayout.playerPortraitsTemporaryOff' : 'settings.ui.hudLayout.playerPortraitsTemporaryOn') }}
+                <button type="button" class="sf-btn small" data-testid="player-card-use-saved" @click="clearPlayerCardOverride()">{{ $t('settings.ui.hudLayout.useSavedPlayerPortraits') }}</button>
+              </p>
             </div>
             <div class="row">
               <label class="row-main">

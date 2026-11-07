@@ -545,7 +545,7 @@ import { autoDirectorBadgeState, bindAutoDirectorManualHold } from '../game/auto
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import { onReportOwnedKey } from '../game/reportModalKeys';
 import { kickConfirmEnter } from '../game/kickConfirmKeys';
-import { decisionCardOpen, gameKeyDecision, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
+import { decisionCardOpen, effectivePlayerCardMode, gameKeyDecision, middleClickDecision, playerCardsToggleBlocked, textFieldOwnsInput, togglePlayerCardMode, type DecisionCardStoreState } from '../game/playerCards';
 import { createIntensiveTrainingFocus, intensiveCardAnchor, intensiveTrainingFocusTarget } from '../game/intensiveTrainingFocus';
 import ReplayControls from '../components/ReplayControls.vue';
 import ReplayTelestrator from '../components/ReplayTelestrator.vue';
@@ -558,7 +558,7 @@ import { flashingReduced, motionReduced } from '../game/accessibilityModes';
 // they are incorporated on the next build (Vite ?raw import, header row skipped).
 import givethanksRaw from '../assets/givethanks.csv?raw';
 import signSayingsRaw from '../assets/signsayings.csv?raw';
-import { $t, data, terms, useLiveSet } from '../i18n';
+import { $t, data, lt, terms, useLiveSet } from '../i18n';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
 import { playerStateLabel, playerStateToken } from '../game/playerStateToken';
@@ -8884,25 +8884,28 @@ function showPopup(playerId: string) {
  *  behaviour); 'called' ("Player portraits off") leaves it to the explicit opens - a roster row, the Player card key if
  *  one is bound, the pad's Y - which call showPopup directly. */
 function autoShowPopup(playerId: string) {
-  if (settings.playerCardMode === 'called') return;
+  if (effectivePlayerCardMode(settings.playerCardMode) === 'called') return; // owner 11-07: a middle-click flip is temporary
   showPopup(playerId);
 }
 /** Owner 10-10: "let's add Middle Mouse Button as a default button for enabling/disabling player portraits" - the
- *  "Player portraits on / off" action flips Settings > UI "Player portraits" (persisted) and says so below the centre panel. Off
+ *  "Player portraits on / off" action flips player portraits and says so below the centre panel (owner 11-07: for this
+ *  session only; Settings > UI "Player portraits" stays the saved choice). Off
  *  closes a card that is open; explicit opens keep working. */
 function togglePlayerCards(): boolean {
-  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: showPlayerCardsNotice });
+  // owner 11-07: the notice also goes in the log, so a stray middle click can be traced afterwards
+  togglePlayerCardMode({ settings, closeCard: () => { popup.visible = false; }, notice: (key) => { showPlayerCardsNotice($t(key)); gameStore.logSystem(lt(key)); } });
   return true;
 }
 /** Owner 10-11: the notice sits just BELOW the centre panel again (the 1.0.169 place), not in the top-right corner chip
- *  the controller work moved it to. One line, 1.5 s, a second press replaces the first; its own slot in the .chat-toast
+ *  the controller work moved it to. One line, a second press replaces the first (owner 11-07: 4 s, it now says the flip
+ *  is temporary); its own slot in the .chat-toast
  *  look (like the interceptor-wait line), not on the chat stack, which is hidden in the replayer. */
 const playerCardsNotice = ref('');
 let playerCardsNoticeTimer = 0;
 function showPlayerCardsNotice(text: string) {
   window.clearTimeout(playerCardsNoticeTimer);
   playerCardsNotice.value = text;
-  playerCardsNoticeTimer = window.setTimeout(() => { playerCardsNotice.value = ''; }, 1500);
+  playerCardsNoticeTimer = window.setTimeout(() => { playerCardsNotice.value = ''; }, 4000);
 }
 onBeforeUnmount(() => window.clearTimeout(playerCardsNoticeTimer));
 /** A middle-button CLICK on the pitch (the renderer reports it; a middle-button drag still pans). True = the button is
@@ -8969,7 +8972,7 @@ watch(() => popup.visible, (visible) => { if (!visible) renderer?.clearRosterAtt
 let intensiveFocusRendererMounted = false;
 const intensiveTrainingFocus = createIntensiveTrainingFocus({
   renderer: () => (intensiveFocusRendererMounted ? renderer : null),
-  portraitsOn: () => settings.playerCardMode !== 'called',
+  portraitsOn: () => effectivePlayerCardMode(settings.playerCardMode) !== 'called',
   openCard: (playerId) => showPopup(playerId),
   cardPlayerId: () => (popup.visible ? popup.playerId : null),
   closeCard: () => { popup.visible = false; },
