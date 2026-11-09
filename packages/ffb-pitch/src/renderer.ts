@@ -22,11 +22,11 @@ import {
   type BundledSkillBadgeFamily,
   type SkillIconStyle,
 } from './skillIcons';
-import { AURA_RADIUS, auraEmitters, bombCells, catchTarget, disturbingPresenceLayers, foulTarget, interceptors, passTargetRoll } from './actions';
+import { AURA_RADIUS, auraEmitters, catchTarget, disturbingPresenceLayers, foulTarget, interceptors, passTargetRoll } from './actions';
 import { disturbingPresenceTagText } from './disturbingPresence';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
-import { jumpTargetForPlayer, serverMoveSquareRolls, type ServerMoveRoll } from './jumpTarget';
+import { type ServerMoveRoll } from './jumpTarget';
 import { breakTackleAvailable, planDodgeTarget } from './dodgeTarget';
 import {
   PITCH_COLS,
@@ -81,7 +81,7 @@ export interface HmpScatterMarksState {
   final: boolean;
 }
 import { passRange, type PassRange } from './passing';
-import { blockDicePreview, type BlockPreview } from './blocks';
+import { blockDicePreview } from './blocks';
 import { preSetupPlacements } from './preSetupFormation';
 import {
   bundledWalkSheetFor,
@@ -685,12 +685,11 @@ export function ballThrowArcMs(kind: 'pass' | 'punt'): number {
 /** BB2025 TTM: the thrown player's single flight-arc duration (kick fly-in style). Shared by
  *  playThrow's arm-time merge and the consumption tween in setGame's per-token loop so the two
  *  stay in lockstep (item row29-ttm-anim). Owner 10-13 (Doglobro g1953046, "the ttm throw goes too quick"):
- *  "We can go to a 1.2s flight time" - a FIXED 1.2 s flight in Modern. Classic keeps its 640 ms flight. */
+ *  "We can go to a 1.2s flight time" - a FIXED 1.2 s flight. */
 export const TTM_THROW_MS = 1200;
-export const TTM_THROW_CLASSIC_MS = 640;
-/** The thrown player's flight on screen, presentation-scaled (Classic keeps the 640 ms flight). */
-export function ttmThrowMs(classic = false): number {
-  return presentationMs(classic ? TTM_THROW_CLASSIC_MS : TTM_THROW_MS);
+/** The thrown player's flight on screen, presentation-scaled. */
+export function ttmThrowMs(): number {
+  return presentationMs(TTM_THROW_MS);
 }
 /** Owner 10-13: "Bounce should occur after the flight ... look at the ball bounce behavior and copy timings here." One
  *  landing-bounce hop of a thrown player (Modern) = one loose-ball bounce hop: the per-square move pace plus the
@@ -736,12 +735,6 @@ export const KICK_FOLLOW_RETURN_MS = 900;
 export const KICK_FOLLOW_LANDING_DWELL_MS = 350;
 export const AD_NUDGE_MS = 420;
 export const AD_MANUAL_HOLD_MS = 1500;
-export const AD_IDLE_DELAY_MS = 10_000;
-export const AD_IDLE_MAX_ZOOM_OUT = 0.15;
-/** Owner 09-06: the auto director's idle ZOOM-OUT (pull back to fit the central group) is DISABLED — it pans and
- *  follows only; the coach's zoom rung stays where they left it. The pure autoDirectorIdleZoomTarget stays for tests. */
-export const AD_IDLE_ZOOM_OUT_ENABLED = false;
-export const AD_IDLE_ZOOM_TAU_MS = 1600;
 const AD_THRESHOLD_EPSILON_SQ = 0.000001;
 const AD_FOLLOW_RELEASE_PX = 0.5; // close enough to centred — disengage
 /** Pure per-frame follow step. `offsetPx` = active player's signed screen distance
@@ -806,66 +799,6 @@ export function autoDirectorFocusMode(
   if (moving && atLeast(AD_TRACK_START_SQ)) return 'track';
   if (moving && atLeast(AD_NUDGE_START_SQ)) return 'nudge';
   return 'idle';
-}
-
-export interface AutoDirectorIdleZoomInput {
-  /** Player anchors in renderer-local/world coordinates. */
-  points: { x: number; y: number }[];
-  worldX: number;
-  worldY: number;
-  scale: number;
-  minScale: number;
-  viewportWidth: number;
-  viewportHeight: number;
-  tilePadding: number;
-}
-
-/** Robust central envelope: trim 10% from both tails on each axis. Each axis
- *  retains 80%, so their intersection contains at least 60% of players (a true
- *  majority), while isolated outliers cannot demand a giant zoom change. */
-export function autoDirectorCentralEnvelope(points: { x: number; y: number }[]): {
-  minX: number; maxX: number; minY: number; maxY: number;
-} | null {
-  if (points.length === 0) return null;
-  const xs = points.map((p) => p.x).sort((a, b) => a - b);
-  const ys = points.map((p) => p.y).sort((a, b) => a - b);
-  const trim = Math.floor(points.length * 0.1);
-  const hi = Math.max(trim, points.length - 1 - trim);
-  return { minX: xs[trim]!, maxX: xs[hi]!, minY: ys[trim]!, maxY: ys[hi]! };
-}
-
-/** Compute the one-shot idle zoom target. The viewport-centre world point is the
- *  anchor, so applying the returned scale cannot introduce a pan jump. A single
- *  idle episode can reduce scale by at most 15%, and never below camera fit. */
-export function autoDirectorIdleZoomTarget(input: AutoDirectorIdleZoomInput): number | null {
-  const envelope = autoDirectorCentralEnvelope(input.points);
-  if (!envelope || input.scale <= input.minScale + 0.0001) return null;
-  const marginX = input.viewportWidth * 0.1;
-  const marginY = input.viewportHeight * 0.1;
-  const left = input.worldX + (envelope.minX - input.tilePadding) * input.scale;
-  const right = input.worldX + (envelope.maxX + input.tilePadding) * input.scale;
-  const top = input.worldY + (envelope.minY - input.tilePadding) * input.scale;
-  const bottom = input.worldY + (envelope.maxY + input.tilePadding) * input.scale;
-  if (left >= marginX && right <= input.viewportWidth - marginX
-    && top >= marginY && bottom <= input.viewportHeight - marginY) return null;
-
-  const cx = input.viewportWidth / 2;
-  const cy = input.viewportHeight / 2;
-  const worldCx = (cx - input.worldX) / input.scale;
-  const worldCy = (cy - input.worldY) / input.scale;
-  const extentX = Math.max(Math.abs(envelope.minX - worldCx), Math.abs(envelope.maxX - worldCx)) + input.tilePadding;
-  const extentY = Math.max(Math.abs(envelope.minY - worldCy), Math.abs(envelope.maxY - worldCy)) + input.tilePadding;
-  const desired = Math.min(
-    extentX > 0 ? (cx - marginX) / extentX : input.scale,
-    extentY > 0 ? (cy - marginY) / extentY : input.scale,
-  );
-  const capped = Math.max(input.minScale, input.scale * (1 - AD_IDLE_MAX_ZOOM_OUT), desired);
-  return capped < input.scale - 0.0001 ? capped : null;
-}
-
-export function autoDirectorIdleZoomStep(current: number, target: number, dtMs: number): number {
-  const alpha = 1 - Math.exp(-Math.min(50, Math.max(0, dtMs)) / AD_IDLE_ZOOM_TAU_MS);
-  return current + (target - current) * alpha;
 }
 
 export function staticSelectionHaloVisible(selectedPlayerId: string | null, activePlayerId: string | null): boolean {
@@ -1574,17 +1507,6 @@ const DISTANCE_STYLE = new TextStyle({
   // owner 2026-07-03 r3: black outline so the on-pitch row markers read over any turf/pitch photo;
   // owner 09-07: 1.25 -> 3 px, a proper outline.
   stroke: { color: 0x000000, width: 3 },
-});
-/** FUMBBL Classic coloured row-number rails (showRowNumberRails): red = home half,
- *  blue = away half. Heavier outline than DISTANCE_STYLE so the small edge numbers
- *  read over any turf photo. */
-const RAIL_HOME_STYLE = new TextStyle({
-  fontFamily: FONT_DISPLAY_FAMILY, fontSize: 18, fontWeight: 'bold',
-  fill: 0xe8524b, stroke: { color: 0x180404, width: 2 },
-});
-const RAIL_AWAY_STYLE = new TextStyle({
-  fontFamily: FONT_DISPLAY_FAMILY, fontSize: 18, fontWeight: 'bold',
-  fill: 0x5a8fe0, stroke: { color: 0x04101c, width: 2 },
 });
 /** Owner 10-07: the TOUCHBACK / OUT OF BOUNDS plate's pop (over the depth scale, settling at ~1 square) and fade, at
  *  `stampElapsed` ms into its `stampMs` hold. Shared by the ball's stamp and (owner 10-20) a thrown player's. */
@@ -2549,7 +2471,6 @@ export class PitchRenderer {
     this.pinchDistance = 0;
     this.lastPointer = { x: 0, y: 0 };
     this.squareHoverLast = null;
-    this.actionHoverActive = false;
   }
   /** Bobbing BALL marker over the ball carrier (queue item 9). */
   private ballMarker: { node: Container; baseY: number; bob?: number } | null = null;
@@ -2756,7 +2677,7 @@ export class PitchRenderer {
     return JSON.stringify([
       !!g, String((g as { gameId?: unknown } | null)?.gameId ?? ''),
       fans(g?.teamHome as { dedicatedFans?: unknown } | undefined), fans(g?.teamAway as { dedicatedFans?: unknown } | undefined),
-      this.stadiumEnabled, this.decorEnabled,
+      this.stadiumEnabled,
       m ? [this.stadiumModelGeneration, m.texture.uid, m.dugoutsProvided, m.footprint.x0, m.footprint.x1, m.footprint.y0, m.footprint.y1,
         m.corners.tl.u, m.corners.tl.v, m.corners.tr.u, m.corners.tr.v, m.corners.bl.u, m.corners.bl.v] : null,
       geometryStateKey(),
@@ -2856,7 +2777,7 @@ export class PitchRenderer {
   private dugoutCompartmentById = new Map<string, Exclude<PlayerPresentationCompartment, 'pitch' | 'removed'>>();
   /** Owner 2026-07-07: the SW off-pitch SCORE / TURN-TIMER / RE-ROLL track. */
   private turnTrackLayer = new Container();
-  /** Show the on-pitch turn-timer track (also gated by dugoutsEnabled → off in Classic). */
+  /** Show the on-pitch turn-timer track. */
   turnTrackEnabled = true;
   /** Modern HUD presentation option. The chrome variant renders these as physical,
    *  weathered sideline fixtures; Classic never opts in and keeps its existing renderer. */
@@ -3341,8 +3262,6 @@ export class PitchRenderer {
       }
     }
   }
-  /** B5-2: false = spectator-clean (no halo/range/path/dice previews). */
-  plannerEnabled = true;
   /** Owner 2026-07-03: "Auto Director" — when false, the automatic camera work is
    *  suppressed: `cinematicZoom` no-ops (no zoom-in on the action) and the active-
    *  player nudge/track is skipped by the app. Dice/splashes still play; only the
@@ -3364,9 +3283,6 @@ export class PitchRenderer {
    *  cinematic or the kick-off follow owns the camera it reads false even with the manual latch live (that is still
    *  automatic camera work), and true again once they end if the latch still is. Presentation-only. */
   onAutoDirectorManualHoldChange: ((held: boolean) => void) | null = null;
-  private adIdleSince: number | null = null;
-  private adIdleZoomTargetScale: number | null = null;
-  private adIdleZoomEvaluated = false;
   private presentationMode: PresentationMode = 'spectator';
   /** B5-5: cinematic camera state — user input is ignored while active. */
   private cinematic: {
@@ -3493,7 +3409,6 @@ export class PitchRenderer {
   }
 
   private beginVisualEffect(): () => void {
-    this.noteAutoDirectorActivity();
     this.activeVisualEffects += 1;
     let active = true;
     return () => {
@@ -3542,9 +3457,6 @@ export class PitchRenderer {
     this.adFocusMode = 'idle';
     this.adFocusElapsedMs = 0;
     this.adCompletedMotionTargets.clear();
-    this.adIdleSince = null;
-    this.adIdleZoomTargetScale = null;
-    this.adIdleZoomEvaluated = false;
     if (clearSubject) {
       this.adFocusSubject = null;
       this.adForceNudgeSubject = null;
@@ -3552,18 +3464,9 @@ export class PitchRenderer {
     }
   }
 
-  /** Presentation-only activity latch used by effects which do not own a move
-   *  tween. It never writes the game model or emits a command. */
-  noteAutoDirectorActivity(now = performance.now()): void {
-    this.adIdleSince = now;
-    this.adIdleZoomTargetScale = null;
-    this.adIdleZoomEvaluated = false;
-  }
-
   private noteManualCameraInput(now = performance.now()): void {
     this.adManualUntil = now + AD_MANUAL_HOLD_MS;
     this.resetAutoDirectorCamera(true);
-    this.adIdleSince = now;
     this.kickFollow = null; // a coach who grabs the camera mid-kick keeps it
   }
 
@@ -3742,14 +3645,6 @@ export class PitchRenderer {
     if (t >= 1) this.kickFollow = null;
   }
 
-  private autoDirectorPresentationBusy(): boolean {
-    return this.activeVisualEffects > 0
-      || this.moveTweens.size > 0
-      || this.actionDice.length > 0
-      || this.rollModals.length > 0
-      || this.flashRings.length > 0;
-  }
-
   /** Resolve the player the renderer is actually presenting, rather than the
    *  player the immediate-apply server model has already advanced to. During
    *  streamed/catch-up movement those identities can differ for a tile (or an
@@ -3865,28 +3760,22 @@ export class PitchRenderer {
   private tickAutoDirector(dtMs: number, now: number): void {
     const manualHeld = this.destroyed ? false : this.reportAutoDirectorManualHold(now);
     if (!this.app || !this.autoDirector || this.adSuspended || this.destroyed) {
-      if (this.adFocusMode !== 'idle' || this.adIdleZoomTargetScale != null) this.resetAutoDirectorCamera(true);
+      if (this.adFocusMode !== 'idle') this.resetAutoDirectorCamera(true);
       return;
     }
-    // Cinematics retain their established priority and saved-camera return. The
-    // idle clock is re-anchored for their entire visible lifetime.
+    // Cinematics retain their established priority and saved-camera return.
     if (this.cinematic) {
       this.resetAutoDirectorCamera(true);
-      this.adIdleSince = now;
       return;
     }
     // Owner 09-14: the kick-off camera owns the pan while the ball is in the air / bouncing / returning.
     if (this.kickFollow) {
       this.resetAutoDirectorCamera(true);
-      this.adIdleSince = now;
       return;
     }
     // Controller P2a (Astra P2-1): while the pad crosshair is shown it owns the camera — the director holds (even with
     // the crosshair parked past the manual hold) and resumes when mouse mode returns or the crosshair hides.
-    if (manualHeld) {
-      this.adIdleSince = now;
-      return;
-    }
+    if (manualHeld) return;
 
     const target = this.autoDirectorTarget();
     const previousSubject = this.adFocusSubject;
@@ -3897,7 +3786,6 @@ export class PitchRenderer {
       this.adFocusSubject = nextSubject;
       this.adFocusMode = 'idle';
       this.adFocusElapsedMs = 0;
-      this.noteAutoDirectorActivity(now);
     }
 
     if (target) {
@@ -3933,49 +3821,8 @@ export class PitchRenderer {
         this.world.position.x -= offsetX * alpha;
         this.world.position.y -= offsetY * alpha;
         this.adFocusElapsedMs += frameMs;
-        this.noteAutoDirectorActivity(now);
-      } else if (target.moving) {
-        // Movement inside the dead box holds the camera but is not "idle".
-        this.noteAutoDirectorActivity(now);
       }
     }
-
-    if (this.autoDirectorPresentationBusy()) {
-      this.noteAutoDirectorActivity(now);
-      return;
-    }
-    if (this.adFocusMode !== 'idle') return;
-    if (this.adIdleSince == null) this.adIdleSince = now;
-    if (now - this.adIdleSince < AD_IDLE_DELAY_MS) return;
-
-    if (!this.adIdleZoomEvaluated) {
-      this.adIdleZoomEvaluated = true;
-      const points = (this.game?.fieldModel.playerDataArray ?? [])
-        .filter((data) => isOnPitch(data.playerCoordinate))
-        .map((data) => squareAnchor(data.playerCoordinate![0], data.playerCoordinate![1]));
-      this.adIdleZoomTargetScale = !AD_IDLE_ZOOM_OUT_ENABLED ? null : autoDirectorIdleZoomTarget({
-        points,
-        worldX: this.world.position.x,
-        worldY: this.world.position.y,
-        scale: this.world.scale.x,
-        minScale: this.cameraFitScale,
-        viewportWidth: this.app.screen.width,
-        viewportHeight: this.app.screen.height,
-        tilePadding: Math.max(TILE_W, TILE_H) * 1.25,
-      });
-    }
-    const zoomTarget = this.adIdleZoomTargetScale == null ? null : this.quantizeZoom(this.adIdleZoomTargetScale, 'nearest');
-    if (zoomTarget == null) return;
-    const oldScale = this.world.scale.x;
-    const newScale = autoDirectorIdleZoomStep(oldScale, zoomTarget, dtMs);
-    const cx = this.app.screen.width / 2;
-    const cy = this.app.screen.height / 2;
-    const worldCx = (cx - this.world.position.x) / oldScale;
-    const worldCy = (cy - this.world.position.y) / oldScale;
-    this.world.scale.set(newScale);
-    this.world.position.set(cx - worldCx * newScale, cy - worldCy * newScale);
-    this.updateOverlayScales();
-    if (Math.abs(newScale - zoomTarget) <= 0.0001) this.adIdleZoomTargetScale = null;
   }
   /** Previous ball square — feeds the ball-flight tween (F-5). */
   private lastBallSquare: [number, number] | null = null;
@@ -4014,8 +3861,6 @@ export class PitchRenderer {
   private lastBaseStates = new Map<string, number>();
   /** Expanding knockdown/injury flash rings (F-5), self-removing. */
   private flashRings: { g: Container; x: number; y: number; scale: number; start: number; grow?: number; durationMs?: number; square?: [number, number] }[] = [];
-  /** Owner o66 #7: over-head PASS/CATCH roll modals — a labelled pill above the passer/catcher, pop-in then fade. */
-  private rollModals: { node: Container; start: number; baseY: number }[] = [];
   /** On-pitch action d6 (owner 2026-07-03 r3): a rolled die pops next to the
    *  action square, holds, then fades. Self-removing via the ticker. */
   private actionDice: ActionDieRecord[] = [];
@@ -4117,10 +3962,6 @@ export class PitchRenderer {
   showRowMarkers = true;
   showSweetSpot = true;
   showFieldLogos = true;
-  /** FUMBBL Classic (owner 2026-07-08): number every length-row 1..26 down BOTH
-   *  side rails, coloured by half — red on the home half (x 0..12), blue on the
-   *  away half. Off by default; the classic preset turns it on. */
-  showRowNumberRails = false;
   /** Position-ring density (alpha multiplier) + optional colour override. */
   private ringDensity = 1;
   private ringColorOverride: number | null = null;
@@ -4346,9 +4187,6 @@ export class PitchRenderer {
   private throwRollCue: { square: [number, number]; target: number } | null = null;
   private catchRollCue: { square: [number, number]; target: number } | null = null;
   private passRollResolver: ((throwerId: string, from: Square, to: Square) => number | null) | null = null;
-  /** Pending Monstrous Mouth target + authoritative needed roll. This is deliberately
-   *  separate from PlayerStateFlag.CHOMPED: the latter means the bite already landed. */
-  private chompCue: { square: [number, number]; target: number } | null = null;
   setThrowRoll(square: [number, number] | null, target: number): void {
     this.throwRollCue = square && target > 0 ? { square: [square[0], square[1]], target } : null;
     this.redrawOverlays();
@@ -4365,12 +4203,6 @@ export class PitchRenderer {
   private resolvedPassRoll(throwerId: string, from: Square, to: Square): number | null {
     if (this.passRollResolver) return this.passRollResolver(throwerId, from, to);
     return passTargetRoll(this.game!, throwerId, from, to)?.roll ?? null;
-  }
-  setChompCue(square: [number, number] | null, target: number): void {
-    this.chompCue = square && target > 0 ? { square: [square[0], square[1]], target } : null;
-    // The roll chip lives on overlayLayer, while the pending-target token is a
-    // token-local child like CONFUSED, so rebuild both surfaces together.
-    this.refresh();
   }
 
   /**
@@ -5064,13 +4896,9 @@ export class PitchRenderer {
   /** Astra pass 4 (10-05): the quick second right-click on empty grass is consumed here as a full reset and never
    *  reaches onContextMenu; the host hears about it so its own right-click cancels (a pending player switch) run. */
   onRightClickReset: (() => void) | null = null;
-  /** Path indices that are JUMPS (over a downed player) rather than steps. */
-  private jumpSteps = new Set<number>();
   /** Double right-click window (B2-1): two quick right-clicks = full reset. */
   static DOUBLE_RCLICK_MS = 400;
   private lastRightClickAt = -Infinity;
-  /** O2/O3: armed block preview; the second click on the defender confirms. */
-  private pendingBlock: { defenderId: string; square: Square; preview: BlockPreview } | null = null;
   /** Owner 2026-07-08: FUMBBL block-target preview — while set, draw the block-dice
    *  COUNT over every adjacent standing opponent of this attacker (from the classic
    *  Block context menu). null = off. */
@@ -5117,8 +4945,6 @@ export class PitchRenderer {
    *  (× TILE_H). Classic default 1.62 (shifted higher); FUMBBL40k sets it lower so
    *  the dots sit closer to the sprite's head. */
   blockDotsHeadFactor = 1.62;
-  /** Fired when a block is confirmed via the O3 double-click convention. */
-  onBlockConfirm: ((attackerId: string, defenderId: string, preview: BlockPreview) => void) | null = null;
   /** Q4 Option B: rejected actions surface a tooltip at the click point. */
   onActionRejected: ((message: string, canvasX: number, canvasY: number) => void) | null = null;
   /** #92 (owner, supersedes #60): sound-cue sink. The view binds this to gameStore.playSound so the
@@ -5127,9 +4953,6 @@ export class PitchRenderer {
   onCue: ((name: string) => void) | null = null;
 
   // --- Owner 2026-07-04c: interactive FOUL / HAND-OFF / PASS -----------------
-  /** Roll tip while hovering an eligible target in foul/handoff/pass mode
-   *  (host renders the DOM tip beside the cursor); null clears it. */
-  onActionHover: ((tip: { mode: 'foul' | 'handoff' | 'pass'; text: string; canvasX: number; canvasY: number } | null) => void) | null = null;
   /** Pass/bomb targeting surface (Fives contract 08-12): the hovered on-pitch square while
    *  pass/bomb free-select is armed (null off-pitch / on leave). The host drives the throw+catch
    *  tooltip and intercept feed off this; additive — the internal cursor/tip paths are unchanged. */
@@ -5210,7 +5033,6 @@ export class PitchRenderer {
   private armedAction: { seq: number; mode: 'foul' | 'handoff' | 'pass'; targetId: string; square: Square; rollText: string; plannedOrigin?: Square | null; catchTarget?: number | null } | null = null;
   /** Monotonic DOM occurrence for the host confirmation card. A cancelled target selected again is a new card. */
   private armedActionSeq = 0;
-  private actionHoverActive = false;
   /** Plain square-hover feedback: four subtle corner brackets, kept independent of action-specific overlays. */
   private hoverSquareMarker: Container | null = null;
   /** Owner o66an: INTERACTIVE KICK PLACEMENT — the eligible aim squares (single hover crosshair, not a grid) and
@@ -5244,31 +5066,15 @@ export class PitchRenderer {
    *  to HOME/AWAY (home = friendly) — the spectator default; play mode may later
    *  set this to the local coach's side. */
   friendlyIsHome = true;
-  /** Owner 2026-07-08 (FC1): pitch decor — broadcast cameras + stadium light
-   *  towers. On by default; FUMBBL-Classic mode turns it OFF for a plain pitch. */
-  decorEnabled = true;
-  /** Stadium bowl and dressing. On by default; Classic disables it. */
+  /** Stadium bowl and dressing. On by default. */
   stadiumEnabled = true;
   /** Owner 10-06: Settings > On-field markings "player counts on dugout labels" (default OFF). */
   private dugoutCountsOn = false;
-  /** Owner 2026-07-08 (FUMBBL Classic): draw the on-pitch dugout boxes
-   *  (reserves/KO/casualties beside the sidelines). Classic turns this OFF — the
-   *  classic sidebars carry the box info, so the on-pitch dugouts are redundant. */
-  dugoutsEnabled = true;
-  /** Owner 2026-07-07: the faint cyan KICK TRAVEL-ARC trail (showKickTrail). Default on;
-   *  a gate so a mode can suppress it. Owner: LEAVE ON in FUMBBL Classic (classic keeps
-   *  the trail), so nothing sets it false today — it exists for future toggling. */
-  kickTrailEnabled = true;
   /** Owner 2026-07-08: keep the camera bound to the rendered content — pan can't
    *  push the FURTHEST rendered asset (pitch + dugouts + decor) past the viewport
    *  edge, and zoom-out stops at the fit scale. On for BOTH the 40k and classic
    *  views. Cinematics bypass this (they set the camera directly). */
   clampToPitch = true;
-  /** Owner 2026-07-08 (FUMBBL Classic): clamp STRICTLY to the pitch rectangle —
-   *  the fit + pan + zoom-out bounds are the pitch itself (`worldWidth×worldHeight`),
-   *  excluding the dugout margin (X) and the full rendered-content extent (Y) that
-   *  the default `clampToPitch` allows. Requires `clampToPitch`; classic sets both. */
-  clampToPitchEdge = false;
   /** Additional screen pixels the camera may travel toward the southern edge. Modern enables this only while
    * the app is fullscreen so bottom HUD chrome cannot make the endzone unreachable. */
   private southernPanExtension = 0;
@@ -5290,15 +5096,15 @@ export class PitchRenderer {
     const next = Number.isFinite(pixels) ? Math.max(0, Math.round(pixels)) : 0;
     if (next === this.topHudClearance) return;
     this.topHudClearance = next;
-    if (!this.app || this.clampToPitchEdge || getOrientation() !== 'ew') return;
+    if (!this.app || getOrientation() !== 'ew') return;
     // The wheel-out floor follows the gutter; the coach's zoom and pan are kept (only re-legalised).
     this.cameraFitScale = this.currentFitScale();
     this.updateOverlayScales();
     this.clampCamera();
   }
-  /** The top gutter the E-W pan keeps clear (0 in N-S and in Classic's pitch-edge clamp). */
+  /** The top gutter the E-W pan keeps clear (0 in N-S). */
   private topHudReserve(): number {
-    return !this.clampToPitchEdge && getOrientation() === 'ew' ? this.topHudClearance : 0;
+    return getOrientation() === 'ew' ? this.topHudClearance : 0;
   }
   /** Astra P2-3: the part of the gutter the FIT must reserve - only what the content above the top band (the stands,
    *  with the stadium on) does not already cover at the unreserved fit. Stadium off: the whole gutter; stadium on:
@@ -5340,16 +5146,6 @@ export class PitchRenderer {
    *  Bound to the renderer's own 'resize' event, which fires AFTER app.screen is
    *  updated, so resetCamera reads the correct new size. */
   private onRendererResize: (() => void) | null = null;
-  /** Owner 2026-07-04d: bomb/Throw-Keg target — the 3×3 blast centre (or null).
-   *  Set via setBombTarget while in 'bomb' action mode; drawn by drawBombTarget. */
-  private bombTarget: Square | null = null;
-  /** Fired when the coach clicks a bomb target square (host confirms + wires). */
-  onBombTarget: ((centre: Square) => void) | null = null;
-  setBombTarget(centre: Square | null): void {
-    this.bombTarget = centre;
-    this.redrawOverlays();
-  }
-
   /** This renderer's OWN drive-north flip. `fieldFlip` lives in geometry.ts as MODULE state shared by every
    *  renderer instance, so a flip left true by a previous view (spectate) survived into the next mount and
    *  mirrored the board 180 degrees for the whole session — the "seat transform is not applying" P1 (g868).
@@ -5833,21 +5629,6 @@ export class PitchRenderer {
         }
         flash.g.scale.set(flash.scale * (1 + t * (flash.grow ?? 0.9)));
         flash.g.alpha = 1 - t;
-        return true;
-      });
-    });
-    // Owner o66 #7: over-head pass/catch roll modals — a quick pop-in (back-out), a hold, then rise + fade (~1.9s).
-    const RM_IN = presentationMs(160), RM_HOLD = presentationMs(1400), RM_OUT = presentationMs(340);
-    app.ticker.add(() => {
-      if (this.rollModals.length === 0) return;
-      const now = performance.now();
-      this.rollModals = this.rollModals.filter((m) => {
-        if (m.node.destroyed) return false;
-        const e = now - m.start;
-        if (e >= RM_IN + RM_HOLD + RM_OUT) { m.node.parent?.removeChild(m.node); m.node.destroy({ children: true }); return false; }
-        if (e < RM_IN) { const p = e / RM_IN; m.node.scale.set(1.15 - 0.15 * (1 - (1 - p) * (1 - p))); m.node.alpha = p; }
-        else if (e < RM_IN + RM_HOLD) { m.node.scale.set(1); m.node.alpha = 1; }
-        else { const p = (e - RM_IN - RM_HOLD) / RM_OUT; m.node.alpha = 1 - p; m.node.position.y = m.baseY - p * 10; }
         return true;
       });
     });
@@ -6513,10 +6294,8 @@ export class PitchRenderer {
     this.onContextMenu = null;
     this.onWaypointPlanCancel = null;
     this.onRightClickReset = null;
-    this.onBlockConfirm = null;
     this.onActionRejected = null;
     this.onCue = null;
-    this.onActionHover = null;
     this.onSquareHover = null;
     this.onHoverSquare = null;
     this.onRightClick = null;
@@ -6528,7 +6307,6 @@ export class PitchRenderer {
     this.onActionTarget = null;
     this.onActionConfirm = null;
     this.onKickPick = null;
-    this.onBombTarget = null;
     if (app) this.destroyApplication(app);
     releaseWalkersOwnedBy(this.walkerOwnerId);
     this.destroyGeneratedCrowdTexture();
@@ -6890,8 +6668,6 @@ export class PitchRenderer {
     this.retirePassBallFlight(undefined, false);
     for (const f of this.flashRings) { f.g.parent?.removeChild(f.g); f.g.destroy(); }
     this.flashRings = [];
-    for (const m of this.rollModals) { m.node.parent?.removeChild(m.node); m.node.destroy({ children: true }); }
-    this.rollModals = [];
     this.clearActionDice();
     this.liveSkillAssets.clear();
     for (const c of this.effectsLayer.removeChildren()) c.destroy({ children: true });
@@ -8373,7 +8149,6 @@ export class PitchRenderer {
 
   setActivePlayer(playerId: string | null): void {
     if (playerId === this.activePlayerId) return;
-    this.noteAutoDirectorActivity();
     if (playerId && this.autoDirector && !this.adSuspended) this.adForceNudgeSubject = playerId;
     this.flushMovementOverlay();
     this.declaredActionCache = null; // #251 (owner): active-player change or activation end
@@ -8462,7 +8237,6 @@ export class PitchRenderer {
     const d = this.game.fieldModel.playerDataArray.find((p) => p.playerId === this.activePlayerId);
     if (d && isOnPitch(d.playerCoordinate)) {
       this.adForceNudgeSubject = this.activePlayerId;
-      this.noteAutoDirectorActivity();
     }
   }
 
@@ -8476,7 +8250,6 @@ export class PitchRenderer {
     const anchor = squareAnchor(square[0], square[1]);
     this.adRequestedNudge = { subject: `event:${square[0]},${square[1]}`, point: anchor };
     this.adForceNudgeSubject = this.adRequestedNudge.subject;
-    this.noteAutoDirectorActivity();
   }
 
   /** Owner 09-08: log double-click — centre the camera on a square. With the auto-director on, the director's
@@ -8560,18 +8333,12 @@ export class PitchRenderer {
     if (mode === this.actionMode) return;
     this.actionMode = mode;
     this.clearHoverSquareMarker();
-    this.pendingBlock = null;
-    if (mode !== 'bomb') this.bombTarget = null;
     if (this.armedAction) {
       this.armedAction = null;
       this.onActionTarget?.(null);
     }
     this.onActionModeChange?.(mode);
     this.redrawOverlays();
-  }
-
-  getActionMode(): ActionMode {
-    return this.actionMode;
   }
 
   clearSelection(): void {
@@ -8600,8 +8367,6 @@ export class PitchRenderer {
   /** Single funnel for path mutations so the host's confirm gate stays in sync. */
   private setPath(path: Square[]): void {
     this.plannedPath = path;
-    this.jumpSteps = new Set([...this.jumpSteps].filter((i) => i < path.length));
-    this.pendingBlock = null; // path changes re-arm the preview
     this.onPathChange?.(this.getPlannedPath(), this.selectedPlayerId);
     this.redrawOverlays();
   }
@@ -8616,37 +8381,6 @@ export class PitchRenderer {
     }
     const [px, py] = info.data.playerCoordinate!;
     return [px, py];
-  }
-
-  /**
-   * Jump over a downed player adjacent to the path end, landing on the square
-   * directly opposite (owner 2026-07-02 RC4). Prototype: the jump occupies one
-   * path index; MA cost of the second square is a TODO for M4 accounting.
-   */
-  canJumpOver(downed: Square): boolean {
-    return this.jumpLanding(downed) !== null;
-  }
-
-  planJumpOver(downed: Square): boolean {
-    const landing = this.jumpLanding(downed);
-    if (!landing) return false;
-    this.jumpSteps.add(this.plannedPath.length);
-    this.setPath([...this.plannedPath, landing]);
-    return true;
-  }
-
-  private jumpLanding(downed: Square): Square | null {
-    const info = this.selectionInfo();
-    if (!info) return null;
-    const start = this.getPathEnd()!;
-    const dx = downed[0] - start[0];
-    const dy = downed[1] - start[1];
-    if (Math.max(Math.abs(dx), Math.abs(dy)) !== 1) return null; // must be adjacent
-    const landing: Square = [downed[0] + dx, downed[1] + dy];
-    if (landing[0] < 0 || landing[0] >= PITCH_COLS || landing[1] < 0 || landing[1] >= PITCH_ROWS) return null;
-    if (this.occupiedForPathing().has(squareKey(landing[0], landing[1]))) return null;
-    if (this.plannedPath.length + 1 > info.normal + info.rushes) return null;
-    return landing;
   }
 
   private selectedIsHome(): boolean {
@@ -8672,7 +8406,7 @@ export class PitchRenderer {
    *  read-only reach/tackle-zone inspect, and any click away — empty square or right-click — must clear it.
    *  selectedIsActor() alone is not enough there: an acting-side player still counts as "the actor". */
   private inspectionOnly(): boolean {
-    return !this.plannerEnabled && !this.order66;
+    return !this.order66;
   }
 
   /** Squares marked by opposition tackle zones — dodges roll when leaving them. */
@@ -9170,111 +8904,6 @@ export class PitchRenderer {
     return { inFlight: this.movementInFlight(playerId), progress };
   }
 
-  private handleSquareClick(square: Square): void {
-    if (!this.plannerEnabled) return; // B5-2: spectator-clean
-    const info = this.selectionInfo();
-    if (!info) return;
-    // Owner 09-23: swallow further plans until the rendered move has finished — clicks mid-walk are dropped.
-    if (this.movementInFlight(info.data.playerId)) return;
-    const [px, py] = info.data.playerCoordinate!;
-    if (square[0] === px && square[1] === py) {
-      this.setPath([]);
-      return;
-    }
-    const stepIndex = this.plannedPath.findIndex(([x, y]) => x === square[0] && y === square[1]);
-    if (stepIndex >= 0) {
-      this.setPath(this.plannedPath.slice(0, stepIndex + 1));
-      return;
-    }
-    // O8 auto-pathing: extend from the last clicked square, avoiding dice
-    const start: Square = this.plannedPath.length > 0 ? this.plannedPath[this.plannedPath.length - 1]! : [px, py];
-    const extension = planPath(
-      this.occupiedForPathing(),
-      this.markedSquares(),
-      start,
-      square,
-      this.plannedPath.length,
-      info.normal,
-      info.normal + info.rushes,
-    );
-    if (extension) {
-      this.setPath([...this.plannedPath, ...extension]);
-    } else {
-      this.clearSelection();
-    }
-  }
-
-  /**
-   * O2/O3/O5 opponent-click routing (Q6: no dedicated Block button — the
-   * preview raises contextually):
-   * - adjacent standing defender, attacker standing + unmoved in Auto, or in
-   *   Blitz mode → block dice preview; second click confirms (O3)
-   * - moved without Blitz / Move declared → Q4 rejection tooltip
-   * - otherwise → approach planning per mode (Q8: no-op when out of range)
-   */
-  private handleOpponentClick(defenderId: string, square: Square, canvasX: number, canvasY: number): void {
-    if (!this.plannerEnabled) {
-      // B5-2: spectator-clean — plain selection/card only, no dice preview
-      this.selectPlayer(defenderId);
-      this.onPlayerClick?.(defenderId, canvasX, canvasY);
-      return;
-    }
-    const info = this.selectionInfo();
-    if (!info || !this.game) return;
-    // Owner 2026-07-04d: defense-in-depth — a block/approach needs a legal ACTOR
-    // as the attacker (the acting team). If an opposition player is selected
-    // (view-only), route the click as a fresh selection instead of a block.
-    if (!this.selectedIsActor()) {
-      this.selectPlayer(defenderId);
-      this.onPlayerClick?.(defenderId, canvasX, canvasY);
-      return;
-    }
-    // O3: the second click on the same defender confirms the armed block
-    if (this.pendingBlock && this.pendingBlock.defenderId === defenderId) {
-      const pending = this.pendingBlock;
-      this.pendingBlock = null;
-      this.redrawOverlays();
-      this.onBlockConfirm?.(this.selectedPlayerId!, defenderId, pending.preview);
-      return;
-    }
-    const mode = this.actionMode;
-    if (mode === 'pass' || mode === 'handoff') return; // action doesn't involve opponents
-
-    const end = this.getPathEnd()!;
-    const adjacentToEnd = Math.max(Math.abs(end[0] - square[0]), Math.abs(end[1] - square[1])) === 1;
-    const defenderData = this.game.fieldModel.playerDataArray.find((d) => d.playerId === defenderId);
-    const defenderStanding = defenderData ? !isDown(defenderData.playerState) : false;
-    const moved = this.plannedPath.length > 0;
-
-    if (adjacentToEnd && defenderStanding && mode !== 'foul') {
-      if (isDown(info.data.playerState) && mode !== 'blitz') {
-        this.onActionRejected?.('Prone players must Blitz to block', canvasX, canvasY);
-        return;
-      }
-      if (mode === 'blitz' || (mode === 'auto' && !moved)) {
-        const preview = blockDicePreview(this.game, this.selectedPlayerId!, defenderId, moved ? end : undefined);
-        if (preview) {
-          this.pendingBlock = { defenderId, square, preview };
-          this.redrawOverlays();
-        }
-        return;
-      }
-      // Q4 Option B: movement performed means Move was declared — no block
-      const turnData = (this.selectedIsHome() ? this.game.turnDataHome : this.game.turnDataAway) as {
-        blitzUsed?: boolean;
-      };
-      this.onActionRejected?.(turnData.blitzUsed ? 'Blitz already used' : 'Blitz was not declared', canvasX, canvasY);
-      return;
-    }
-    // Owner 2026-07-04c: a clicked PRONE opponent in Foul mode arms the action
-    // (auto-path to contact + the "Perform foul?" modal via onActionTarget).
-    if (mode === 'foul' && !defenderStanding) {
-      if (!this.armActionTarget(defenderId, square)) this.onActionRejected?.('Out of reach', canvasX, canvasY);
-      return;
-    }
-    if (mode === 'auto' || mode === 'blitz' || mode === 'foul') this.pathTowardOpponent(square);
-  }
-
   // --- Owner 2026-07-04c: FOUL / HAND-OFF / PASS interaction ---------------
 
   /** The roll-preview text for hovering/arming `targetId` in the given mode,
@@ -9388,28 +9017,6 @@ export class PitchRenderer {
     this.onActionTarget?.(null);
   }
 
-  /** Cursor art while hovering an eligible action target. */
-  private static SKULL_CURSOR = `url("${new URL('../assets/blockdice/face_skull.png', import.meta.url).href}") 12 12, crosshair`;
-  private static HAND_CURSOR =
-    'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'26\' height=\'26\'><text x=\'2\' y=\'20\' font-size=\'18\'>✋</text></svg>") 12 12, pointer';
-  private actionCursorFor(mode: 'foul' | 'handoff' | 'pass'): string {
-    // Settings reflow (owner 11-03): "Use the Super FUMBBL cursor" off = system cursors for the action art too.
-    if (!this.fantasyCursorEnabled) return mode === 'handoff' ? 'pointer' : 'crosshair';
-    if (mode === 'foul') return PitchRenderer.SKULL_CURSOR;
-    if (mode === 'handoff') return PitchRenderer.HAND_CURSOR;
-    return 'crosshair';
-  }
-
-  /**
-   * O8: clicking an opposition player auto-paths to the best adjacent square
-   * (fewest dice, then fewest steps), continuing from the path end. The
-   * selection is kept — this is approach planning, not a selection switch.
-   * Public: the right-click menus (Blitz/Foul/Special) plan through this too.
-   */
-  planApproach(opponentSquare: Square): void {
-    this.pathTowardOpponent(opponentSquare);
-  }
-
   /** Owner 2026-07-08 (FUMBBL Classic): show the block-dice COUNT over every
    *  adjacent standing opponent of `attackerId` — the block-target preview surfaced
    *  from the classic Block context menu. Pass null to clear. */
@@ -9481,37 +9088,8 @@ export class PitchRenderer {
     this.redrawOverlays();
   }
 
-  /** Arms the block preview for a defender (context-menu path into O2). */
-  previewBlock(defenderId: string, canvasX = 0, canvasY = 0): boolean {
-    if (!this.game || !this.selectedPlayerId) return false;
-    const data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === defenderId);
-    if (!data || !isOnPitch(data.playerCoordinate)) return false;
-    this.handleOpponentClick(defenderId, [data.playerCoordinate[0], data.playerCoordinate[1]], canvasX, canvasY);
-    return this.pendingBlock !== null;
-  }
-
-  /** Q8: an approach (e.g. Blitz) is only offered when contact is reachable. */
-  canApproach(opponentSquare: Square): boolean {
-    const info = this.selectionInfo();
-    if (!info) return false;
-    const start = this.getPathEnd()!;
-    if (Math.max(Math.abs(start[0] - opponentSquare[0]), Math.abs(start[1] - opponentSquare[1])) === 1) return true;
-    const occupied = this.occupiedForPathing();
-    const marked = this.markedSquares();
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        if (dx === 0 && dy === 0) continue;
-        const target: Square = [opponentSquare[0] + dx, opponentSquare[1] + dy];
-        if (target[0] < 0 || target[0] >= PITCH_COLS || target[1] < 0 || target[1] >= PITCH_ROWS) continue;
-        if (occupied.has(squareKey(target[0], target[1]))) continue;
-        if (planPath(occupied, marked, start, target, this.plannedPath.length, info.normal, info.normal + info.rushes)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
+  /** O8: auto-paths the selected player to the best square adjacent to `opponentSquare` (fewest dice, then fewest
+   *  steps), continuing from the path end. armActionTarget uses it for a hand-off armed out of reach. */
   private pathTowardOpponent(opponentSquare: Square): void {
     const info = this.selectionInfo();
     if (!info) return;
@@ -9838,7 +9416,6 @@ export class PitchRenderer {
     this.drawPassRuler();
     // #151: pass rolls-required cues (throw over passer / catch over target) — server-fed, cleared with the layer.
     this.drawPassRollCues();
-    this.drawChompCue();
     // Owner o66 automove PREVIEW: draw the pending route (a trail through the square centres + a dot per step,
     // a brighter ring on the destination) BEFORE the legacy planner gate — plannerEnabled is off in o66. The
     // host passes [from, ...route]; the start square gets no dot. Minimal by design (owner tunes on return).
@@ -10117,7 +9694,7 @@ export class PitchRenderer {
     // it remains non-interactive because selectedIsActor() is false and the host owns all sends.
     // Owner 09-06: SPECTATORS (planner off, o66 flag off) inspect the same way — a click reveals the player's
     // movement reach. Only the acting player's own o66 selection in play keeps the host-owned surface.
-    if (!this.plannerEnabled && this.order66 && this.selectedIsActor()) return;
+    if (this.order66 && this.selectedIsActor()) return;
     const [px, py] = info.data.playerCoordinate!;
 
     // Static click-selection yields to the shared active aura on identity overlap; otherwise both semantics layer.
@@ -10143,7 +9720,6 @@ export class PitchRenderer {
     }
     if (this.actionMode === 'bomb') {
       this.drawPassTemplate([px, py]); // bombs use the pass range ruler
-      this.drawBombTarget(); // owner 2026-07-04d: the 3×3 blast preview
       return;
     }
     if (this.actionMode === 'foul') {
@@ -10163,10 +9739,8 @@ export class PitchRenderer {
     // player being INSPECTED (view-only), we shade the FULL movement range so
     // the coach can see how far that enemy can reach.
     const isActor = this.selectedIsActor();
-    // Owner 09-06: with the planner OFF (spectate, replay, o66 play) every selection is an INSPECTION — the
-    // "actor: rush squares only" read below is the command planner's, and it left a spectator's click on the
-    // acting side's players showing nothing at all (no declared move phase => no squares).
-    const actorRushOnly = isActor && this.plannerEnabled;
+    // Owner 09-06: every selection (spectate, replay, o66 play) is an INSPECTION - the legacy command planner's
+    // "actor: rush squares only" read is gone with the planner.
     const action = (this.game!.actingPlayer as { playerId?: string; playerAction?: string | null } | undefined)?.playerId === this.activePlayerId
       ? ((this.game!.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? null)
       : null;
@@ -10193,7 +9767,6 @@ export class PitchRenderer {
       const [sx, sy] = key.split(',').map(Number) as [number, number];
       const total = used + cost;
       const rush = total > info.normal;
-      if (actorRushOnly && (!rush || !actorHasMovePhase)) continue; // actor (planner on): rush squares only
       const quad = squareQuad(sx, sy);
       // Owner 2026-07-08: rush squares read NEUTRAL grey (matches the spectator reach); the
       // inspection full-range pale-yellow (non-rush) is unchanged.
@@ -10219,7 +9792,6 @@ export class PitchRenderer {
     const reachRushTarget = rushTargetForPlayer(this.game, this.selectedPlayerId);
     const reachSide = this.plannedRollSide(this.selectedPlayerId); // owner 10-22: the mover's seat die
     for (const [key, cost] of reach.costs) {
-      if (actorRushOnly && !actorHasMovePhase) continue;
       if (used + cost <= info.normal) continue;
       const [sx, sy] = key.split(',').map(Number) as [number, number];
       const a = squareAnchor(sx, sy);
@@ -10248,8 +9820,6 @@ export class PitchRenderer {
     const selectedIsHome = this.game!.teamHome.playerArray.some((p) => p.playerId === this.selectedPlayerId);
     if (!this.spectatorTackleZoneSurface && this.o66BothZoneOwner() !== 'actor') this.drawTackleZones(selectedIsHome, this.selectionTackleZoneMode(isActor));
 
-    // armed block preview (O2), drawn over everything
-    this.drawBlockPreview();
     this.drawPlannedBlitzRushChip();
 
     // queued path: connecting line + numbered steps; rush dice and dodge
@@ -10281,16 +9851,6 @@ export class PitchRenderer {
         const dodge = oppositionCounts.has(squareKey(fromSquare[0], fromSquare[1]));
         const destMarks = oppositionCounts.get(squareKey(sx, sy)) ?? 0;
         const dodgeDestMarks = oppositionDodgeMarks.get(squareKey(sx, sy)) ?? 0;
-        if (this.jumpSteps.has(i)) {
-          // JLeav 10-13: a jump over a downed player shows the SERVER's price when it sent one (a leaping move
-          // square's minimumRollDodge); otherwise the mirrored BB2025 projection (jumpTarget.ts). Unknown AG draws
-          // no chip rather than a guessed 2+.
-          const priced = i === 0 && this.selectedIsActor() ? this.serverJumpRoll(sx, sy) : null;
-          const target = priced ?? jumpTargetForPlayer(this.game, this.selectedPlayerId, fromSquare, [sx, sy]);
-          if (target !== null) this.pathLayer.addChild(this.buildJumpChip(a.x, a.y - 3, stepScale, target));
-          fromSquare = [sx, sy];
-          return;
-        }
         if (rush) {
           const target = rushTargetForPlayer(this.game, this.selectedPlayerId);
           if (persistentPlannedPath) {
@@ -10711,41 +10271,6 @@ export class PitchRenderer {
     g.stroke({ color, width: 1.1, alpha: AURA_HATCH_STAGE2_OPACITY, cap: 'round' });
   }
 
-  /** Owner 2026-07-04d: the 3×3 BOMB blast preview centred on `this.bombTarget`
-   *  (bomb 💣 at the centre; 💥 + roll on each affected square; centre shows the
-   *  CATCH target if a player can catch, else the explosion). Drawn in bomb mode. */
-  private drawBombTarget(): void {
-    if (!this.bombTarget || !this.game) return;
-    const chip = (target: number, sq: Square, prefix?: string) => {
-      const p = squareAnchor(sq[0], sq[1]);
-      const s = Math.max(0.7, depthScale(sq[0], sq[1]));
-      const node = this.buildPassRollChip(p.x, p.y + 10 * s, s, target, 0xffb020, prefix);
-      node.zIndex = 22;
-      this.overlayLayer.addChild(node);
-    };
-    const glyph = (emoji: string, sq: Square, dy: number) => {
-      const p = squareAnchor(sq[0], sq[1]);
-      const s = depthScale(sq[0], sq[1]);
-      const g = new Text({ text: emoji, style: INTERCEPT_GLYPH_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
-      g.anchor.set(0.5, 0.5);
-      g.scale.set(Math.max(0.8, s) * 1.2);
-      g.position.set(p.x, p.y - TILE_H * dy * s);
-      g.zIndex = 22;
-      this.overlayLayer.addChild(g);
-    };
-    for (const cell of bombCells(this.game, this.bombTarget)) {
-      const q = squareQuad(cell.square[0], cell.square[1]);
-      const fill = new Graphics()
-        .poly(q.points.flat())
-        .fill({ color: cell.centre ? 0xff8a2a : 0xe0402a, alpha: cell.kind === 'empty' ? 0.12 : 0.26 });
-      fill.zIndex = 0.5;
-      this.overlayLayer.addChild(fill);
-      if (cell.centre) glyph('💣', cell.square, 0.5);
-      else if (cell.kind === 'explode') glyph('💥', cell.square, 0.5);
-      if (cell.roll != null) chip(cell.roll, cell.square, cell.kind === 'catch' ? 'Catch' : undefined);
-    }
-  }
-
   private playExplosionGif(centre: Square, sound?: string, yOffset = 0): boolean {
     if (!this.app || !isOnPitch(centre)) return false;
     const gif = this.fireballExplosionGif;
@@ -10852,14 +10377,6 @@ export class PitchRenderer {
     return die;
   }
 
-  /** O2: block dice above the defender — real die faces animating through
-   *  each result state in sync; red-shaded + "OPPONENT'S CHOICE" when Uphill
-   *  (O2.4–O2.7). */
-  private drawBlockPreview(): void {
-    if (!this.pendingBlock) return;
-    this.drawBlockDiceAt(this.pendingBlock.square, this.pendingBlock.preview.dice, this.pendingBlock.preview.opponentChoice);
-  }
-
   /** Acting-coach blitz aid: if the queued walk reaches contact through a SERVER-marked GFI square,
    *  repeat that square's authoritative target on the blocked player's token. Derived on every overlay redraw so
    *  changing/clearing the path, target, or server roll map cannot leave a stale chip behind. */
@@ -10867,9 +10384,7 @@ export class PitchRenderer {
     if (!this.game || !this.selectedIsActor() || this.plannedPath.length === 0 || !this.tilePickRolls) return;
 
     const action = String((this.game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
-    const pendingTarget = this.actionMode === 'blitz' ? this.pendingBlock?.defenderId : null;
-    const declaredTarget = action === 'blitz' || action === 'blitzMove' ? this.blockTargetsOnly : null;
-    const targetId = pendingTarget ?? declaredTarget;
+    const targetId = action === 'blitz' || action === 'blitzMove' ? this.blockTargetsOnly : null;
     if (!targetId) return;
 
     const rushTarget = this.plannedPath
@@ -11208,13 +10723,6 @@ export class PitchRenderer {
     addText('+');
     content.pivot.set(cursor / 2, 0);
     return content;
-  }
-
-  /** The server's jump price for a square: a leaping move square's minimumRollDodge (null when unpriced). Only
-   *  valid for a jump from the acting player's CURRENT square, which is what the server priced. */
-  private serverJumpRoll(sx: number, sy: number): number | null {
-    const roll = this.tilePickRolls?.get(squareKey(sx, sy)) ?? serverMoveSquareRolls(this.game).get(squareKey(sx, sy));
-    return roll?.jump && roll.dodge > 0 ? roll.dodge : null;
   }
 
   /** Owner 10-14: setting hook. Redraws the path tags (the persistent-path signatures include the style). */
@@ -11605,23 +11113,6 @@ export class PitchRenderer {
     draw(this.catchRollCue, 0x2ec24f, 'Catch'); // CATCH over the target — green (the friendly catch language)
   }
 
-  /** Pending Monstrous Mouth roll, using the same projected, depth-scaled plate as pass/catch cues. */
-  private drawChompCue(): void {
-    const cue = this.chompCue;
-    if (!cue || !isOnPitch(cue.square)) return;
-    const [sx, sy] = cue.square;
-    const a = this.tokenPos(sx, sy);
-    const depth = depthScale(sx, sy);
-    const chip = this.buildPassRollChip(a.x, a.y - TILE_H * depth * 1.25, depth, cue.target, 0xffb020, 'Chomp');
-    chip.zIndex = 7;
-    this.overlayLayer.addChild(chip);
-  }
-
-  /** Match11: cycle order for the toolbar toggle. */
-  tackleZoneModeOptions(): string[] {
-    return ['opposition', 'friendly', 'both', 'off'];
-  }
-
   setTackleZoneMode(mode: string): void {
     if (mode !== 'off' && mode !== 'opposition' && mode !== 'friendly' && mode !== 'both') return;
     this.tackleZoneMode = mode;
@@ -11839,7 +11330,7 @@ export class PitchRenderer {
     // this draw does not use are destroyed at the end (and here, when there is nothing to draw).
     const dugoutFonts = displayFontState();
     const dugoutLetteringKeys = new Set<string>();
-    if (!this.game || !this.dugoutsEnabled || this.boardCleared) { // owner 2026-07-15: clear the board at end of game
+    if (!this.game || this.boardCleared) { // owner 2026-07-15: clear the board at end of game
       this.pruneLettering('dugout', dugoutLetteringKeys);
       return;
     }
@@ -11894,8 +11385,7 @@ export class PitchRenderer {
       // Owner 2026-07-14 (setup overhaul #1b): extend the RESERVES box back one row — dugoutRows 10→11 (ends
       // at row 11). RIPPLE AUDIT (Yularen CWY cond-a): X0 away (26-dugoutRows) 16→15, X1 home (dugoutRows-1)
       // 9→10 — home dugout x0..10, away x15..25, gap x11..14 (no overlap); ground/trim/separators/tokens all
-      // key off X0/X1 (auto); dugoutHits rebuilt from token anchors (auto); Classic dugoutsEnabled=false
-      // (unaffected); worldToSquare bands exclude dugout tokens — dugoutHits handles them (unaffected);
+      // key off X0/X1 (auto); dugoutHits rebuilt from token anchors (auto); worldToSquare bands exclude dugout tokens — dugoutHits handles them (unaffected);
       // camera-fit + pan-clamp use dugoutW=4*TILE_W on the ACROSS axis, not dugoutRows — the along-axis stays
       // within pitch x0..25 (unaffected); turn-track is on the opposite flank (unaffected). The extra row goes
       // to RESERVES so a full 16-man bench packs less. Voss dugout acceptance pass owed post-land.
@@ -12287,12 +11777,10 @@ export class PitchRenderer {
   private drawTurnTrack(): void {
     for (const child of this.turnTrackLayer.removeChildren()) this.destroyKeepingTextWarm(child);
     this.turnTrackLayer.sortableChildren = true;
-    // gated on dugoutsEnabled so FUMBBL-Classic (which disables the on-pitch dugouts) also
-    // hides the on-pitch tracks — classic carries the info in its sidebars.
     // Owner 10-11: the apothecary caption's cached lettering; what this draw does not use is destroyed at its end.
     this.turnTrackFonts = displayFontState();
     this.turnTrackLetteringKeys = new Set<string>();
-    if (this.game && this.dugoutsEnabled && this.turnTrackEnabled) {
+    if (this.game && this.turnTrackEnabled) {
       this.drawOneTrack(true); // home — SW (west margin, south rows)
       this.drawOneTrack(false); // away — NE (east margin, north rows), mirrored
     }
@@ -12348,8 +11836,6 @@ export class PitchRenderer {
       canvas.style.cursor = this.restingCursor();
     } else if (now === SPIKE_CURSOR_PRIMED || now === 'pointer') {
       canvas.style.cursor = this.primedCursor();
-    } else if (!enabled && (now === PitchRenderer.SKULL_CURSOR || now === PitchRenderer.HAND_CURSOR)) {
-      canvas.style.cursor = now === PitchRenderer.HAND_CURSOR ? 'pointer' : 'crosshair'; // the next hover re-derives it
     }
   }
 
@@ -12914,11 +12400,10 @@ export class PitchRenderer {
 
   /** Accessibility (owner 2026-07-03 r4): toggle the on-field row markers, the
    *  sweet-spot crosshairs, and the faded on-field team logos. */
-  setFieldMarkers(opts: { rowMarkers?: boolean; sweetSpot?: boolean; fieldLogos?: boolean; rowNumberRails?: boolean }): void {
+  setFieldMarkers(opts: { rowMarkers?: boolean; sweetSpot?: boolean; fieldLogos?: boolean }): void {
     if (opts.rowMarkers !== undefined) this.showRowMarkers = opts.rowMarkers;
     if (opts.sweetSpot !== undefined) this.showSweetSpot = opts.sweetSpot;
     if (opts.fieldLogos !== undefined) this.showFieldLogos = opts.fieldLogos;
-    if (opts.rowNumberRails !== undefined) this.showRowNumberRails = opts.rowNumberRails;
     if (!this.app) return;
     this.drawPitch(); // row markers
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away); // sweet spot + logos
@@ -13083,11 +12568,6 @@ export class PitchRenderer {
     if (this.app) this.refresh();
   }
 
-  /** Available sprite sets for UI pickers; the standard set lists first. */
-  spriteSetOptions(): string[] {
-    return ['classic', 'checkers', 'chess', 'walk'];
-  }
-
   /** Switches between FUMBBL Classic iconsets and checker discs (UI-5;
    *  'new' HD-2D stays accepted programmatically but is out of the UI). */
   setSpriteSet(set: string): void {
@@ -13182,7 +12662,6 @@ export class PitchRenderer {
     // Owner 2026-07-03: Auto Director off → no automatic zoom (the dice/splashes
     // still play at their square; the camera just doesn't move).
     if (!this.app || !this.autoDirector) return;
-    this.noteAutoDirectorActivity();
     const priority = opts?.priority ?? 1;
     // Owner 2026-07-04: a cinematic is already on screen — only a HIGHER-priority
     // event (e.g. the ball in flight) may preempt it; otherwise leave it be. The
@@ -13596,7 +13075,7 @@ export class PitchRenderer {
     // a spectator and got NO candidate arrows / click targets, killing the pushback pick. In o66 play the coach
     // IS choosing → not a spectator. (deriveClientState→PUSHBACK + state.pushChoice already gate the AUTHORITY;
     // this is purely the visual/click surface.) Off-flag: identical `!plannerEnabled`.
-    const spectator = (!this.plannerEnabled && !this.order66) || (this.order66 && !this.pushOptionsArmed); // owner 09-06: unarmed o66 = chosen square only
+    const spectator = !this.order66 || !this.pushOptionsArmed; // owner 09-06: unarmed o66 = chosen square only
     const watchOccupied = new Set<string>();
     if (spectator && this.pushOptionsWatching && this.pushOptionsWatchSkipOccupied) {
       for (const d of this.game.fieldModel.playerDataArray) if (isOnPitch(d.playerCoordinate)) watchOccupied.add(`${d.playerCoordinate![0]},${d.playerCoordinate![1]}`);
@@ -13893,7 +13372,7 @@ export class PitchRenderer {
       actorIsHome,
       friendlyIsHome: this.friendlyIsHome,
       diceDecorationArray: game.fieldModel.diceDecorationArray as unknown[] | undefined,
-      targetChosen: this.declaredBlockTargetChosen || !!this.blockTargetsOnly || !!this.pendingBlock,
+      targetChosen: this.declaredBlockTargetChosen || !!this.blockTargetsOnly,
       defenderId: String((game as { defenderId?: unknown }).defenderId ?? ''),
     });
   }
@@ -15633,7 +15112,7 @@ export class PitchRenderer {
    *  it from these (reprojectKickCues). `viaApex` = the two-phase held kick (edge -> apex over the aim -> aim). */
   private kickTrailSquares: { edge: [number, number]; aim: [number, number]; viaApex: boolean } | null = null;
   private showKickTrail(edgeSquare: [number, number], aimSquare: [number, number], viaApex: boolean): void {
-    if (!this.app || !this.kickTrailEnabled) return;
+    if (!this.app) return;
     this.clearKickTrail();
     const edge = squareAnchor(edgeSquare[0], edgeSquare[1]);
     const dest = squareAnchor(aimSquare[0], aimSquare[1]);
@@ -16515,26 +15994,6 @@ export class PitchRenderer {
     return { left, top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
   }
 
-  /** Owner 09-14: the canvas-px TOP of the block-dice PREVIEW drawn over `square` (the staged block target), or
-   *  null when no preview sits there. The DOM block-confirm pill (SpectateView .o66-target-cue) used a fixed
-   *  88 px lift, while the dice rise with zoom (TILE_H·1.85·depth·zoom) — at larger zoom the pill covered them.
-   *  Mirrors drawBlockDiceAt's geometry (side-effect free: no blockPreviewSquares push) incl. the OPPONENT'S
-   *  CHOICE caption. Re-query while the camera moves, like squareToCanvas. */
-  blockPreviewTopCanvas(square: [number, number]): number | null {
-    if (!this.app || !this.pendingBlock) return null;
-    const [bx, by] = this.pendingBlock.square;
-    if (bx !== square[0] || by !== square[1]) return null;
-    const anchor = squareAnchor(bx, by);
-    const scale = depthScale(bx, by);
-    const dieH = (this.blockFaceTextures.length > 0 ? 27 : 18) * scale;
-    const tuned = anchor.y - TILE_H * 1.85 * scale;
-    const decorTop = this.blockDecorTopWorld(square);
-    const y = decorTop == null ? tuned : Math.min(tuned, decorTop - dieH / 2 - BLOCK_PREVIEW_RING_GAP * scale);
-    const captionH = this.pendingBlock.preview.opponentChoice ? 17 * scale + 14 * scale : 0;
-    const topWorld = y - dieH / 2 - captionH;
-    return topWorld * this.world.scale.y + this.world.position.y;
-  }
-
   /** Owner 08-18 (bullseye unify): project a square's TOKEN BODY CENTRE to canvas px — the
    *  block-crosshair anchor convention (tokenPos x-nudge, anchor.y − TILE_H·0.55·depth). For
    *  DOM badges that must sit ON the occupant's torso (the #94 blitz-target 🎯 / spent-blitzer ⚡)
@@ -17310,71 +16769,6 @@ export class PitchRenderer {
       if (now - die.start > holdBoundary) die.start = now - holdBoundary;
       die.holdForOpponentReroll = false;
     }
-  }
-
-  /** Owner o66 #7: a labelled PASS/CATCH roll MODAL over the passer's / catcher's head, using D6 faces, on a
-   *  green (success) or red (fail) pill. Screen-constant size (a UI modal, always readable); pops in, holds, then
-   *  rises + fades (rollModals ticker). Replaces the generic feet-die for these two rolls (owner-requested). */
-  showRollModal(square: [number, number], kind: 'pass' | 'catch', roll: number, needed: number | undefined, ok: boolean, reRolled?: boolean): void {
-    if (!this.app || !isOnPitch(square) || roll < 1 || roll > 6) return;
-    const [x, y] = square;
-    const anchor = squareAnchor(x, y);
-    const scale = depthScale(x, y);
-    const content = new Container();
-    const style = new TextStyle({ fontFamily: 'sans-serif', fontSize: 13, fontWeight: 'bold', fill: 0xffffff });
-    let cursor = 0;
-    const addText = (label: string) => {
-      const text = new Text({ text: label, style, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
-      text.anchor.set(0, 0.5);
-      text.position.set(cursor, 0);
-      content.addChild(text);
-      cursor += text.width + 4;
-    };
-    const side = this.actionDieSide(square); // owner 10-13: the passer's / catcher's team colour
-    const addFace = (value: number) => {
-      const face = this.buildD6(value, undefined, side);
-      face.scale.set(0.64);
-      face.position.set(cursor + 9, 0);
-      content.addChild(face);
-      cursor += 22;
-    };
-    addText(kind === 'pass' ? 'Pass' : 'Catch');
-    addFace(roll);
-    if (needed && isD6FaceValue(needed)) {
-      addText('/');
-      addFace(needed);
-      addText('+');
-    }
-    addText(ok ? '✓' : '✗');
-    if (reRolled) {
-      // Owner 09-05: the re-roll marker is the TRR token icon (the old ↻ arrow only as a texture-less fallback).
-      if (this.tokenRerollIcon) {
-        const icon = new Sprite(this.tokenRerollIcon);
-        icon.anchor.set(0, 0.5);
-        const size = 16;
-        icon.scale.set(size / Math.max(1, this.tokenRerollIcon.width));
-        icon.position.set(cursor + 3, 0);
-        content.addChild(icon);
-        cursor += size + 5;
-      } else {
-        addText(' ↻');
-      }
-    }
-    content.pivot.set(cursor / 2, 0);
-    const w = cursor + 18, h = 30;
-    const pill = new Graphics()
-      .roundRect(-w / 2, -h / 2, w, h, 6).fill({ color: ok ? 0x2f9e44 : 0xc0392b, alpha: 0.94 })
-      .roundRect(-w / 2, -h / 2, w, h, 6).stroke({ color: 0x10160f, width: 1.6, alpha: 0.9 });
-    const node = new Container();
-    node.addChild(pill);
-    node.addChild(content);
-    const baseY = anchor.y - TILE_H * scale * 1.3; // over the head (depth-aware offset, constant on-screen size)
-    node.position.set(anchor.x, baseY);
-    node.alpha = 0;
-    node.zIndex = this.depthZ(x, y) + 70; // above the action die
-    this.effectsLayer.addChild(node);
-    this.anchorEffect(node, x, y, true);
-    this.rollModals.push({ node, start: performance.now(), baseY });
   }
 
   /** Stenciled failure label with the required D6 face. */
@@ -19090,9 +18484,8 @@ export class PitchRenderer {
    *  zoom on a resized host must compare against, and be able to wheel out to, the NEW fit. */
   private currentFitScale(): number {
     const ew = getOrientation() === 'ew';
-    const edge = this.clampToPitchEdge;
-    const padW = edge ? 0 : ew ? 0 : 2 * 4 * TILE_W;
-    const padH = edge ? 0 : ew ? 2 * 4 * TILE_H : 0;
+    const padW = ew ? 0 : 2 * 4 * TILE_W;
+    const padH = ew ? 2 * 4 * TILE_H : 0;
     const w = worldWidth() + padW, h = worldHeight() + padH;
     return this.fitScaleFor(w, h, 24, this.topHudFitReserve((r) => this.fitScaleFor(w, h, 24, r)));
   }
@@ -19124,13 +18517,10 @@ export class PitchRenderer {
     const ew = getOrientation() === 'ew';
     const dugoutW = 4 * TILE_W; // N-S: dugout span along the horizontal
     const dugoutH = 4 * TILE_H; // E-W: dugout span along the vertical
-    // Classic (clampToPitchEdge): fit the PITCH only — drop the dugout margin so
-    // the pitch fills the view and zoom-out can't reveal past its edge.
-    const edge = this.clampToPitchEdge;
-    const padW = edge ? 0 : ew ? 0 : 2 * dugoutW;
-    const padH = edge ? 0 : ew ? 2 * dugoutH : 0;
-    const offX = edge ? 0 : ew ? 0 : dugoutW;
-    const offY = edge ? 0 : ew ? dugoutH : 0;
+    const padW = ew ? 0 : 2 * dugoutW;
+    const padH = ew ? 2 * dugoutH : 0;
+    const offX = ew ? 0 : dugoutW;
+    const offY = ew ? dugoutH : 0;
     const worldW = worldWidth() + padW;
     const worldH = worldHeight() + padH;
     // bug 10-13: E-W keeps the HUD gutter (only the part the stands do not already cover, Astra P2-3)
@@ -19203,14 +18593,6 @@ export class PitchRenderer {
       const nextMin = Math.min(min, lo);
       return [nextMin, Math.max(min + size, hi) - nextMin];
     };
-    // Classic (clampToPitchEdge): bind BOTH axes to the pitch rectangle itself.
-    if (this.clampToPitchEdge) {
-      const [cx, cw] = widen(0, worldWidth(), preview?.x0, preview?.x1);
-      const [cy, ch] = widen(0, worldHeight(), preview?.y0, preview?.y1);
-      this.world.position.x = clampAxis(this.world.position.x, cx, cw, this.app.screen.width);
-      this.world.position.y = clampAxis(this.world.position.y, cy, ch, this.app.screen.height);
-      return;
-    }
     // X → pitch + dugout box (dugouts flank the horizontal in N-S). Excludes the crowd.
     // Owner 09-15: the one-column inward inset is GONE — it clipped the outer column of the INJURED box
     // (the end-zone corner) off the pannable range; the camera now reaches the dugout's outer edge.
@@ -19764,30 +19146,27 @@ export class PitchRenderer {
     this.stadiumLayer.addChild(fence);
 
     // corner pennants at the four pitch corners, team-colored per the
-    // end-color convention (blue south / red north). Arena dressing → OFF when
-    // decor is disabled (FUMBBL Classic: owner 2026-07-08, no corner flags).
-    if (this.decorEnabled) {
-      const flagBlue = this.dressingTextures.get('corner_flag_blue');
-      const flagRed = this.dressingTextures.get('corner_flag_red');
-      // Owner 2026-07-06: the flags sat on an INNER corner of their corner square. Place
-      // them on the actual OUTER FIELD corners via extPoint (the grid-boundary mapper the
-      // dugout trim uses) — extPoint(0/COLS, 0/ROWS) are the four field corners. Blue =
-      // the x=0 (home) end, red = the x=COLS (away) end.
-      const corners: { point: { x: number; y: number }; texture: Texture | undefined; scale: number }[] = [
-        { point: extPoint(0, 0), texture: flagBlue, scale: depthScale(0, 0) },
-        { point: extPoint(0, PITCH_ROWS), texture: flagBlue, scale: depthScale(0, PITCH_ROWS - 1) },
-        { point: extPoint(PITCH_COLS, 0), texture: flagRed, scale: depthScale(PITCH_COLS - 1, 0) },
-        { point: extPoint(PITCH_COLS, PITCH_ROWS), texture: flagRed, scale: depthScale(PITCH_COLS - 1, PITCH_ROWS - 1) },
-      ];
-      for (const corner of corners) {
-        if (!corner.texture) continue;
-        const flag = new Sprite(corner.texture);
-        flag.anchor.set(0.5, 1);
-        flag.height = TILE_H * 1.1 * corner.scale;
-        flag.scale.x = flag.scale.y;
-        flag.position.set(corner.point.x, corner.point.y);
-        this.dressingLayer.addChild(flag); // over the pitch surface
-      }
+    // end-color convention (blue south / red north).
+    const flagBlue = this.dressingTextures.get('corner_flag_blue');
+    const flagRed = this.dressingTextures.get('corner_flag_red');
+    // Owner 2026-07-06: the flags sat on an INNER corner of their corner square. Place
+    // them on the actual OUTER FIELD corners via extPoint (the grid-boundary mapper the
+    // dugout trim uses) — extPoint(0/COLS, 0/ROWS) are the four field corners. Blue =
+    // the x=0 (home) end, red = the x=COLS (away) end.
+    const corners: { point: { x: number; y: number }; texture: Texture | undefined; scale: number }[] = [
+      { point: extPoint(0, 0), texture: flagBlue, scale: depthScale(0, 0) },
+      { point: extPoint(0, PITCH_ROWS), texture: flagBlue, scale: depthScale(0, PITCH_ROWS - 1) },
+      { point: extPoint(PITCH_COLS, 0), texture: flagRed, scale: depthScale(PITCH_COLS - 1, 0) },
+      { point: extPoint(PITCH_COLS, PITCH_ROWS), texture: flagRed, scale: depthScale(PITCH_COLS - 1, PITCH_ROWS - 1) },
+    ];
+    for (const corner of corners) {
+      if (!corner.texture) continue;
+      const flag = new Sprite(corner.texture);
+      flag.anchor.set(0.5, 1);
+      flag.height = TILE_H * 1.1 * corner.scale;
+      flag.scale.x = flag.scale.y;
+      flag.position.set(corner.point.x, corner.point.y);
+      this.dressingLayer.addChild(flag); // over the pitch surface
     }
 
     // bunting along the stand fronts every third row: home side blue, away red
@@ -19806,7 +19185,7 @@ export class PitchRenderer {
       }
     }
 
-    if (this.decorEnabled) this.drawStadiumProps();
+    this.drawStadiumProps();
   }
 
   /**
@@ -20118,35 +19497,6 @@ export class PitchRenderer {
         }
       }
     }
-
-    // FUMBBL Classic coloured row-number rails (owner 2026-07-08): each HALF counts
-    // 1..12 down both side rails, starting at that team's END ZONE and terminating
-    // at the LINE OF SCRIMMAGE. The pitch is 26 long = 1 end zone + 12 + 12 + 1 end
-    // zone, so the two end-zone columns (x=0, x=25) are skipped; home field x=1..12
-    // → 1..12 (red), away field x=13..24 → 12..1 (blue), both reaching 12 at the LOS.
-    if (this.showRowNumberRails) for (let x = 1; x < PITCH_COLS - 1; x++) {
-      const home = x <= PITCH_COLS / 2 - 1; // x 1..12 home, 13..24 away
-      const num = home ? x : PITCH_COLS - 1 - x; // end zone = 1 → LOS = 12, per half
-      const style = home ? RAIL_HOME_STYLE : RAIL_AWAY_STYLE;
-      for (const gameY of [0, PITCH_ROWS - 1]) {
-        const scale = depthScale(x, gameY);
-        const label = new Text({ text: String(num), style, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true }); // owner 09-07: 4x raster
-        label.anchor.set(0.5, 0.5);
-        label.alpha = 0.92;
-        label.scale.set(scale);
-        // hug the sideline: nudge a hair INWARD (toward the row centre) so the
-        // number sits on the outermost square, not off-pitch. Same screen-vector
-        // trick as the accessibility row markers above.
-        const a = squareAnchor(x, gameY);
-        const center = squareAnchor(x, Math.floor(PITCH_ROWS / 2));
-        const dx = center.x - a.x;
-        const dy = center.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const nud = 4 * scale;
-        label.position.set(a.x + (dx / len) * nud, a.y + (dy / len) * nud);
-        this.pitchLayer.addChild(label);
-      }
-    }
   }
 
   // --- player tokens (placeholder art, EC-7) ---
@@ -20214,28 +19564,6 @@ export class PitchRenderer {
   }
   /** Owner 10-22 (Astra r1): each on-pitch player's token base (see TokenGround), refreshed whenever his token is built. */
   private tokenGrounds = new Map<string, TokenGround>();
-
-  /** @deprecated W31 constant nudge — retained only for the historical note above; no callers. */
-  private legacyTokenPosNudge(x: number, y: number): { x: number; y: number } {
-    const anchor = squareAnchor(x, y);
-    const ew = getOrientation() === 'ew';
-    const widthCol = ew ? x : y;
-    const widthCenter = ew ? (PITCH_COLS - 1) / 2 : (PITCH_ROWS - 1) / 2;
-    // Owner 08-13 (W31, restoring prior behaviour): tokens nudge toward the pitch's width-
-    // center as they sit further out — TOKEN_EDGE_NUDGE_MAX_PX at the furthest column,
-    // falling off LINEARLY to 0 at center. Previously this dropped to zero entirely in FLAT
-    // mode (isFlat() early-return, ff08de70) — that was the missing-path bug: FLAT/Classic
-    // spectate lost the nudge outright. depthScale (≡1 in FLAT, since far=1 there) keeps the
-    // existing Madden depth taper in isometric mode instead of a bare linear cheat, so the
-    // near rows read the full 8px and far rows taper with the same perspective the tiles use
-    // — in FLAT it collapses to a uniform 10px-at-edge linear falloff, matching the spec exactly.
-    const nudgeFrac = widthCenter > 0 ? (widthCol - widthCenter) / widthCenter : 0;
-    // Owner 2026-07-06: the spectator drive-north flip mirrors the width axis, so the
-    // off-centre nudge must point the other way (a token on the flipped-left of centre
-    // is nudged the opposite screen direction). depthScale is already flip-aware.
-    const nudgeX = -nudgeFrac * 10 * depthScale(x, y) * (isFieldFlip() ? -1 : 1);
-    return { x: anchor.x + nudgeX, y: anchor.y };
-  }
 
   /** Owner 10-22: every player token, any sprite set, stands with its BASE on its square's projected centre line: the
    *  token records where its base sits (tokenGrounds) and its origin goes to tokenPos(x, y, id) - the centre line at
@@ -20767,11 +20095,6 @@ export class PitchRenderer {
     // the rest of the turn (store: blitzTokens is per-turn-key) and under the effects layer (stamps land over them).
     if (this.blitzTokens?.targetId === playerId) markers.push({ text: '🎯', emoji: true, deco: 'blitz_target', art: 'blitzTarget' });
     if (this.blitzTokens?.blitzerId === playerId) markers.push({ text: '⚡', emoji: true, deco: 'blitzer', art: 'blitzer' });
-    // A pending chomp uses the action's tooth glyph (not the post-state mouth), in the
-    // same token-local torso row as CONFUSED. Slightly larger so the imminent attack reads.
-    if (coordinate && this.chompCue?.square[0] === coordinate[0] && this.chompCue.square[1] === coordinate[1]) {
-      markers.push({ text: '🦷', emoji: true, deco: 'chompCue', scale: 1.3 });
-    }
     // Owner 2026-07-08: Dodgy Snack (-MA/-AV for the drive, ate BB_Nut's cooking) now reads as
     // a PUTRID-GREEN glow on the player + a SMALL vomiting marker centred on the token — no
     // longer the oversized torso emoji it shared with the state-marker row.
@@ -21580,7 +20903,7 @@ export class PitchRenderer {
   /** Owner 2026-07-07 (TTM): flag a thrown/kicked player's next move to HOP along this
    *  explicit scatter path (square list incl. start + end). Consumed once. */
   /** The thrown player's flight on screen (Modern 1.2 s, Classic 640 ms). */
-  private ttmFlightMs(): number { return ttmThrowMs(!this.modernPitchPresentation); }
+  private ttmFlightMs(): number { return ttmThrowMs(); }
   /** The model square of `playerId` right now (null off the pitch / unknown). */
   private modelSquareOf(playerId: string): [number, number] | null {
     const c = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
@@ -22498,7 +21821,7 @@ export class PitchRenderer {
   private expectedRenderedCompartment(
     targetCompartment: PlayerPresentationCompartment,
   ): PlayerPresentationCompartment {
-    return !this.dugoutsEnabled && targetCompartment !== 'pitch' ? 'removed' : targetCompartment;
+    return targetCompartment;
   }
 
   private scheduleBoardProtectedRecheck(
@@ -24070,7 +23393,7 @@ export class PitchRenderer {
     // drive the throw/catch tooltip + intercept feed. Fires ahead of the mode-specific handlers
     // below (which early-return) and is purely additive — dedup by key, null off-pitch / on mode-exit.
       const onPitch = sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS;
-    if (this.passRulerFrom || (this.plannerEnabled && (this.actionMode === 'pass' || this.actionMode === 'bomb'))) {
+    if (this.passRulerFrom) {
       const key = onPitch ? `${sx},${sy}` : null;
       if (key !== this.squareHoverLast) {
         this.squareHoverLast = key;
@@ -24105,44 +23428,15 @@ export class PitchRenderer {
     const overPush = this.pushOptionCoords.some((c) => c[0] === sx && c[1] === sy);
     // Upstream HIT_AND_RUN exposes its valid cursor on exactly the server moveSquareArray membership test.
     const overHitAndRun = this.tilePickSkill === 'order66-hit-and-run' && this.tilePickEligible?.has(`${sx},${sy}`);
-    // Owner 2026-07-04d: in bomb mode, hovering previews the 3×3 blast.
-    if (this.actionMode === 'bomb' && this.plannerEnabled) {
-      this.clearHoverSquareMarker();
-      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS &&
-        (this.bombTarget?.[0] !== sx || this.bombTarget?.[1] !== sy)) {
-        this.setBombTarget([sx, sy]);
-      }
-      this.canvasCursor(canvas, 'crosshair');
-      return;
-    }
-    // Owner 2026-07-04c: foul/handoff/pass — hovering an ELIGIBLE target
-    // swaps the cursor (skull / hand) and raises the roll tip beside it.
-    const mode = this.actionMode;
-    const hoverId = this.playersBySquare.get(`${sx},${sy}`);
-    let actionTip: string | null = null;
-    if (this.plannerEnabled && hoverId && (mode === 'foul' || mode === 'handoff' || mode === 'pass')) {
-      actionTip = this.actionRollText(mode, hoverId);
-    }
-    if (actionTip) {
-      this.clearHoverSquareMarker();
-      this.canvasCursor(canvas, this.actionCursorFor(mode as 'foul' | 'handoff' | 'pass'));
-      this.actionHoverActive = true;
-      this.onActionHover?.({ mode: mode as 'foul' | 'handoff' | 'pass', text: actionTip, canvasX: offsetX, canvasY: offsetY });
+    this.canvasCursor(canvas, overHitAndRun
+      ? 'crosshair'
+      : overPush || this.playersBySquare.has(`${sx},${sy}`)
+        ? this.primedCursor()
+        : this.restingCursor());
+    if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
+      this.showHoverSquareMarker([sx, sy]);
     } else {
-      if (this.actionHoverActive) {
-        this.actionHoverActive = false;
-        this.onActionHover?.(null);
-      }
-      this.canvasCursor(canvas, overHitAndRun
-        ? 'crosshair'
-        : overPush || this.playersBySquare.has(`${sx},${sy}`)
-          ? this.primedCursor()
-          : this.restingCursor());
-      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) {
-        this.showHoverSquareMarker([sx, sy]);
-      } else {
-        this.clearHoverSquareMarker();
-      }
+      this.clearHoverSquareMarker();
     }
   }
 
@@ -24277,15 +23571,6 @@ export class PitchRenderer {
       }
       // else fall through to the player-click dispatch below
     }
-    // Owner 2026-07-04d: bomb/Throw-Keg targeting owns taps — a click on any
-    // square (the 3×3 blast centre) confirms the target via onBombTarget.
-    if (this.actionMode === 'bomb' && this.plannerEnabled && isTap) {
-      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
-      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
-      const [sx, sy] = worldToSquare(worldX, worldY);
-      if (sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS) this.onBombTarget?.([sx, sy]);
-      return;
-    }
     // Owner o66an: KICK PLACEMENT owns taps — a tap on an eligible aim square fires onKickPick (→ CLIENT_KICKOFF).
     if (this.kickPickSquares && isTap) {
       const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
@@ -24356,23 +23641,11 @@ export class PitchRenderer {
           this.confirmArmedAction();
           return;
         }
-        const clickedIsHome = !!this.game?.teamHome.playerArray.some((p) => p.playerId === playerId);
         // Owner 2026-07-04d: only route to the block/approach handler when the
         // SELECTED player is a legal actor (the acting team). If an opposition
         // player is selected (view-only), clicking another player just RE-selects
         // it — so clicking opp→own never arms a reverse block preview.
         if (
-          // o66-dispatch (P1): in o66 play, an enemy click must NOT enter the legacy block-PREVIEW routing
-          // (handleOpponentClick → pendingBlock/onBlockConfirm) — it falls through to onPlayerClick below,
-          // where the o66 router turns it into sendBlock. Off-flag: unchanged legacy routing.
-          !this.order66 &&
-          this.selectedPlayerId &&
-          playerId !== this.selectedPlayerId &&
-          clickedIsHome !== this.selectedIsHome() &&
-          this.selectedIsActor()
-        ) {
-          this.handleOpponentClick(playerId, [sx, sy], offsetX, offsetY);
-        } else if (
           // Owner 2026-07-04c: in handoff/pass mode a TEAMMATE click targets the
           // action instead of switching the selection.
           this.selectedPlayerId &&
@@ -24388,12 +23661,9 @@ export class PitchRenderer {
         }
       } else if (this.selectedPlayerId && this.inspectionOnly()) {
         this.clearSelection(); // owner 09-08: spectator/replay inspect — any empty-square click dismisses, acting side included
-      } else if (this.selectedPlayerId && this.actionMode !== 'pass' && this.selectedIsActor()) {
-        this.handleSquareClick([sx, sy]);
       } else if (this.selectedPlayerId && !this.selectedIsActor()) {
         // Owner 2026-07-06 (B): spectator/view-only inspect — tapping an empty square
-        // DESELECTS, shutting down the reach + tackle-zone read (an actor keeps their
-        // pathing via handleSquareClick above).
+        // DESELECTS, shutting down the reach + tackle-zone read (an actor's selection stays).
         this.clearSelection(); // the host re-selects the actor itself when its inspection latch is set (o66 play)
       }
     }
@@ -24646,10 +23916,6 @@ export class PitchRenderer {
     if (this.squareHoverLast !== null) {
       this.squareHoverLast = null;
       this.onSquareHover?.(null);
-    }
-    if (this.actionHoverActive) {
-      this.actionHoverActive = false;
-      this.onActionHover?.(null);
     }
   }
 

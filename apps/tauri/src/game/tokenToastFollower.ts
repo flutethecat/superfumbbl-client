@@ -3,34 +3,6 @@ export interface TokenScreenPosition {
   y: number;
 }
 
-/** Convert Classic's pitch-canvas or visible sidebar Box token into the Classic root's
- * coordinate space. Off-pitch players without a rendered Box tile deliberately have no anchor. */
-export function classicTokenToastScreenPosition(input: {
-  root: HTMLElement;
-  pitch: HTMLElement | null;
-  playerId: string;
-  onPitch: boolean;
-  canvasPosition: TokenScreenPosition | null | undefined;
-}): TokenScreenPosition | null {
-  const rootRect = input.root.getBoundingClientRect();
-  if (input.onPitch) {
-    if (!input.pitch || !input.canvasPosition) return null;
-    const pitchRect = input.pitch.getBoundingClientRect();
-    return {
-      x: pitchRect.left - rootRect.left + input.canvasPosition.x,
-      y: pitchRect.top - rootRect.top + input.canvasPosition.y,
-    };
-  }
-  const tile = Array.from(input.root.querySelectorAll<HTMLElement>('.cv-dg-tile[data-player-id]'))
-    .find((entry) => entry.dataset.playerId === input.playerId);
-  if (!tile) return null;
-  const tileRect = tile.getBoundingClientRect();
-  return {
-    x: tileRect.left - rootRect.left + tileRect.width / 2,
-    y: tileRect.top - rootRect.top + tileRect.height / 2,
-  };
-}
-
 export const WATCH_OUT_TOAST_COPY = '⭐ Withergrasp gains the Dodge skill!';
 
 export interface TokenToastFollowerDeps {

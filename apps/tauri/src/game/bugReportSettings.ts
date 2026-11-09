@@ -26,7 +26,7 @@ export const BUG_REPORT_SETTINGS_KEYS = [
   'showSweetSpot', 'showFieldLogos', 'activePlayerEcho', 'clickEcho', 'turnTrack', 'trailMarks', 'trailColor',
   'auraDisturbingPresence', 'auraPickMeUp', 'colorblindMode',
   // HUD / log / chat presentation
-  'uiMode', 'modernHudStyle', 'classicEffects', 'uiTheme', 'uiStyle', 'uiColorScheme', 'uiGameStyle', 'uiFont', 'uiTextSize', 'uiCustomize', 'useFantasyCursor',
+  'uiMode', 'modernHudStyle', 'uiTheme', 'uiStyle', 'uiColorScheme', 'uiGameStyle', 'uiFont', 'uiTextSize', 'uiCustomize', 'useFantasyCursor',
   'logStyle', 'chatStyle', 'logFont', 'logFontSize', 'chatToastsEnabled', 'chatDisabled', 'chatPoppedOut',
   'playerCardMode', 'spectatorView', 'spectatorClean', 'autoDirector',
   // input / audio / play mode / diagnostics switches

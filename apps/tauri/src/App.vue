@@ -3,12 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowR
 import { createIntroWatchdog } from './introWatchdog';
 import SpectateView from './views/SpectateView.vue';
 import WaitingBoardView from './views/WaitingBoardView.vue';
-// Owner 09-12: FUMBBL Classic is a fork-edition feature. The public export omits ClassicView.vue entirely (see
-// public-export.exclude); the glob tolerates the missing file, so the public build carries no Classic code.
-const classicModules = import.meta.glob('./views/ClassicView.vue');
-const ClassicView = FORK_EDITION && classicModules['./views/ClassicView.vue']
-  ? defineAsyncComponent(classicModules['./views/ClassicView.vue'] as () => Promise<{ default: Component }>)
-  : null;
 // The FUMBBL.COM blade (FUMBBL website, docked; owner 10-05) - in every edition since 10-06. Lazy: the pane's code loads
 // only when the blade is opened.
 const fumbblHomeModules = import.meta.glob('./views/FumbblHomePane.vue');
@@ -1967,11 +1961,6 @@ watch(() => ui.settingsOpen, (open) => { if (!open) { resetUiConfirmOpen.value =
 // blade's own selector (SpectateBrowserView.vue) applies 'fumbbl' when a Spectate action needs it.
 // No flow was found whose ONLY server-switch path was the header plate.
 
-function selectMode(mode: 'play' | 'spectate' | 'team') {
-  view.value = mode;
-  ui.browserOpen = false;
-}
-
 function selectBlade(nextView: AppView) {
   if (nextView === 'team') {
     tournamentBuilderPackage.value = '';
@@ -2545,16 +2534,6 @@ onBeforeUnmount(() => {
     <svg class="cb-filter-defs" aria-hidden="true" focusable="false" width="0" height="0">
       <filter v-for="mode in COLORBLIND_FILTER_MODES" :id="`cb-${mode}`" :key="mode" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" :values="COLORBLIND_MATRICES[mode]" /></filter>
     </svg>
-    <!-- Owner 10-12: the circuit-board header strip is gone from the console shell (the blade ribbon is the menu bar
-         now); the Super FUMBBL logo plate and the BETA stamp moved to the ribbon's right end (below). Only the Classic
-         in-game view keeps its compact header plate, unchanged (Classic is Pellaeon's lane). -->
-    <header v-if="gameStore.game.value && settings.uiMode === 'classic'" class="shell-header header-compact">
-      <div class="server-switcher" role="group" :aria-label="$t('app.shellHeader.classic.server')">
-        <div class="server-plate server-plate-super server-plate-inert" :aria-label="$t('app.shellHeader.classic.superFumbbl')">
-          <img :src="superFumbblLogoUrl" :alt="$t('app.shellHeader.classic.superFumbbl')" />
-        </div>
-      </div>
-    </header>
 
     <!-- Fives integration (risk-b): the blade ribbon is the console shell nav — HIDE it during a live game so it
          doesn't steal ~42px above the pitch AND so a mid-game blade click can't desync `view` under the live-game
@@ -2655,8 +2634,6 @@ onBeforeUnmount(() => {
       <button type="button" :aria-label="$t('app.dismissReplayFileError')" @click="replayFileError = ''">×</button>
     </div>
 
-    <!-- owner 2026-07-08 (FC): view-layer fork — the FUMBBL-Classic presentation
-         mounts instead of SpectateView when the mode is set (shared store). -->
     <!-- Owner 09-23: the art pack must be installed before the pitch draws (split builds); see startArtPackSync. -->
     <div v-if="!!gameStore.game.value && !artPack.ready" class="art-pack-wait" role="status" aria-live="polite">
       <template v-if="artPack.error">
@@ -2671,8 +2648,7 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <template v-if="!!gameStore.game.value && artPack.ready">
-      <component :is="ClassicView" v-if="ClassicView && settings.uiMode === 'classic' && !gameStore.isReplay.value" :mode="liveGameMode as 'play' | 'spectate'" @select-mode="selectMode" />
-      <SpectateView v-else ref="spectateViewRef" :mode="liveGameMode" @end-game-exit="onEndGameExit" />
+      <SpectateView ref="spectateViewRef" :mode="liveGameMode" @end-game-exit="onEndGameExit" />
     </template>
     <!-- Owner ruling (console shell restructure): Play blade is up for BOTH server plates — the "PLAY ON
          SUPER FUMBBL" entry card (CreateGameModal) replaces the old fork stopgap that routed here into
@@ -5682,38 +5658,6 @@ html:has(.shell--in-game), body:has(.shell--in-game) { overflow: hidden; }
 input, textarea, [contenteditable="true"], .log-panel {
   user-select: text;
   -webkit-user-select: text;
-}
-/* Owner 2026-07-11: motherboard PCB texture behind the top bar. Owner 10-12: the console shell no longer shows it
-   (the blade ribbon carries the logo + BETA now); only the Classic in-game compact header plate keeps it. */
-.shell-header {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  padding: 0.25rem 1rem;
-  background-color: #0c1408; /* PCB-dark fallback before the image paints */
-  background-image:
-    linear-gradient(90deg, rgba(10, 16, 8, 0.82) 0%, rgba(10, 16, 8, 0.5) 35%, rgba(10, 16, 8, 0.5) 65%, rgba(10, 16, 8, 0.82) 100%),
-    url('./assets/resources/motherboard-header.jpg');
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  border-bottom: 1px solid #16391a;
-}
-/* owner 2026-07-14: once a game is loaded, the menu bar SHRINKS to give the pitch more room. */
-.shell-header.header-compact .server-plate { width: 92px; height: 32px; padding: 0 0.45rem; }
-.shell-header.header-compact .server-plate-super img { max-height: 25px; }
-/* owner 2026-07-14: narrow windows shrink the plate (kept for the Classic in-game header, its only remaining user). */
-@media (max-width: 720px) {
-  .shell-header .server-plate { width: 86px; height: 36px; padding: 0 0.35rem; }
-  .shell-header .server-plate-super img { max-height: 26px; max-width: 72px; }
-}
-
-/* Console-UI S2: server switcher plates are a matched 52px-high bevelled pair. */
-.server-switcher {
-  display: inline-flex;
-  gap: 0.45rem;
-  flex-shrink: 0;
 }
 .server-plate {
   display: inline-flex;

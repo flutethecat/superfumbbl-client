@@ -6862,20 +6862,6 @@ function answerFollowup(follow: boolean) {
   gameStore.resolveFollowup(follow);
 }
 
-// Show planner/path previews only to the acting coach in play/demo mode; pure spectate and spectator-clean hide them.
-const plannerAllowed = computed(
-  // C6 (owner 2026-07-09): a server shutdown ends the match — no selection/planning after it.
-  // ORDER 66 (A.2): the client planner (BFS paths + reach shading) is the REPLACE surface — server
-  // moveSquareArray drives movement instead — so it is OFF whenever settings.order66 is on (⚖ law).
-  () => !settings.spectatorClean && !gameStore.state.gameShutdown && !settings.order66
-    && (gameStore.state.demoMode || (gameStore.isPlaying.value && gameStore.myTurn.value)),
-);
-watch(plannerAllowed, (allowed) => {
-  if (renderer) {
-    renderer.plannerEnabled = allowed;
-    renderer.clearSelection();
-  }
-});
 // ORDER 66 (P1): the renderer hands clicks to the o66 router (bypassing the legacy cinematic-freeze +
 // block-preview interceptors) ONLY in o66 PLAY mode. Spectate/ClassicView never flip it (byte-valid passes).
 const o66RendererActive = computed(() => settings.order66 && gameStore.isPlaying.value);
@@ -8015,11 +8001,9 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
       ? passDestinationRollPreview(g, from, sq, throwerId, mode)
       : null;
     // Pass/Bomb/TTM uses one in-square destination control: projectile icon + full Pass requirement.
-    // Owner 09-14: the block-confirm pill clears the block-dice preview (which rises with zoom) instead of a fixed lift.
-    const diceTop = o66AggroStage.value ? renderer.blockPreviewTopCanvas(sq) : null;
     if (p) o66TargetCue.value = {
       x: p.x,
-      y: throwDestination ? p.y : o66AggroStage.value ? Math.max(diceTop != null ? Math.min(diceTop - 6, p.y - 88) : p.y - 88, 8) : p.y - 40,
+      y: throwDestination ? p.y : o66AggroStage.value ? Math.max(p.y - 88, 8) : p.y - 40,
       label,
       throwRoll: preview?.throwRoll,
       // owner 10-05: the catch requirement rides this same cue (the renderer's green "Catch" chip is retired)
@@ -9085,20 +9069,6 @@ watch(() => ctxMenu.visible, (visible) => {
 /** Action chosen from a menu, carried into the planner + Confirm button label. */
 const plannedAction = ref<string | null>(null);
 
-const SPECIAL_ACTION_SKILLS = [
-  'hypnoticgaze', 'projectilevomit', 'stab', 'chainsaw', 'bombardier', 'breathefire',
-  'throwteammate', 'kickteammate', 'multipleblock', 'lookintomyeyes',
-];
-
-function specialsOf(playerId: string): string[] {
-  const game = gameStore.game.value;
-  if (!game) return [];
-  const player = [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => p.playerId === playerId);
-  return (player?.skillArray ?? []).filter((s) =>
-    SPECIAL_ACTION_SKILLS.includes(s.toLowerCase().replace(/[^a-z]/g, '')),
-  );
-}
-
 /** Read star named rules from skillArray for informational display; Throw Keg is wired and single-block-die reroll remains parked. */
 function isStar(playerId: string): boolean {
   const game = gameStore.game.value;
@@ -9112,12 +9082,6 @@ function starRulesOf(playerId: string): string[] {
   if (!game || !isStar(playerId)) return [];
   const player = [...game.teamHome.playerArray, ...game.teamAway.playerArray].find((p) => p.playerId === playerId);
   return player?.skillArray ?? [];
-}
-
-function adjacentToPathEnd(square: [number, number]): boolean {
-  const end = renderer?.getPathEnd();
-  if (!end) return false;
-  return Math.max(Math.abs(end[0] - square[0]), Math.abs(end[1] - square[1])) === 1;
 }
 
 // ---- ORDER 66 (A.2): flag-gated action menu (surface ③) ----------------------------------------------
@@ -10453,7 +10417,6 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   if (!renderer) return;
   const r = renderer;
   const items: MenuItem[] = [];
-  const selectedId = r.getSelectedPlayerId();
 
   // #134 (owner): in SPECTATE / non-play mode, a right-click closes the open player portrait AND de-selects the
   // player in ONE gesture — no menu (the legacy action menu is useless to a spectator). ⚠ SCOPE GUARD (load-bearing):
@@ -10554,106 +10517,6 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     }
     openO66Menu(target, x, y);
     return;
-  }
-
-  if (target.isOpposition) {
-    if (!selectedId) {
-      items.push({ get label() { return $t('hud.text.selectOneOfYour'); }, disabled: true });
-    } else {
-      const attackerIsHome = selectedIsHome();
-      const reachable = r.canApproach(target.square);
-      // Q6: Block raises the contextual dice preview (no dedicated button)
-      if (!target.isDown && adjacentToPathEnd(target.square)) {
-        items.push({
-          get label() { return $t('hud.text.block'); },
-          action: () => {
-            r.previewBlock(target.playerId, x, y);
-            plannedAction.value = 'Block';
-          },
-        });
-      }
-      // Q8 (revised): out-of-range hides; spent budgets show shaded "— used"
-      if (!target.isDown && reachable) {
-        const used = !budgetAvailable('blitz', attackerIsHome);
-        items.push({
-          label: used ? 'Blitz here — used' : 'Blitz here',
-          disabled: used,
-          action: () => {
-            r.setActionMode('blitz');
-            r.planApproach(target.square);
-            plannedAction.value = 'Blitz';
-          },
-        });
-      }
-      if (target.isDown && reachable) {
-        const used = !budgetAvailable('foul', attackerIsHome);
-        items.push({
-          label: used ? 'Foul — used' : 'Foul',
-          disabled: used,
-          action: () => {
-            r.setActionMode('foul');
-            r.planApproach(target.square);
-            plannedAction.value = 'Foul';
-          },
-        });
-      }
-      if (target.isDown && r.canJumpOver(target.square)) {
-        items.push({ get label() { return $t('hud.text.jumpOver'); }, action: () => void r.planJumpOver(target.square) });
-      }
-      const specials = specialsOf(selectedId);
-      items.push({
-        get label() { return $t('hud.text.special'); },
-        children: specials.length
-          ? specials.map((skill) => ({
-              label: skill,
-              action: () => {
-                r.planApproach(target.square);
-                plannedAction.value = skill;
-              },
-            }))
-          : [{ get label() { return $t('hud.text.noneAvailable'); }, disabled: true }],
-      });
-      if (items.length === 0) items.push({ get label() { return $t('hud.text.noActionsAvailable'); }, disabled: true });
-    }
-  } else if (target.activationSpent) {
-    // Q8: nothing actionable renders for a spent player
-    items.push({ get label() { return $t('hud.text.alreadyActivated'); }, disabled: true });
-  } else {
-    const distracted = target.isConfused || target.isHypnotized;
-    const suffix = distracted ? ' (distracted)' : '';
-    const declare = (mode: ActionMode, label: string) => () => {
-      r.selectPlayer(target.playerId);
-      r.setActionMode(mode);
-      plannedAction.value = label === 'Move' ? null : label;
-    };
-    // owner 2026-07-03 r3: the Move item is just "Activate"; the others drop the
-    // "Declare " prefix (Blitz/Foul/Pass/Handoff).
-    items.push({ get label() { return $t('hud.text.activate'); }, action: declare('move', 'Move') });
-    for (const [mode, label] of [['blitz', 'Blitz'], ['foul', 'Foul'], ['pass', 'Pass'], ['handoff', 'Handoff']] as [ActionMode, string][]) {
-      // Q8 (revised): spent declarations stay visible, shaded "— used"
-      const used = !budgetAvailable(mode, target.isHomeTeam);
-      items.push({
-        label: used ? `${label} — used` : `${label}${suffix}`,
-        disabled: used,
-        action: declare(mode, label),
-      });
-    }
-    if (target.isDown && selectedId && selectedId !== target.playerId && r.canJumpOver(target.square)) {
-      items.push({ get label() { return $t('hud.text.jumpOver'); }, action: () => void r.planJumpOver(target.square) });
-    }
-    const specials = specialsOf(target.playerId);
-    items.push({
-      get label() { return $t('hud.text.special'); },
-      children: specials.length
-        ? specials.map((skill) => ({
-            label: skill,
-            action: () => {
-              r.selectPlayer(target.playerId);
-              plannedAction.value = skill;
-            },
-          }))
-        : [{ get label() { return $t('hud.text.noneAvailable'); }, disabled: true }],
-    });
   }
 
   // Owner 2026-07-06: STAR PLAYER special rules on the coach's OWN star. FFB keeps a
@@ -12223,7 +12086,6 @@ onMounted(async () => {
   renderer.trailColorMode = settings.trailColor; // owner 2026-07-04
   applyPlannerColors(); // owner 09-16
   renderer.trailMarkStyle = settings.trailMarks; // owner 2026-07-08: echo | numbers
-  renderer.plannerEnabled = plannerAllowed.value;
   renderer.order66 = o66RendererActive.value; // ORDER 66 (P1): o66 owns clicks in PLAY only (never spectate)
   renderer.setDeclaredBlockTargetChosen(o66BlockTargetChosen.value); // UAT 1.0.208: a remount mid-choice keeps the click
   renderer.setPreClickBlockDice(settings.preClickBlockDice); // owner 10-15: Settings > UI gate
@@ -12983,15 +12845,7 @@ onMounted(async () => {
   renderer.onPlayerDoubleClick = () => {
     /* o66: intentionally inert — single-click declares Move (#5). */
   };
-  // Owner 2026-07-04c: foul/handoff/pass — hover roll tip + confirm modal + wire.
-  renderer.onActionHover = (tip) => {
-    if (!tip) { actionTip.visible = false; return; }
-    actionTip.visible = true;
-    actionTip.mode = tip.mode;
-    actionTip.text = tip.text;
-    actionTip.x = tip.canvasX + 16;
-    actionTip.y = tip.canvasY + 20;
-  };
+  // Owner 2026-07-04c: foul/handoff/pass — confirm modal + wire.
   renderer.onActionTarget = (req) => {
     // Owner 10-13 (pass at destination): with a route plotted, the armed Pass is thrown from the route's destination
     // after the walk. The card says so and the range ruler runs from that square to the target while it is up.
@@ -13348,16 +13202,6 @@ onMounted(async () => {
   renderer.onHoverSquare = (coord) => fumbblHover(coord as [number, number] | null);
   renderer.onRightClick = (x, y) => pitchRightClick(x, y);
   renderer.oneClickActionTargets = () => fumbblControls(); // rig g1100 #1: one click throws / hands off (no card)
-  // Owner 2026-07-04d: bomb/Throw-Keg — clicking the 3×3 blast centre confirms.
-  renderer.onBombTarget = (centre) => {
-    const attackerId = renderer?.getSelectedPlayerId();
-    if (!attackerId) return;
-    renderer?.setActionMode('auto');
-    renderer?.setBombTarget(null);
-    // CT-1409 review batch: a bomber never moves (no throwBombMove) — drop the stale getPlannedPath() read.
-    if (gameStore.isPlaying.value) gameStore.playerThrowBomb(attackerId, centre as [number, number]);
-    else { gameStore.state.bombBlast = { square: centre as [number, number], seq: (gameStore.state.bombBlast?.seq ?? 0) + 1 }; }
-  };
   // path-planning clicks shouldn't leave a stale stats card behind
   renderer.onSelectionChange = (playerId) => {
     pitchSelectionRevision += 1; // Astra round 5: every selection change counts, however brief
@@ -13402,23 +13246,6 @@ onMounted(async () => {
   // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off. Owner 10-13: with Settings >
   // Confirm kick-off square ON it opens the "Kick to ...?" card instead (pickKickSquare; OFF = the same send as before).
   renderer.onKickPick = (coord) => gameStore.pickKickSquare(coord as [number, number]);
-  renderer.onBlockConfirm = (attackerId, defenderId, preview) => {
-    // Owner 09-28 (S6 follow-up, Sol item 4, recorded not fixed): this legacy order66-off sender goes straight to
-    // gameStore.playerBlitz/playerBlock with no blitz-commit hold, so Gored/Chainsaw never offers here either —
-    // but settings.ts hard-pins order66=true unconditionally, so this whole branch is unreachable in shipped
-    // builds (dead legacy code, Phase ② excises it). Left as-is.
-    // M4.2: in play mode send the REAL block (server rolls + resolves); demo otherwise.
-    if (gameStore.isPlaying.value) {
-      // Owner 2026-07-09 (C2/C7): a BLITZ moves to contact BEFORE blocking — send the approach path
-      // via playerBlitz. A plain block is already adjacent (empty path) → playerBlock. The old code
-      // always sent a plain block, so a block requiring movement was rejected server-side (target not
-      // adjacent) and never resolved.
-      const path = (renderer?.getPlannedPath() ?? []) as [number, number][];
-      if (actionMode.value === 'blitz' || path.length > 0) gameStore.playerBlitz(attackerId, defenderId, path);
-      else gameStore.playerBlock(attackerId, defenderId);
-    } else gameStore.demoBlock(attackerId, defenderId, preview.dice, preview.opponentChoice);
-    renderer?.clearSelection();
-  };
   renderer.onPathChange = (path) => {
     queuedSteps.value = path.length;
   };

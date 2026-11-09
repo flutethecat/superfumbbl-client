@@ -16,16 +16,6 @@ export function isGazeMovementState(state: string): state is GazeMovementState {
   return state === 'GAZE_MOVE' || state === 'GAZE';
 }
 
-export type GazeTargetClick = 'confirmDeclared' | 'confirmCandidate' | 'nominate' | 'ordinary';
-
-/** Locked activations intercept only their declared victim; every other click stays ordinary. */
-export function gazeTargetClick(intent: GazeIntent | null, candidateId: string | null, clickedId: string): GazeTargetClick {
-  if (!intent) return 'ordinary';
-  if (intent.phase === 'active') return intent.victimId === clickedId ? 'confirmDeclared' : 'ordinary';
-  if (intent.phase !== 'targeting' && intent.phase !== 'targetSelected') return 'ordinary';
-  return candidateId === clickedId ? 'confirmCandidate' : 'nominate';
-}
-
 /**
  * Owner 10-08 (Modern): no victim is named at declare. A click on an opposing player during a live gaze activation
  * is read against the gazer's CURRENT square:

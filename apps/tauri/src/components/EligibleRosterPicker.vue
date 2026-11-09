@@ -4,7 +4,7 @@
 // (armPlayerPick / resolvePlayerPick / confirmPlayerPick in game/store.ts). The pitch/dugout
 // crosshair interaction can miss an eligible candidate that has no synthetic pre-setup square
 // (packages/ffb-pitch/src/preSetupFormation.ts caps the synthetic formation at eleven
-// fieldable players, Stars first) — Classic has no dugout click surface at all. This list
+// fieldable players, Stars first). This list
 // answers the SAME wire: every row's id comes straight from the server's exact eligibleIds
 // (game/rosterPicker.ts resolveRosterPickCandidates), never re-derived or substituted.
 import type { RosterPickCandidate } from '../game/rosterPicker';
@@ -17,8 +17,8 @@ const props = defineProps<{
   min: number;
   max: number;
   declinable: boolean;
-  /** 'classic' = grey-Swing modal skin (ClassicView); 'modern' = dark inline panel (SpectateView). */
-  theme?: 'classic' | 'modern';
+  /** 'modern' = dark inline panel (SpectateView), the only skin since the Classic view was retired (owner 11-05). */
+  theme?: 'modern';
 }>();
 
 const emit = defineEmits<{
@@ -80,21 +80,6 @@ const emit = defineEmits<{
 .erp-actions { display: flex; gap: 0.5rem; }
 .erp-btn { padding: 0.35rem 0.9rem; font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); border-radius: 3px; cursor: pointer; }
 .erp-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-
-/* Classic grey-Swing skin (mirrors ClassicView's cv-mvp*). */
-.erp-root[data-theme="classic"] { color: #e6e2d8; }
-.erp-root[data-theme="classic"] .erp-title { color: #cdb36a; }
-.erp-root[data-theme="classic"] .erp-list { border: 1px solid #4a4436; background: #1e1e22; }
-.erp-root[data-theme="classic"] .erp-cand { background: #2c2c31; color: #e6e2d8; border: 1px solid #45454c; }
-.erp-root[data-theme="classic"] .erp-cand:hover { background: #34343a; }
-.erp-root[data-theme="classic"] .erp-cand[data-sel="true"] { background: #4a3f1c; border-color: #cdb36a; box-shadow: 0 0 0 1px #cdb36a inset; }
-.erp-root[data-theme="classic"] .erp-nr { color: #cfc6ab; }
-.erp-root[data-theme="classic"] .erp-name { color: #f0ece0; }
-.erp-root[data-theme="classic"] .erp-pos { color: #a99f7e; }
-.erp-root[data-theme="classic"] .erp-count { color: #cfc6ab; }
-.erp-root[data-theme="classic"] .erp-btn { background: #3d3d3d; color: #e6e2d8; border: 1px solid #5a5a5a; }
-.erp-root[data-theme="classic"] .erp-btn:hover { background: #474747; }
-.erp-root[data-theme="classic"] .erp-confirm { background: #6a5a2a; border-color: #cdb36a; color: #fff; }
 
 /* Modern dark inline skin. */
 .erp-root[data-theme="modern"] { color: #e8e8ec; }

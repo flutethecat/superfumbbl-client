@@ -32,7 +32,7 @@ const BACKUP_KEY = 'fumbbl40k.settings.bak';
 /** An unparseable primary is parked here (not destroyed) before defaults may overwrite it. */
 const CORRUPT_KEY = 'fumbbl40k.settings.corrupt';
 /** Bump when a default change must be FORCED onto existing installs (see load()). */
-const SETTINGS_VERSION = 35; // v35: camera pan speed default 16 px (owner 10-07)
+const SETTINGS_VERSION = 36; // v36: the retired Classic view's settings (uiMode 'classic', classicEffects) migrate to Modern
 
 /** Load-path health (P1 08-18: blank credentials). notices non-empty = a degraded settings read
  *  happened this session; loadedFromDefaults = BOTH blob and backup were unreadable, and the
@@ -725,17 +725,12 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
     sidestep: boolean;
     taunt: boolean;
   };
-  /** Owner 2026-07-08 (FC): UI presentation fork. 'fumbbl40k' (default) = the
-   *  current UI; 'classic' = the FUMBBL-Classic view (docs/fumbbl-classic-mode-plan.md).
-   *  A VIEW-layer switch only — the store/protocol/settings/assets are shared. */
+  /** Owner 2026-07-08 (FC): UI presentation fork. 'fumbbl40k' = the Modern view, the only one since owner 11-05
+   *  retired the FUMBBL-Classic view ('classic' survives only as a store-level value; load() always pins 'fumbbl40k'). */
   uiMode: 'fumbbl40k' | 'classic';
   /** Modern/Order66 HUD shell. Minimalist preserves the compact first-pass panels;
    *  chrome adds the molded console treatment without changing controls or layout. */
   modernHudStyle: 'chrome' | 'minimalist';
-  /** Owner 2026-07-08 (FC-D3): FUMBBL Classic is EFFECTS-OFF by default (pure
-   *  classic look). Opt-IN wires our cinematics (push arrows, turnover…) into the
-   *  classic view. Only consulted when uiMode==='classic'. */
-  classicEffects: boolean;
   /** Local-only saved-setup previews. The upstream list wire carries names, not coordinates. */
   savedSetupPreviews: Record<string, Record<string, {
     playerNumbers: number[];
@@ -997,7 +992,6 @@ const DEFAULTS: AppSettings = {
   uiColorScheme: 'dark', // owner 11-03: dark by default, light is opt-in
   uiGameStyle: 'retro', // owner 11-03 / coordinator ruling B: the in-game Modern look is opt-in
   modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
-  classicEffects: false, // owner 2026-07-08 (FC-D3): classic is effects-off by default
   savedSetupPreviews: {},
   recentPlayedTeams: [],
   completedFirstRun: false,
@@ -1225,6 +1219,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // v15 retired the opt-in classic state-marker artwork. Strip the legacy key
     // before merging so old settings cannot keep feeding or re-persisting it.
     delete raw.stateMarkerStyle;
+    // v36 (owner 11-05): the FUMBBL-Classic view is retired; its effects opt-in has nothing left to configure.
+    delete (raw as { classicEffects?: unknown }).classicEffects;
     const merged: AppSettings = { ...DEFAULTS, ...raw };
     const opacity = (value: unknown, fallback: number): number =>
       typeof value === 'number' && Number.isFinite(value)
@@ -1656,6 +1652,12 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       if (merged.moveSpeedMs === 150) merged.moveSpeedMs = 200;
       merged.settingsVersion = 34;
     }
+    // v36 (owner 11-05): the FUMBBL-Classic view is retired. A stored Classic choice moves to Modern once (the pin
+    // below keeps any later blob there too); any unknown value is treated the same way, never as a crash.
+    if ((raw.settingsVersion ?? 0) < 36 && !v26UserOverrideMigrationPending) {
+      if (merged.uiMode !== 'fumbbl40k') merged.uiMode = 'fumbbl40k';
+      merged.settingsVersion = 36;
+    }
     // Owner 09-10: the public edition has no local-dev target, and (owner 10-31) a fork target only in a run launched
     // with --fork-server. Load runs BEFORE the async launch-flag read, so a persisted 'fork' is coerced to FUMBBL now
     // and remembered; reconcileForkTarget() restores it once the flag resolves (and drops it when no flag comes).
@@ -1683,8 +1685,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     if (merged.activeServerTarget === 'fork' && !merged.forkUrlCustom) merged.url = derivedForkUrl;
     // Owner 09-10: public edition — wire log file always on (bug reports carry it), developer panel never shown.
     if (!FORK_EDITION) { merged.wireLog = true; merged.devPanelOpen = false; }
-    // Owner 11-03 settings reflow: Classic is descoped (its UI mode row is gone from Settings in every edition), so no
-    // run can be left in a mode it has no way back out of. (Was: owner 09-12, Classic fork-edition only.)
+    // Owner 11-03 settings reflow / owner 11-05: Classic is retired (no view, no Settings row), so no run can be left
+    // in a mode it has no way back out of. (Was: owner 09-12, Classic fork-edition only.)
     merged.uiMode = 'fumbbl40k';
     // Owner 11-03: LZ-String compression is always on (upstream FFB and FUMBBL both use it); its row is gone.
     merged.compression = true;

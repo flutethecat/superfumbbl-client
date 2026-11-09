@@ -11834,7 +11834,7 @@ function applyFrameContents(frame: QueuedFrame) {
             const landing = kind === 'throwTeamMate' && thrownId ? flightCrowdLandingFresh(thrownId) : null; // owner 10-20
             state.throwAnim = { kind, from: [from[0], from[1]], ...(fromPoint ? { fromPoint } : {}), to: [end[0], end[1]], thrownId, seq, sound: throwSound, ...(landing ? { landing } : {}) };
             // Owner 10-13: the landing reroll card waits for this flight (ttmLandingHold).
-            if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, ttmThrowMs(settings.uiMode === 'classic'));
+            if (kind === 'throwTeamMate' && thrownId && !playback.catchingUp) ttmLandingHold.noteFlight(thrownId, ttmThrowMs());
             // Owner 10-13 ("Players knocked down should resolve at the point of impact"): like a thrown bomb, nothing
             // behind the flight (the landing coordinate, the player he hits going down with his armour roll, the bounce,
             // the landing roll) applies until the thrown player has come down. Modern, every seat (file replay's next
@@ -11856,7 +11856,7 @@ function applyFrameContents(frame: QueuedFrame) {
           // omission). Fail-OPEN: release as soon as no anim for THIS seq is actually still in flight.
           const CLEAR_MS: Record<ThrowPresentationKind, number> = {
             pass: ballThrowArcMs('pass'), punt: ballThrowArcMs('punt'),
-            throwTeamMate: ttmThrowMs(settings.uiMode === 'classic'),
+            throwTeamMate: ttmThrowMs(),
             throwBomb: presentationMs(700), throwKeg: presentationMs(700),
             throwARock: PIPELINE_TIMINGS.rockThrow.flightMs,
           };
