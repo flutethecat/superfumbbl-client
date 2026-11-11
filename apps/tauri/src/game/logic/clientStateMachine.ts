@@ -57,6 +57,8 @@ const TURNMODE_ACTIVE_STATE: Record<string, ClientStateId> = {
   // upstream getStateForGame → SELECT_BLOCK_KIND. Was deriving UNKNOWN (order66-special-actions-review §1).
   selectBlockKind: 'SELECT_BLOCK_KIND',
   kickoff: 'KICKOFF', kickoffReturn: 'KICKOFF_RETURN', swarming: 'SWARMING', passBlock: 'PASS_BLOCK',
+  // Upstream 3.4.0 (43a845f6c ClientStateFactory): DUMP_OFF_PASS_BLOCK shares PASS_BLOCK; homePlaying (the active team) reacts.
+  dumpOffPassBlock: 'PASS_BLOCK',
   highKick: 'HIGH_KICK', quickSnap: 'QUICK_SNAP', illegalSubstitution: 'ILLEGAL_SUBSTITUTION',
   wizard: 'WIZARD', safePairOfHands: 'PLACE_BALL',
   bombHome: 'BOMB', bombHomeBlitz: 'BOMB', bombAway: 'BOMB', bombAwayBlitz: 'BOMB',

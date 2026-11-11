@@ -23,6 +23,7 @@ import {
   type WideRailPreActionRuleId,
 } from './wideRailPreAction';
 import { t, data } from '../../i18n';
+import { activeGameServerVersion, serverRestoresDwarfenWisdomActive } from '../serverVersionGate';
 
 /** declare = clientActingPlayer{action}; endMove = clientActingPlayer{playerId:null}. */
 export type CoachActionKind = 'declare' | 'endMove';
@@ -1498,7 +1499,7 @@ export function jumpAvailable(game: GameJson, playerId: string): boolean {
   if (!Number.isFinite(ma)) return false;
   const used = Math.max(0, Number(acting.currentMove) || 0);
   const tm = String((game as { turnMode?: string }).turnMode ?? '');
-  if (tm === 'kickoffReturn' || tm === 'passBlock') return used < 3; // KICKOFF_RETURN/PASS_BLOCK cap (non-jumping)
+  if (tm === 'kickoffReturn' || tm === 'passBlock' || tm === 'dumpOffPassBlock') return used < 3; // KICKOFF_RETURN/PASS_BLOCK cap (non-jumping; TurnMode.isPassBlock covers DUMP_OFF_PASS_BLOCK, 43a845f6c UtilPlayer)
   const extraMove = acting.goingForIt ? (hasSkill(game, playerId, 'sprint') ? 3 : 2) : 0; // GFI rushes, once in GFI territory
   return used < (ma + extraMove); // hasMoveLeft(false): a normal step or a rush remains
 }
@@ -1639,7 +1640,10 @@ export function handOffReceiverIdsFrom(game: GameJson, playerId: string, from?: 
  *  The acting team is keyed by `homePlaying`, not upstream's literal `getTeamHome()`; that rejects every AWAY nominee.
  *  Local eligibility restores that bit's standing-on-pitch meaning, minus opposing tackle zones exactly as
  *  bb2025 `SetupMechanic.pinPlayersInTacklezones` (:135-148). */
-export function highKickNomineeIds(game: GameJson): string[] {
+export function highKickNomineeIds(
+  game: GameJson,
+  serverRestoresWisdomActive: boolean = serverRestoresDwarfenWisdomActive(activeGameServerVersion()),
+): string[] {
   const actingSide = !!(game as { homePlaying?: boolean }).homePlaying;
   const out: string[] = [];
   for (const p of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
@@ -1651,7 +1655,13 @@ export function highKickNomineeIds(game: GameJson): string[] {
      * cleared ACTIVE bits; union local eligibility with the server-sent set. See
      * ../docs/artifact-orchestration/upstream-contribution-candidates.md (08-17).
      * Yularen 2026-07-12 (no client TZ gate) is superseded for LOCAL only; the server floor is never TZ-filtered.
+     * Upstream PR #338 fixes leave(): on a server that carries it (serverVersionGate
+     * DWARFEN_WISDOM_REACTIVATES_MIN_SERVER_VERSION) the server's ACTIVE set is the whole answer again.
      */
+    if (serverRestoresWisdomActive) {
+      if (serverOffered) out.push(p.playerId);
+      continue;
+    }
     const locallyEligible = square !== null
       && baseState(p.playerState) === BASE_STANDING
       && tzPlayersAdjacent(game, square, !actingSide).length === 0;
@@ -3293,7 +3303,10 @@ function availableActionsRaw(
     if (clickedIsActing) return [{ action: '', get label() { return t('hud.actions.text.endActivation'); }, kind: 'endMove', enabled: true }];
     const ps = Number(p?.playerState ?? 0);
     const mine = !!p && playerSideIsHome(game, selectedPlayerId) === (ctx.myIsHome ?? true);
-    if (!actingId && mine && (ps & FLAG_ACTIVE) && onTheBallPlayerStateIsAbleToMove(ps)) {
+    // Upstream 351cdeed9 (PassBlockLogicModule.playerInteraction): in a pass block a MOVING player is the actor a
+    // Dump-off interrupted (dumpOffPassBlock); he stays active but is never offered the reaction move.
+    const interruptedMover = state === 'PASS_BLOCK' && (ps & 0xff) === 2;
+    if (!actingId && mine && (ps & FLAG_ACTIVE) && onTheBallPlayerStateIsAbleToMove(ps) && !interruptedMover) {
       return [{ action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true }];
     }
     return [];

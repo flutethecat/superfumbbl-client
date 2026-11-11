@@ -3,7 +3,8 @@ import { blockOutcomePresentation } from './blockOutcomePresentation';
 import { ballProjectilePresentation, createBallOutContext, createBallProjectileContext, type BallOutContext, KNOWN_PROJECTILE_ANIMATION_TYPES, throwPresentationKind, type BallProjectileContext, type ThrowPresentationKind } from './ballProjectilePresentation';
 export { throwPresentationKind } from './ballProjectilePresentation';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext, type PregamePresentationCue } from './kickoffWeatherPresentation';
-import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
+import { isModifierRescueReport, modifierRescueKinds, modifierPassSplashCue, type ModifierPassRoll } from './modifierRescue';
+import { captureTurnPresentationBefore, createTurnPresentationContext, turnoverArmAfterReport, turnoverArmStep, turnPresentation, TURN_RESCUE_CONTEXT_KEYS, type TurnPresentationBefore, type TurnPresentationContext } from './turnPresentation';
 import { apothecaryChoiceOutcomeClaim, apothecaryFixUpClaims, apothecaryFixUpCue, apothecaryFixUpVerdict, apothecaryOutcomePresentation, regenerationFixUpClaims, sendOffOutcomePresentation, type ApothecaryFixUpClaim } from './officialResultPresentation';
 import { pushPresentation, type PendingPush } from './pushPresentation';
 import { followUpSignalWithoutDialog, pushStoppedByPinnedPlayer, standFirmStayReported } from './followupProjection';
@@ -44,7 +45,7 @@ import { createTeamCaptainRowQueue, teamCaptainKept } from './teamCaptainLogOrde
 import { casualtyTierLabel, createInjuryOutcomeProjection, reduceInjuryOutcomes, injuryOutcomeFor } from './injuryOutcomeProjection';
 import { casualtyRollLabel, casualtyRollBase, injuryTypeName, createCasualtyRollProjection, reduceCasualtyRollProjection, casualtyRollFor } from './casualtyRollProjection';
 import { buildApothecaryDecision, buildApothecaryResult } from './apothecaryDecisionProjection';
-import { buildReRollDecision, withoutCancelledDodgeSkill } from './reRollDecisionProjection';
+import { buildReRollDecision, withoutCancelledDodgeSkill, isReRollModifierChoice, modifierChoiceWireOptions, receivedModifierOption, buildReRollModifierChoiceCommand, type ModifierChoiceCombination } from './reRollDecisionProjection';
 import { type ReRollPromptOption, skillNameWithValue, reRollSourceName, playerById, explicitLashOutCapability, primalSavageryAvailable, valuedSkillLabel, lonerValueForPlayer, singleUseReRollName, reRollSkillName, type ReRollPromptPresentation, reRollActionName, ttmSuperbTarget, reRollPromptPresentation, offeredReRollOptions, proCompositeReRollOptions } from './reRollDecisionProjection';
 export { type ReRollPromptOption, skillNameWithValue, reRollSourceName, playerById, explicitLashOutCapability, primalSavageryAvailable, valuedSkillLabel, lonerValueForPlayer, singleUseReRollName, reRollSkillName, type ReRollPromptPresentation, reRollActionName, ttmSuperbTarget, reRollPromptPresentation, offeredReRollOptions, proCompositeReRollOptions } from './reRollDecisionProjection';
 import { serverPassRollTruth, type PassReRollResult, type ServerPassRollTruth, createActionRollProjection, reduceActionRollProjection, actionRollFor } from './actionRollProjection';
@@ -72,7 +73,7 @@ import {
 import { createThrownCrowdProjection, reduceThrownCrowdProjection } from './thrownCrowdBlood';
 import { SETUP_TEMPLATES, validateSetup, setupLimitsFromGameOptions, interceptors, passRange, BlockPipeline, PIPELINE_TIMINGS, BEAT_MS, PlayerStateBase, PlayerStateFlag, rendersOnPitch, KICKOFF_CINE_MS, ballThrowArcMs, ttmThrowMs, ttmBounceHopMs, isD6FaceValue, kickArcGateCapMs, presentationMs, setPresentationMode, surfLandingSquare, isCrowdSquare, thrownCrowdLanding, type BloodSpotRelocation, type SetupTemplateSide, type SetupValidation, type InjuryTokenHold } from '@fumbbl40k/ffb-pitch';
 import { createGameSession } from './gameSessionFactory';
-import { lastServerVersion, serverHasBb2025WizardTargeting, serverVersionBlock } from './serverVersionGate';
+import { activeGameServerVersion, serverHasBb2025WizardTargeting, serverSupportsApothecaryChoiceFlag, serverVersionBlock, setGameConnectionVersionSource } from './serverVersionGate';
 import { noteClientVersionForReplay } from './clientVersionGate';
 import { applyLogEasterEgg, createReportLogContext, formatReportLines, logEventKey, noteReportLogContext, playerName, setBlockDefenderHint, injuryReportDedupeKey, playerActionDescription, activationCancelReport, noteActivationLogged, noteActivationActivity, openActivationBefore, tentaclesRollHeld } from './reportFormatter';
 import type { LogActionPlate } from './logActionPlates';
@@ -125,7 +126,7 @@ import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
 import { REROLL_SUCCESS_AFTER_FAIL_CUE_MS, ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, dieSettleMs, rerollChainSuccessSound } from './logic/uiSoundCues';
-import { staleDialogOutlivedPhase } from './logic/staleDialog';
+import { dwarfenWisdomOfferCardRetired, noteDwarfenWisdomOfferFrame, staleDialogOutlivedPhase } from './logic/staleDialog';
 import { modalRerollCaption, withLiveOfferHold } from './logic/modalOfferHolds';
 import { prettySkillName } from './logic/prettySkillName'; // #214: pure display-label seam (Echo item-① tooth imports it)
 import {
@@ -247,6 +248,10 @@ import {
   OnTheBallController,
   OnTheBallOccurrenceTracker,
   isOwnedOnTheBallDialogCommand,
+  ON_THE_BALL_ECHO_GRACE_MS,
+  isOnTheBallTurnMode,
+  isPassBlockMode,
+  onTheBallDialogId,
   onTheBallPlayerStateIsAbleToMove,
   selectableOnTheBallIds,
   type OnTheBallFrame,
@@ -318,7 +323,7 @@ import {
   serializeReplay,
   type ReplayBundle,
 } from './replay/replayLoader';
-import { $t, liveSet, lt, englishText, isLocalText, shownText, type LocalText } from '../i18n';
+import { $t, liveSet, lt, englishText, isLocalText, shownText, terms, type LocalText } from '../i18n';
 
 // ==== SPECTATOR_ONLY build gate — REMOVE-WHEN-ASKED (grep SPECTATOR_ONLY; docs/spectator-build.md): VITE_SPECTATOR_ONLY=true ⇒ connectAsPlayer() refuses AND the play sender drops every outbound turn command; spectating unaffected.
 const SPECTATOR_ONLY = import.meta.env.VITE_SPECTATOR_ONLY === 'true';
@@ -936,6 +941,10 @@ const legacyState = reactive({
     needed?: number;
     /** True when the server explicitly sent minimumRoll<=0: this is a neutral result roll, not pass/fail. */
     thresholdless: boolean;
+    /** S36: `reRollModifierChoice` when the card answers that dialog; absent for the older re-roll dialogs. */
+    dialogId?: string;
+    /** S36: the dialog's modifierCombinations (information only). */
+    combinations?: ModifierChoiceCombination[];
     /** Owner 07-08 rev-7: false = SPECTATOR read-only view; the coach's pick (`chosen`) glows activation-gold before downstream renders. */
     mine: boolean;
     chosen: string | null;
@@ -1406,7 +1415,7 @@ const legacyState = reactive({
   /** One-shot gold flash at my attacker's arrival square after a chosen follow. */
   followupFlash: null as { square: [number, number]; seq: number } | null,
   /** Owner 07-04 (catalog 16+45, ON THE BALL): the picked mover rides the normal move rails; `origin` (kickoffReturn|passBlock) is ALSO the turnMode the wire answers carry (clientEndTurn{turnMode:origin}). */
-  onTheBallMover: null as { playerId: string; origin: 'kickoffReturn' | 'passBlock'; seq: number } | null,
+  onTheBallMover: null as { playerId: string; origin: OnTheBallMode; seq: number } | null,
   /** Server-derived passive surface for the coach who does not own the On-the-Ball reaction. */
   onTheBallWaiting: null as { mode: OnTheBallMode; coach: string; teamName: string; message: string } | null,
   /** S48: the other seat's notice while the kicking coach picks Charge players (server `playerChoice` mode charge standing). Separate from onTheBallWaiting: different turn mode (kickoff vs kickoffReturn/passBlock), different text. */
@@ -1495,7 +1504,7 @@ const legacyState = reactive({
    *  when held, red "<Holder> fails to hold <Mover> with their tentacles!" when the mover gets away. Raised from the
    *  server's tentaclesShadowingRoll {skill:'Tentacles'} report; not seat-gated; Modern view only; never a latch. */
   tentaclesCue: null as { holderId: string; holderName: string; moverId: string; moverName: string; held: boolean; square: [number, number]; text: string; seq: number } | null,
-  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
+  rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-26: a title line above the text (the modifier-pass splash: the skill's name) */ title?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
    *  by a reroll / Loner / Mascot toast. `seq` never repeats, so every line mounts a fresh element.
@@ -1953,6 +1962,13 @@ export { turnoverArmAfterReport };
 // Owner 07-04: on-pitch die CAUSE by FFB report id → renderer DIE_CAUSE_TAG glyph; report.reRolled overrides to 'reroll' (team vs skill indistinguishable on the roll report).
 let turnoverArmed = false;
 let turnoverArmedAfterInjury = false;
+/** Sol r2 #1 / r3 #2: TurnPresentationContext's optional rescue context, persisted across frames like the two flags above. */
+let turnoverArmExtra: Partial<Pick<TurnPresentationContext, (typeof TURN_RESCUE_CONTEXT_KEYS)[number]>> = {};
+function turnoverArmExtraOf(context: TurnPresentationContext): typeof turnoverArmExtra {
+  const extra: Record<string, unknown> = {};
+  for (const key of TURN_RESCUE_CONTEXT_KEYS) if (context[key] !== undefined) extra[key] = context[key];
+  return extra as typeof turnoverArmExtra;
+}
 let turnoverTimer: ReturnType<typeof setTimeout> | null = null;
 let turnoverClearTimer: ReturnType<typeof setTimeout> | null = null;
 // Owner 09-28 (S7 v3): a monotonically increasing id for each turnover splash, so the clear timer (live) and the
@@ -2571,6 +2587,7 @@ function failedMoveHoldWaitMs(): number {
 const REROLL_RESULT_PIN_TAIL_MS = 900;
 /** Owner 07-06/08: the reroll mini splash — names the SOURCE used; TRR keeps its icon. */
 function showRerollSplash(playerId: string, source = 'a team reroll', isTeam = true, raw?: string, proRescuedBy: string | null = null) { // owner 09-06: copy
+  if (rerollRailFloorUntil > Date.now() && !playback.catchingUp) { afterRerollRailFloor(() => showRerollSplash(playerId, source, isTeam, raw, proRescuedBy)); return; }
   const g = game.value;
   if (!g || !playerId) return;
   const leader = isLeaderReroll(raw) || isLeaderReroll(source);
@@ -2680,6 +2697,7 @@ function showTentaclesCue(g: GameJson, holderId: string, moverId: string, held: 
 
 /** Weather Mage uses the existing compact splash rail; the authoritative result report supplies the reveal. */
 function showWeatherMageSplash(g: GameJson): void {
+  if (rerollRailFloorUntil > Date.now() && !playback.catchingUp) { afterRerollRailFloor(() => showWeatherMageSplash(g)); return; } // Sol r2 #2
   const side: 'home' | 'away' = g.homePlaying ? 'home' : 'away';
   const team = side === 'home' ? g.teamHome : g.teamAway;
   const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
@@ -2697,6 +2715,7 @@ function showWeatherMageSplash(g: GameJson): void {
  *  a SUCCESSFUL mascot returns before any ReportReRoll is written (only a Loner check follows), so nothing rode the
  *  reroll rail. The toast is not seat-gated, so both coaches and every spectator see it. */
 function showMascotSplash(g: GameJson, teamId: string, roll: number | null): void {
+  if (rerollRailFloorUntil > Date.now() && !playback.catchingUp) { afterRerollRailFloor(() => showMascotSplash(g, teamId, roll)); return; }
   const side: 'home' | 'away' = String((g.teamAway as { teamId?: string }).teamId ?? '') === teamId ? 'away' : 'home';
   const team = side === 'home' ? g.teamHome : g.teamAway;
   const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
@@ -2706,6 +2725,44 @@ function showMascotSplash(g: GameJson, teamId: string, roll: number | null): voi
     side, coach, logo, source: 'Team Mascot', isTeam: true, mascot: true,
     text: `${coach}'s Team Mascot comes through${roll != null ? ` (${roll})` : ''} - free reroll!`, seq: (state.rerollSplash?.seq ?? 0) + 1,
   };
+  rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
+}
+/** Owner 10-26: "We should also add a splash for when Swift as the Breeze or Consummate Professional are used to pass
+ *  something." The reroll toast (same rail, look and placement), the skill's name as its title and "<Player> passes the
+ *  <roll>" beneath; it follows the rescue by the Team Captain's after-result beat and self-hides like the reroll toast
+ *  (REROLL_SPLASH_HOLD_MS, above the 450 ms viewer-visible floor). Not seat-gated; never during catch-up; never on a
+ *  decline (no skillUse) or for another modifier skill (modifierPassSplashCue). */
+const MODIFIER_PASS_SPLASH_KEYS: Readonly<Record<ModifierPassRoll, string>> = {
+  dodge: 'store.text.modifierPassSplash.dodge', jump: 'store.text.modifierPassSplash.jump', agility: 'store.text.modifierPassSplash.agility',
+};
+/** Sol r1 #5: the modifier-pass splash keeps the viewer-visible floor on the shared toast rail - a reroll toast that
+ *  comes in under 450 ms waits for the rest of it (owner 09-05 viewer-visible rule). */
+const MODIFIER_PASS_SPLASH_FLOOR_MS = 450;
+let rerollRailFloorUntil = 0;
+/** Run `show` now, or once the modifier-pass splash has had its floor (the wait rides rerollStageTimers: a reset or a
+ *  catch-up drops it with every other staged beat). */
+function afterRerollRailFloor(show: () => void): void {
+  const wait = rerollRailFloorUntil - Date.now();
+  if (wait <= 0 || playback.catchingUp) { show(); return; }
+  rerollStageTimers.push(scheduleGameTimeout(show, wait));
+}
+function showModifierPassSplash(cue: { playerId: string; skill: string; roll: ModifierPassRoll }, model: GameJson | null = game.value): void {
+  const g = model;
+  if (!g || playback.catchingUp) return;
+  if (rerollRailFloorUntil > Date.now()) { afterRerollRailFloor(() => showModifierPassSplash(cue, model)); return; } // Sol r2 #2: its own floor too
+  const isHome = g.teamHome.playerArray.some((p) => p.playerId === cue.playerId);
+  const isAway = g.teamAway.playerArray.some((p) => p.playerId === cue.playerId);
+  if (!isHome && !isAway) return;
+  const team = isHome ? g.teamHome : g.teamAway;
+  const logo = (team.roster as { logoUrl?: string } | undefined)?.logoUrl ?? null;
+  if (rerollSplashClearTimer) cancelGameTimeout(rerollSplashClearTimer);
+  const name = playerName(g, cue.playerId) || $t('store.text.modifierPassSplash.thePlayer');
+  state.rerollSplash = {
+    side: isHome ? 'home' : 'away', coach: (team.coach as string | null) ?? '', logo, source: cue.skill, isTeam: false,
+    skill: cue.skill, title: terms(cue.skill), text: $t(MODIFIER_PASS_SPLASH_KEYS[cue.roll], { name }),
+    playerId: cue.playerId, seq: (state.rerollSplash?.seq ?? 0) + 1,
+  };
+  rerollRailFloorUntil = Date.now() + presentationMs(MODIFIER_PASS_SPLASH_FLOOR_MS);
   rerollSplashClearTimer = scheduleGameTimeout(() => (state.rerollSplash = null), presentationMs(REROLL_SPLASH_HOLD_MS));
 }
 /** Owner 10-20: the Team Captain splash follows the rerolled result by this beat (its own read, after the die / the
@@ -3560,6 +3617,7 @@ function isWithergraspWatchOutPlayer(g: GameJson, playerId: string): boolean {
 
 /** A failed Pro gate is its own coach-facing result, not the successful Pro-use toast. */
 function showProFailedSplash(playerId: string) {
+  if (rerollRailFloorUntil > Date.now() && !playback.catchingUp) { afterRerollRailFloor(() => showProFailedSplash(playerId)); return; } // Sol r2 #2
   const g = game.value;
   if (!g || !playerId) return;
   const isHome = g.teamHome.playerArray.some((p) => p.playerId === playerId);
@@ -7036,6 +7094,16 @@ async function pauseSpectatorView(): Promise<void> {
         ] : []),
       ], signal);
       if (!staged) { if (reviewRerollPin) releaseRerollResultPin(reviewRerollPin.seq); return; }
+      // Sol r1 #3: the spectator's published-position presenter (review, and live after Pause -> Go to live) shows the
+      // Swift As The Breeze / Consummate Professional splash too, after the same after-result beat as the live path.
+      // Sol r5 #3: on its own timer, never inside the serialized presenter - later frames publish at once. The timer
+      // rides rerollStageTimers (a reset / catch-up / seek drops it with the other staged beats).
+      for (const report of reports) {
+        const cue = modifierPassSplashCue(report);
+        if (!cue) continue;
+        const model = position.model;
+        rerollStageTimers.push(scheduleGameTimeout(() => showModifierPassSplash(cue, model), presentationMs(TEAM_CAPTAIN_AFTER_RESULT_MS)));
+      }
       if (projectile) {
         if (projectile.unknownAnimationType && !warnedAnimationTypes.has(projectile.unknownAnimationType)) {
           warnedAnimationTypes.add(projectile.unknownAnimationType);
@@ -7486,6 +7554,8 @@ function commitSpectatorDisplayedFrame(frame: QueuedFrame): void {
 }
 let spectatorSessionSerial = 0;
 let session: GameSession | null = null;
+// Sol r2 P2: the game connection's own announced version drives its capability decisions (not lastServerVersion).
+setGameConnectionVersionSource(() => (session as { serverVersion?: string | null } | null)?.serverVersion ?? null);
 const replay = reactive({
   active: false,
   loading: false,
@@ -9222,7 +9292,9 @@ function fenceMovementPresentation(
       deferredFailedFence = { playerId, occurrenceId, phase, token: ++deferredFailedFenceToken, cap: null };
       armDeferredFailedFenceCap();
     }
-    if (!state.failedActionHold) state.failedActionHold = { playerId, occurrenceId, seq: ++failedActionHoldSeq };
+    // Sol r1 #1: only a FAILURE arms the action hold; a resolution (a rescue, a successful reroll) never re-arms one the
+    // rescue frame already dropped - it only re-phases the held fence above, which still publishes on the walk drain.
+    if (!state.failedActionHold && phase === 'failed') state.failedActionHold = { playerId, occurrenceId, seq: ++failedActionHoldSeq };
     return;
   }
   if (deferredFailedFence?.playerId === playerId) releaseDeferredFailedFence(false); // this fence supersedes the held one
@@ -9436,7 +9508,8 @@ function settleMovementIntentAfterFrame(
     String(report.playerId ?? report.defenderId ?? '') === intent.playerId;
   const rollSettled = reports.some((report) => {
     const id = String(report.reportId ?? '');
-    return owns(report) && (id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll') && report.successful === true;
+    return owns(report) && (((id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll') && report.successful === true)
+      || isModifierRescueReport(report)); // owner 10-26 (g1075): the modifier makes the failed roll pass
   });
   const fell = reports.some((report) => {
     if (String(report.reportId ?? '') !== 'injury' || !owns(report)) return false;
@@ -9963,9 +10036,11 @@ function wizardTeamPlayers(g: GameJson, team: GameJson['teamHome']): WizardTarge
   });
 }
 
-/** FFB 3.4.0 entry 5 (P1): the wizard target rule for the live game (serverVersionGate flag + BB2025 ruleset). */
+/** FFB 3.4.0 entry 5 (P1): the wizard target rule for the live game (serverVersionGate flag + BB2025 ruleset). Sol r1
+ *  (land 3.4.0, P2): the version is the one THIS game connection announced (activeGameServerVersion), never the shared
+ *  lastServerVersion a lobby / prepared session overwrites. */
 function liveWizardTargetRule(g: GameJson): WizardTargetRule {
-  return wizardTargetRuleFor(g.gameOptions, serverHasBb2025WizardTargeting(lastServerVersion.value));
+  return wizardTargetRuleFor(g.gameOptions, serverHasBb2025WizardTargeting(activeGameServerVersion()));
 }
 
 /** The players the target rule reads. legacy: exactly wizardOpponentPlayers (unchanged). bb2025: both teams, the
@@ -10055,6 +10130,21 @@ function retirePassSurfacesOnFailedCatch(): void {
   armPassResolvedWatchdog();
 }
 
+/** The thrower of the dump-off whose throw the server has visibly accepted (it went on into dumpOffPassBlock or an
+ *  interception). Server-derived; released when the server leaves the dump-off modes or names another thrower, and on
+ *  every reset (resetPlayback). */
+let dumpOffThrowAcceptedFor: string | null = null;
+const DUMP_OFF_OCCURRENCE_MODES = new Set(['dumpOff', 'dumpOffPassBlock', 'interception']);
+function noteDumpOffThrowAccepted(g: GameJson): void {
+  const mode = String(g.turnMode ?? '');
+  const thrower = String((g as { throwerId?: unknown }).throwerId ?? '');
+  const dumping = String((g as { throwerAction?: unknown }).throwerAction ?? '') === 'dumpOff';
+  if (!DUMP_OFF_OCCURRENCE_MODES.has(mode) || !dumping || (dumpOffThrowAcceptedFor !== null && dumpOffThrowAcceptedFor !== thrower)) dumpOffThrowAcceptedFor = null;
+  // also derivable from a reconnect snapshot: dumpOff returning from either of them (StepPassBlock:208, StepIntercept:264)
+  const last = String((g as { lastTurnMode?: unknown }).lastTurnMode ?? '');
+  if (dumping && thrower && (mode === 'dumpOffPassBlock' || mode === 'interception'
+    || last === 'dumpOffPassBlock' || last === 'interception')) dumpOffThrowAcceptedFor = thrower;
+}
 /** Derive server coordinate-pick ownership; Wizard is locally staged after its spell election. */
 function armServerCoordinatePicks(): void {
   if (!game.value) return;
@@ -10074,7 +10164,15 @@ function armServerCoordinatePicks(): void {
   // open means the dump-off's throw has already been caught at - no pick under it
   const catchRerollOpen = normalizedWireName((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId).includes('reroll')
     && String((game.value.dialogParameter as { reRolledAction?: unknown } | null)?.reRolledAction ?? '') === 'Catch';
-  const isDumpOff = String(game.value.turnMode ?? '') === 'dumpOff' && !dumpOffPassResolved && !catchRerollOpen;
+  // Upstream 3.4.0 (43a845f6c): an On the Ball reaction to the dump-off (dumpOffPassBlock) and an interception both run
+  // AFTER StepInitPassing accepted the throw; the server then restores turnMode dumpOff for the rest of the pass
+  // (StepPassBlock:208, StepIntercept). The target is already the server's, so the pick never re-arms behind them.
+  // The evidence is kept per dump-off (thrower) for the whole occurrence (Sol r1: dumpOffPassBlock -> dumpOff ->
+  // interception -> dumpOff overwrites lastTurnMode); it ends with the server leaving the dump-off modes.
+  noteDumpOffThrowAccepted(game.value);
+  const dumpOffThrowAccepted = dumpOffThrowAcceptedFor !== null
+    && dumpOffThrowAcceptedFor === String((game.value as { throwerId?: unknown }).throwerId ?? '');
+  const isDumpOff = String(game.value.turnMode ?? '') === 'dumpOff' && !dumpOffPassResolved && !catchRerollOpen && !dumpOffThrowAccepted;
   const isSafeHands = String(game.value.turnMode ?? '') === 'safePairOfHands';
   const isWizard = String(game.value.turnMode ?? '') === 'wizard'
     && String((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '') === 'wizardSpell'
@@ -10341,8 +10439,18 @@ function applyFrame(frame: QueuedFrame) {
         if (!playback.catchingUp) settleLingeringPill(); // owner 10-20: a pill persisted for an election this frame closed goes now
       }
     }
+    // g1104 / Sol r1-r2: the turn mode each Dwarfen Wisdom offer object opened in (see staleDialog.ts truth table).
+    // Only a frame that SET the dialog is evidence; a snapshot (or any other first sighting) records `unknown`.
+    noteDwarfenWisdomOfferFrame(game.value, frameSetsDialogParameter(frame.cmd));
     commitSpectatorDisplayedFrame(frame);
   });
+}
+
+/** The frame carries a gameSetDialogParameter model change (a serverGameState snapshot never counts). */
+function frameSetsDialogParameter(cmd: Record<string, unknown>): boolean {
+  if (cmd.netCommandId !== NetCommandId.SERVER_MODEL_SYNC) return false;
+  const changes = (cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown }[] } | undefined)?.modelChangeArray;
+  return Array.isArray(changes) && changes.some((change) => change?.modelChangeId === 'gameSetDialogParameter');
 }
 
 function applyFrameContents(frame: QueuedFrame) {
@@ -10974,7 +11082,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // state itself advances once, in the turnEnd handling further down.
   {
     const playingIds = new Set((wasHomePlaying ? game.value.teamHome : game.value.teamAway).playerArray.map((player) => player.playerId));
-    const preview = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury }, playingIds, reports, game.value.turnMode);
+    const preview = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury, ...turnoverArmExtra }, playingIds, reports, game.value.turnMode);
     const scored = reports.some((r) => String(r.reportId ?? '') === 'turnEnd' && !!(r as { playerIdTouchdown?: unknown }).playerIdTouchdown);
     visibleReportLogContext.turnEndSide = wasHomePlaying ? 'home' : 'away';
     visibleReportLogContext.turnEndTurnover = !ownRegularEndTurnAcked && preview.context.turnoverArmed && !scored && String(game.value.turnMode ?? '') === 'regular';
@@ -11916,6 +12024,21 @@ function applyFrameContents(frame: QueuedFrame) {
       showMascotSplash(game.value, mascot.teamId, mascot.roll);
       holdPlayback(presentationMs(REROLL_BEAT_MS));
       mascotBeatEndsAt = Date.now() + presentationMs(REROLL_BEAT_MS);
+    }
+  }
+  // Owner 10-26 (g1075): a modifier made this player's failed roll pass. The failed die is no longer rerollable, and
+  // Swift As The Breeze / Consummate Professional get their splash after the rescue's beat (every seat; replay too).
+  if (!playback.catchingUp) {
+    for (const report of reports) {
+      if (!isModifierRescueReport(report)) continue;
+      const rescuedId = String(report.playerId);
+      rerollableRollByPlayer.delete(rescuedId);
+      // Sol r1 #1: the failed roll's action hold drops on THIS frame (the server already re-evaluated the same die); a
+      // fence still waiting on the walk now publishes as resolved when that walk drains (no snap, no fail-open wait).
+      if (state.failedActionHold?.playerId === rescuedId) state.failedActionHold = null;
+      if (deferredFailedFence?.playerId === rescuedId) deferredFailedFence.phase = 'resolved';
+      const cue = modifierPassSplashCue(report);
+      if (cue) rerollStageTimers.push(scheduleGameTimeout(() => showModifierPassSplash(cue), presentationMs(TEAM_CAPTAIN_AFTER_RESULT_MS)));
     }
   }
   // Owner 2026-07-06 / 2026-07-08: a RE-ROLL was spent — surface it for ANY source (Team Re-Roll / Pro / Brawler / Leader / skill rerolls…), not just TRR. A blockReRoll splashes immediately (the block cine paces that family); a plain reRoll is handed to the action-dice pass below, which STAGES it behind the failed die so the fail → reroll → new result sequence is readable.
@@ -12916,17 +13039,21 @@ function applyFrameContents(frame: QueuedFrame) {
     const playingPlayerIds = new Set(playingRoster.map((player) => player.playerId));
     {
       // The per-report rules, the knockdown arming and the drive-boundary disarm: turnPresentation.ts turnoverArmStep.
-      const step = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury }, playingPlayerIds, reports, game.value.turnMode);
+      const step = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury, ...turnoverArmExtra }, playingPlayerIds, reports, game.value.turnMode);
       if (step.knockedDown) logMatch('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, step.knockedDown)})`); // #11 diag
       turnoverArmed = step.context.turnoverArmed;
       turnoverArmedAfterInjury = step.context.turnoverAfterInjury;
+      turnoverArmExtra = turnoverArmExtraOf(step.context); // Sol r2 #1 / r3 #2: spans the dialog's frames
     }
     // Owner 10-16: the server cleared the acting player in this frame (after its reports were logged above): an
     // activation that logged nothing was cancelled, and says so under its declaration.
     {
       const changes = (cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: string; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [];
       noteActivationActivity(visibleReportLogContext, changes);
-      if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)) {
+      // Live 3.4.0 rig (game 1086): StepPassBlock nulls the acting player to SUSPEND the interrupted block / blitz for
+      // the On the Ball reaction to a dump-off and restores it afterwards - not a cancellation.
+      if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)
+        && String(game.value.turnMode ?? '') !== 'dumpOffPassBlock') {
         const cancel = activationCancelReport(visibleReportLogContext);
         if (cancel) for (const formatted of formatReportLines(cancel, game.value, visibleReportLogContext)) {
           logMatch('report', formatted.text, undefined, formatted.d6, formatted.blockDice, formatted.names, formatted.tags, formatted.action, formatted.g, false, formatted.alt);
@@ -12977,6 +13104,7 @@ function applyFrameContents(frame: QueuedFrame) {
       else if (String(game.value.turnMode ?? '') === 'regular' && !state.kickTargetReveal) state.kickClearSeq++; // S47: the landing marker outlives a mini-turn's turn ends (only the flight retires it)
       state.kickoffVictimSplash = null; // #131 fail-safe: a stale kickoff victim-splash never survives a turn
       state.multiBlockSel = null; // #58 (ML-7 fail-safe): a stale multi-block selection never survives a turnEnd
+      turnoverArmExtra = {}; // modifier rescue: no failure of the ending turn can be rescued after its turnEnd (clearTurnRescueContext)
       if (ownRegularEndTurnAcked) {
         // Owner 09-19: this turnEnd answers OUR acknowledged regular End Turn — a turn pass by definition, whatever
         // failed roll the heuristic latched earlier (g1944287 seq 3552→3618: a scatter catch). Consumed here.
@@ -13056,6 +13184,8 @@ function applyFrameContents(frame: QueuedFrame) {
       ? Number((cmd as { commandNr?: unknown }).commandNr)
       : null,
   );
+  // S36 Sol r2: an awaited reRollModifierChoice answer is consumed only by evidence the server acted on it.
+  if (play.active) observeModifierChoiceEvidence(game.value, reports);
   // M4.2: in play mode, auto-resolve any mechanical Move/Block follow-up this frame surfaced (block dice, pushback, skill/re-roll declines).
   if (play.active) {
     try {
@@ -13094,9 +13224,9 @@ function applyFrameContents(frame: QueuedFrame) {
     gazeIntentOnModelApplied(); // W40: ack the menu declare; clear only after its live gaze activation leaves
     gazeToMoveOnModelApplied(); // owner 10-08: a confirmed gaze→move change walks on its echo
     foulAppearanceFailureOnModelApplied(cmd); // owner 10-08: a final failed Foul Appearance roll retires the plan at once
-    if (game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock') {
+    if (isOnTheBallTurnMode(game.value.turnMode)) {
       armOnTheBall(game.value, game.value.turnMode);
-    }
+    } else retireOnTheBallSurfaces(); // Sol r1: on the mode exit itself, before any later dialog branch can return
   }
   // The report/presentation consumers above have now captured the attempted destination for any fall or injury.
   // Release the local intent last so renderer rollback resolves to the already-applied authoritative coordinate.
@@ -13711,7 +13841,7 @@ let pipelinedFirstStepSend = false;
 /** Turn modes that upstream closes with CLIENT_END_TURN. */
 const END_TURN_CLOSABLE_TURN_MODES = new Set([
   'regular', 'blitz', 'setup', 'perfectDefence', 'solidDefence', 'quickSnap', 'highKick',
-  'kickoffReturn', 'passBlock', 'swarming', 'illegalSubstitution', 'dwarfenWisdom',
+  'kickoffReturn', 'passBlock', 'dumpOffPassBlock', 'swarming', 'illegalSubstitution', 'dwarfenWisdom',
   'hitAndRun', 'thenIStartedBlastin',
 ]);
 
@@ -13785,7 +13915,7 @@ function pumpPlayback() {
     // once, read-only or interactive as appropriate.
     const livePrayer = game.value ? interactivePrayerDialog(game.value) : null;
     syncInteractivePrayerPresentation();
-    const liveOnTheBall = game.value?.turnMode === 'kickoffReturn' || game.value?.turnMode === 'passBlock';
+    const liveOnTheBall = isOnTheBallTurnMode(game.value?.turnMode);
     if (play.active && (livePrayer?.kind === 'player' || liveOnTheBall)) drivePregameStep();
   }
   // Owner 10-22: a spectator's block card held behind the blitzer's walk - nothing behind it applies until it is up
@@ -14865,6 +14995,7 @@ function resetPlayback() {
   pendingPushes.clear(); // B9-12 G4: don't carry pending pushes across games
   followupHandled.clear(); // M4.2: fresh game — no stale answered-prompt keys
   useInducementReshownKeys.clear(); consumedUseInducementDialogs = new WeakSet<object>(); // g1956430: per epoch, like followupHandled
+  resetModifierChoiceOccurrences(); // S36 Sol r1 #1: per epoch too
   useInducementStallReshownKeys.clear(); cancelUseInducementStall(); useInducementNoticeDialog = null;
   useInducementAnsweredContent.clear(); // Astra r2: the duplicate-delivery memory is per game / session epoch
   apothecaryElectionController.clear(); answeredApothecaryChoiceKey = null;
@@ -14908,7 +15039,7 @@ function resetPlayback() {
   srvActingId = null; srvActingAction = null; // g330: fresh game — reset the receive-time acting-player mirror
   state.switchWatcherCard = null; // Astra r12: an unanswered watcher card never carries into another game
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); noteDeclarationLatchChange();
-  pendingWideRailDeclare = null; acknowledgedWideRailDeclare = null; completedWideRailDeclare = null;
+  pendingWideRailDeclare = null; acknowledgedWideRailDeclare = null; completedWideRailDeclare = null; releasedDeclaration = null;
   deferredStandUpWideRail = null; // client-owned activation elections never cross connection/game boundaries
   clearShotToNothingElection(); // post-Pass client election never crosses connection/game boundaries
   state.acceptedPassSubmission = null;
@@ -14940,6 +15071,7 @@ function resetPlayback() {
   state.freeSelectPass = false; // spec-252 R-1: fresh game/reconnect — never carry a free-select-pass arm across games
   state.freeSelectPassConfirm = null; // owner 10-20: nor its pending "Throw to ...?" card
   clearPassResolvedLatch(); // owner 10-22: nor a failed catch's Dump-Off suppression
+  dumpOffThrowAcceptedFor = null; // nor the dump-off-accepted evidence (a snapshot re-derives it)
   offerTransportAlive = true; // Astra r4: a fresh session (the queue is emptied below)
   modalOfferHoldTeardown.value++; // Astra r2: nor a pass / catch die held for an offer of the old position
   state.ttmRailTerminal = null; // fresh game/reconnect — no historical landing may retire a new rail
@@ -15033,7 +15165,7 @@ function clearCinematics(hardGameBoundary = false) {
   state.grabUse = null; // #79: fresh game — drop any stale grab-icon signal
   state.blitzTokens = null; visibleBlitzProjection = null; // #94: fresh game — drop blitz-token capture
   state.turnStart = null; clearRerollSplash(); clearTeamCaptainSplash(); clearLonerFailedCue(); clearTentaclesCue(); clearPastriesSplash(); clearGettingEvenSplash(); clearSwarmingSplash(); rerollableRollByPlayer.clear(); clearApothecaryFixUps();
-  for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; // owner 2026-07-08: drop staged fail→reroll beats
+  for (const t of rerollStageTimers) cancelGameTimeout(t); rerollStageTimers = []; rerollRailFloorUntil = 0; // owner 2026-07-08: drop staged fail→reroll beats
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
@@ -15057,7 +15189,7 @@ function clearCinematics(hardGameBoundary = false) {
   for (const t of demoCineTimers) cancelGameTimeout(t);
   demoCineTimers = [];
   clearAutoBeats(); // #166: drop any pending opt-in auto-answer beats on a game change
-  turnoverArmed = false; turnoverArmedAfterInjury = false; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; armourShownAt = 0; // Phase 3a: drop stale turnover/block/armour gates
+  turnoverArmed = false; turnoverArmedAfterInjury = false; turnoverArmExtra = {}; failedKickEmFoulAppearanceId = null; blockCineUntil = 0; armourGateUntil = 0; armourShownAt = 0; // Phase 3a: drop stale turnover/block/armour gates
   visibleBlockContext.defenderSquare = null; lastBlitzDeclKey = ''; // #1/#5 + blitz-decl
   injuryQueue.length = 0;
   injuryPlaying = false; injuryPresentingSet.clear();
@@ -15408,7 +15540,9 @@ let cancelSentAt = 0;
 let latchWatchdog: ReturnType<typeof setTimeout> | null = null;
 function releaseStaleLatches(reason: string): void {
   if (declarationAwaitingEcho) {
+    const refusedFor = declarationAwaitingEchoFor;
     declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; declarationAwaitingEchoAction = null; noteDeclarationLatchChange();
+    releaseRefusedDeclarationCorrelations(refusedFor);
     log('system', `play: declaration not answered by the server (${reason}) - released`);
   }
   if (cancelInFlight) {
@@ -15416,6 +15550,55 @@ function releaseStaleLatches(reason: string): void {
     log('system', `play: cancel not answered by the server (${reason}) - released`);
     if (!srvActingId) wakeActorClearWaiters();
   }
+}
+/** Sol 6.1 r1 P1 / r2 P1 (upstream PR #339): a declaration the server never answers (a once-per-turn action it
+ *  silently skips) leaves no echo to retire what was armed for it, and those correlations (localWideRailSessionActive)
+ *  would swallow every later special-action request. When its latch fails open they leave the live slots, so later
+ *  requests go out, but a bounded copy is kept: a valid echo that was merely late (an action-only change arriving after
+ *  the grace, or anything after the watchdog) restores the election (restoreLateDeclarationEcho). The copy goes on a
+ *  new declaration, a contradicting acting tuple, a turn boundary, a snapshot or after LATE_DECLARATION_ECHO_MS.
+ *  Acknowledged elections belong to answered declarations and keep their own lifecycle. */
+const LATE_DECLARATION_ECHO_MS = 10_000;
+type ReleasedDeclaration = {
+  playerId: string | null;
+  at: number;
+  wideRail: PendingWideRailDeclare | null;
+  shotToNothing: PendingShotToNothingCorrelation | null;
+  standUp: DeferredStandUpWideRail | null;
+};
+let releasedDeclaration: ReleasedDeclaration | null = null;
+function releaseRefusedDeclarationCorrelations(refusedFor: string | null): void {
+  const ours = (playerId: string) => refusedFor === null || playerId === refusedFor;
+  const released: ReleasedDeclaration = { playerId: refusedFor, at: Date.now(), wideRail: null, shotToNothing: null, standUp: null };
+  if (pendingWideRailDeclare && ours(pendingWideRailDeclare.playerId)) { released.wideRail = pendingWideRailDeclare; pendingWideRailDeclare = null; }
+  if (pendingShotToNothingDeclare && ours(pendingShotToNothingDeclare.playerId)) { released.shotToNothing = pendingShotToNothingDeclare; pendingShotToNothingDeclare = null; }
+  if (deferredStandUpWideRail?.stage === 'awaitingActor' && ours(deferredStandUpWideRail.playerId)) { released.standUp = deferredStandUpWideRail; deferredStandUpWideRail = null; }
+  releasedDeclaration = released.wideRail || released.shotToNothing || released.standUp ? released : null;
+}
+/** A late but valid echo of a released declaration restores its correlation, already counted as echoed, so the
+ *  reconciliation that follows in the same frame acknowledges it exactly as an in-time echo would. */
+function restoreLateDeclarationEcho(sawPlayerId: boolean, sawPlayerAction: boolean, terminalBoundary: boolean): void {
+  const r = releasedDeclaration;
+  if (!r) return;
+  if (terminalBoundary || Date.now() - r.at > LATE_DECLARATION_ECHO_MS) { releasedDeclaration = null; return; }
+  if (!sawPlayerId && !sawPlayerAction) return; // nothing about the actor in this frame
+  const player = r.wideRail?.playerId ?? r.shotToNothing?.playerId ?? r.standUp?.playerId ?? r.playerId;
+  if (srvActingId !== player) { if (sawPlayerId) releasedDeclaration = null; return; } // another actor or none: refused
+  let restored = false;
+  if (r.wideRail && srvActingAction === r.wideRail.playerAction
+      && !pendingWideRailDeclare && !acknowledgedWideRailDeclare && !completedWideRailDeclare) {
+    pendingWideRailDeclare = { ...r.wideRail, sawPlayerIdEcho: true, sawPlayerActionEcho: true };
+    restored = true;
+  }
+  if (r.shotToNothing && srvActingAction === r.shotToNothing.playerAction && !pendingShotToNothingDeclare) {
+    pendingShotToNothingDeclare = { ...r.shotToNothing, sawPlayerIdEcho: true, sawPlayerActionEcho: true };
+    restored = true;
+  }
+  if (r.standUp && srvActingAction == null && !deferredStandUpWideRail) {
+    deferredStandUpWideRail = r.standUp;
+    restored = true;
+  }
+  if (restored || sawPlayerAction) releasedDeclaration = null; // answered: restored, or this player's action says otherwise
 }
 function armLatchWatchdog(): void {
   if (latchWatchdog) cancelGameTimeout(latchWatchdog);
@@ -15732,26 +15915,37 @@ function advanceDeferredStandUpWideRail(): void {
 const PLAN_RESOLUTION_REPORT: Record<string, PlanResolution> = {
   goForItRoll: 'gfi', dodgeRoll: 'dodge', pickUpRoll: 'pickup',
 };
+/** Owner 10-26 (g1075): the roll kind a modifier `skillUse` (modifierRescue.ts) rescues when `failed` (the player's
+ *  last failed roll of the square) is one of its kinds; null for every other report. */
+export function modifierRescuedRoll(report: Record<string, unknown>, playerId: string, failed: PlanResolution | null): PlanResolution | null {
+  if (!failed || String(report.playerId ?? '') !== playerId) return null;
+  return modifierRescueKinds(report).includes(failed) ? failed : null;
+}
 
 /** Release only the oldest matching roll-boundary occurrence. A square can own Dodge, Rush and Pick Up in
  * sequence, so the visual edge stays closed until every required successful report has arrived. */
 function settleMovementRollPresentation(reports: readonly Record<string, unknown>[]): void {
   if (playback.catchingUp) return;
   for (const report of reports) {
+    // Owner 10-26 (g1075): a modifier skillUse makes the held failed roll pass - its kind settles like a success.
+    for (const rescued of modifierRescueKinds(report)) settleMovementRollKind(String(report.playerId), rescued);
     if (report.successful !== true) continue;
     const resolution = PLAN_RESOLUTION_REPORT[String(report.reportId ?? '')];
     const playerId = String(report.playerId ?? '');
     if (!resolution || !playerId) continue;
-    const active = presentation.presenting;
-    if (active?.kind === 'rollBeat' && active.id === playerId && active.pendingRolls?.has(resolution)) {
-      active.pendingRolls.delete(resolution);
-      if (active.pendingRolls.size === 0) active.release();
-      continue;
-    }
-    const queued = presentation.queue.find((event): event is Extract<PresentationEvent, { kind: 'step' }> =>
-      event.kind === 'step' && event.playerId === playerId && event.rollRequirements.has(resolution));
-    queued?.rollRequirements.delete(resolution);
+    settleMovementRollKind(playerId, resolution);
   }
+}
+function settleMovementRollKind(playerId: string, resolution: PlanResolution): void {
+  const active = presentation.presenting;
+  if (active?.kind === 'rollBeat' && active.id === playerId && active.pendingRolls?.has(resolution)) {
+    active.pendingRolls.delete(resolution);
+    if (active.pendingRolls.size === 0) active.release();
+    return;
+  }
+  const queued = presentation.queue.find((event): event is Extract<PresentationEvent, { kind: 'step' }> =>
+    event.kind === 'step' && event.playerId === playerId && event.rollRequirements.has(resolution));
+  queued?.rollRequirements.delete(resolution);
 }
 function reconcileWideRailDeclarationEcho() {
   if (pendingWideRailDeclare
@@ -15879,6 +16073,13 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
       if (pendingShotToNothingDeclare && srvActingAction === pendingShotToNothingDeclare.playerAction) {
         pendingShotToNothingDeclare.sawPlayerActionEcho = true;
       }
+      // Sol r2 P1: upstream sets the actor id only when it changes (UtilActingPlayer:77-86) but always the action, so a
+      // same-player re-declaration is answered by the action change alone. That answers our latch too.
+      if (declarationAwaitingEcho && srvActingAction != null && srvActingId === declarationAwaitingEchoFor
+          && (srvActingAction === declarationAwaitingEchoAction
+            || (pendingWideRailDeclare?.playerId === srvActingId && srvActingAction === pendingWideRailDeclare.playerAction))) {
+        declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; noteDeclarationLatchChange();
+      }
     } else if (bigGuyActivateIntent && bigGuyActivateActedChange(ch)) {
       bigGuyActivateIntent = null; // the player acted: the first step / any other action ends the intent
     } else if (ch.modelChangeId === 'gameSetHomePlaying'
@@ -15928,6 +16129,7 @@ function trackActingPlayer(cmd: Record<string, unknown>) {
     if (declarationAwaitingEcho && now - declarationSentAt >= LATCH_FRAME_GRACE_MS) releaseStaleLatches('a later server frame');
     if (cancelInFlight && (srvActingId == null || now - cancelSentAt >= LATCH_FRAME_GRACE_MS)) releaseStaleLatches('a later server frame');
   }
+  restoreLateDeclarationEcho(explicitPlayerId, explicitPlayerAction, terminalBoundary); // Sol r2 P1: before reconciling
   // A foreign activation can legitimately CLEAR before whenPriorActivationEnded sends and arms the requested
   // declaration. Once armed, only an exact tuple acknowledges it; coherent mismatches above reject it.
   reconcileWideRailDeclarationEcho();
@@ -15952,6 +16154,7 @@ function seedActingPlayer(g: GameJson | null | undefined) {
   if (!srvActingId) wakeActorClearWaiters();
   bigGuyActivateIntent = null; bigGuyRollEndLatch = null; // never rebuilt from a snapshot (first action / reconnect)
   foulChoice = null; // S42: same — a snapshot cannot say which Foul row the coach picked
+  releasedDeclaration = null;
   pendingWideRailDeclare = null;
   acknowledgedWideRailDeclare = null;
   completedWideRailDeclare = null;
@@ -16213,7 +16416,7 @@ interface PlannerPlan {
   terminalSent: boolean;
   phase: 'declaring' | 'moving' | 'acting';
   turnKey: string;                             // flush if the turn changes under us
-  onTheBallMode: 'kickoffReturn' | 'passBlock' | null; // W27: admits only the OtB plan that started in this exact window
+  onTheBallMode: OnTheBallMode | null; // W27: admits only the OtB plan that started in this exact window
 }
 /** #34: BLITZ optional special block-kind → sendBlock flavor flags (store-side mirror of SpectateView's o66BlockFlags); null/undefined ⇒ PLAIN block (byte-identical to pre-#34). */
 /** #113 (JC-3/JC-4): SINGLE source of truth for acting player's jump state; reads SERVER's echoed actingPlayer.leaping (ModelChangeId.ACTING_PLAYER_SET_JUMPING), NOT local latch; ONE derivation via CLIENT_ACTING_PLAYER's leaping:isJumping(), never re-hardcoded false; defaults false → byte-identical to old hardcode until jump toggled. */
@@ -16809,8 +17012,8 @@ function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): bool
   // Hold the planner on model-level dialogs/pushback; UI surfaces arm after model application.
   const g = game.value;
   const dialogId = String((g?.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
-  const staleDialog = staleDialogOutlivedPhase(dialogId, g?.turnMode);
-  const onTheBallInfo = plannerPlan?.onTheBallMode != null && dialogId === plannerPlan.onTheBallMode;
+  const staleDialog = staleDialogOutlivedPhase(dialogId, g?.turnMode, g);
+  const onTheBallInfo = plannerPlan?.onTheBallMode != null && dialogId === onTheBallDialogId(plannerPlan.onTheBallMode);
   if (g?.dialogParameter && !staleDialog && !onTheBallInfo && !dialogAlreadyAnswered()) return true;
   if (state.failedActionHold) return true; // owner 09-06: a failed roll's walk is still draining
   // SB-3/SR-269: model-truth HOLD, not FLUSH; the existing model-apply pause/resume advances once waitingForOpponent clears.
@@ -16865,7 +17068,7 @@ function plannerStart(input: {
   declareOnly?: boolean; declareAction?: string;
 }): boolean {
   if (!play.active || !game.value) return false;
-  const onTheBall = game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock';
+  const onTheBall = isOnTheBallTurnMode(game.value.turnMode);
   if (!settings.order66 && !onTheBall) return false;
   const { playerId, actKind } = input;
   if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
@@ -16996,7 +17199,7 @@ function plannerStart(input: {
     goredCommit: false,
     terminalSent: false,
     phase: 'declaring', turnKey: currentTurnKey(game.value),
-    onTheBallMode: game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock' ? game.value.turnMode : null,
+    onTheBallMode: isOnTheBallTurnMode(game.value.turnMode) ? game.value.turnMode : null,
   });
   plannerArmAbort();
   log('system', `plan: ${actKind.toUpperCase()} ${playerName(game.value, playerId)} — ${route.length} sq walk${squareResolutions.some((s) => s.size) ? ` (${squareResolutions.filter((s) => s.size).length} roll-sq)` : ''} → act (server-sequenced)`);
@@ -17609,8 +17812,9 @@ export function installMovePlannerTestHarness(
         modelChangeList: { modelChangeArray: changes },
         reportList: { reports },
       };
+      const onTheBall = noteOnTheBallReceive(cmd); // enqueueSync's ordered On-the-Ball receive identity
       trackActingPlayer(cmd);
-      applyFrame({ receivedAt: Date.now(), cmd });
+      applyFrame({ receivedAt: Date.now(), cmd, ...onTheBall });
     },
     fail(playerId, reportId) {
       confirmFailedMovementIntent([{ reportId, playerId, successful: false }]);
@@ -17943,6 +18147,7 @@ export function installGazeIntentTestHarness(
 export function installApothecaryTestHarness(
   fixture: GameJson,
   send: (command: Record<string, unknown>) => boolean | void,
+  serverVersion: string | null = null,
 ): {
   applyDialog(dialog: Record<string, unknown> | null, commandNr: number): void;
   applyReports(reports: Record<string, unknown>[], commandNr: number): void;
@@ -18023,6 +18228,7 @@ export function installApothecaryTestHarness(
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   settings.order66 = false;
   session = {
+    serverVersion, // the version this (game) connection announced
     send(command: Record<string, unknown>) {
       if (send(command) === false) throw new Error('test transport refusal');
     },
@@ -18405,8 +18611,8 @@ export function installWizardTargetConfirmationTestHarness(
   fixture: GameJson,
   seat: 'modern' | 'classic' | 'spectator',
   send: (command: Record<string, unknown>) => void,
-  /** FFB 3.4.0 entry 5: the elected spell (default zap). */
-  options?: { spell?: WizardSpell },
+  /** FFB 3.4.0 entry 5: the elected spell (default zap); `serverVersion` = the version the game connection announced. */
+  options?: { spell?: WizardSpell; serverVersion?: string | null },
 ): {
   targetSquares(): [number, number][];
   select(square: [number, number]): void;
@@ -18461,7 +18667,7 @@ export function installWizardTargetConfirmationTestHarness(
     key: wizardSpellKey(commandNr), prompt: $t('store.text.chooseAZapTarget'), declineLabel: 'Cancel',
     options: [], seq: (priorInducement?.seq ?? 0) + 1,
   };
-  session = { send } as unknown as GameSession;
+  session = { serverVersion: options?.serverVersion ?? null, send } as unknown as GameSession;
   armServerCoordinatePicks();
 
   return {
@@ -19762,6 +19968,7 @@ export function installWideRailActivationTestHarness(
   acknowledgedWideRailDeclare = null;
   completedWideRailDeclare = null;
   deferredStandUpWideRail = null;
+  releasedDeclaration = null;
   interactiveSetup = seat !== 'spectator';
   pregameHandled.clear();
   clearAnsweredDialogInstance();
@@ -19877,6 +20084,7 @@ export function installWideRailActivationTestHarness(
       completedWideRailDeclare = priorCompletedWideRailDeclare;
       wideRailDeclareSeq = priorWideRailDeclareSeq;
       deferredStandUpWideRail = priorDeferredStandUpWideRail;
+      releasedDeclaration = null;
       interactiveSetup = priorInteractiveSetup;
       pregameHandled.clear();
       for (const key of priorPregameHandled) pregameHandled.add(key);
@@ -19902,7 +20110,11 @@ export function installStarDeclareTestHarness(
 ): {
   declare(playerId: string, action: string, expectedWireAction: string): void;
   declareWithoutAck(playerId: string, action: string): void;
+  /** Sol r3: declare while `playerId` is already the server's acting player under `currentAction`. */
+  declareWhileActing(playerId: string, currentAction: string, action: string): void;
   ack(playerId: string, playerAction: string): void;
+  /** Sol r3: the action-only answer upstream sends when the actor id is unchanged (UtilActingPlayer:77-86). */
+  ackActionOnly(playerAction: string): void;
   seedReconnect(): void;
   choice(): typeof state.skillChoice;
   answer(use: boolean): void;
@@ -19943,6 +20155,17 @@ export function installStarDeclareTestHarness(
       srvActingId = null;
       srvActingAction = null;
       gameStore.declareAction(playerId, action);
+    },
+    declareWhileActing(playerId: string, currentAction: string, action: string) {
+      srvActingId = playerId;
+      srvActingAction = currentAction;
+      gameStore.declareAction(playerId, action);
+    },
+    ackActionOnly(playerAction: string) {
+      fixture.actingPlayer = { ...(fixture.actingPlayer ?? {}), playerAction } as GameJson['actingPlayer'];
+      trackActingPlayer({ modelChangeList: { modelChangeArray: [
+        { modelChangeId: 'actingPlayerSetPlayerAction', modelChangeValue: playerAction },
+      ] } });
     },
     ack(playerId: string, playerAction: string) {
       fixture.actingPlayer = {
@@ -20145,6 +20368,9 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   state.bncScatter = null;
   liveReRollDialog = null;
   liveReRollOfferEpoch = 0;
+  resetModifierChoiceOccurrences();
+  clearAnsweredDialogInstance();
+  rerollRailFloorUntil = 0; // owner 10-26: the toast rail's floor is per epoch
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
   settings.order66 = false;
@@ -20178,6 +20404,7 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
     scatterSeq: () => state.bncScatter?.seq ?? 0,
     answer(source) { gameStore.resolveReRoll(source); },
     dispose() {
+      resetModifierChoiceOccurrences();
       followupHandled.clear();
       for (const key of priorHandled) followupHandled.add(key);
       liveReRollDialog = priorLiveDialog;
@@ -20460,12 +20687,20 @@ export function installSetupErrorRecoveryTestHarness(
   armBlockPartial(): void;
   stuck(): void;
   logs(): string[];
+  /** g1104: the owning seat's useInducement offer card and the kicker's aim surface. */
+  inducementUse(): typeof state.inducementUse;
+  kickPlacement(): typeof state.kickPlacement;
+  game(): GameJson | null;
+  /** The coach's Decline click on the open useInducement card. */
+  declineInducement(): void;
   dispose(): void;
 } {
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
   const priorUiMode = settings.uiMode;
+  const priorInducementUse = state.inducementUse;
+  const priorKickPlacement = state.kickPlacement;
   const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorFastPregame = fastPregame;
@@ -20500,6 +20735,11 @@ export function installSetupErrorRecoveryTestHarness(
   state.setupPhase = null;
   state.swarmingPhase = null;
   state.playerPick = null;
+  retireUseInducement();
+  for (const key of [...followupHandled]) if (key.startsWith('useInducement:')) followupHandled.delete(key);
+  useInducementAnsweredContent.clear();
+  useInducementReshownKeys.clear();
+  state.kickPlacement = null;
   session = {
     send(command: Record<string, unknown>) {
       if (send(command) === false) throw new Error('test transport refusal');
@@ -20542,8 +20782,15 @@ export function installSetupErrorRecoveryTestHarness(
     armBlockPartial: () => { state.blockPartial = {} as NonNullable<typeof state.blockPartial>; },
     stuck: () => gameStore.devCommand('stuck'),
     logs: () => state.log.slice(logStart).map((entry) => entry.text),
+    inducementUse: () => state.inducementUse,
+    kickPlacement: () => state.kickPlacement,
+    game: () => game.value,
+    declineInducement: () => answerUseInducement({ kind: 'decline' }),
     dispose() {
       clearSetupLoop();
+      retireUseInducement();
+      state.inducementUse = priorInducementUse;
+      state.kickPlacement = priorKickPlacement;
       pregameHandled.clear();
       for (const key of priorHandled) pregameHandled.add(key);
       clearAnsweredDialogInstance();
@@ -21841,12 +22088,16 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
       const arrived = !!coord && coord[0] === target[0] && coord[1] === target[1];
       for (const r of reps) {
         if (String(r.playerId ?? '') !== p.playerId) continue;
-        const kind = PLAN_RESOLUTION_REPORT[String(r.reportId ?? '')];
-        if (kind && cur.has(kind) && r.successful === false) { p.failedRoll = kind; continue; } // owner 09-15: remembered for the quiet retire
-        if (!kind || r.successful !== true || !cur.has(kind)) continue;
+        // Owner 10-26 (g1075): "guards should drop when rerollmodifierchoice fires" - the modifier's skillUse makes the
+        // failed roll pass (no new roll report follows): settle it exactly as a successful (re)roll of that kind.
+        const rescued = modifierRescuedRoll(r as Record<string, unknown>, p.playerId, p.failedRoll);
+        const kind = rescued ?? PLAN_RESOLUTION_REPORT[String(r.reportId ?? '')];
+        const successful = rescued ? true : r.successful;
+        if (kind && cur.has(kind) && successful === false) { p.failedRoll = kind; continue; } // owner 09-15: remembered for the quiet retire
+        if (!kind || successful !== true || !cur.has(kind)) continue;
         p.failedRoll = null; // a success (incl. a rescuing re-roll) supersedes the remembered failure
         if (arrived) cur.delete(kind);
-        else if (r.reRolled === true) {
+        else if (r.reRolled === true || rescued) {
           // A successful reroll may settle the roll but leave the model at the origin. Mark the current destination
           // for one server-offer-bounded resend after the live reroll dialog clears (plannerPromptPending above).
           cur.delete(kind);
@@ -21898,6 +22149,8 @@ const DECLARE_COMMANDS = new Set<string>([
 ]);
 const OWN_DIALOG_ANSWER_COMMANDS = new Set<string>([
   NetCommandId.CLIENT_PUNT_TO_CROWD,
+  // S36: the modifier pick of an owned `reRollModifierChoice` dialog.
+  NetCommandId.CLIENT_RE_ROLL_MODIFIER_CHOICE,
   NetCommandId.CLIENT_PICK_UP_CHOICE,
   NetCommandId.CLIENT_USE_CHAINSAW,
   // BB2025 Multiple Block per-target answers (reRollBlockForTargetsProperties / opponentBlockSelectionProperties /
@@ -22426,7 +22679,7 @@ export function heldBacklogVetoLifted(applied: { turnMode: string; liveDialog: b
 function serverAwaitsThisSeatPerAppliedState(g: GameJson): boolean {
   const dialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
   const liveDialog = !!g.dialogParameter && !dialogAlreadyAnswered()
-    && !(staleDialogOutlivedPhase(dialogId, g.turnMode) || blastinStaleRerollDialog(g));
+    && !(staleDialogOutlivedPhase(dialogId, g.turnMode, g) || blastinStaleRerollDialog(g));
   return heldBacklogVetoLifted({
     turnMode: String(g.turnMode ?? ''), liveDialog,
     squarePick: !!state.squarePick, playerPick: !!state.playerPick, unknownPick: !!state.unknownCall,
@@ -22455,7 +22708,7 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
   // model's dialogParameter when turnMode flips to kickoff. It is informational (the server never waits on it), so
   // outside the setup turn modes it must not veto declarations: the kicking coach's CLIENT_KICKOFF was dropped here.
   const liveDialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
-  const staleDialog = staleDialogOutlivedPhase(liveDialogId, g.turnMode) || blastinStaleRerollDialog(g); // S46 r3: the shooter's re-roll card outlives the roll into the second beat
+  const staleDialog = staleDialogOutlivedPhase(liveDialogId, g.turnMode, g) || blastinStaleRerollDialog(g); // S46 r3: the shooter's re-roll card outlives the roll into the second beat
   if (commandActionClass(id) === 'declare' && g.dialogParameter && !dialogAlreadyAnswered() && !staleDialog) {
     if (unknownDialogLiftPermits(g, cmd)) return true; // S43: the coach's explicit End Turn / End Activation past an UNKNOWN dialog
     return ownedDeclarationInsideLiveDialogPermitted(g, cmd);
@@ -23693,6 +23946,12 @@ function unrecognizedReRollFields(dp: Record<string, unknown>): UnrecognizedReRo
   ] as const) {
     if (value && reRollSourceName(value) === null) fields.push({ key, value });
   }
+  // S36: a `reRollModifierChoice` option list that is not the upstream ModifierChoiceOption shape is never guessed at.
+  if (isReRollModifierChoice(dp)) {
+    for (const key of ['modifierOptions', 'modifierCombinations'] as const) {
+      if (modifierChoiceWireOptions(dp, key) === null) fields.push({ key, value: dp[key] });
+    }
+  }
   return fields;
 }
 
@@ -23723,6 +23982,11 @@ export function emitReRollAnswer(
 ): boolean {
   const selected = source === null ? null : prompt.options.find((option) => option.source === source);
   if (source !== null && !selected) return false;
+  if (selected?.response === 'modifier-choice') {
+    // S36: exactly the received option's skills (the caller has checked them against the LIVE dialog).
+    if (!selected.skillArray?.length) return false;
+    return send(buildReRollModifierChoiceCommand(prompt.playerId, selected.skillArray, prompt.reRolledAction)) !== false;
+  }
   if (selected?.response === 'skill') {
     return send({
       netCommandId: NetCommandId.CLIENT_USE_SKILL,
@@ -23733,6 +23997,161 @@ export function emitReRollAnswer(
     }) !== false;
   }
   return send({ netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: prompt.reRolledAction, reRollSource: source }) !== false;
+}
+
+/**
+ * S36 Sol r1 #1 / r2 (latches fail open, EVIDENCE-based): an answered `reRollModifierChoice` awaiting the server.
+ * Upstream can drop an answer without any reply (OfferedSkillService.isOfferedModifierOption -> UNHANDLED_COMMAND;
+ * StepExecutor syncs only when something changed; CommandSocket swallows exceptions) and it legitimately sends
+ * unrelated frames while it still waits (ServerGameTimeTask timeout sync, marker sync). It also never clears this
+ * dialog in most steps after acting, so an unchanged dialog object proves nothing either way. Therefore:
+ *  - the occurrence is consumed ONLY by evidence that the server acted on this decision (modifierChoiceEvidence);
+ *  - while the same dialog object is still open without evidence, each answer is followed by a re-show of the card
+ *    after 8 s, then 15 s, 30 s and every 30 s for later answers (nothing is ever resent: the coach answers again).
+ * Evidence (upstream master e7f9858a1), any of, in a frame applied after the send:
+ *  - the dialog cleared or replaced (StepJumpUp / StepCatchScatterThrowIn hideDialog; Arm Bar / Lord of Chaos /
+ *    Diving Tackle look-ahead dialogs replace it);
+ *  - a report naming the dialog's player (ReportReRoll from UtilServerReRoll.useReRoll / RollMechanic for every
+ *    re-roll source incl. skills, Pro and Loner; ReportSkillUse addDodgeModifier / addAgilityModifier /
+ *    passDodgeWithoutModifiers / passJumpWithoutModifiers; the new roll report; the injury report of a declined
+ *    dodge / jump / landing);
+ *  - a report of the game moving on (turnEnd, a ball scatter / throw-in, a pass or catch roll: a declined pick up,
+ *    catch or interception bounces or continues the ball);
+ *  - the received state moved: that player's square or state, the ball square / moving flag, the turn mode, the
+ *    acting player or the half (a modifier catch sends no catch roll report; the ball and the catcher's state do).
+ * Timers die with the game / snapshot epoch (resetModifierChoiceOccurrences) and with the dialog (frame release).
+ * Only this dialog uses it: a server that never sends `reRollModifierChoice` never reaches any of it.
+ */
+const MODIFIER_CHOICE_RESHOW_BACKOFF_MS = [8000, 15000, 30000] as const;
+/** The surfaced occurrence: dialog object -> its followupHandled key. */
+let liveModifierChoice: { ref: object; handledKey: string } | null = null;
+/** Sol r3: the OBSERVED occurrence lives from the first answer until evidence (or a dialog change / epoch reset);
+ *  a re-show only spends the timer (`timer: null`), it never drops the observation. A re-answer re-arms the timer of
+ *  the same occurrence; the send point and state mark of the FIRST answer stay (evidence after it counts). */
+let modifierChoiceAwaiting: {
+  handledKey: string; ref: object; playerId: string; sentAtCommandNr: number; mark: string; timer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+/** Re-shows done per occurrence (handledKey), for the backoff. */
+const modifierChoiceReshowCount = new Map<string, number>();
+let consumedModifierChoiceDialogs = new WeakSet<object>();
+const MODIFIER_CHOICE_GAME_MOVED_REPORTS = new Set([
+  'turnEnd', 'scatterBall', 'throwIn', 'passRoll', 'catchRoll', 'interceptionRoll', 'kickoffResult',
+]);
+function retireModifierChoiceAwait(): void {
+  if (modifierChoiceAwaiting?.timer) cancelGameTimeout(modifierChoiceAwaiting.timer);
+  modifierChoiceAwaiting = null;
+}
+/** Sol r3: a modifier-choice card is never left up over a cleared or different server dialog (original or recovered). */
+function retireStaleModifierChoiceCard(g: GameJson): void {
+  const prompt = state.reRollPrompt;
+  if (!prompt?.mine || prompt.dialogId !== 'reRollModifierChoice') return;
+  const live = g.dialogParameter as Record<string, unknown> | null | undefined;
+  if (!live || !isReRollModifierChoice(live) || dialogInstanceKey(g) !== prompt.instanceKey) state.reRollPrompt = null;
+}
+/** Per game / snapshot epoch (cleared with followupHandled). */
+function resetModifierChoiceOccurrences(): void {
+  retireModifierChoiceAwait();
+  retireModifierChoiceSurfaceWatch();
+  liveModifierChoice = null;
+  modifierChoiceReshowCount.clear();
+  consumedModifierChoiceDialogs = new WeakSet<object>();
+}
+/** The received state a server action on this decision moves (see the evidence list above). */
+export function modifierChoiceStateMark(g: GameJson, playerId: string): string {
+  const data = g.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+  const field = g.fieldModel as unknown as { ballCoordinate?: unknown; ballMoving?: unknown };
+  return JSON.stringify([
+    data?.playerCoordinate ?? null, data?.playerState ?? null, field.ballCoordinate ?? null, field.ballMoving ?? null,
+    g.turnMode ?? null, (g.actingPlayer as { playerId?: unknown } | undefined)?.playerId ?? null, (g as { half?: unknown }).half ?? null,
+  ]);
+}
+const REPORT_PLAYER_FIELDS = ['playerId', 'defenderId', 'actingPlayerId', 'catcherId', 'interceptorId', 'thrownPlayerId'] as const;
+/** Whether this applied frame carries evidence that the server acted on the awaited decision. */
+export function modifierChoiceEvidence(
+  g: GameJson, reports: readonly Record<string, unknown>[], awaited: { ref: object; playerId: string; mark: string },
+): boolean {
+  if (g.dialogParameter !== awaited.ref) return true;
+  if (reports.some((r) => MODIFIER_CHOICE_GAME_MOVED_REPORTS.has(String(r.reportId ?? ''))
+    || REPORT_PLAYER_FIELDS.some((field) => r[field] === awaited.playerId))) return true;
+  return modifierChoiceStateMark(g, awaited.playerId) !== awaited.mark;
+}
+/** applyFrameContents, before the follow-ups: consume the awaited occurrence on evidence only. */
+function observeModifierChoiceEvidence(g: GameJson, reports: readonly Record<string, unknown>[]): void {
+  const awaited = modifierChoiceAwaiting;
+  if (awaited && lastAppliedCommandNr > awaited.sentAtCommandNr && modifierChoiceEvidence(g, reports, awaited)) {
+    // The server acted on this decision: retire the occurrence AND its card (original or recovered, answered again or
+    // not), stop the timer; the cleared prompt also releases plannerPromptPending.
+    if (g.dialogParameter === awaited.ref) consumedModifierChoiceDialogs.add(awaited.ref);
+    retireModifierChoiceAwait();
+    if (state.reRollPrompt?.mine && state.reRollPrompt.dialogId === 'reRollModifierChoice') state.reRollPrompt = null;
+  }
+  // timeout sync, markers, other players: never evidence. Independently, no card outlives its server dialog.
+  retireStaleModifierChoiceCard(g);
+}
+/** One number per received `reRollModifierChoice` OBJECT (dialogObjectId), the occurrence its handled key carries. */
+function modifierChoiceOccurrence(dp: object): number {
+  return dialogObjectId(toRaw(dp));
+}
+/** Sol r1 (land 3.4.0, P1) - latches fail open: once an occurrence is marked handled, a watchdog checks that the coach
+ *  can see its card. If the dialog is still the live, unconsumed, unanswered offer of this seat and no modifier-choice
+ *  card is up (a deferral that never armed, a card cleared by something else), the occurrence is shown again. It
+ *  re-arms with the same backoff until the card is up, the offer is answered, or the dialog goes. Nothing is sent. */
+let modifierChoiceSurfaceWatch: { ref: object; handledKey: string; timer: ReturnType<typeof setTimeout>; tries: number } | null = null;
+function retireModifierChoiceSurfaceWatch(): void {
+  if (modifierChoiceSurfaceWatch) cancelGameTimeout(modifierChoiceSurfaceWatch.timer);
+  modifierChoiceSurfaceWatch = null;
+}
+function armModifierChoiceSurfaceWatch(handledKey: string, ref: object, tries = 0): void {
+  retireModifierChoiceSurfaceWatch();
+  const delay = MODIFIER_CHOICE_RESHOW_BACKOFF_MS[Math.min(tries, MODIFIER_CHOICE_RESHOW_BACKOFF_MS.length - 1)] ?? 30000;
+  const timer = scheduleGameTimeout(() => {
+    if (modifierChoiceSurfaceWatch?.timer !== timer) return;
+    modifierChoiceSurfaceWatch = null;
+    const live = game.value;
+    if (!live || !play.active || live.dialogParameter !== ref || consumedModifierChoiceDialogs.has(ref)) return;
+    if (modifierChoiceAwaiting?.ref === ref || answeredDialogInstanceRef === ref) return; // answered: the await watch owns it
+    const prompt = state.reRollPrompt;
+    if (prompt?.mine && prompt.dialogId === 'reRollModifierChoice') { armModifierChoiceSurfaceWatch(handledKey, ref, tries); return; }
+    followupHandled.delete(handledKey);
+    log('system', lt('store.text.modifierChoiceShownAgain'));
+    surfaceReRollPrompt(ref as Record<string, unknown>);
+    if (!followupHandled.has(handledKey)) return;
+    armModifierChoiceSurfaceWatch(handledKey, ref, tries + 1);
+  }, delay, 'connection');
+  modifierChoiceSurfaceWatch = { ref, handledKey, timer, tries };
+}
+/** Show the still-open occurrence again (nothing is resent: the coach answers again). */
+function reshowModifierChoice(handledKey: string, ref: object): void {
+  followupHandled.delete(handledKey);
+  if (answeredDialogInstanceRef === ref) clearAnsweredDialogInstance(); // the server waits on this seat again
+  log('system', lt('store.text.modifierChoiceShownAgain'));
+  surfaceReRollPrompt(ref as Record<string, unknown>);
+}
+function armModifierChoiceAwait(handledKey: string, ref: object): void {
+  const g = game.value;
+  const playerId = String((ref as { playerId?: unknown }).playerId ?? '');
+  if (!g || !playerId) { retireModifierChoiceAwait(); return; }
+  const same = modifierChoiceAwaiting && modifierChoiceAwaiting.ref === ref && modifierChoiceAwaiting.handledKey === handledKey
+    ? modifierChoiceAwaiting : null;
+  if (!same) retireModifierChoiceAwait();
+  else if (same.timer) cancelGameTimeout(same.timer);
+  const shown = modifierChoiceReshowCount.get(handledKey) ?? 0;
+  const delay = MODIFIER_CHOICE_RESHOW_BACKOFF_MS[Math.min(shown, MODIFIER_CHOICE_RESHOW_BACKOFF_MS.length - 1)] ?? 30000;
+  const timer = scheduleGameTimeout(() => {
+    const awaited = modifierChoiceAwaiting;
+    if (!awaited || awaited.timer !== timer) return;
+    awaited.timer = null; // Sol r3: the observation stays until evidence; only the timer is spent
+    const live = game.value;
+    if (!live || !play.active || live.dialogParameter !== ref || consumedModifierChoiceDialogs.has(ref)) {
+      retireModifierChoiceAwait();
+      return;
+    }
+    modifierChoiceReshowCount.set(handledKey, shown + 1);
+    reshowModifierChoice(handledKey, ref);
+  }, delay, 'connection');
+  modifierChoiceAwaiting = same
+    ? { ...same, timer }
+    : { handledKey, ref, playerId, sentAtCommandNr: lastAppliedCommandNr, mark: modifierChoiceStateMark(g, playerId), timer };
 }
 
 /** Surface FFB reRoll dialog as interactive CINEMATIC prompt (owner 2026-07-03 r6f): offered sources shown in skill-choice card style (spotlight+zoom+failed d6 at player), enabling TEAM re-roll+ONLY natural skill server says can reroll THIS action (reRollSkill—we don't invent); if NO re-roll available, DON'T surface prompt—failed action is turnover so raise turnover splash. */
@@ -23763,9 +24182,22 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
   // gameSetDialogParameter (g868 nr127 → nr131), advances the epoch, and still re-arms — 7cf18a99's intent is kept.
   if (dp !== liveReRollDialog) { liveReRollDialog = dp; liveReRollOfferEpoch += 1; }
   const bncSuffix = game.value && movesRandomly(game.value, String(dp.playerId ?? '')) ? `:${liveReRollOfferEpoch}` : '';
-  const key = `reRollPrompt:${dp.reRolledAction}:${dp.playerId}${bncSuffix}`;
+  // S36 / spec 3.9: a `reRollModifierChoice` is keyed on its received OCCURRENCE (the server dialog object: each
+  // gameSetDialogParameter installs a new one, a frame that leaves the dialog standing keeps it), never on its payload.
+  // Sol r1 (land 3.4.0, P1): a later failed dodge on the same planned route can offer the same player, roll, target
+  // and sources; a payload key handed that fresh dialog the earlier answered key, so no card showed and the game
+  // wedged. The Diving Tackle look-ahead offer that replaces the first one without a null frame is a new object too.
+  const modifierChoice = isReRollModifierChoice(dp);
+  const key = modifierChoice
+    ? `reRollPrompt:mc#${modifierChoiceOccurrence(dp)}:${dialogInstanceKey(game.value) ?? `${dp.reRolledAction}:${dp.playerId}`}`
+    : `reRollPrompt:${dp.reRolledAction}:${dp.playerId}${bncSuffix}`;
+  if (modifierChoice) {
+    if (consumedModifierChoiceDialogs.has(dp)) return; // Sol r1 #1: the server moved on without clearing it
+    liveModifierChoice = { ref: dp, handledKey: key };
+  }
   if (followupHandled.has(key)) return;
   followupHandled.add(key);
+  if (modifierChoice && mine) armModifierChoiceSurfaceWatch(key, dp);
   const playerId = String(dp.playerId ?? '');
   const actingPlayer = playerById(game.value, playerId);
   // Owner 09-28 (S18): the server lists the Dodge skill even when Tackle at the origin square cancels it (server defect,
@@ -23780,13 +24212,14 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
       role: 'modifier',
     });
   }
-  const options = withoutCancelledDodgeSkill(rawOptions, dp, game.value, liveMovementOccurrence);
+  const options = modifierChoice ? rawOptions : withoutCancelledDodgeSkill(rawOptions, dp, game.value, liveMovementOccurrence);
   const modifyingSkill = reRollSourceName(dp.modifyingSkill);
   // Owner 2026-07-09 (C4—failed-rush/dodge reroll STALL): live fork sends offer as reRollProperties:string[] source codes (TRR/MASCOT/LONER=team re-roll, PRO=Pro) NOT legacy *Option booleans; reading only booleans found ZERO options→surfaceReRollPrompt declared turnover+never showed prompt→server waited on un-answered reroll→STALL (g286 f386: reRollProperties:["TRR"] on failed Rush→owner had to concede); parse codes like surfaceBlockPartial (booleans kept as fallback).
   // Every named server offer remains visible; eligibility belongs to the server.
   const isDodge = /dodge/i.test(String(dp.reRolledAction ?? ''));
   // Owner 2026-07-06: AUTO DODGE RE-ROLL (Settings→Gameplay); when THIS is our dodge and natural Dodge skill re-roll on offer, 'auto' default spends immediately with no prompt; 'manual' falls through to surface.
-  if (AUTO_ANSWER_SERVER_DIALOGS && mine && isDodge && settings.dodgeReroll === 'auto') {
+  // S36 / spec 3.8: never on a `reRollModifierChoice` - a modifier option may be the coach's better answer.
+  if (AUTO_ANSWER_SERVER_DIALOGS && mine && isDodge && !modifierChoice && settings.dodgeReroll === 'auto') {
     const dodgeOpt = options.find((o) => o.role === 'reroll-skill' && /dodge/i.test(o.source));
     if (dodgeOpt) {
       state.reRollPrompt = null;
@@ -24266,7 +24699,7 @@ function liveDialogId(): string {
 function serverDialogLive(dialogIds: readonly string[]): boolean {
   const id = liveDialogId();
   if (!id || !dialogIds.includes(id)) return false;
-  if (staleDialogOutlivedPhase(id, game.value?.turnMode)) return false;
+  if (staleDialogOutlivedPhase(id, game.value?.turnMode, game.value)) return false;
   return !dialogAlreadyAnswered();
 }
 function clearYesNo() {
@@ -24742,7 +25175,7 @@ function settleUnknownAttempt(a: UnknownAttempt, status: 'done' | 'not-accepted'
 /** True when the ordinary End Activation would go straight to its plain end command, with nothing else to alter first. */
 function endActivationIsPlain(g: GameJson, actingId: string): boolean {
   const mode = String(g.turnMode ?? '');
-  if (mode === 'kickoffReturn' || mode === 'passBlock' || mode === 'selectBlitzTarget' || mode === 'hitAndRun' || mode === 'thenIStartedBlastin') return false;
+  if (isOnTheBallTurnMode(mode) || mode === 'selectBlitzTarget' || mode === 'hitAndRun' || mode === 'thenIStartedBlastin') return false;
   if (String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'kickEmBlitz') return false;
   if (state.multiBlockSel && !state.multiBlockSel.committed) return false;
   if (bigGuyRollEndLatched(g, actingId) || blitzEndConfirmationRequired(g)) return false;
@@ -24984,8 +25417,10 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   // Astra r1 #2: the owned occurrence ends the moment the live dialog is not that object (cleared, replaced, or
   // re-addressed to the other seat) - its prompt never waits for a click to find out. Also releases an awaited answer.
+  // g1104: a Dwarfen Wisdom offer the server left behind on a decline (staleDialogOutlivedPhase) retires it too.
   if (initialDialogId !== 'useInducement'
-    || (liveUseInducementOccurrence && g.dialogParameter !== liveUseInducementOccurrence.ref)) retireUseInducement();
+    || (liveUseInducementOccurrence && g.dialogParameter !== liveUseInducementOccurrence.ref)
+    || dwarfenWisdomOfferCardRetired(g)) retireUseInducement();
   else releaseConsumedUseInducement(g);
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
   // Astra confirmlock-6: a replacement wizardSpell occurrence (the opponent's) retires the stale Zap confirmation.
@@ -25170,7 +25605,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     const idp = g.dialogParameter as Record<string, unknown> | undefined;
     // g1956430: a consumed occurrence (the server moved on without clearing it) is no offer: never re-prompted, and the
     // driver falls through to the rest of the game (the kick-off).
-    if (idp?.dialogId === 'useInducement' && !consumedUseInducementDialogs.has(idp)) {
+    // g1104: a Wisdom-only offer that outlived its phase (upstream decline leaves it unhidden) is no offer either.
+    if (idp?.dialogId === 'useInducement' && !consumedUseInducementDialogs.has(idp)
+      && !dwarfenWisdomOfferCardRetired(g)) { // an ambiguous Wisdom offer keeps its card (staleDialog.ts [A])
       const myId = (myPlayTeam(g) as { teamId?: string } | undefined)?.teamId;
       const teamId = String(idp.teamId ?? myId ?? '');
       if (teamId === myId && myId) {
@@ -25590,7 +26027,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   // surface the offered sources so the coach picks one or declines. Otherwise
   // (headless driver, or a prompt not for our player) auto-decline so the roll
   // stands — preserving the M4.2 probe flow.
-  if (dlg === 'reRoll' || dlg === 'reRollProperties') {
+  if (dlg === 'reRoll' || dlg === 'reRollProperties' || dlg === 'reRollModifierChoice') {
     // o66: authority = deriveReaction (reroll offered for my player); legacy: dpPlayer ∈ mine. Bloodlust-
     // flavored rerolls were already peeled off above, so both branches see only generic rerolls here.
     // interactiveReRolls (am I a live client vs a headless driver) is orthogonal and gates both.
@@ -25608,6 +26045,11 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
       surfaceReRollPrompt(dp as Record<string, unknown>);
       return;
     }
+    // S36: headless declines a `reRollModifierChoice` once per INSTANCE (a second offer on the same roll is a new one).
+    if ((!dpPlayer || ownedReroll) && dlg === 'reRollModifierChoice')
+      return once(`reRollMC:${modifierChoiceOccurrence(dp as object)}:${dialogInstanceKey(g)}`, {
+        netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: dp?.reRolledAction, reRollSource: null,
+      });
     if (!dpPlayer || ownedReroll)
       return once(`reRoll:${dp?.reRolledAction}:${dpPlayer}`, {
         netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: dp?.reRolledAction, reRollSource: null,
@@ -25697,8 +26139,13 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   if (dlg === 'apothecaryChoice' && (!dpPlayer || mine.has(dpPlayer))) {
     if (humanDecisionSurface(interactiveApothecaryPrompts()) && dpPlayer && mine.has(dpPlayer)) return; // cinematic owns it
+    // Upstream PR #325 (10-17, "Prevent client-injected Apothecary outcomes"): that server reads only `choiceNewInjury`
+    // and applies its own dialog's outcome; a command without it NPEs in initFrom there. Owner (Sol r1): the flag is
+    // sent only to a server that carries the PR (serverVersionGate); the legacy fields always ride along.
     return once(`apoChoice:${dpPlayer}`, {
-      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE, playerId: dpPlayer,
+      netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE,
+      ...(serverSupportsApothecaryChoiceFlag(activeGameServerVersion()) ? { choiceNewInjury: true } : {}),
+      playerId: dpPlayer,
       playerState: dp?.playerStateNew, seriousInjury: dp?.seriousInjuryNew, playerStateOld: dp?.playerStateOld,
     });
   }
@@ -25987,8 +26434,10 @@ function dwarfenWisdomPreMode(g: GameJson): boolean {
     inducementTypeArray?: unknown[];
     playerChoiceMode?: string;
   } | null | undefined;
+  // g1104: a declined offer the server left unhidden into kickoff is no pre-mode frame (it parked the kicker's aim).
   return (dp?.dialogId === 'useInducement'
-      && (dp.inducementTypeArray ?? []).some((type) => String(type) === DWARFEN_WISDOM_TURN_MODE))
+      && (dp.inducementTypeArray ?? []).some((type) => String(type) === DWARFEN_WISDOM_TURN_MODE)
+      && !staleDialogOutlivedPhase('useInducement', g.turnMode, g))
     || (dp?.dialogId === 'playerChoice' && dp.playerChoiceMode === DWARFEN_WISDOM_TURN_MODE);
 }
 
@@ -26865,8 +27314,22 @@ function clearSetupLoop() {
 const onTheBallController = new OnTheBallController((command) => {
   // Latch only after both the shared command lock and transport accept the exact upstream wire.
   if (!commandPermittedByLock(command)) return false;
-  return sendCommand(command);
+  const sent = sendCommand(command);
+  if (sent) armOnTheBallEchoWatchdog(); // every reaction send waits on an echo: the latch behind it fails open
+  return sent;
 });
+/** Latches fail open: the controller's echo latches (mover declaration, End, End-mover) release on its grace; this
+ *  watchdog re-syncs the surface then even if the server sends nothing at all. It only re-derives controls from the
+ *  received state and NEVER sends (armOnTheBall with restoreOnly: no decline, not even for a headless seat). */
+let onTheBallEchoWatchdog: ReturnType<typeof scheduleGameTimeout> | null = null;
+function armOnTheBallEchoWatchdog(): void {
+  if (onTheBallEchoWatchdog != null) cancelGameTimeout(onTheBallEchoWatchdog);
+  onTheBallEchoWatchdog = scheduleGameTimeout(() => {
+    onTheBallEchoWatchdog = null;
+    const live = game.value;
+    if (live && isOnTheBallTurnMode(live.turnMode)) armOnTheBall(live, live.turnMode, { restoreOnly: true });
+  }, ON_THE_BALL_ECHO_GRACE_MS + 100);
+}
 
 function onTheBallFrame(g: GameJson): OnTheBallFrame {
   const mine = myPlayIds(g);
@@ -26883,6 +27346,8 @@ function onTheBallFrame(g: GameJson): OnTheBallFrame {
       onPitch: rendersOnPitch(playerState) && !!coordinate
         && coordinate[0] >= 0 && coordinate[0] < 26 && coordinate[1] >= 0 && coordinate[1] < 15,
       ableToMove: onTheBallPlayerStateIsAbleToMove(playerState),
+      // Upstream 351cdeed9: the interrupted actor of a dump-off pass block keeps MOVING + active; never selectable.
+      interruptedMover: isPassBlockMode(g.turnMode) && (playerState & 0xff) === PlayerStateBase.MOVING,
     };
   }));
   const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null; leaping?: boolean } | undefined;
@@ -27034,7 +27499,7 @@ export function installOnTheBallActionTestHarness(
   const sync = () => {
     applySeat();
     syncOnTheBallWaiting(fixture);
-    if (fixture.turnMode === 'kickoffReturn' || fixture.turnMode === 'passBlock') {
+    if (isOnTheBallTurnMode(fixture.turnMode)) {
       armOnTheBall(fixture, fixture.turnMode);
     }
   };
@@ -27070,7 +27535,7 @@ export function installOnTheBallActionTestHarness(
       onTheBallAppliedPhaseIdentity += 1;
       onTheBallAppliedModelRevision += 1;
       fixture.actingPlayer = { playerId: null, playerAction: null } as GameJson['actingPlayer'];
-      fixture.dialogParameter = { dialogId: fixture.turnMode } as GameJson['dialogParameter'];
+      fixture.dialogParameter = { dialogId: isOnTheBallTurnMode(fixture.turnMode) ? onTheBallDialogId(fixture.turnMode) : fixture.turnMode } as GameJson['dialogParameter'];
       setCandidates(candidateIds);
       clearPlayerPick();
       sync();
@@ -27080,7 +27545,7 @@ export function installOnTheBallActionTestHarness(
       onTheBallAppliedPhaseIdentity = 1;
       onTheBallAppliedModelRevision += 1;
       fixture.actingPlayer = { playerId: null, playerAction: null } as GameJson['actingPlayer'];
-      fixture.dialogParameter = { dialogId: fixture.turnMode } as GameJson['dialogParameter'];
+      fixture.dialogParameter = { dialogId: isOnTheBallTurnMode(fixture.turnMode) ? onTheBallDialogId(fixture.turnMode) : fixture.turnMode } as GameJson['dialogParameter'];
       setCandidates(candidateIds);
       clearPlayerPick();
       sync();
@@ -27107,8 +27572,14 @@ export function installOnTheBallActionTestHarness(
   };
 }
 
+/** The server left the On the Ball modes: the reaction's own surfaces go with it (client-only; nothing sent). */
+function retireOnTheBallSurfaces(): void {
+  if (state.playerPick?.key.startsWith('onTheBall:')) clearPlayerPick();
+  state.onTheBallMover = null;
+  state.onTheBallWaiting = null;
+}
 /** Thin runtime adapter; upstream transaction is specified in docs/on-the-ball-kickoff-pass-upstream-deep-dive.md. */
-function armOnTheBall(g: GameJson, origin: OnTheBallMode) {
+function armOnTheBall(g: GameJson, origin: OnTheBallMode, opts: { restoreOnly?: boolean } = {}) {
   const frame = onTheBallFrame(g);
   const projection = onTheBallController.sync(frame);
   const clearPick = () => {
@@ -27128,11 +27599,13 @@ function armOnTheBall(g: GameJson, origin: OnTheBallMode) {
   state.onTheBallMover = null;
   const decline = () => {
     const live = game.value;
-    if (!live || (live.turnMode !== 'kickoffReturn' && live.turnMode !== 'passBlock')) return;
+    if (!live || !isOnTheBallTurnMode(live.turnMode)) return;
     if (!onTheBallController.endPhase(onTheBallFrame(live))) armOnTheBall(live, live.turnMode);
   };
-  if (frame.audience === 'headless' || projection.eligiblePlayerIds.length === 0) {
-    decline();
+  // Headless bots end the phase themselves. A coach is never answered for: with nothing selectable (a rooted On the
+  // Ball player is still a server pass blocker) the card stands with Decline only, like upstream's Continue (Sol r1).
+  if (frame.audience === 'headless') {
+    if (!opts.restoreOnly) decline();
     return;
   }
   if (frame.audience !== 'owner-player') return;
@@ -27148,7 +27621,7 @@ function armOnTheBall(g: GameJson, origin: OnTheBallMode) {
       if (!live) return;
       const command = onTheBallController.choose(onTheBallFrame(live), picked[0]!);
       if (!command) {
-        if (live.turnMode === 'kickoffReturn' || live.turnMode === 'passBlock') armOnTheBall(live, live.turnMode);
+        if (isOnTheBallTurnMode(live.turnMode)) armOnTheBall(live, live.turnMode);
         return;
       }
       log('system', `play: On the Ball (${origin}) — ${playerName(live, picked[0]!)} declared to move`);
@@ -27344,7 +27817,7 @@ function drivePregameStep() {
   // Lifecycle clear FIRST: the recognised-dialog branches below return early, so a replacement dialog must not leave the card up.
   if (state.yesNo?.key.startsWith('useChainsaw:')
     && (dlg !== 'useChainsaw' || String(dialogParam?.teamId ?? '') !== String((myPlayTeam(g) as { teamId?: string } | undefined)?.teamId ?? ''))) clearYesNo();
-  if (!dlg && (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock')) {
+  if (!dlg && isOnTheBallTurnMode(g.turnMode)) {
     armOnTheBall(g, g.turnMode);
   }
   const wisdomPreMode = dwarfenWisdomPreMode(g);
@@ -27808,7 +28281,10 @@ function drivePregameStep() {
     case 'kickoffReturn':
     case 'passBlock':
       // Owner 2026-07-04 (catalog 16 + 45): both halves of ON THE BALL ride the shared handler; the origin decides the turnMode the answers carry.
-      armOnTheBall(g, dlg);
+      // The origin is the server's TURN MODE, not the dialog id: upstream StepPassBlock raises the same passBlock dialog
+      // in dumpOffPassBlock (43a845f6c), and its End answer must carry turnMode dumpOffPassBlock (StepInitSelecting
+      // ignores a CLIENT_END_TURN whose turnMode differs from the game's).
+      if (isOnTheBallTurnMode(g.turnMode) && dlg === onTheBallDialogId(g.turnMode)) armOnTheBall(g, g.turnMode);
       return;
     case 'selectBlitzTarget': {
       if (staleDialogOutlivedPhase('selectBlitzTarget', g.turnMode)) {
@@ -28074,12 +28550,12 @@ function drivePregameStep() {
   if (state.playerPick?.key.startsWith('gazeTarget:') && String(g.turnMode ?? '') !== 'selectGazeTarget') clearPlayerPick();
   if (state.playerPick?.key.startsWith('pchoice:') && dlg !== 'playerChoice') clearPlayerPick();
   if (state.bloodlust?.stage === 'bite' && dlg !== 'playerChoice') state.bloodlust = null;
-  const onTheBallLive = (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock')
-    && (dlg == null || dlg === g.turnMode);
+  const onTheBallLive = isOnTheBallTurnMode(g.turnMode)
+    && (dlg == null || dlg === onTheBallDialogId(g.turnMode));
   if (state.playerPick?.key.startsWith('onTheBall:') && !onTheBallLive) clearPlayerPick();
   if (state.yesNo?.key === 'kickOffResult' && dlg !== 'kickOffResult') clearYesNo();
-  if (state.onTheBallMover && g.turnMode !== 'kickoffReturn' && g.turnMode !== 'passBlock') state.onTheBallMover = null;
-  if (g.turnMode !== 'kickoffReturn' && g.turnMode !== 'passBlock') state.onTheBallWaiting = null;
+  if (state.onTheBallMover && !isOnTheBallTurnMode(g.turnMode)) state.onTheBallMover = null;
+  if (!isOnTheBallTurnMode(g.turnMode)) state.onTheBallWaiting = null;
   // Clear kick-placement UI after leaving kickoff aim or once the ball is in play.
   if (state.kickPlacement && (g.turnMode !== 'kickoff' || !!g.fieldModel?.ballInPlay)) state.kickPlacement = null;
   if (state.kickConfirm && state.kickConfirm.placementSeq !== state.kickPlacement?.seq) state.kickConfirm = null; // owner 10-13: dies with the aim
@@ -29266,7 +29742,7 @@ export const gameStore = {
     // through (commandPermittedByLock: staleDialogOutlivedPhase, e.g. the informational setupError SetupMechanic leaves
     // up into kickoff) is compatible: the coach must still be able to kick.
     const dialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
-    if (g.dialogParameter != null && !staleDialogOutlivedPhase(dialogId, g.turnMode)) return null;
+    if (g.dialogParameter != null && !staleDialogOutlivedPhase(dialogId, g.turnMode, g)) return null;
     if (!mySeatKicksOff(g)) return null;
     return { square: pending.square, seq: pending.seq };
   },
@@ -29857,9 +30333,21 @@ export const gameStore = {
     if (!dialogInstanceLive(p.instanceKey)) { state.reRollPrompt = null; return; } // R-E1: no stale reroll answer into a changed/cleared dialog
     const selected = source === null ? null : p.options.find((option) => option.source === source);
     const governsPrimalSavagery = p.options.some((option) => option.response === 'primal-savagery');
-    // Sender gate (S18): a Dodge SKILL answer the server's own rule withholds is refused, nothing sent.
-    if (selected?.response === 'skill'
+    // Sender gate (S18): a Dodge SKILL answer the server's own rule withholds is refused, nothing sent. Not on a
+    // `reRollModifierChoice`: there the server withholds a cancelled Dodge itself (spec 3.12).
+    if (selected?.response === 'skill' && p.dialogId !== 'reRollModifierChoice'
       && !withoutCancelledDodgeSkill([selected], { reRolledAction: p.reRolledAction, playerId: p.playerId }, game.value, liveMovementOccurrence).length) return;
+    // S36 sender gate: a modifier answer goes out only when its skills are EXACTLY one option of the LIVE dialog for the
+    // same player and action. The server drops anything else silently (OfferedSkillService.isOfferedModifierOption),
+    // which would leave the dialog open with the card gone - so a mismatch sends nothing and keeps the card.
+    if (selected?.response === 'modifier-choice') {
+      const live = game.value?.dialogParameter as Record<string, unknown> | null | undefined;
+      if (!live || String(live.playerId ?? '') !== p.playerId || String(live.reRolledAction ?? '') !== p.reRolledAction
+        || !receivedModifierOption(live, selected.skillArray)) {
+        log('system', lt('store.text.modifierChoiceRefused', { label: selected.label }));
+        return;
+      }
+    }
     const reRollSource = selected?.response === 'primal-savagery' ? null : source;
     const answerInstance = game.value?.dialogParameter as object | null;
     if (!emitReRollAnswer(
@@ -29867,6 +30355,10 @@ export const gameStore = {
       p,
       reRollSource,
     )) return;
+    // S36 Sol r1 #1: a modifier-choice answer the server may drop is watched (fail open, see armModifierChoiceAwait).
+    if (p.dialogId === 'reRollModifierChoice' && answerInstance && liveModifierChoice?.ref === answerInstance) {
+      armModifierChoiceAwait(liveModifierChoice.handledKey, answerInstance);
+    }
     if (governsPrimalSavagery && game.value) {
       primalSavageryIntent = {
         playerId: p.playerId,
@@ -29877,6 +30369,8 @@ export const gameStore = {
     }
     if (selected?.response === 'primal-savagery') {
       log('system', `play: ${PRIMAL_SAVAGERY_SKILL} selected (${playerName(game.value, p.playerId)})`);
+    } else if (selected?.response === 'modifier-choice') {
+      log('system', lt('store.text.modifierChoiceUsed', { skills: (selected.skillArray ?? []).join(' + '), player: playerName(game.value, p.playerId) }));
     } else if (selected?.response === 'skill') {
       log('system', `play: skill ${selected.source} used (${playerName(game.value, p.playerId)})`);
     } else {
@@ -30251,7 +30745,7 @@ export const gameStore = {
     // mid-hold. Only a phase end in a non-free turn mode (the server is waiting for exactly that) passes.
     if (presentationHoldBlocksActions() && FREE_ACTION_TURN_MODES.has(String(g.turnMode ?? ''))) return;
     if (playback.queue.length > 0 && bombFlightWaitMs() > 0) return; // owner 10-03: the bomb's resolution is still queued
-    if (g.turnMode === 'kickoffReturn' || g.turnMode === 'passBlock') {
+    if (isOnTheBallTurnMode(g.turnMode)) {
       if (onTheBallController.endPhase(onTheBallFrame(g))) log('system', `play: end On the Ball (${g.turnMode})`);
       return;
     }
@@ -30294,6 +30788,13 @@ export const gameStore = {
     log('system', context.audience === 'player' ? 'penalty shootout: confirmed' : 'penalty shootout: closed locally');
   },
 
+  /** Owner 11-09 (chat slash-command router, game/chatCommands.ts): a client reply to a slash line typed into chat.
+   *  Lands in the game log and the CHAT tab (where the line was typed); never sent. */
+  chatCommandReply(message: string | LocalText) {
+    log('system', message);
+    log('talk', message);
+  },
+
   /** Owner 2026-07-08: DEV CONSOLE — slash-commands typed into the CHAT LOG let a stuck
    *  player pass their turn / issue a default without hunting for a button (aimed at the
    *  40k testbed). `/stuck` (or `/pass`) defaults any pending block pick and ends the turn;
@@ -30310,7 +30811,9 @@ export const gameStore = {
       case 'endturn': {
         const g = game.value;
         if (!play.active || !g) { say(`/${cmd} — only works while PLAYING a live game.`); return; }
-        const where = (g.dialogParameter as { dialogId?: string } | undefined)?.dialogId ?? g.turnMode;
+        const whereDialogId = (g.dialogParameter as { dialogId?: string } | undefined)?.dialogId;
+        // g1104: a dialog the server left behind past its phase is not what the coach is stuck on - name the turn mode.
+        const where = whereDialogId && !staleDialogOutlivedPhase(whereDialogId, g.turnMode, g) ? whereDialogId : g.turnMode;
         // Sol r2 P2 (g1960010): with no dialog up, hitAndRun's turn-ending command is the Hit and Run cancel - it goes
         // through the one Cancel Hit and Run latch, never force-advance's direct CLIENT_END_TURN.
         if (String(g.turnMode ?? '') === 'hitAndRun' && !g.dialogParameter) {
@@ -31149,6 +31652,8 @@ export const gameStore = {
     state.apothecaryD16 = null;
     sendCommand({
       netCommandId: NetCommandId.CLIENT_APOTHECARY_CHOICE,
+      // upstream PR #325: the server's own outcome, picked by this flag, on a server that carries it (see the headless answer above)
+      ...(serverSupportsApothecaryChoiceFlag(activeGameServerVersion()) ? { choiceNewInjury: useNew } : {}),
       playerId: c.playerId,
       playerState: useNew ? raw.playerStateNew : raw.playerStateOld,
       seriousInjury: useNew ? raw.seriousInjuryNew : raw.seriousInjuryOld,
@@ -31586,6 +32091,7 @@ export const gameStore = {
       : null;
     // A new declaration supersedes any earlier unacknowledged or unanswered election. Arm its correlation only
     // at the actual wire boundary below: a foreign activation may have to clear before this callback is entered.
+    releasedDeclaration = null;
     pendingWideRailDeclare = null;
     acknowledgedWideRailDeclare = null;
     completedWideRailDeclare = null;
@@ -31603,7 +32109,7 @@ export const gameStore = {
       const shotToNothingCorrelation: PendingShotToNothingCorrelation | null = electShotToNothingAfterPass
         ? {
             playerId, playerAction: 'passMove', seq: ++shotToNothingDeclareSeq,
-            sawPlayerIdEcho: false, sawPlayerActionEcho: false,
+            sawPlayerIdEcho: srvActingId === playerId, sawPlayerActionEcho: false, // Sol r3: upstream never resends an unchanged id
           }
         : null;
       pendingShotToNothingDeclare = shotToNothingCorrelation;
@@ -31892,7 +32398,7 @@ export const gameStore = {
     // ClientStatePassBlock.java:32 and ClientStateKickoffReturn.java:30 both use the shared move state;
     // their logic modules accept one server MoveSquare per click (PassBlockLogicModule.java:43-48;
     // KickoffReturnLogicModule.java:39-44) and MoveLogicModule.java:282-285 emits normal CLIENT_MOVE.
-    if (game.value.turnMode === 'passBlock' || game.value.turnMode === 'kickoffReturn') {
+    if (isOnTheBallTurnMode(game.value.turnMode)) {
       if (!onTheBallController.step(onTheBallFrame(game.value), toSquare)) {
         log('system', 'ignored: On the Ball square is not server-offered / not owned');
         return false;
@@ -31944,7 +32450,7 @@ export const gameStore = {
     }
     // Owner 11-03 (Take Root): a pinned player cannot step (upstream StepMove refuses it); nothing is sent.
     if (plannerPinned(playerId)) { log('system', `ignored: ${playerName(game.value, playerId)} is rooted to the spot and cannot move`); return false; }
-    const onTheBall = game.value.turnMode === 'passBlock' || game.value.turnMode === 'kickoffReturn';
+    const onTheBall = isOnTheBallTurnMode(game.value.turnMode);
     // Multi-square routes use the echo-driven continuation seam.
     if (!plannerPlan && path.length > 1) {
       if (plannerStart({ playerId, actKind: 'move', route: path })) return true;
@@ -32039,7 +32545,7 @@ export const gameStore = {
     completedWideRailDeclare = null;
     deferredStandUpWideRail = null;
     clearShotToNothingElection();
-    if (game.value.turnMode === 'kickoffReturn' || game.value.turnMode === 'passBlock') {
+    if (isOnTheBallTurnMode(game.value.turnMode)) {
       if (onTheBallController.endMover(onTheBallFrame(game.value))) log('system', 'play: END On the Ball mover (server resolves)');
       return;
     }

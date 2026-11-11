@@ -8519,7 +8519,7 @@ export class PitchRenderer {
     // Keep this branch after the shared player/from/used reads but before every regular MA/rush calculation:
     // regular MOVE/BLITZ/PASS/FOUL/HAND_OVER budgets below remain byte-for-byte unchanged.
     const turnMode = String(this.game.turnMode ?? '');
-    if (turnMode === 'kickoffReturn' || turnMode === 'passBlock') {
+    if (turnMode === 'kickoffReturn' || turnMode === 'passBlock' || turnMode === 'dumpOffPassBlock') { // TurnMode.isPassBlock (43a845f6c)
       return { from: [from[0], from[1]], normal: Math.max(0, 3 - used), rushes: 0, used };
     }
     normal = Math.max(0, baseNormal - used);
@@ -13776,7 +13776,10 @@ export class PitchRenderer {
     const decision = this.hmpScatterMarks?.decision;
     if (decision) return; // the pending step's marker is drawn with the scatter marks, above the tokens
     // Owner 10-22 (Astra r3): a thrown team-mate's landing marks HIS base (the ball / bomb keep the plain point).
-    if (this.passDestinationMarker) this.drawPassMarkerAt(this.passDestinationMarker, this.overlayLayer, this.passDestinationKind === 'stunty' ? this.thrownPlayerId() : null);
+    // Owner 11-10 (g1105, On The Ball): drawn on pathLayer, ABOVE the tokens like the Hail Mary decision marker - on the
+    // overlay layer a catcher standing on the target square hid it while the pass blockers decided their moves. The
+    // marker stays eventMode 'none', so clicks still reach the catcher, the movers and the squares under it.
+    if (this.passDestinationMarker) this.drawPassMarkerAt(this.passDestinationMarker, this.pathLayer, this.passDestinationKind === 'stunty' ? this.thrownPlayerId() : null);
   }
 
   private drawPassMarkerAt(square: Square, layer: Container, playerId?: string | null): void {
@@ -15631,7 +15634,7 @@ export class PitchRenderer {
     return moveBadgeNormalLeft(Number.isFinite(ma) ? ma : null, currentMove, {
       down: isDown(data.playerState),
       standsForFree: playerHasSkill(player, 'Jump Up'), // the sole canStandUpForFree grantor (availableActions.ts)
-      onTheBall: turnMode === 'kickoffReturn' || turnMode === 'passBlock',
+      onTheBall: turnMode === 'kickoffReturn' || turnMode === 'passBlock' || turnMode === 'dumpOffPassBlock',
     });
   }
 

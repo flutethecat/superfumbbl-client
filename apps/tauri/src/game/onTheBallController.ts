@@ -1,7 +1,24 @@
 import { NetCommandId } from '@fumbbl40k/ffb-protocol';
 import { PlayerStateBase, PlayerStateFlag } from '@fumbbl40k/ffb-pitch';
 
-export type OnTheBallMode = 'kickoffReturn' | 'passBlock';
+export type OnTheBallMode = 'kickoffReturn' | 'passBlock' | 'dumpOffPassBlock';
+/** The pass-block reaction modes: upstream TurnMode.isPassBlock() (43a845f6c, TurnMode.java) = PASS_BLOCK or
+ *  DUMP_OFF_PASS_BLOCK ("dumpOffPassBlock": the ACTIVE team's On the Ball players react to an opposing Dump-off;
+ *  homePlaying does not flip, team rerolls are allowed and Pro is not, the interrupted action resumes afterwards). */
+export type PassBlockMode = 'passBlock' | 'dumpOffPassBlock';
+export const ON_THE_BALL_TURN_MODES: readonly OnTheBallMode[] = ['kickoffReturn', 'passBlock', 'dumpOffPassBlock'];
+/** Every client special-case of `passBlock` reads this, never the literal (source pin: dumpOffPassBlockCoverage.test.ts). */
+export function isPassBlockMode(mode: unknown): mode is PassBlockMode {
+  return mode === 'passBlock' || mode === 'dumpOffPassBlock';
+}
+export function isOnTheBallTurnMode(mode: unknown): mode is OnTheBallMode {
+  return mode === 'kickoffReturn' || isPassBlockMode(mode);
+}
+/** The information dialog the mode raises. StepPassBlock (bb2025) sets DialogPassBlockParameter (DialogId.PASS_BLOCK =
+ *  "passBlock") in BOTH pass-block modes, so the dialog id is not the turn mode during a dump-off pass block. */
+export function onTheBallDialogId(mode: OnTheBallMode): 'kickoffReturn' | 'passBlock' {
+  return mode === 'kickoffReturn' ? 'kickoffReturn' : 'passBlock';
+}
 export type OnTheBallAudience = 'owner-player' | 'opponent-player' | 'spectator' | 'replay' | 'headless';
 
 export interface OnTheBallFrame {
@@ -30,6 +47,9 @@ export interface OnTheBallCandidateState {
   active: boolean;
   onPitch: boolean;
   ableToMove: boolean;
+  /** Upstream 351cdeed9: during a pass block the MOVING player is the one whose action a Dump-off interrupted; he keeps
+   *  his active flag but PassBlockLogicModule.playerInteraction and StepInitSelecting both refuse him. */
+  interruptedMover?: boolean;
 }
 
 /** Exact received-state half of Java PlayerState.isAbleToMove(). */
@@ -42,7 +62,7 @@ export function onTheBallPlayerStateIsAbleToMove(playerState: number): boolean {
 
 export function selectableOnTheBallIds(players: readonly OnTheBallCandidateState[]): string[] {
   return players
-    .filter((player) => player.mine && player.active && player.onPitch && player.ableToMove)
+    .filter((player) => player.mine && player.active && player.onPitch && player.ableToMove && !player.interruptedMover)
     .map((player) => player.playerId);
 }
 
@@ -71,8 +91,7 @@ export class OnTheBallOccurrenceTracker {
       return this.occurrence;
     }
     this.lastReceiveSequence = event.receiveSequence;
-    if ((event.turnMode === 'kickoffReturn' || event.turnMode === 'passBlock')
-      && event.dialogSetId === event.turnMode) {
+    if (isOnTheBallTurnMode(event.turnMode) && event.dialogSetId === onTheBallDialogId(event.turnMode)) {
       this.occurrence += 1;
     }
     return this.occurrence;
@@ -128,13 +147,18 @@ export interface OnTheBallWaitingProjection {
 
 /** Passive opponent-seat copy derived only from the server-owned reaction side. */
 export function projectOnTheBallWaiting(input: OnTheBallWaitingInput): OnTheBallWaitingProjection | null {
-  const mode = input.turnMode === 'kickoffReturn' || input.turnMode === 'passBlock' ? input.turnMode : null;
+  const mode = isOnTheBallTurnMode(input.turnMode) ? input.turnMode : null;
   if (!mode || input.audience !== 'opponent-player') return null;
   const team = input.homePlaying ? input.teamHome : input.teamAway;
   const coach = String(team.coach ?? '').trim();
   const teamName = String(team.teamName ?? '').trim();
   const subject = coach || teamName || 'Your opponent';
   const teamSuffix = coach && teamName ? ` (${teamName})` : '';
+  // The dump-off thrower's coach: his pass is already chosen (StepInitPassing ran before StepPassBlock) and waits
+  // for the reacting coach's On the Ball moves; it resumes when the server leaves dumpOffPassBlock.
+  if (mode === 'dumpOffPassBlock') {
+    return { mode, coach, teamName, message: `Waiting for ${subject}'s On The Ball reaction to the dump-off…` };
+  }
   return { mode, coach, teamName, message: `Waiting for ${subject}${teamSuffix} to act…` };
 }
 
@@ -148,7 +172,7 @@ export function deriveOnTheBallAudience(input: OnTheBallAuthorityInput): OnTheBa
 }
 
 const modeFrom = (frame: OnTheBallFrame): OnTheBallMode | null =>
-  frame.turnMode === 'kickoffReturn' || frame.turnMode === 'passBlock' ? frame.turnMode : null;
+  isOnTheBallTurnMode(frame.turnMode) ? frame.turnMode : null;
 
 const exactKeys = (command: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean => {
   const actual = Object.keys(command).sort();
@@ -172,7 +196,7 @@ export function isOwnedOnTheBallDialogCommand(
   command: Readonly<Record<string, unknown>>,
 ): boolean {
   const mode = modeFrom(frame);
-  if (!mode || frame.dialogId !== mode) return false;
+  if (!mode || frame.dialogId !== onTheBallDialogId(mode)) return false;
   const owner = frame.audience === 'owner-player';
   const ownerOrHeadless = owner || frame.audience === 'headless';
   const id = String(command.netCommandId ?? '');
@@ -209,7 +233,7 @@ export function isOwnedOnTheBallDialogCommand(
     if (command.playerId === null) {
       return command.playerAction === null && command.leaping === false && frame.endMoveAvailable;
     }
-    return mode === 'passBlock'
+    return isPassBlockMode(mode)
       && frame.jumpAvailable
       && command.playerId === frame.actingPlayerId
       && command.playerAction === 'move'
@@ -218,7 +242,7 @@ export function isOwnedOnTheBallDialogCommand(
 
   return id === NetCommandId.CLIENT_USE_SKILL
     && exactKeys(command, ['netCommandId', 'skill', 'skillUsed', 'playerId'])
-    && mode === 'passBlock'
+    && isPassBlockMode(mode)
     && frame.jumpAvailable
     && !frame.actingPlayerLeaping
     && !!frame.boundingLeapSkill
@@ -232,12 +256,17 @@ export function upstreamOnTheBallActions(frame: OnTheBallFrame, mode: OnTheBallM
   const actions: OnTheBallAction[] = [];
   if (frame.endMoveAvailable) actions.push('endMove');
   if (frame.canEndPhase) actions.push('endPhase');
-  if (mode === 'passBlock' && frame.jumpAvailable) {
+  if (isPassBlockMode(mode) && frame.jumpAvailable) {
     actions.push('jump');
     if (!frame.actingPlayerLeaping && frame.boundingLeapSkill) actions.push('boundingLeap');
   }
   return actions;
 }
+
+/** Latches fail open (owner P0 10-16): a mover declaration, an End or an End-mover the server never answers (a mismatched or dropped command)
+ *  must not hold the surface forever. After this grace the reaction re-surfaces from the received state; nothing is
+ *  re-sent (the client never auto-answers). The store's watchdog re-syncs once the grace has run out. */
+export const ON_THE_BALL_ECHO_GRACE_MS = 3000;
 
 /**
  * Shared On the Ball transaction. See docs/on-the-ball-kickoff-pass-upstream-deep-dive.md.
@@ -252,8 +281,11 @@ export class OnTheBallController {
   private endMoverSentFor: string | null = null;
   private pendingAction: { playerId: string; action: 'jump' | 'boundingLeap'; afterRevision: number } | null = null;
   private ending = false;
+  private endingAt = 0;
+  private endMoverSentAt = 0;
+  private awaitingPlayerSentAt = 0;
 
-  constructor(private readonly send: OnTheBallSend) {}
+  constructor(private readonly send: OnTheBallSend, private readonly now: () => number = () => Date.now()) {}
 
   sync(frame: OnTheBallFrame): OnTheBallProjection {
     const mode = modeFrom(frame);
@@ -270,7 +302,14 @@ export class OnTheBallController {
       this.ending = false;
     }
     if (!mode) return { kind: 'inactive' };
-    if (frame.dialogId !== null && frame.dialogId !== mode) {
+    // fail open: an unanswered End / End-mover releases after the grace (the server's state decides from there)
+    if (this.ending && this.now() - this.endingAt >= ON_THE_BALL_ECHO_GRACE_MS) this.ending = false;
+    if (this.endMoverSentFor && this.now() - this.endMoverSentAt >= ON_THE_BALL_ECHO_GRACE_MS) this.endMoverSentFor = null;
+    if (this.awaitingPlayerId && this.now() - this.awaitingPlayerSentAt >= ON_THE_BALL_ECHO_GRACE_MS) {
+      this.awaitingPlayerId = null;
+      this.awaitingPlayerAtRevision = -1;
+    }
+    if (frame.dialogId !== null && frame.dialogId !== onTheBallDialogId(mode)) {
       return { kind: 'blocked', mode, dialogId: frame.dialogId };
     }
     if (frame.audience === 'opponent-player' || frame.audience === 'spectator' || frame.audience === 'replay') {
@@ -318,6 +357,7 @@ export class OnTheBallController {
     if (!this.send(command)) return null;
     this.awaitingPlayerId = playerId;
     this.awaitingPlayerAtRevision = frame.modelRevision;
+    this.awaitingPlayerSentAt = this.now();
     return command;
   }
 
@@ -348,6 +388,7 @@ export class OnTheBallController {
     const command = { netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: projection.mode, playersAtCoordinates: {} } as const;
     if (!this.send(command)) return null;
     this.ending = true;
+    this.endingAt = this.now();
     return command;
   }
 
@@ -358,12 +399,13 @@ export class OnTheBallController {
     const command = { netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: null, playerAction: null, leaping: false } as const;
     if (!this.send(command)) return null;
     this.endMoverSentFor = projection.playerId;
+    this.endMoverSentAt = this.now();
     return command;
   }
 
   toggleJump(frame: OnTheBallFrame): OnTheBallCommand | null {
     const projection = this.sync(frame);
-    if (projection.kind !== 'moving' || projection.mode !== 'passBlock'
+    if (projection.kind !== 'moving' || !isPassBlockMode(projection.mode)
       || frame.audience !== 'owner-player' || !frame.jumpAvailable
       || frame.actingPlayerAction !== 'move') return null;
     const command = {
@@ -379,7 +421,7 @@ export class OnTheBallController {
 
   useBoundingLeap(frame: OnTheBallFrame): OnTheBallCommand | null {
     const projection = this.sync(frame);
-    if (projection.kind !== 'moving' || projection.mode !== 'passBlock'
+    if (projection.kind !== 'moving' || !isPassBlockMode(projection.mode)
       || frame.audience !== 'owner-player' || !frame.jumpAvailable
       || frame.actingPlayerLeaping || !frame.boundingLeapSkill) return null;
     const command = {

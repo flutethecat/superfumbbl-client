@@ -35,7 +35,7 @@ import type { ReplayCommand } from './replayController';
 import { boardTurnKey, createBoardProjection, reduceBoardProjection, type BoardProjection } from '../boardProjection';
 import { observedFailedMovementDestination, reduceObservedMovementOccurrence, type ObservedMovementOccurrence } from '../movementOccurrenceProjection';
 import { createKickoffWeatherContext, kickoffWeatherPresentation, type KickoffWeatherContext } from '../kickoffWeatherPresentation';
-import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, type TurnPresentationContext } from '../turnPresentation';
+import { captureTurnPresentationBefore, createTurnPresentationContext, turnPresentation, TURN_RESCUE_CONTEXT_KEYS, type TurnPresentationContext } from '../turnPresentation';
 import { ballProjectilePresentation, createBallProjectileContext, type BallProjectileContext } from '../ballProjectilePresentation';
 import { blastinStaleRerollDialog } from '../blastinSecondBeat';
 import { createThrownCrowdProjection, reduceThrownCrowdProjection, validThrownCrowdProjection, type ThrownCrowdProjection } from '../thrownCrowdBlood';
@@ -178,6 +178,9 @@ export function withSpectatorClock(checkpoint: SpectatorCheckpoint, clock: Spect
   return trust({ ...checkpoint, clock: clock && (Object.isFrozen(clock) ? clock : { gameTime: clock.gameTime, turnTime: clock.turnTime, receivedMonotonicAt: clock.receivedMonotonicAt }) });
 }
 
+/** S36 (upstream master e7f9858a1): the skillUse values a `reRollModifierChoice` modifier pick is reported with. */
+const MODIFIER_CHOICE_SKILL_USES = new Set(['addDodgeModifier', 'addAgilityModifier', 'passDodgeWithoutModifiers', 'passJumpWithoutModifiers']);
+
 function decision(model: GameJson, cursor: SpectatorCursor, previous: SpectatorDecision | null): SpectatorDecision | null {
   const raw = model.dialogParameter as Record<string, unknown> | null;
   if (!raw?.dialogId) return null;
@@ -206,7 +209,7 @@ export function seedSpectatorCheckpoint(snapshot: GameJson, cursor: SpectatorCur
       apothecaryResult: model.dialogParameter?.dialogId === 'apothecaryChoice' ? buildApothecaryResult(model, model.dialogParameter, createCasualtyRollProjection()) : null,
       apothecaryCard: apothecaryDecisionFromModel(model),
       blockCard: ['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll'].includes(String(model.dialogParameter?.dialogId)) ? buildBlockDecision(model, model.dialogParameter!, true) : null,
-      reRollCard: ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, createActionRollProjection()) : null,
+      reRollCard: ['reRoll', 'reRollProperties', 'reRollModifierChoice'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, createActionRollProjection()) : null,
       followup: createFollowupProjection(), pendingPushes: [], movementOccurrence: null,
       kickoffWeather: createKickoffWeatherContext(model), turnPresentation: createTurnPresentationContext(),
       ballProjectile: createBallProjectileContext(),
@@ -356,7 +359,9 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   projection.block = reduceBlockContext(projection.block, next.model, reports, new Map(previous.model.fieldModel.playerDataArray.map((p) => [p.playerId, p.playerCoordinate])));
   // Owner 10-16: the server cleared the acting player in this frame: an activation that logged nothing was cancelled
   noteActivationActivity(projection.logContext, changes);
-  if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)) {
+  // StepPassBlock suspends (not cancels) the interrupted activation for a dump-off pass block (3.4.0)
+  if (changes.some((ch) => ch.modelChangeId === 'actingPlayerSetPlayerId' && ch.modelChangeValue == null)
+    && String(next.model.turnMode ?? '') !== 'dumpOffPassBlock') {
     const cancel = activationCancelReport(projection.logContext);
     if (cancel) {
       const lines = formatReportLines(cancel, next.model, projection.logContext);
@@ -388,6 +393,10 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
   if (!newDialog && pending?.state === 'offered' && reports.some((r) => {
     if (typeof r.playerId !== 'string' || r.playerId !== pending.playerId) return false;
     if (['reRoll', 'reRollProperties'].includes(pending.type)) return r.reportId === 'reRoll';
+    // S36: a `reRollModifierChoice` resolves on a re-roll OR on the skillUse report(s) of the picked modifier option.
+    if (pending.type === 'reRollModifierChoice') {
+      return r.reportId === 'reRoll' || (r.reportId === 'skillUse' && r.used === true && MODIFIER_CHOICE_SKILL_USES.has(String(r.skillUse ?? '')));
+    }
     if (pending.type === 'skillUse') return r.reportId === 'skillUse' && String(r.skill ?? '') === String(pending.payload.skill ?? '');
     return false;
   })) pending.state = 'resolved';
@@ -421,7 +430,7 @@ export function reduceSpectatorCheckpoint(previous: SpectatorCheckpoint, event: 
     }
   }
   projection.blockCard = blockCard;
-  projection.reRollCard = projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence) : null;
+  projection.reRollCard = projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties', 'reRollModifierChoice'].includes(String(model.dialogParameter?.dialogId)) && !blastinStaleRerollDialog(model) ? buildReRollDecision(model, model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence) : null;
   projection.endGameHud = reduceEndGameHud(projection.endGameHud, reports, model);
   projection.endGame = reduceEndGame(projection.endGame, endGameFrameFromServer(model, command));
   const observed = projection.provenance;
@@ -617,7 +626,11 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   if (kickoff.pendingWinner !== null && (!object(kickoff.pendingWinner) || !keys(kickoff.pendingWinner, ['result', 'roll'])
     || typeof kickoff.pendingWinner.result !== 'string' || !numbers(kickoff.pendingWinner.roll))) fail(24);
   const turn = p.turnPresentation;
-  if (!object(turn) || !keys(turn, ['turnoverArmed', 'turnoverAfterInjury'])
+  const optionalTurnKeys: readonly string[] = TURN_RESCUE_CONTEXT_KEYS;
+  const numericTurnKeys = ['armedFailure', 'lastFailure', 'failureSeq'];
+  if (!object(turn) || !('turnoverArmed' in turn) || !('turnoverAfterInjury' in turn)
+    || Object.keys(turn).some((k) => k !== 'turnoverArmed' && k !== 'turnoverAfterInjury' && !optionalTurnKeys.includes(k))
+    || optionalTurnKeys.some((k) => k in turn && (numericTurnKeys.includes(k) ? !Number.isSafeInteger(turn[k]) : typeof turn[k] !== 'string'))
     || typeof turn.turnoverArmed !== 'boolean' || typeof turn.turnoverAfterInjury !== 'boolean'
     || (turn.turnoverAfterInjury && !turn.turnoverArmed)) fail(25);
   const flight = p.ballProjectile;
@@ -714,12 +727,19 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   const card = p.reRollCard;
   if (card !== null) {
     const required = ['playerId', 'reRolledAction', 'label', 'options', 'title', 'question', 'messages', 'fumble', 'loner', 'thresholdless'];
-    const optional = ['result', 'roll', 'needed', 'lonerValue'];
+    const optional = ['result', 'roll', 'needed', 'lonerValue', 'dialogId', 'combinations'];
     if (!object(card) || required.some((k) => !(k in card)) || Object.keys(card).some((k) => ![...required, ...optional].includes(k))
       || ![card.playerId, card.reRolledAction, card.label, card.title, card.question].every((v) => typeof v === 'string') || !strings(card.messages)
       || ![card.fumble, card.loner, card.thresholdless].every((v) => typeof v === 'boolean') || !Array.isArray(card.options)) fail(41);
-    if (card.options.some((o) => !object(o) || !keys(o, ['label', 'source', 'response', 'role']) || typeof o.label !== 'string' || typeof o.source !== 'string'
+    // S36: a `modifier-choice` option also carries the received skillArray and its minimumRoll.
+    if (card.options.some((o) => !object(o)
+      || !(keys(o, ['label', 'source', 'response', 'role']) || (o.response === 'modifier-choice' && keys(o, ['label', 'source', 'response', 'role', 'skillArray', 'minimumRoll'])
+        && strings(o.skillArray) && finite(o.minimumRoll)))
+      || typeof o.label !== 'string' || typeof o.source !== 'string'
       || !oneOf(RE_ROLL_RESPONSES, o.response) || !oneOf(RE_ROLL_OPTION_ROLES, o.role))) fail(42);
+    if (('dialogId' in card && card.dialogId !== 'reRollModifierChoice')
+      || ('combinations' in card && (!Array.isArray(card.combinations)
+        || card.combinations.some((c) => !object(c) || !keys(c, ['label', 'minimumRoll']) || typeof c.label !== 'string' || !finite(c.minimumRoll))))) fail(42);
     if (('roll' in card && !finite(card.roll)) || ('needed' in card && !finite(card.needed)) || ('lonerValue' in card && typeof card.lonerValue !== 'string')
       || ('result' in card && !oneOf(PASS_RE_ROLL_RESULTS, card.result))) fail(43);
   }

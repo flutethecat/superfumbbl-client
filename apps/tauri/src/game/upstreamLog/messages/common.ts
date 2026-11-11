@@ -564,7 +564,11 @@ function spellEffectRoll(r: Report, out: UpstreamPrinter, game: GameJson | null)
 }
 
 function skillUse(r: Report, out: UpstreamPrinter, game: GameJson | null): void {
-  const skill = canonicalSkill(game, r.skill);
+  // S36 Sol r1 #2: a modifier-choice skill (BB2025 Consummate Professional) can be missing from the generated tables,
+  // built from the fork server; for the two NEW skillUse values only (a server without them never reaches this), the
+  // report's own skill name is printed as sent.
+  const skill = canonicalSkill(game, r.skill)
+    ?? (typeof r.skillUse === 'string' && Object.prototype.hasOwnProperty.call(STAGED_SKILL_USES, r.skillUse) && typeof r.skill === 'string' && r.skill ? r.skill : null);
   if (!skill) return;
   const player = playerById(game, r.playerId);
   const indent = out.getIndent();
@@ -587,9 +591,16 @@ function skillUse(r: Report, out: UpstreamPrinter, game: GameJson | null): void 
   out.printlnT(indent, `${status}.`);
 }
 
+/** S36 (staged): SkillUse values upstream master e7f9858a1 added (SkillUse.java:41-42) that the generated tables, built
+ *  from the fork server, do not carry yet. Verbatim upstream descriptions; the generated table wins once it has them. */
+const STAGED_SKILL_USES: Readonly<Record<string, string>> = {
+  addDodgeModifier: 'to improve the dodge roll',
+  addAgilityModifier: 'to improve the agility roll',
+};
+
 /** SkillUse.getDescription(player): %g becomes the player's genitive. */
 export function skillUseDescription(skillUse: unknown, player: PlayerJson | null): string | null {
-  const template = typeof skillUse === 'string' ? COMMON_TABLES.skillUses[skillUse] : undefined;
+  const template = typeof skillUse === 'string' ? COMMON_TABLES.skillUses[skillUse] ?? (Object.prototype.hasOwnProperty.call(STAGED_SKILL_USES, skillUse) ? STAGED_SKILL_USES[skillUse] : undefined) : undefined;
   if (template === undefined) return null;
   return player ? template.replaceAll('%g', genitive(player)) : template;
 }

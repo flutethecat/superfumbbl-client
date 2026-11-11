@@ -24,7 +24,7 @@ export type ReactionSurface = 'diePick' | 'blockView' | 'pushback' | 'followup' 
 interface DialogLike { dialogId?: string; choosingTeamId?: string; playerId?: string; reRolledAction?: string }
 
 const BLOCK_DICE_DIALOGS = new Set(['blockRoll', 'blockRollProperties', 'blockRollPartialReRoll']);
-const REROLL_DIALOGS = new Set(['reRoll', 'reRollProperties']);
+const REROLL_DIALOGS = new Set(['reRoll', 'reRollProperties', 'reRollModifierChoice']);
 
 function dialog(game: GameJson): DialogLike {
   return ((game as { dialogParameter?: unknown }).dialogParameter ?? {}) as DialogLike;

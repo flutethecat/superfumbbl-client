@@ -24,7 +24,11 @@ export function createBoardProjection(): BoardProjection {
  *  and their end steps restore). None of them is a team turn; the side / turn numbers in the key still are. */
 const MID_ACTIVATION_SUB_MODES: Record<string, string> = {
   ...Object.fromEntries(['selectBlitzTarget', 'selectGazeTarget', 'selectBlockKind', 'raidingParty', 'hitAndRun', 'thenIStartedBlastin',
-    'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway', 'wizard', 'illegalSubstitution'].map((mode) => [mode, 'regular'])),
+    'safePairOfHands', 'trickster', 'dumpOff', 'interception', 'bombHome', 'bombAway', 'wizard', 'illegalSubstitution',
+    // Upstream 3.4.0 (43a845f6c / 351cdeed9): the ACTIVE team's On the Ball reaction to an opposing Dump-off. homePlaying
+    // does not flip, the acting player goes null / the pass blocker and the interrupted actor is restored afterwards
+    // (StepPassBlock restoreFrom), so it sits inside the blitzer's activation like the dump-off itself.
+    'dumpOffPassBlock'].map((mode) => [mode, 'regular'])),
   // Astra 10-18: the kick-off Bombardier modes sit inside the `blitz` kick-off phase (upstream BombardierBehaviour), not the regular turn
   bombHomeBlitz: 'blitz', bombAwayBlitz: 'blitz',
 };
@@ -76,6 +80,13 @@ export function boardTurnKey(g: GameJson): string {
   // stays that of the regular turn it sits in (1.0.230 keyed the mode but still read the flipped side: the team-turn
   // reset cleared the acting mirror and End Blitz read "nothing declared").
   const activation = activationSideIsHome(g);
+  // Sol r1 (dump-off pass block): a sub-mode entered from ANOTHER sub-mode (dumpOff -> dumpOffPassBlock, dumpOff ->
+  // interception ...) cannot name its activation phase - lastTurnMode is the other sub-mode. Its phase is unknown ('~')
+  // to this reader; boardTurnKeyAfter inherits the prior key, and a key SEEDED here (reconnect inside the reaction)
+  // holds until the turn numbers or the side move, so the return to `blitz` / `regular` is no false boundary.
+  if (sub && MID_ACTIVATION_SUB_MODES[lastMode] && bombSideIsHome(lastMode) === null) {
+    return `~:${activation ?? turnSideIsHome(g)}:${g.turnDataHome?.turnNr}:${g.turnDataAway?.turnNr}`;
+  }
   // Astra 10-18 (Safe Pair of Hands): still `regular`, the side flipped to the opposing coach for his skill prompt
   const reactionPrompt = !sub && turnMode === 'regular' && activation !== null && activation !== turnSideIsHome(g) && opposingSkillPromptOpen(g, activation);
   const side = sub ? (activation ?? turnSideIsHome(g)) : reactionPrompt ? activation : turnSideIsHome(g);
@@ -97,7 +108,18 @@ export function boardTurnKeyAfter(priorKey: string | null | undefined, g: GameJs
   if (priorSide === '?' && priorPhase === freshPhase && sameTurn) return priorKey;
   const turnMode = String(g.turnMode);
   const bombMode = bombSideIsHome(turnMode) !== null ? turnMode : turnMode === 'interception' && bombSideIsHome(String(g.lastTurnMode ?? '')) !== null ? String(g.lastTurnMode) : null;
-  if (!bombMode) return fresh;
+  if (!bombMode) {
+    // A sub-mode entered from ANOTHER sub-mode (dumpOff -> dumpOffPassBlock -> dumpOff, dumpOff -> interception) cannot
+    // name its activation phase from lastTurnMode (that is the other sub-mode), so the table's `regular` default would
+    // read a kick-off Blitz! free turn's dump-off reaction as a team-turn boundary. Same turn numbers, same side and a
+    // prior key in an activation phase: the prior key stands.
+    const [, freshSide] = fresh.split(':');
+    const activationPhase = (phase: string | undefined) => phase === 'regular' || phase === 'blitz' || phase === '~';
+    // a chained sub-mode ('~') inside a keyed activation phase, or a '~' seed returning to its activation phase
+    if ((freshPhase === '~' || priorPhase === '~') && activationPhase(priorPhase) && activationPhase(freshPhase)
+      && priorSide === freshSide && sameTurn) return priorKey;
+    return fresh;
+  }
   const parent = MID_ACTIVATION_SUB_MODES[bombMode];
   return priorPhase === parent && sameTurn ? priorKey : fresh;
 }

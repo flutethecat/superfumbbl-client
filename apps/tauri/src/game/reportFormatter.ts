@@ -1,4 +1,5 @@
 import { effectiveArmour, effectiveStat, type GameJson } from '@fumbbl40k/ffb-protocol';
+import { isModifierRescueReport } from './modifierRescue';
 import { isD6FaceValue, playerServerSide, teamServerSide, type D6FaceValue, type ServerSide } from '@fumbbl40k/ffb-pitch';
 import type { D6LogToken } from './d6Log';
 import { isBlockDieFaceValue, type BlockDieLogToken } from './blockDieLog';
@@ -1404,7 +1405,10 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       // Owner 09-05: automatic cancels (Juggernaut vs Wrestle/Fend/Stand Firm, Tackle vs Dodge…) read as a cancel.
       ? `${pn(g, r.playerId)}: ${r.skill ?? 'a skill'} cancels ${String(r.skillUse).slice(6).replace(/([a-z])([A-Z])/g, '$1 $2')}!`
       // Astra 10-15: the server reports a declined skill too (used: false) - it is not "used"
-      : r.used === false ? `${pn(g, r.playerId)} does not use ${r.skill ?? 'a skill'}` : `${pn(g, r.playerId)} uses ${r.skill ?? 'a skill'}`,
+      : r.used === false ? `${pn(g, r.playerId)} does not use ${r.skill ?? 'a skill'}`
+        // Owner 10-26 (g1075): the modifier made the failed roll pass (no new roll report follows): say so.
+        : isModifierRescueReport(r) && modifierPassWords(r.skillUse) ? `${pn(g, r.playerId)} uses ${r.skill ?? 'a skill'} | ${modifierPassWords(r.skillUse)}`
+          : `${pn(g, r.playerId)} uses ${r.skill ?? 'a skill'}`,
   // Owner #83 (07-18): a GATED reroll source (Loner, Pro) must roll to GRANT the reroll — the `reRoll` report
   // (ReportReRoll) carries that roll + pass/fail (wire fields `roll`/`successful`), which the old formatter dropped,
   // so a failed Loner/Pro vanished from the log (the reported "Loner roll missing"). Surface roll + outcome whenever
@@ -2420,6 +2424,16 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
     default:
       return leadOnly();
   }
+}
+
+/** Owner 10-26 (g1075): skillUse values that make the player's failed roll pass on the same die (modifierRescue.ts). */
+const MODIFIER_PASS_WORDS: Readonly<Record<string, string>> = {
+  addDodgeModifier: 'passes the dodge', passDodgeWithoutModifiers: 'passes the dodge', passJumpWithoutModifiers: 'passes the jump',
+  passRushWithoutModifiers: 'passes the rush', addAgilityModifier: 'passes the roll',
+};
+function modifierPassWords(skillUse: unknown): string | null {
+  const key = String(skillUse ?? '');
+  return Object.prototype.hasOwnProperty.call(MODIFIER_PASS_WORDS, key) ? MODIFIER_PASS_WORDS[key]! : null;
 }
 
 function formatReportLinesPlain(report: Report, game: GameJson | null, context: ReportLogContext): ReportDisplay[] {

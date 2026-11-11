@@ -66,7 +66,11 @@ export function artPackPlugin(opts: { split: boolean; version: string; publicRep
       const minBytes = opts.minPartBytes ?? MIN_PART_BYTES;
       for (const [group, files] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
         const bytes = files.reduce((n, f) => n + f.bytes.byteLength, 0);
-        if (bytes < minBytes) { for (const [key, g] of owned) if (g === group) owned.delete(key); continue; } // stays bundled
+        // Owner 11-10 (1.0.320): walk art ALWAYS travels in the pack. Vite emits byte-identical sheets once, so a roster
+        // that mostly reuses another roster's sprites (the Secret League gap rosters) can fall under the minimum; left
+        // in the bundle, its sheets made the app patch refuse the build ("is walk art"). The minimum still keeps other
+        // small groups bundled if PACK_GROUPS is ever widened.
+        if (bytes < minBytes && !/^walk\//.test(group)) { for (const [key, g] of owned) if (g === group) owned.delete(key); continue; } // stays bundled
         const hash = partHash(files);
         const key = `${group}@${hash}`;
         const entry = lock[key] ?? { url: artPackPartUrl(opts.publicRepo, opts.version, group, hash) };

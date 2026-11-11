@@ -88,6 +88,7 @@ export const DIALOG_IDS = [
   "selectPosition",
   "reRollRegenerationMultiple",
   "puntToCrowd",
+  "reRollModifierChoice",
 ] as const;
 
 export type DialogId = (typeof DIALOG_IDS)[number];

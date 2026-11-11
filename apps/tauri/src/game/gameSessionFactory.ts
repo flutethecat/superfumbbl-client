@@ -4,6 +4,7 @@ import { GameSession, type ClientMode, type ServerCommandVersion } from '@fumbbl
 import { FORK_EDITION } from './edition';
 import { isForkServerUrl } from './forkAccess';
 import { withEntropy } from './mouseEntropy';
+import { clientIdentityForServer } from './clientIdentity';
 import { APPROVED_FFB_SERVER_VERSIONS, lastServerVersion, serverVersionBlock, serverVersionRefusal } from './serverVersionGate';
 import { clientVersionBlock, clientVersionJoinGate, noteSeatTaken } from './clientVersionGate';
 
@@ -47,7 +48,7 @@ export function createGameSession(target: GameSessionTarget): GameSession {
     if (!join.listOnly) pendingSeat = !refusal && join.mode === 'player' && join.coach ? { coach: join.coach, gameId: join.gameId, gameName: join.gameName ?? null } : null;
     return refusal;
   };
-  const session = new GameSession({ url: target.url, compression: target.compression ?? true, decorateOutgoing: withEntropy, joinGate });
+  const session = new GameSession({ url: target.url, compression: target.compression ?? true, decorateOutgoing: withEntropy, joinGate, clientIdentity: clientIdentityForServer });
   session.on('join', (command) => {
     if (!pendingSeat || command.clientMode !== 'player' || String(command.coach ?? '').toLowerCase() !== pendingSeat.coach.toLowerCase()) return;
     acceptedCoach = pendingSeat.coach;

@@ -389,7 +389,7 @@ export class LiveSpectateHistory {
     }
     if (!changed) return null;
     const projection = next.durableProjection;
-    if (projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties'].includes(projection.pendingDecision.type) && !blastinStaleRerollDialog(next.model)) {
+    if (projection.pendingDecision?.state === 'offered' && ['reRoll', 'reRollProperties', 'reRollModifierChoice'].includes(projection.pendingDecision.type) && !blastinStaleRerollDialog(next.model)) {
       projection.reRollCard = buildReRollDecision(next.model, next.model.dialogParameter!, projection.actionRolls, false, undefined, projection.movementOccurrence);
     }
     const checkpoint = freezeSpectatorValue(next);

@@ -39,6 +39,7 @@ const DIALOG_RAILS: Readonly<Record<string, RailId>> = Object.freeze({
   skillUse: 'skill-use',
   reRoll: 'reroll',
   reRollProperties: 'reroll',
+  reRollModifierChoice: 'reroll',
   reRollForTargets: 'reroll',
   reRollBlockForTargets: 'reroll',
   reRollBlockForTargetsProperties: 'reroll',
@@ -100,7 +101,7 @@ const COMMAND_RAILS: Readonly<Record<string, RailId>> = Object.freeze({
   clientPositionSelection: 'square-picker',
   clientPickUpChoice: 'reactive-dialog', clientPuntToCrowd: 'reactive-dialog', clientUseChainsaw: 'reactive-dialog',
   clientTouchback: 'square-picker',
-  clientUseReRoll: 'reroll', clientUseReRollForTarget: 'reroll',
+  clientUseReRoll: 'reroll', clientUseReRollForTarget: 'reroll', clientReRollModifierChoice: 'reroll',
   clientInterceptorChoice: 'reaction',
   clientUseApothecary: 'inducement', clientApothecaryChoice: 'inducement',
   clientUseApothecaries: 'inducement', clientUseIgors: 'inducement', clientUseInducement: 'inducement',
@@ -265,7 +266,7 @@ export function observeShadowModel(
  *  coach's CLIENT_KICKOFF that the legacy gate (correctly) emitted: a false-refusal divergence, not a real drop. */
 function staleDialog(frame: Readonly<ShadowFrameInput>): boolean {
   const dialogId = String(frame.dialog?.dialogId ?? '');
-  return staleDialogOutlivedPhase(dialogId, (frame.game as { turnMode?: unknown }).turnMode);
+  return staleDialogOutlivedPhase(dialogId, (frame.game as { turnMode?: unknown }).turnMode, frame.game, frame.dialog);
 }
 
 export function observeShadowOutgoing(

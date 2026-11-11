@@ -143,6 +143,9 @@ export const NetCommandId = {
   CLIENT_USE_HATRED: 'clientUseHatred',
   CLIENT_POSITION_SELECTION: 'clientPositionSelection',
   CLIENT_PUNT_TO_CROWD: 'clientPuntToCrowd',
+  /** Upstream master e7f9858a1 NetCommandId.java:24 (S36): the coach's pick of one offered modifier option of a
+   *  `reRollModifierChoice` dialog (ClientCommandReRollModifierChoice: playerId, skillArray, reRolledAction). */
+  CLIENT_RE_ROLL_MODIFIER_CHOICE: 'clientReRollModifierChoice',
 } as const;
 
 export type NetCommandIdKey = keyof typeof NetCommandId;

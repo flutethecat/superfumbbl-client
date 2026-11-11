@@ -51,6 +51,12 @@ function discriminatorFor(id: string, dp: Record<string, unknown>, ctx: DialogKe
     case 'reRoll':
     case 'reRollProperties':
       return `${String(dp.reRolledAction ?? '')}:${String(dp.playerId ?? '')}`;
+    case 'reRollModifierChoice':
+      // S36: the server never mutates this dialog in place; every change is a NEW dialog (the Diving Tackle look-ahead
+      // replaces the first offer on the same roll WITHOUT a null frame, a failed Loner roll re-offers without the
+      // sources). Its immutable payload is therefore the instance identity (upstream e7f9858a1
+      // DialogReRollModifierChoiceParameter.toJsonValue keys).
+      return reRollModifierChoiceSignature(dp);
     case 'skillUse':
       return `${String(dp.playerId ?? '')}:${String(dp.skill ?? '')}`;
     case 'interception':
@@ -91,6 +97,14 @@ function discriminatorFor(id: string, dp: Record<string, unknown>, ctx: DialogKe
     default:
       return ''; // addressee-only: bribes / argueTheCall / pregame (coinChoice/receiveChoice/…)
   }
+}
+
+function reRollModifierChoiceSignature(dp: Record<string, unknown>): string {
+  return JSON.stringify([
+    dp.reRolledAction ?? null, dp.playerId ?? null, dp.minimumRoll ?? null, dp.roll ?? null,
+    dp.reRollProperties ?? null, dp.fumble ?? null, dp.skill ?? null, dp.messageArray ?? null,
+    dp.modifierOptions ?? null, dp.modifierCombinations ?? null,
+  ]);
 }
 
 function apothecaryInjuryDiscriminator(value: unknown): string {

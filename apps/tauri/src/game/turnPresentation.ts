@@ -1,12 +1,43 @@
 import { type GameJson } from '@fumbbl40k/ffb-protocol';
 import { injuryTypeName } from './casualtyRollProjection';
 import { turnSideIsHome } from './blastinSecondBeat';
+import { isModifierRescueReport } from './modifierRescue';
 
 const TURNOVER_FAIL_IDS = new Set(['dodgeRoll', 'goForItRoll', 'pickUpRoll', 'passRoll', 'catchRoll', 'leapRoll']);
 
 export interface TurnPresentationContext {
   turnoverArmed: boolean;
   turnoverAfterInjury: boolean;
+  /** Sol r2 #1: an opposing player whose interceptionRoll just failed and may still be rescued by a modifier
+   *  (bb2025 StepIntercept 177-197). Present only while it applies. */
+  rescuableInterceptor?: string;
+  /** Sol r3 #2 / r5: the playing-side FAILURE OCCURRENCE the turnover rests on (`armedFailure`, a per-context sequence
+   *  number; its player and roll kind - 'passFumble' for a fumbled pass), when a failed roll armed it. A reroll of the
+   *  same roll that fails again supersedes it. */
+  armedBy?: string;
+  armedByRoll?: string;
+  armedFailure?: number;
+  /** Sol r5: the latest playing-side failure occurrence - the one a reRollModifierChoice offer (and so its rescue) is
+   *  about. A rescue disarms only when it is the armed occurrence (or a catch completing an inaccurate pass). */
+  lastFailure?: number;
+  lastFailureBy?: string;
+  lastFailureRoll?: string;
+  failureSeq?: number;
+}
+/** The optional rescue-context keys (persisted by the store and the checkpoint validator). */
+export const TURN_RESCUE_CONTEXT_KEYS = ['rescuableInterceptor', 'armedBy', 'armedByRoll', 'armedFailure', 'lastFailure', 'lastFailureBy', 'lastFailureRoll', 'failureSeq'] as const;
+/** A turn boundary ends every rescue window: no failure of the ending turn can be rescued (or rescue an interception)
+ *  after its turnEnd, so the rescue keys never leak into the next turn's context (the boundary context is fresh). */
+export function clearTurnRescueContext(context: TurnPresentationContext): void {
+  for (const key of TURN_RESCUE_CONTEXT_KEYS) delete context[key];
+}
+function clearArming(context: TurnPresentationContext): void {
+  delete context.armedBy; delete context.armedByRoll; delete context.armedFailure;
+  delete context.lastFailure; delete context.lastFailureBy; delete context.lastFailureRoll;
+}
+/** Sol r4: a FUMBLED pass ends the turn even when a team-mate ends up with the ball (bb2025 StepEndPassing 267-278). */
+function failureKind(id: string, report: Readonly<Record<string, unknown>>): string {
+  return id === 'passRoll' && String(report.passResult ?? '').toUpperCase() === 'FUMBLE' ? 'passFumble' : id;
 }
 
 export interface TurnPresentationBefore {
@@ -73,6 +104,10 @@ export function turnoverArmAfterReport(
   // Owner 09-06 (game 945): Swift as the Breeze turns a failed dodgeRoll into a success via the SAME-frame
   // `modifiedDodgeResultSuccessful` report (skill only, no playerId): the modification is the disarm.
   if (id === 'modifiedDodgeResultSuccessful') return false;
+  // Owner 10-26 (g1075): an optional modifier picked on reRollModifierChoice (or Swift As The Breeze on a rush) makes the
+  // failed roll pass on the same die; its skillUse is the only trace (modifierRescue.ts). Which failure it rescues needs
+  // the context turnoverArmStep keeps (armedBy / rescuableInterceptor): on its own a rescue changes nothing.
+  if (isModifierRescueReport(report)) return armed;
   // Owner 09-14 (g1942502): a SUCCESSFUL Steady Footing keeps the player on their feet (upstream bb2025
   // StepSteadyFooting publishes END_TURN=false, no armour / injury follows): it DISARMS the failed roll before it.
   // A failed one changes nothing here - the knockdown's injury report arms on its own.
@@ -128,13 +163,59 @@ export function turnoverArmStep(
       }
       continue;
     }
+    const pid = String(report.playerId ?? '');
+    if (isModifierRescueReport(report)) {
+      if (!playingPlayerIds.has(pid)) {
+        if (context.rescuableInterceptor === pid) {
+          context.turnoverArmed = true; // Sol r2 #1: the rescued interception succeeds, as a successful interceptionRoll arms
+          delete context.rescuableInterceptor;
+          clearArming(context);
+        }
+      } else if (context.lastFailureBy === pid && context.lastFailure !== undefined) {
+        // Sol r3 #2 / r5: the rescue makes THIS player's latest failure pass. It disarms only when that occurrence is the
+        // one the turnover rests on, or a catch completing an inaccurate (not fumbled) pass; any earlier committed
+        // failure stays (StepPickUp 234-244 END_TURN, StepEndPassing 267-278).
+        // Sol r6: a pass that was not fumbled ends by final possession (StepEndPassing 267-278), so a rescued catch
+        // anywhere in its chain (after an inaccurate pass or a team-mate's failed catch) completes it.
+        const rescuesArmed = context.turnoverArmed && (context.lastFailure === context.armedFailure
+          || (context.lastFailureRoll === 'catchRoll' && (context.armedByRoll === 'passRoll' || context.armedByRoll === 'catchRoll')));
+        delete context.lastFailure; delete context.lastFailureBy; delete context.lastFailureRoll;
+        if (rescuesArmed) {
+          context.turnoverArmed = false;
+          context.turnoverAfterInjury = false;
+          clearArming(context);
+        }
+      }
+      continue;
+    }
+    if (id === 'interceptionRoll' && report.successful === false && pid && !playingPlayerIds.has(pid)) context.rescuableInterceptor = pid;
+    else if (id !== 'reRoll' && id !== 'skillUse') delete context.rescuableInterceptor;
+    const wasArmed = context.turnoverArmed;
     context.turnoverArmed = turnoverArmAfterReport(context.turnoverArmed, report, playingPlayerIds);
-    if (!context.turnoverArmed) context.turnoverAfterInjury = false;
+    const playingFailure = TURNOVER_FAIL_IDS.has(id) && report.successful === false && !!pid && playingPlayerIds.has(pid);
+    if (playingFailure) {
+      const seq = (context.failureSeq ?? 0) + 1;
+      const kind = failureKind(id, report);
+      context.failureSeq = seq;
+      context.lastFailure = seq; context.lastFailureBy = pid; context.lastFailureRoll = kind;
+      const sameRoll = context.armedBy === pid && (context.armedByRoll === id || (id === 'passRoll' && context.armedByRoll === 'passFumble'));
+      // a fresh arming, or (Sol r5 #1) the reroll of the very roll the turnover rests on failing again: the latest
+      // occurrence (and kind: an inaccurate pass rerolled into a fumble) is the one the turnover now rests on
+      if (context.turnoverArmed && (!wasArmed || (report.reRolled === true && sameRoll))) {
+        context.armedFailure = seq; context.armedBy = pid; context.armedByRoll = kind;
+      }
+    } else if (!wasArmed && context.turnoverArmed) {
+      delete context.armedBy; delete context.armedByRoll; delete context.armedFailure;
+    }
+    if (!context.turnoverArmed) { context.turnoverAfterInjury = false; clearArming(context); }
   }
   const mode = String(turnModeAfter ?? '');
-  if (mode !== 'regular' && mode !== 'betweenTurns') {
+  // Sol r3 #1: the interception reaction mode (bb2025 StepIntercept 240-264) is mid-pass, never a drive boundary.
+  if (mode !== 'regular' && mode !== 'betweenTurns' && mode !== 'interception') {
     context.turnoverArmed = false;
     context.turnoverAfterInjury = false;
+    delete context.rescuableInterceptor;
+    clearArming(context);
   }
   return { context, knockedDown };
 }
@@ -161,6 +242,7 @@ export function turnPresentation(
   let splash: TurnPresentation['splash'] = null;
   let toast: TurnPresentation['toast'] = null;
   if (turnEnd) {
+    clearTurnRescueContext(context);
     if (turnEnd.playerIdTouchdown) {
       context.turnoverArmed = false;
       context.turnoverAfterInjury = false;

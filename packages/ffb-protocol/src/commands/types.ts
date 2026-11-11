@@ -53,6 +53,12 @@ export interface ClientCommandJoin extends NetCommand {
   gameName?: string;
   teamId?: string;
   teamName?: string;
+  /** Upstream PR #341: the FFB protocol version this client speaks (logged by the server only). */
+  protocolVersion?: string;
+  /** Upstream PR #341: the client's name (logged by the server only). */
+  clientName?: string;
+  /** Upstream PR #341: the client's own version (logged by the server only). */
+  clientVersion?: string;
 }
 
 export interface ServerCommandJoin extends ServerCommand {

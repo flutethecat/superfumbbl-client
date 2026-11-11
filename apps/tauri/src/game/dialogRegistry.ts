@@ -106,6 +106,9 @@ export const DIALOG_REGISTRY = {
   selectPosition: d('existing-dialog', 'DialogSelectPositionHandler'), // owner 10-05 (g1950414): Raise the Dead position pick -> clientPositionSelection (store.ts)
   reRollRegenerationMultiple: d('existing-dialog', 'DialogReRollRegenerationMultipleHandler'),
   puntToCrowd: d('existing-dialog', 'DialogPuntToCrowdHandler'),
+  // S36 (staged): upstream master e7f9858a1 BB2025 agility re-roll prompt with optional modifier skills; surfaced on the
+  // existing re-roll card (store.ts surfaceReRollPrompt), answered with clientReRollModifierChoice / clientUseSkill / clientUseReRoll.
+  reRollModifierChoice: d('existing-dialog', 'DialogReRollModifierChoiceHandler'),
 } satisfies Record<DialogId, DialogDescriptor>;
 
 export function dialogDescriptor(value: string): DialogDescriptor | null {

@@ -59,6 +59,25 @@ export function isRecoverableFumbblLobbyStatus(serverStatus: unknown): boolean {
   return String(serverStatus ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === 'gameinuse';
 }
 
+/** Upstream christerk/ffb PR #341 (join client identification): `clientJoin` / `clientJoinReplay` carry the FFB protocol
+ *  version the client speaks, the client's name and its version (JSON keys `protocolVersion`, `clientName`,
+ *  `clientVersion`). The server only logs them; one before the PR reads only the keys it knows, so they are safe on both. */
+export interface ClientIdentity {
+  protocolVersion: string;
+  clientName: string;
+  clientVersion: string;
+}
+
+/** A fixed identity, or one chosen per announced server version (null = send none to that server). */
+export type ClientIdentitySource = ClientIdentity | ((version: ServerCommandVersion | null) => ClientIdentity | null);
+
+/** The join's identification keys, exactly as upstream PR #341 names them (empty when no identity is configured). */
+export function clientIdentityFields(identity: ClientIdentity | null | undefined): Partial<ClientIdentity> {
+  if (!identity) return {};
+  // All three are JsonStringOption on the PR's server: always JSON strings, never a number or null.
+  return { protocolVersion: String(identity.protocolVersion), clientName: String(identity.clientName), clientVersion: String(identity.clientVersion) };
+}
+
 /** Owner 10-17 (server-version hard stop): consulted once the server has announced its version and before any join
  *  leaves. A string refuses the join with that reason (the session emits `refused` and closes); null lets it through. */
 /** `gameName` = a join by game name; `listOnly` = the lobby's open-games list request (no seat is taken). */
@@ -132,10 +151,12 @@ export class GameSession {
   };
 
   private readonly joinGate: JoinGate | null;
+  private readonly clientIdentity: ClientIdentitySource | null;
   private lastVersion: ServerCommandVersion | null = null;
 
-  constructor(connectionOptions: FfbConnectionOptions & { joinGate?: JoinGate }) {
+  constructor(connectionOptions: FfbConnectionOptions & { joinGate?: JoinGate; clientIdentity?: ClientIdentitySource }) {
     this.joinGate = connectionOptions.joinGate ?? null;
+    this.clientIdentity = connectionOptions.clientIdentity ?? null;
     this.connection = new FfbConnection(connectionOptions);
     this.connection.on('command', (command) => this.handleCommand(command as ServerCommand));
     this.connection.on('error', (error) => this.emit('error', error));
@@ -145,6 +166,13 @@ export class GameSession {
       this.setState('closed');
       this.emit('close', code, reason);
     });
+  }
+
+  /** The version THIS connection's server announced (null before it did). Capability decisions for commands sent on
+   *  this session read it, never a value another session may have overwritten (Sol r2 P2). */
+  get serverVersion(): string | null {
+    const v = this.lastVersion?.serverVersion;
+    return v == null || String(v) === '' ? null : String(v);
   }
 
   get state(): SessionState {
@@ -328,6 +356,8 @@ export class GameSession {
       teamName: override ? override.teamName : params.teamName ?? null,
       // fork play-permission token (our fork; FUMBBL ignores unknown fields)
       ...(params.authToken ? { authToken: params.authToken } : {}),
+      // upstream PR #341: who is joining (logged by a server with the PR, ignored by one without)
+      ...clientIdentityFields(typeof this.clientIdentity === 'function' ? this.clientIdentity(this.lastVersion) : this.clientIdentity),
     } as NetCommand);
   }
 

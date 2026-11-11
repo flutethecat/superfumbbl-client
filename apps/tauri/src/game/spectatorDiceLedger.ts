@@ -26,7 +26,7 @@ import {
   DICE_ROW_KEYS, adoptDiceStats, emptyDiceStats, ingestDiceReports, noteActivation, noteTurnEnd,
   type DiceCoverage, type DiceRowTotals, type DiceStats, type DisplayedDiceRows,
 } from './diceStats';
-import { createTurnPresentationContext, turnEndIsTurnover, turnoverArmStep } from './turnPresentation';
+import { clearTurnRescueContext, createTurnPresentationContext, turnEndIsTurnover, turnoverArmStep } from './turnPresentation';
 import { turnSideIsHome } from './blastinSecondBeat';
 import type { SpectatorCheckpoint, SpectatorCursor } from './replay/spectatorCheckpoint';
 
@@ -67,6 +67,7 @@ export function tallyDiceCommand(stats: DiceStats, ordinal: number, homeWasPlayi
     const turnover = turnEndIsTurnover(context, turnEnd, model.turnMode);
     noteTurnEnd(stats, model, homeWasPlaying ? 'home' : 'away', turnover);
     if (turnEnd.playerIdTouchdown || turnover) { context.turnoverArmed = false; context.turnoverAfterInjury = false; }
+    clearTurnRescueContext(context);
   }
   stats.turnover = context;
 }

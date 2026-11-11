@@ -19,6 +19,9 @@ export {
 export {
   GameSession,
   isRecoverableFumbblLobbyStatus,
+  clientIdentityFields,
+  type ClientIdentity,
+  type ClientIdentitySource,
   type GameSessionParams,
   type SessionState,
 } from './session/gameSession';

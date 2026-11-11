@@ -1,4 +1,5 @@
 import { withEntropy } from '../mouseEntropy';
+import { clientIdentityJoinFields } from '../clientIdentity';
 import {
   FfbConnection,
   NetCommandId,
@@ -188,6 +189,7 @@ export async function downloadReplay(
               gameName: null,
               teamId: null,
               teamName: null,
+              ...clientIdentityJoinFields(command.serverVersion == null ? null : String(command.serverVersion)), // upstream PR #341, flag-gated
             });
           } else requestReplay();
           return;

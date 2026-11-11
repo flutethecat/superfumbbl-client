@@ -12,8 +12,10 @@ import type { ClientMode, ServerCommandVersion } from '@fumbbl40k/ffb-protocol';
 
 /** FFB server versions this client has been vetted against. A list, so a server rollback stays approved.
  *  3.3.1 = the live fumbbl.com game server on 2026-10-17 (asked directly: connect -> clientRequestVersion), the server
- *  every UAT game of 1.0.221-1.0.235 ran against. (An old capture said 3.2.3; Astra caught that before it shipped.) */
-export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1'];
+ *  every UAT game of 1.0.221-1.0.235 ran against, and still on 2026-11-09 (asked directly again). (An old capture said
+ *  3.2.3; Astra caught that before it shipped.) 3.4.0 = the live fork server since 2026-10-26 (upstream 3.4.0 + PRs 325,
+ *  336-342), the server the 3.4.0 protocol work was tested against (owner 11-09: "finish prepping for 3.4.0 protocol"). */
+export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1', '3.4.0'];
 
 export interface ServerVersionBlock {
   /** The server's announced version. */
@@ -48,7 +50,7 @@ export const PASTRIES_MIN_SERVER_VERSION: string | null = null;
  * Fireball needs a standing opponent). `null` = the old rule everywhere (public builds today); the staged 3.4.0 branch
  * sets it to '3.4.0' for dev cuts. The rule also needs the game to be BB2025 (wizardSpell.wizardTargetRuleFor).
  */
-export const WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION: string | null = null;
+export const WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION: string | null = '3.4.0';
 let wizardTargetingMinOverride: { min: string | null } | null = null;
 /** @internal Test seam: stand in for WIZARD_BB2025_TARGETING_MIN_SERVER_VERSION (undefined = restore the constant). */
 export function overrideWizardBb2025TargetingMinForTest(min: string | null | undefined): void {
@@ -72,6 +74,77 @@ export function compareServerVersions(a: string, b: string): number {
 export function serverSupportsPastries(serverVersion: string | null | undefined, min: string | null = PASTRIES_MIN_SERVER_VERSION): boolean {
   const v = (serverVersion ?? '').trim();
   return min !== null && v !== '' && compareServerVersions(v, min) >= 0;
+}
+
+/** A released FFB version: exactly MAJOR.MINOR.PATCH, digits only (Sol r2 P3: '3.4oops.0' or '3.4.0-rc1' compare
+ *  equal to 3.4.0 in compareServerVersions, yet prove nothing about the released fixes). */
+const RELEASED_VERSION = /^\d+\.\d+\.\d+$/;
+
+/** `serverVersion` is a released version and at least `min`; a null `min` (no release carries the change yet) is never
+ *  met, and anything that is not a plain released version leaves the capability OFF. The coach-seat approval list
+ *  (serverVersionApproved) keeps its exact-match semantics. */
+function serverAtLeast(serverVersion: string | null | undefined, min: string | null): boolean {
+  const v = (serverVersion ?? '').trim();
+  return min !== null && RELEASED_VERSION.test(v) && RELEASED_VERSION.test(min.trim()) && compareServerVersions(v, min) >= 0;
+}
+
+/** Sol r2 P2: capability decisions for the live game read the version announced on the GAME connection, never the
+ *  shared `lastServerVersion` (a lobby / prepared session consults the gate too and overwrites it). The store registers
+ *  the source (its game session); null when there is none. */
+let gameConnectionVersionSource: () => string | null = () => null;
+export function setGameConnectionVersionSource(source: () => string | null): void {
+  gameConnectionVersionSource = source;
+}
+export function activeGameServerVersion(): string | null {
+  return gameConnectionVersionSource();
+}
+
+/**
+ * Upstream christerk/ffb PR #325 ("Prevent client-injected Apothecary outcomes"): `clientApothecaryChoice` is read as
+ * `{choiceNewInjury: boolean}` only; a command without it fails to deserialise and is dropped. Owner: held until
+ * upstream merges. `null` = the wire stays exactly as today (legacy fields only). Set it to the FUMBBL release that
+ * carries PR #325; from that server on the flag rides next to the legacy fields (which stay until a later patch).
+ */
+export const APOTHECARY_CHOICE_FLAG_MIN_SERVER_VERSION: string | null = '3.4.0';
+
+/** The announced server reads `choiceNewInjury` on the apothecary choice (upstream PR #325). */
+export function serverSupportsApothecaryChoiceFlag(
+  serverVersion: string | null | undefined,
+  min: string | null = APOTHECARY_CHOICE_FLAG_MIN_SERVER_VERSION,
+): boolean {
+  return serverAtLeast(serverVersion, min);
+}
+
+/**
+ * Upstream christerk/ffb PR #341 (join client identification): `clientJoin` carries `protocolVersion`, `clientName` and
+ * `clientVersion`, logged by the server only. `null` = joins stay exactly as today. Set it to the FUMBBL release that
+ * carries PR #341.
+ */
+export const JOIN_CLIENT_IDENTIFICATION_MIN_SERVER_VERSION: string | null = '3.4.0';
+
+/** The announced server logs the join's client identification (upstream PR #341). */
+export function serverSupportsJoinClientIdentification(
+  serverVersion: string | null | undefined,
+  min: string | null = JOIN_CLIENT_IDENTIFICATION_MIN_SERVER_VERSION,
+): boolean {
+  return serverAtLeast(serverVersion, min);
+}
+
+/**
+ * Upstream christerk/ffb PR #338 (fix/dwarfen-wisdom-reactivate-players): StepDwarfenWisdom.leave() re-activates the
+ * players it locked for the Josef Bugman re-setup. Until a server carries it, High Kick unions local eligibility with
+ * the server's ACTIVE set (owner-ruled divergence, 08-17; availableActions.highKickNomineeIds). `null` = no released
+ * server carries the fix yet, so the union stays. Flip this to the FUMBBL release version that ships PR #338; from that
+ * server on, High Kick reads the server's ACTIVE set alone (server-derived law).
+ */
+export const DWARFEN_WISDOM_REACTIVATES_MIN_SERVER_VERSION: string | null = '3.4.0';
+
+/** The announced server re-activates the Dwarfen Wisdom-locked players itself (upstream PR #338). */
+export function serverRestoresDwarfenWisdomActive(
+  serverVersion: string | null | undefined,
+  min: string | null = DWARFEN_WISDOM_REACTIVATES_MIN_SERVER_VERSION,
+): boolean {
+  return serverAtLeast(serverVersion, min);
 }
 
 export function serverVersionApproved(serverVersion: string, approved: readonly string[] = APPROVED_FFB_SERVER_VERSIONS): boolean {

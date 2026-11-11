@@ -1,4 +1,4 @@
-import { playerHasSkill, type GameJson } from '@fumbbl40k/ffb-protocol';
+import { NetCommandId, playerHasSkill, type GameJson } from '@fumbbl40k/ffb-protocol';
 import { prettySkillName } from './logic/prettySkillName';
 import { starRuleById } from './logic/coachActionDispatch';
 import type { PassReRollResult, ServerPassRollTruth } from './actionRollProjection';
@@ -9,6 +9,7 @@ import { adjacentSavageryTargetIds, dodgeSkillCancelledAt, normSquare, skillMark
 import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 import { t, terms, data } from '../i18n';
+import { serverExplanationLines } from './serverExplanation';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -18,6 +19,10 @@ export interface ReRollDecisionProjection extends ReRollPromptPresentation {
   label: string;
   lonerValue?: string;
   options: ReRollPromptOption[];
+  /** S36: set (to `reRollModifierChoice`) only for that dialog; omitted for every older re-roll dialog. */
+  dialogId?: string;
+  /** S36: the dialog's `modifierCombinations`, information only (never clickable). Omitted when empty. */
+  combinations?: ModifierChoiceCombination[];
 }
 
 /** Complete card content, independent of sequence counters, send authority and presentation timers. */
@@ -25,7 +30,9 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
   const playerId = String(dialog.playerId ?? '');
   const player = playerById(game, playerId);
   const offered = suppliedOptions ?? offeredReRollOptions(dialog, player?.skillDisplayValuesMap);
-  const options = withoutCancelledDodgeSkill(offered, dialog, game, movement);
+  const modifierChoice = isReRollModifierChoice(dialog);
+  // S36 / spec 3.12: on this dialog the server withholds a cancelled Dodge itself (canceledReRollSkills -> ignoreSkills).
+  const options = modifierChoice ? [...offered] : withoutCancelledDodgeSkill(offered, dialog, game, movement);
   const clientWithheld = options.length < offered.length; // S18: the client emptied a card the server did offer
   if (!suppliedOptions && primalSavageryAvailable(dialog, player, game.actingPlayer as unknown as Record<string, unknown>, game)) {
     options.push({ label: PRIMAL_SAVAGERY_SKILL, source: PRIMAL_SAVAGERY_SKILL, response: 'primal-savagery', role: 'modifier' });
@@ -43,8 +50,12 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
     ? (mine ? t('dialogs.reroll.label.nameFailedTheirFoul', { name }) : t('dialogs.reroll.label.nameIsDecidingWhether', { name }))
     : modifier ? t('dialogs.reroll.short.orUse', { action: terms(action), skill: terms(prettySkillName(modifier)) }) : t('dialogs.reroll.short.plain', { action: terms(action) });
   const rulesVersion = game.gameOptions.gameOptionArray.find((o) => o.gameOptionId === 'rulesVersion')?.gameOptionValue;
-  const roll = presentation.roll ?? d6RerollRoll(prior?.roll ?? undefined, rulesVersion, dialog.reRolledAction);
-  const needed = passTruth ? presentation.needed : presentation.needed ?? d6RerollNeeded(dialog.minimumRoll, prior?.needed ?? undefined, rulesVersion, dialog.reRolledAction, presentation.thresholdless);
+  // S36 / spec 3.2: `reRollModifierChoice` carries the rolled die and the roll needed itself; they come from the dialog,
+  // never from the client's roll tracking.
+  const roll = modifierChoice ? d6Value(dialog.roll)
+    : presentation.roll ?? d6RerollRoll(prior?.roll ?? undefined, rulesVersion, dialog.reRolledAction);
+  const needed = modifierChoice ? modifierChoiceNeeded(dialog.minimumRoll)
+    : passTruth ? presentation.needed : presentation.needed ?? d6RerollNeeded(dialog.minimumRoll, prior?.needed ?? undefined, rulesVersion, dialog.reRolledAction, presentation.thresholdless);
   const lonerValue = lonerValueForPlayer(game, playerId);
   // Optional fields are omitted, never undefined, so card content survives strict JSON checkpoints.
   const result: ReRollDecisionProjection = { playerId, reRolledAction: String(dialog.reRolledAction ?? ''), label, options,
@@ -54,16 +65,141 @@ export function buildReRollDecision(game: GameJson, dialog: Record<string, unkno
   if (roll !== undefined) result.roll = roll;
   if (needed !== undefined) result.needed = needed;
   if (lonerValue !== undefined) result.lonerValue = lonerValue;
+  if (modifierChoice) {
+    result.dialogId = RE_ROLL_MODIFIER_CHOICE_DIALOG;
+    const combinations = modifierChoiceCombinations(dialog);
+    if (combinations.length) result.combinations = combinations;
+  }
   return result;
 }
 
-export const RE_ROLL_RESPONSES = ['reroll', 'skill', 'primal-savagery'] as const;
+/** S36 Sol r1 #4: the server sends any integer >= 2 (bb2025 AgilityMechanic has no upper bound); shown as sent. */
+function modifierChoiceNeeded(value: unknown): number | undefined {
+  const n = Number(value);
+  return value != null && Number.isInteger(n) && n >= 2 ? n : undefined;
+}
+
+function d6Value(value: unknown): number | undefined {
+  const n = Number(value);
+  return value != null && Number.isInteger(n) && n >= 1 && n <= 6 ? n : undefined;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// S36 (STAGED): BB2025 `reRollModifierChoice` (upstream master e7f9858a1, DialogReRollModifierChoiceParameter /
+// ModifierChoiceOption / ClientCommandReRollModifierChoice). The dialog is the re-roll prompt of every BB2025 Agility
+// Test (dodge, pick up, jump, jump up, catch, interception, landing) plus optional modifier skills (Break Tackle,
+// Consummate Professional, Swift As The Breeze). The server accepts a modifier answer ONLY when its skill set equals
+// one offered option (OfferedSkillService.isOfferedModifierOption) - anything else is silently dropped and wedges the
+// game - so the client sends exactly one RECEIVED option's skillArray, never a list of its own.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const RE_ROLL_MODIFIER_CHOICE_DIALOG = 'reRollModifierChoice';
+
+/** One `ModifierChoiceOption` exactly as received (toJsonValue keys: skillArray, modifier, minimumRoll, name). */
+export interface ModifierChoiceWireOption {
+  skillArray: string[];
+  modifier: number;
+  minimumRoll: number;
+  name: string;
+}
+
+export interface ModifierChoiceCombination {
+  label: string;
+  minimumRoll: number;
+}
+
+export function isReRollModifierChoice(dp: Record<string, unknown> | null | undefined): boolean {
+  return String(dp?.dialogId ?? '') === RE_ROLL_MODIFIER_CHOICE_DIALOG;
+}
+
+/** The received options of `key`; `null` when the field is present but not the upstream shape (an unrecognised offer,
+ *  never guessed at). A missing field is an empty list (upstream initFrom tolerates a null array). */
+export function modifierChoiceWireOptions(
+  dp: Record<string, unknown>,
+  key: 'modifierOptions' | 'modifierCombinations',
+): ModifierChoiceWireOption[] | null {
+  const raw = dp[key];
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) return null;
+  const options: ModifierChoiceWireOption[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') return null;
+    const option = entry as Record<string, unknown>;
+    const skills = option.skillArray;
+    if (!Array.isArray(skills) || skills.length === 0 || skills.some((skill) => typeof skill !== 'string' || !skill)) return null;
+    const minimumRoll = Number(option.minimumRoll);
+    if (option.minimumRoll == null || !Number.isFinite(minimumRoll)) return null;
+    options.push({
+      skillArray: [...(skills as string[])],
+      modifier: Number(option.modifier ?? 0),
+      minimumRoll,
+      name: typeof option.name === 'string' ? option.name : (skills as string[]).join(' + '),
+    });
+  }
+  return options;
+}
+
+function modifierChoiceLabel(option: ModifierChoiceWireOption): string {
+  // The server's own label is the skill names joined with " + "; the names are game terms (identity in English).
+  return option.skillArray.map((skill) => terms(skill)).join(' + ');
+}
+
+/** The dialog's actionable options as card buttons, in received order. `source` is a card-local key (the button
+ *  identity); the wire payload is the option's own `skillArray`. */
+export function modifierChoiceOptions(dp: Record<string, unknown>): ReRollPromptOption[] {
+  if (!isReRollModifierChoice(dp)) return [];
+  return (modifierChoiceWireOptions(dp, 'modifierOptions') ?? []).map((option, index) => ({
+    label: modifierChoiceLabel(option),
+    source: `modifierOption:${index}`,
+    response: 'modifier-choice' as const,
+    role: 'modifier' as const,
+    skillArray: [...option.skillArray],
+    minimumRoll: option.minimumRoll,
+  }));
+}
+
+export function modifierChoiceCombinations(dp: Record<string, unknown>): ModifierChoiceCombination[] {
+  if (!isReRollModifierChoice(dp)) return [];
+  return (modifierChoiceWireOptions(dp, 'modifierCombinations') ?? [])
+    .map((option) => ({ label: modifierChoiceLabel(option), minimumRoll: option.minimumRoll }));
+}
+
+/** The received option whose `skillArray` is EXACTLY `skillArray` (same names, same order), or null. */
+export function receivedModifierOption(
+  dp: Record<string, unknown> | null | undefined,
+  skillArray: readonly string[] | null | undefined,
+): ModifierChoiceWireOption | null {
+  if (!dp || !isReRollModifierChoice(dp) || !skillArray?.length) return null;
+  const options = modifierChoiceWireOptions(dp, 'modifierOptions') ?? [];
+  return options.find((option) => option.skillArray.length === skillArray.length
+    && option.skillArray.every((skill, index) => skill === skillArray[index])) ?? null;
+}
+
+/** ClientCommandReRollModifierChoice.toJsonValue key order: netCommandId, playerId, skillArray, reRolledAction. */
+export function buildReRollModifierChoiceCommand(
+  playerId: string,
+  skillArray: readonly string[],
+  reRolledAction: string,
+): Record<string, unknown> {
+  return {
+    netCommandId: NetCommandId.CLIENT_RE_ROLL_MODIFIER_CHOICE,
+    playerId,
+    skillArray: [...skillArray],
+    reRolledAction,
+  };
+}
+
+export const RE_ROLL_RESPONSES = ['reroll', 'skill', 'primal-savagery', 'modifier-choice'] as const;
 export const RE_ROLL_OPTION_ROLES = ['source', 'reroll-skill', 'modifier'] as const;
 export interface ReRollPromptOption {
   label: string;
   source: string;
   response: (typeof RE_ROLL_RESPONSES)[number];
   role: (typeof RE_ROLL_OPTION_ROLES)[number];
+  /** S36 `modifier-choice` only: the received option's skills, sent verbatim. */
+  skillArray?: string[];
+  /** S36 `modifier-choice` only: the roll the test needs with this option applied (the option's own minimumRoll). */
+  minimumRoll?: number;
 }
 
 export function skillNameWithValue(displayValue: string | undefined, skillName: string): string {
@@ -230,7 +366,11 @@ export function reRollPromptPresentation(
   // Owner 08-18 (Breathe Fire screenshot): drop the server's threshold explainer — the "You need a:"
   // header and its "• N+ to <outcome>" bullets. Consequence lines ("You would be knocked down…") and
   // the rolled value stay. Derivations (ttmSuperbTarget) read the RAW list, display reads this one.
-  const messages = rawMessages.filter(
+  // Owner 10-26: the shown lines go through the shared server-explanation projection (trimmed, de-duplicated, server
+  // order, data()-marked English wire text), e.g. the reRollModifierChoice Diving Tackle look-ahead line. The card has
+  // no explanatory copy of its own for these: its Loner line renders the server's LONER re-roll property (a different
+  // subject, drawn by the Java client next to the server messages too), so it stays.
+  const messages = serverExplanationLines(rawMessages.filter(
     (message) => !/^\s*you need a:?\s*$/i.test(message)
       && !/^\s*[•·\-*]?\s*\d\+?\s+to\s+/i.test(message)
       // The TTM result and Superb threshold are already rendered above the offer. This crossed-out server
@@ -239,7 +379,7 @@ export function reRollPromptPresentation(
       // The result/Needed rows and the question already convey this entire sentence. Keep it in rawMessages for
       // ttmSuperbTarget above, but do not repeat it in the dialog body.
       && !(passTruth?.reportId === 'throwTeamMateRoll' && /^\s*this is an?\s+(?:subpar|superb)\s+result\b/i.test(message)),
-  );
+  ));
   const modifier = reRollSourceName(dp.modifyingSkill);
   const failed = hasExplicitMinimum && minimumRollRaw > 0;
   // Owner 08-18 (B&C screenshot): the Ball & Chain DIRECTION re-roll offer (ReRolledActions.DIRECTION,
@@ -251,6 +391,8 @@ export function reRollPromptPresentation(
   const question = isBncDirection
     ? t('dialogs.reroll.question.rerollDirection')
     // i18n (Astra r1 #8): four whole questions; the action and skill are game terms in the active locale.
+    : isReRollModifierChoice(dp) && Array.isArray(dp.modifierOptions) && dp.modifierOptions.length > 0
+      ? t('dialogs.reroll.question.failedSkillOrReroll', { action: terms(action) })
     : modifier
       ? t(failed ? 'dialogs.reroll.question.failedOrUse' : 'dialogs.reroll.question.orUse', { action: terms(action), skill: terms(prettySkillName(modifier)) })
       : t(failed ? 'dialogs.reroll.question.failed' : 'dialogs.reroll.question.plain', { action: terms(action) });
@@ -274,7 +416,8 @@ export function offeredReRollOptions(
   dp: Record<string, unknown>,
   skillDisplayValues?: Record<string, unknown>,
 ): ReRollPromptOption[] {
-  const options: ReRollPromptOption[] = [];
+  // S36: a `reRollModifierChoice` dialog's modifier options come first, in received order (spec 3.3).
+  const options: ReRollPromptOption[] = modifierChoiceOptions(dp);
   const singleUse = singleUseReRollName(dp);
   const skillName = reRollSkillName(dp);
   const modifyingSkill = reRollSourceName(dp.modifyingSkill);

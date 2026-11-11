@@ -4,6 +4,7 @@ import { interceptors } from '@fumbbl40k/ffb-pitch';
 import { actionRollFor, type ActionRollProjection } from './actionRollProjection';
 import { PRAYER_TABLE, type PrayerCatalogEntry } from './prayerCatalog';
 import { dialogInstanceKey } from './logic/dialogDispatch';
+import { staleDialogOutlivedPhase } from './logic/staleDialog';
 import { prettySkillName } from './logic/prettySkillName';
 import { projectOnTheBallWaiting } from './onTheBallController';
 import type { SpectatorCheckpoint } from './replay/spectatorCheckpoint';
@@ -244,13 +245,14 @@ export function touchbackWaitingFromGame(g: GameJson, myTeamId: string | null): 
  *  coordinate until the kick lands (corpus-block-hatred cmd 36 -> 37 sets ballCoordinate + kickoffScatter; every
  *  recorded kickoff opens with ballCoordinate null). Later `kickoff` frames (Charge / Solid Defence choices) carry
  *  the ball, so they never show this. A live dialog means the kicker is answering something else (an inducement);
- *  a leftover `setupError` is informational and does not count. Every seat but the kicker is told. */
+ *  a leftover `setupError` is informational and does not count, nor does a Dwarfen Wisdom offer the server left
+ *  behind on a decline (g1104) - see staleDialogOutlivedPhase. Every seat but the kicker is told. */
 export function kickoffWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
   if (g.turnMode !== 'kickoff') return null;
   const ball = (g.fieldModel as { ballCoordinate?: unknown } | undefined)?.ballCoordinate;
   if (ball != null) return null;
   const dialog = g.dialogParameter as Record<string, unknown> | null;
-  if (dialog && dialog.dialogId !== 'setupError') return null;
+  if (dialog && !staleDialogOutlivedPhase(String(dialog.dialogId ?? ''), g.turnMode, g)) return null;
   const team = g.homePlaying ? g.teamHome : g.teamAway;
   const teamId = String(team?.teamId ?? '');
   if (!team || (myTeamId !== null && myTeamId === teamId)) return null;
@@ -337,11 +339,13 @@ export function pushWaitingFromGame(g: GameJson, myTeamId: string | null): { mes
 export function reRollWaitingFromGame(g: GameJson, myTeamId: string | null): { message: string } | null {
   const dp = g.dialogParameter as { dialogId?: unknown; playerId?: unknown; reRolledAction?: unknown } | null | undefined;
   const dialogId = String(dp?.dialogId ?? '').toLowerCase().replace(/[^a-z]/g, '');
-  if (dialogId !== 'reroll' && dialogId !== 'rerollproperties') return null;
+  const modifierChoice = dialogId === 'rerollmodifierchoice'; // S36 Sol r1 #3 (DialogReRollModifierChoiceHandler:29-45)
+  if (dialogId !== 'reroll' && dialogId !== 'rerollproperties' && !modifierChoice) return null;
   // The wire carries "Catch" for every catch (scatter / bounce included) but the PASS action as the FQ skill class
   // `com.fumbbl.ffb.skill.common.Pass` (Astra 10-07) - match the last dotted segment.
   const action = String(dp?.reRolledAction ?? '').toLowerCase().split('.').pop() ?? '';
-  if (!/^(pass|catch)$/.test(action)) return null;
+  // S36: on reRollModifierChoice the interception is decided by the OTHER team's coach, with no die held on the pitch.
+  if (!(modifierChoice ? /^(pass|catch|interception)$/ : /^(pass|catch)$/).test(action)) return null;
   const playerId = String(dp?.playerId ?? '');
   if (!playerId) return null;
   const teams = [g.teamHome, g.teamAway] as ({ teamId?: string; coach?: string; teamName?: string; playerArray?: { playerId: string }[] } | undefined)[];

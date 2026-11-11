@@ -14,6 +14,7 @@ import { computed, type Ref, nextTick, onBeforeUnmount, onMounted, reactive, ref
 import { blockDiceIdleStep, createBlockDiceRowProvider, type BlockDiceWarmSignal } from '../game/blockDiceRowProvider';
 import { anchorRef } from '../game/anchorRef'; // perf 1.0.261: per-frame screen anchors trigger only on a real move
 import { FORK_EDITION } from '../game/edition';
+import { runChatLine } from '../game/chatCommands';
 import { blockTargetChosen, blockTargetLatchKey, nextBlockTargetLatch } from '../game/blockTargetLatch';
 import { allBlockDiceIndices, BlockTumbleRun, handBlockTumbleTo3d, type BlockTumbleFrame } from '../game/blockRerollTumble';
 import { measuredRefreshHz, resolveFpsCap, trackDisplayRate } from '../game/displayRefreshRate';
@@ -102,6 +103,7 @@ import {
 } from '../game/inducementRevealHold';
 import ChargePickPanel from '../components/ChargePickPanel.vue';
 import PitchConfirmationPanel from '../components/PitchConfirmationPanel.vue';
+import ServerExplanation from '../components/ServerExplanation.vue';
 import { confirmCardLocked as confirmCardLockOpen, lockedConfirmTarget, lockedEscapeOutcomes, openConfirmCards, type ConfirmCardLockInput } from '../game/logic/confirmCardLock';
 import { PROMPT_ANSWER_SELECTOR, installPromptPointerTracker, vPromptDodge } from '../game/promptDodgeDom';
 import { deferredSwitchClick, deferredSwitchFollowUpFresh, deferredSwitchStillValid, type DeferredFriendlySwitch } from '../game/deferredFriendlySwitch';
@@ -175,6 +177,7 @@ import { quickSnapExhaustedText } from '../game/quickSnapController';
 import { currentBlockChoosingTeamId, currentMultiBlockChoosingTeamId, isCurrentBlockChoiceDialog, isCurrentMultiBlockChoiceDialog, projectBlockChooser, type BlockChooserSide } from '../game/blockChooser';
 import { savedSetupPreview, templatePreview } from '../game/setupTemplatePreview';
 import { hmpScatterSkillUseCardCopy, modifyingSkillCardCopy, passSkillUseCardCopy } from '../game/skillUseCardPresentation';
+import { playerChoiceLineFor, playerChoiceRows, playerPickExplanation, skillUseExplanationLines } from '../game/serverExplanation';
 import { swoopChoiceCopy, swoopIndicator, type SwoopIndicator } from '../game/logic/swoopPresentation';
 import { watchedCardHandoffMs } from '../game/logic/minimumVisible';
 import { tastyMorselAvailable, TASTY_MORSEL_AVAILABLE_COPY } from '../game/bloodlustPresentation';
@@ -4857,6 +4860,24 @@ const passSkillCardCopy = computed(() => passSkillUseCardCopy(gameStore.state.sk
 const hmpScatterSkillCardCopy = computed(() => hmpScatterSkillUseCardCopy(gameStore.state.skillChoice));
 // S40: a skillUse dialog with a modifying skill = three answers (skill / modifier / none), official wording.
 const modifierSkillCardCopy = computed(() => modifyingSkillCardCopy(gameStore.state.skillChoice));
+// Owner 10-26: the server's own explanation lines (FFB 3.4.0 skillUse.messageArray, e.g. the Leap / Very Long Legs /
+// Pogo stalling reason) replace the card's explanatory sub-text while the live dialog is this card's prompt.
+const skillUseServerLines = computed(() => skillUseExplanationLines(
+  gameStore.game.value?.dialogParameter as Record<string, unknown> | null | undefined, gameStore.state.skillChoice));
+// Owner 10-26: playerChoice `descriptions` for the armed pick (Diving Tackle, the Catch pick, Tentacles, Shadowing).
+// Only the live occurrence the pick answers counts (same mode, same offered players); a 3.3.1 server without
+// descriptions leaves every card as it was.
+const pickServerExplanation = computed(() => {
+  const pick = gameStore.state.playerPick;
+  return playerPickExplanation(gameStore.game.value?.dialogParameter as Record<string, unknown> | null | undefined, pick,
+    !!pick && gameStore.cardDialogLive(['playerChoice'], pick.answersInstance));
+});
+const pickServerPlayerRows = computed(() => pickServerExplanation.value.shared.length ? []
+  : playerChoiceRows(pickServerExplanation.value, gameStore.game.value));
+const pickServerLineFor = (playerId: string | null | undefined): string[] => {
+  const line = playerChoiceLineFor(pickServerExplanation.value, playerId);
+  return line ? [line] : [];
+};
 const bloodlustTastyMorselAvailable = computed(() => {
   const g = gameStore.game.value;
   const prompt = gameStore.state.bloodlust;
@@ -7445,7 +7466,7 @@ const quickSnapAllowance = computed(() => {
     : null;
 });
 // Suppress the turn-start splash during drive setup and kickoff mini-phases, including kickoff-event blitz.
-const KICKOFF_DRIVE_TURN_MODES = new Set(['setup', 'solidDefence', 'kickoff', 'kickoffReturn', 'highKick', 'quickSnap', 'swarming', 'passBlock', 'blitz']);
+const KICKOFF_DRIVE_TURN_MODES = new Set(['setup', 'solidDefence', 'kickoff', 'kickoffReturn', 'highKick', 'quickSnap', 'swarming', 'passBlock', 'dumpOffPassBlock', 'blitz']);
 const inKickoffDrivePhase = computed(() => KICKOFF_DRIVE_TURN_MODES.has(gameStore.game.value?.turnMode ?? ''));
 // Owner 10-09: one flag for "a full-width centre banner is on screen", built from the SAME conditions the template
 // renders each of them with (never from store state alone: the Master Chef / Riotous Rookies states outlive their
@@ -11693,6 +11714,10 @@ const rerollOptionsShown = computed(() => {
   return activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(options) : options;
 });
 const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
+/** S36: a single-skill reRollModifierChoice option takes that skill's icon; every other option keys the icon by its source. */
+function rerollOptIconSkill(opt: { source: string; skillArray?: string[] }): string {
+  return opt.skillArray?.length === 1 ? opt.skillArray[0]! : opt.source;
+}
 let unregisterCrosshairStick: (() => void) | null = null;
 let stopCrosshairGateWatch: (() => void) | null = null;
 /**
@@ -15302,11 +15327,17 @@ function sendChat() {
   if (text.startsWith('/') && pitchHeldByConfirmation()) return;
   if (text.startsWith('/') && guardConfirmCard()) return; // owner 10-15 (Astra confirmlock-3): every covered card
   if (text) {
-    // Owner 2026-07-08: a leading '/' routes to the DEV CONSOLE (e.g. /stuck to pass a
-    // stuck turn) instead of being sent as chat.
-    // Owner 11-04: the chat slash commands are a dev console; the public build has none, the text goes out as chat.
-    if (FORK_EDITION && text.startsWith('/')) gameStore.devCommand(text);
-    else gameStore.sendTalk(text);
+    // Owner 11-09 ("Option 1"): every slash line goes through the one chat-command router (game/chatCommands.ts), in
+    // every build: the upstream user commands are sent, an unknown or mistyped one is answered here and never sent as
+    // chat. The fork edition's dev commands (/stuck, test commands) plug in through the router's extension.
+    // Sol r1: the router sees EVERY message (plain chat comes back as chat), so a disguised or embedded command (slash
+    // lookalike, invisible lead, a command line in a multi-line message) is refused instead of going out as chat.
+    const route = runChatLine(text, gameStore.isPlaying.value ? 'player' : 'spectator', {
+      sendTalk: (line) => gameStore.sendTalk(line),
+      localCommand: (line) => gameStore.devCommand(line),
+      reply: (m) => gameStore.chatCommandReply('key' in m ? lt(m.key, m.params) : m.text),
+    });
+    if (route.kind === 'refuse') return; // Sol r2: a refused message stays in the box for the coach to edit
     chatInput.value = '';
     void nextTick(growChatInput);
   } else {
@@ -16295,7 +16326,11 @@ watch(() => [
           <img v-if="skillSilhouette" class="sc-silhouette" :src="skillSilhouette" alt="" />
           <div class="sc-title">{{ modifierSkillCardCopy?.title ?? hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? $t('hud.useJuggernautToPush') : $t('hud.useLabel', { label: gameStore.state.skillChoice.label }))) }}</div>
           <div v-if="gameStore.state.skillChoice.injuryResult" class="sc-subtext">{{ $t('hud.currentInjuryInjuryresult', { injuryResult: gameStore.state.skillChoice.injuryResult }) }}</div>
-          <div v-if="swoopCardCopy" class="sc-subtext">{{ swoopCardCopy.body }}</div>
+          <!-- Owner 10-26: server explanation lines override our sub-text (title, dice and buttons stay). -->
+          <ServerExplanation :lines="skillUseServerLines">
+            <template #line="{ line }"><div class="sc-subtext" data-server-explanation>{{ line }}</div></template>
+            <div v-if="swoopCardCopy" class="sc-subtext">{{ swoopCardCopy.body }}</div>
+          </ServerExplanation>
           <!-- #225(b) (owner-fg 07-29): Crushing Blow — show the ACTUAL rolled armour dice (🛡 + the [d6,d6]) ABOVE
                the CB body so the coach reads the roll vs AV before deciding the +1. Guarded ⇒ absent for any other
                skill / when no armour roll is live (generic body renders as before). -->
@@ -16309,7 +16344,9 @@ watch(() => [
             <div>{{ passSkillCardCopy.needLine }}</div>
             <div v-if="modifierSkillCardCopy?.resultLine">{{ modifierSkillCardCopy.resultLine }}</div>
           </div>
-          <div v-else-if="hmpScatterSkillCardCopy" class="sc-subtext">{{ hmpScatterSkillCardCopy.contextLine }}</div>
+          <template v-else-if="hmpScatterSkillCardCopy">
+            <div v-if="!skillUseServerLines.length" class="sc-subtext">{{ hmpScatterSkillCardCopy.contextLine }}</div>
+          </template>
           <div v-else class="sc-body">
             <img v-if="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" class="sc-icon"
               :src="playerOwnedSkillIconUrl(gameStore.state.skillChoice.skill, effectiveIconStyle, playerSideById(gameStore.state.skillChoice.playerId))" :alt="terms(gameStore.state.skillChoice.skill)" />
@@ -17053,6 +17090,13 @@ watch(() => [
           <span v-if="gameStore.state.playerPick.confirm && gameStore.state.playerPick.maxPicks > 1" class="pick-count">
             {{ gameStore.state.playerPick.picked.length }}/{{ gameStore.state.playerPick.maxPicks }}
           </span>
+          <!-- Owner 10-26: the server's playerChoice descriptions, verbatim: one shared line, or each beside its player. -->
+          <ServerExplanation :lines="pickServerExplanation.shared">
+            <template #line="{ line }"><div class="pick-server-line" data-server-explanation>{{ line }}</div></template>
+          </ServerExplanation>
+          <div v-for="row in pickServerPlayerRows" :key="row.playerId" class="pick-server-line pick-server-player" data-server-explanation>
+            <b v-if="row.name">{{ row.name }}</b> {{ row.line }}
+          </div>
           <template #actions>
             <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
               :disabled="gameStore.state.playerPick.picked.length < gameStore.state.playerPick.minPicks || gameStore.state.playerPick.picked.length === 0"
@@ -17091,7 +17135,11 @@ watch(() => [
           v-prompt-dodge="promptDodge('shadowing', shadowingPick.seq)"
           :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('shadowing', $event)">
-          <span>{{ $t('hud.shadowernameCanFollowThe', { shadowerName }) }}</span>
+          <!-- Owner 10-26: the server's line for the shadower replaces our sentence (title and buttons stay). -->
+          <ServerExplanation :lines="pickServerLineFor(shadowingPick.eligibleIds[0])">
+            <template #line="{ line }"><div class="pick-server-line" data-server-explanation><b>{{ shadowerName }}</b> {{ line }}</div></template>
+            <span>{{ $t('hud.shadowernameCanFollowThe', { shadowerName }) }}</span>
+          </ServerExplanation>
           <template #actions>
             <button class="rr-use" @click="answerShadowing(true)">{{ $t('hud.shadow') }}</button>
             <button v-if="shadowingPick.declinable" class="rr-decline" data-pad-cancel @click="answerShadowing(false)">{{ $t('hud.decline') }}</button>
@@ -17107,7 +17155,11 @@ watch(() => [
           v-prompt-dodge="promptDodge('tentacles', tentaclesPick.seq)"
           :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
           @drag-start="startReactivePromptDrag('tentacles', $event)">
-          <span>{{ $t('hud.tentaclernameCanTryTo', { tentaclerName }) }}</span>
+          <!-- Owner 10-26: the server's line for the tentacler replaces our sentence (title and buttons stay). -->
+          <ServerExplanation :lines="pickServerLineFor(tentaclerId)">
+            <template #line="{ line }"><div class="pick-server-line" data-server-explanation><b>{{ tentaclerName }}</b> {{ line }}</div></template>
+            <span>{{ $t('hud.tentaclernameCanTryTo', { tentaclerName }) }}</span>
+          </ServerExplanation>
           <template #actions>
             <button class="rr-use" @click="answerTentacles(true)">{{ $t('hud.use') }}</button>
             <button v-if="tentaclesPick.declinable" class="rr-decline" data-pad-cancel @click="answerTentacles(false)">{{ $t('hud.decline') }}</button>
@@ -17697,7 +17749,12 @@ watch(() => [
           <img v-else-if="rerollToastIconKind(gameStore.state.rerollSplash, false) === 'mascot'" class="reroll-toast-icon" :src="resourceIcon('team_mascot')" alt="" />
           <img v-else-if="gameStore.state.rerollSplash.isTeam" class="reroll-toast-icon" :src="resourceIcon('re_roll')" alt="" />
           <img v-else class="reroll-toast-icon" :src="splashTeamLogo(gameStore.state.rerollSplash.side, gameStore.state.rerollSplash.logo)" alt="" />
-          <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? $t('hud.rerollToast.coachUsesSource', { coach: gameStore.state.rerollSplash.coach, source: gameStore.state.rerollSplash.source }) }}</span>
+          <!-- Owner 10-26: the modifier-pass splash (Swift As The Breeze / Consummate Professional) - the skill's name as a title line. -->
+          <span v-if="gameStore.state.rerollSplash.title" class="reroll-toast-lines" data-testid="modifier-pass-splash">
+            <span class="reroll-toast-title">{{ gameStore.state.rerollSplash.title }}</span>
+            <span class="reroll-toast-text">{{ gameStore.state.rerollSplash.text }}</span>
+          </span>
+          <span v-else class="reroll-toast-text">{{ gameStore.state.rerollSplash.text ?? $t('hud.rerollToast.coachUsesSource', { coach: gameStore.state.rerollSplash.coach, source: gameStore.state.rerollSplash.source }) }}</span>
         </div>
         <!-- Owner 10-20: the Team Captain splash - the reroll toast's look, one row below it (a kept team reroll). -->
         <div v-if="gameStore.state.teamCaptainSplash" :key="'tc-' + gameStore.state.teamCaptainSplash.seq"
@@ -17814,7 +17871,7 @@ watch(() => [
               :data-active="bpDieMode === opt.kind" :title="opt.label" @click="useBlockPartialOption(opt.kind)">
               <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle)"
                 :src="skillIconUrl(opt.skill, effectiveIconStyle)!" :alt="opt.label" />
-              <span class="bp-opt-label">{{ opt.label }}</span>
+              <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle))" class="bp-opt-label">{{ opt.label }}</span>
             </button>
             <!-- Owner 10-10: Pro with a fallback, as upstream's block dialog offers it (its "ReRoll" / "Mascot" /
                  "TRR fallback" boxes under the Pro button). One-die rolls only - see blockProCompositeOptions. -->
@@ -17893,18 +17950,18 @@ watch(() => [
             <div v-if="multiBlockDialogMine" class="mbr-actions">
               <button v-if="row.brawler" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" :alt="$t('hud.mbrRow.brawler')" />
-                <span class="bp-opt-label">{{ $t('hud.mbrRow.brawler') }}</span>
+                <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.brawler') }}</span>
               </button>
               <!-- Hatred (Single Skull → Hatred, upstream Hatred.java): fires immediately like Brawler above —
                    answered CLIENT_USE_HATRED via sendMultiBlockHatred, not the generic reRollSource path. -->
               <button v-if="row.singleSkullLabel" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="gameStore.sendMultiBlockHatred(row.targetId)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)" :src="skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)!" :alt="row.singleSkullLabel" />
-                <span class="bp-opt-label">{{ row.singleSkullLabel }}</span>
+                <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle))" class="bp-opt-label">{{ row.singleSkullLabel }}</span>
               </button>
               <button v-if="row.pro" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
                 :title="$t('hud.mbrRow.pro')" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
-                <span class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
+                <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
               <button v-for="opt in row.proComposite" :key="opt.kind" class="bp-opt"
                 :title="opt.title" @click="multiBlockProComposite(row.targetId, opt.kind)">
@@ -17913,7 +17970,7 @@ watch(() => [
               <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
-                <span class="bp-opt-label">{{ row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional') }}</span>
+                <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle))" class="bp-opt-label">{{ row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional') }}</span>
               </button>
               <!-- Savage Blow (star program): reroll-ALL-dice election — rerolls the WHOLE block-dice pool at once,
                    NOT a single-die pick (canReRollAnyNumberOfBlockDice). Distinct affordance = the source icon + an
@@ -18079,6 +18136,11 @@ watch(() => [
               <div v-if="gameStore.state.reRollPrompt.fumble && !passRerollContext" class="rr-prompt-line">{{ $t('hud.rerollBar.currentRollIsA') }}</div>
               <div v-for="(message, i) in gameStore.state.reRollPrompt.messages" :key="i" class="rr-prompt-line">{{ message }}</div>
               <div v-if="gameStore.state.reRollPrompt.loner" class="rr-prompt-line rr-loner-line">{{ rerollLonerCopy }}</div>
+              <!-- S36: reRollModifierChoice modifierCombinations - information only, never clickable. -->
+              <template v-if="gameStore.state.reRollPrompt.combinations?.length">
+                <div class="rr-prompt-line rr-combos-title">{{ $t('hud.rerollBar.rollsNeededWithOptionalSkills') }}</div>
+                <div v-for="(combo, i) in gameStore.state.reRollPrompt.combinations" :key="`combo-${i}`" class="rr-prompt-line rr-combo">{{ $t('hud.rerollBar.combinationLine', { label: combo.label, roll: combo.minimumRoll }) }}</div>
+              </template>
               <div class="rr-prompt-line rr-question">{{ gameStore.state.reRollPrompt.question }}</div>
             </div>
             <div v-else class="rr-context rr-context-spectator">
@@ -18104,14 +18166,18 @@ watch(() => [
                 </button>
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
-                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(opt.source, effectiveIconStyle) }"
+                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle) }"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
                   :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
-                  <img v-if="skillIconUrl(opt.source, effectiveIconStyle)"
-                    :src="skillIconUrl(opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                  <span class="bp-opt-label">{{ opt.label }}</span>
+                  <img v-if="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)"
+                    :src="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)!" :alt="opt.label" />
+                  <!-- Owner 11-10 (supersedes S8 for icon buttons): a reroll source with an icon shows the icon only; its name stays in
+                       the tooltip and the icon alt. A source without an icon keeps its visible name. -->
+                  <span v-if="!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)" class="bp-opt-label">{{ opt.label }}</span>
+                  <!-- S36: a reRollModifierChoice option shows the roll it turns the test into (the option's own minimumRoll). -->
+                  <span v-if="opt.response === 'modifier-choice' && opt.minimumRoll != null" class="bp-opt-target">{{ $t('hud.rerollBar.optionNeeds', { roll: opt.minimumRoll }) }}</span>
                   <!-- #205 (Meero audit row): Mascot TRR also consumes the team re-roll pool ⇒ it carries the
                        same count, inline (it's the mascot art, not the plain re-roll die). Plain 'Team Mascot'
                        (no TRR) is excluded (#188 FR-1). -->
@@ -21069,6 +21135,9 @@ watch(() => [
 }
 .pick-decline:hover { background: #c02828; }
 .pick-count { font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: var(--ui-text); opacity: 0.85; }
+/* Owner 10-26: the server's playerChoice descriptions, verbatim, under the pick prompt. */
+.pick-server-line { margin-top: 4px; color: var(--ui-muted); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); line-height: 1.3; }
+.pick-server-line b { color: var(--ui-text); font-weight: 600; }
 .quicksnap-confirm-stack {
   display: flex;
   flex-direction: column;
@@ -22132,6 +22201,17 @@ watch(() => [
   box-shadow: 0 6px 20px #000b, 0 0 16px #3a5be044;
 }
 .reroll-toast-icon { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; }
+/* Owner 10-26: the modifier-pass splash's title line (the skill's name) above the "<Player> passes the <roll>" text. */
+.reroll-toast-lines { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.reroll-toast-title {
+  font-family: var(--font-display);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 0.95rem);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #ffe27a;
+  text-shadow: 0 2px 6px #000c;
+}
 .reroll-toast-text {
   font-family: var(--font-display);
   font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem);
@@ -23054,6 +23134,11 @@ watch(() => [
 .rr-context-row:hover { background: transparent; }
 .rr-prompt-line { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 22px; color: var(--ui-text); }
 .rr-loner-line { margin-top: 8px; margin-bottom: 8px; }
+/* S36: reRollModifierChoice information list and the per-option target roll. */
+.rr-combos-title { margin-top: 6px; }
+.rr-combo { padding-left: 10px; opacity: 0.85; }
+.rr-combo::before { content: '\2022\00a0'; }
+.bp-opt-target { margin-left: 6px; opacity: 0.8; font-size: 0.9em; }
 .rr-ctx-label { font-weight: 800; font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: var(--ui-text); }
 .rr-question { color: var(--ui-heading); font-weight: 800; }
 .rr-context-spectator { flex-direction: row; align-items: center; padding-bottom: 8px; }
