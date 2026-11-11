@@ -14,17 +14,24 @@ export function isD6FaceValue(value: unknown): value is D6FaceValue {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 6;
 }
 
+/** Owner 11-11 (Train, Linux: HTML dice painted as black boxes): 'small' = the 256 px copy of the face
+ *  (`<name>-256.png`, scripts/gen-small-d6-faces.py) for HTML surfaces (log, panels, cards; 24-84 CSS px). The pitch
+ *  renderer keeps the full-size masters. */
+export type D6FaceSize = 'full' | 'small';
+
 export function d6FaceUrl(
   value: D6FaceValue,
   variant: D6FaceVariant = DEFAULT_D6_FACE_VARIANT,
   side?: BlockDieSide | null,
+  size: D6FaceSize = 'full',
 ): string {
   const filename = variant === 'team' && (side === 'home' || side === 'away')
     ? `d6-team-${side}-face-${value}.png`
     : variant === 'black'
       ? `d6-face-${value}.png`
       : `d6-brushed-metal-face-${value}.png`;
-  return new URL(`../assets/d6/${filename}`, import.meta.url).href;
+  const file = size === 'small' ? filename.replace(/\.png$/, '-256.png') : filename;
+  return new URL(`../assets/d6/${file}`, import.meta.url).href;
 }
 
 /** The legacy `black` key now selects the original white-pip-face set, which

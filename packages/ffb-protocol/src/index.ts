@@ -60,6 +60,8 @@ export {
   statsMechanicFor,
   type StatsMechanic,
   playerSkillValue,
+  positionSkillValue,
+  type PositionSkillValues,
   type DecodedSkill,
   type PlayerSkillDisplayEntry,
   type PlayerStatKey,

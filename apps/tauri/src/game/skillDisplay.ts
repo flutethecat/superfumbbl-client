@@ -1,5 +1,5 @@
 import type { GameJson, PlayerJson, StatsMechanic, TeamJson } from '@fumbbl40k/ffb-protocol';
-import { decodePlayerSkills, isStatIncreaseSkill, normalizeSkillName, playerSkillDisplayEntries, playerSkillDisplayNames, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
+import { decodePlayerSkills, isStatIncreaseSkill, normalizeSkillName, playerSkillDisplayEntries, playerSkillDisplayNames, positionSkillValue as protocolPositionSkillValue, statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import type { AutoMarkingConfig, AutoMarkingRecord } from './markings';
 import {
   settings,
@@ -141,17 +141,46 @@ export interface PlayerDetailSkill {
   added: boolean;
 }
 
-/** Shared Modern/Classic player-card skill projection. */
+/** Owner 11-11 (RickWreckless g1962735, "Loner not listed as x+"): the position's value for a skill it lists, '' when
+ *  none (the protocol decoder's fallback, ffb-protocol positionSkillValue). */
+export function positionSkillValue(position: Pick<PositionLike, 'skillArray' | 'skillValues' | 'skillDisplayValues'> | undefined, skill: string): string {
+  return protocolPositionSkillValue(position, skill)?.trim() ?? '';
+}
+
+/** The number in a skill value as the wire or the display writes it: "3", "3+", "+1"; null for anything else. */
+export function skillValueNumber(value: string): number | null {
+  const m = /^\+?(\d+)\+?$/.exec(value.trim());
+  return m ? Number(m[1]) : null;
+}
+
+/** Java Player.getSkillIntValue + SkillValueEvaluator (owner 11-11, Sol): a numeric skill's shown value is the ROLL
+ *  evaluator's LOWEST (Loner, Bloodlust, Hypnotic Gaze, Secret Weapon) or the MODIFIER evaluator's HIGHEST (Mighty
+ *  Blow, Dirty Player) over the base value (own, else the position's) and every temporary grant; another skill shows
+ *  its first value. */
+function evaluatedSkillValue(skill: string, values: readonly string[]): string {
+  const key = normalizeSkillName(skill);
+  // Sol r2: a display value ("2+", "+1") carries the same number as the raw one
+  const numbers = values.map(skillValueNumber).filter((n): n is number => n !== null);
+  if (numbers.length && ROLL_VALUED_SKILLS.has(key)) return String(Math.min(...numbers));
+  if (numbers.length && MODIFIER_VALUED_SKILLS.has(key)) return String(Math.max(...numbers));
+  return values[0] ?? '';
+}
+
+/** Shared Modern/Classic player-card skill projection. `position` (owner 11-11: the player's roster position, never for
+ *  a zapped player) supplies a base skill's value when the player has none, through the shared decoder, so Hatred's
+ *  keyword chips and every valued label read the same as the team-array wire shape. */
 export function playerDetailSkills(
   player: PlayerJson,
   baselineSkills: ReadonlySet<string> = new Set(),
+  position?: Pick<PositionLike, 'skillArray' | 'skillValues' | 'skillDisplayValues'>,
 ): PlayerDetailSkill[] {
   // Owner 10-06: the value comes through the canonical decoder (display map > display array > value map > value
   // array) - a team serialization carries Loner's roll only in the parallel `skillValues`, which the map-only read
   // missed, so the card said "Loner" with no roll.
-  const decoded = decodePlayerSkills(player);
-  return playerSkillDisplayEntries(player).map((entry) => {
-    const value = decoded.find((skill) => skill.name === entry.name && skill.value?.trim())?.value?.trim() ?? '';
+  const decoded = decodePlayerSkills(player, position);
+  return playerSkillDisplayEntries(player, position).map((entry) => {
+    const values = decoded.filter((skill) => skill.name === entry.name && skill.value?.trim()).map((skill) => skill.value!.trim());
+    const value = evaluatedSkillValue(entry.name, values);
     return {
       name: entry.name,
       label: entry.label !== entry.name
@@ -170,7 +199,8 @@ export function playerCardSkills(team: TeamJson, player: PlayerJson): PlayerDeta
   const position = roster?.positionArray?.find((p) => p.positionId === player.positionId);
   return !position
     ? playerDetailSkills(player).map((skill) => ({ ...skill, added: false }))
-    : playerDetailSkills(player, new Set(position.skillArray ?? []));
+    // owner 11-11: a zapped player's skills are his own - the old position lends no value
+    : playerDetailSkills(player, new Set(position.skillArray ?? []), String(player.playerKind) === 'zappedPlayer' ? undefined : position);
   // Owner 10-19: the card always lists Hatred; the 10-18 gate is for the pitch icon rail only (computeIconSkills).
 }
 
@@ -196,7 +226,8 @@ export interface RosterSkill extends PlayerDetailSkill {
  */
 export function playerRosterSkills(player: PlayerJson, position: PositionLike | undefined): RosterSkill[] {
   const positionSkills = position?.skillArray ?? [];
-  const detail = playerDetailSkills(player, new Set(positionSkills));
+  // owner 11-11: a zapped player's skills are his own, so the old position never lends them a value
+  const detail = playerDetailSkills(player, new Set(positionSkills), String(player.playerKind) === 'zappedPlayer' ? undefined : position);
   if (!position || String(player.playerKind) === 'zappedPlayer') return detail.map((skill) => ({ ...skill, innate: false }));
   const text = (v: unknown): string => String(v ?? '').trim().toLowerCase();
   const positionValue = (name: string): string => {
@@ -216,7 +247,9 @@ export function playerRosterSkills(player: PlayerJson, position: PositionLike | 
       // position): it is the position's unless a grant is among them.
       const keyword = text(/^.+? \((.+)\)$/.exec(skill.label)?.[1]);
       if (!keyword) return { ...skill, innate: temporary.length === 0 };
-      return { ...skill, innate: keyword === wanted && !temporary.some((entry) => text(entry.value) === keyword) };
+      // owner 11-11: each keyword is its own chip, so a position value may list several ("troll;orc")
+      const keywordsOf = (v: unknown): string[] => text(v).split(';').map((k) => k.trim()).filter(Boolean);
+      return { ...skill, innate: keywordsOf(wanted).includes(keyword) && !temporary.some((entry) => keywordsOf(entry.value).includes(keyword)) };
     }
     // one chip per name: a temporary grant of the same name shares it, so the chip stays
     if (temporary.length) return { ...skill, innate: false };

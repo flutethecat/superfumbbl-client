@@ -63,12 +63,32 @@ type PlayerLike = Partial<Pick<PlayerJson, 'skillArray' | 'temporarySkillsMap' |
   | 'movement' | 'armour' | 'strength' | 'agility' | 'passing' | 'skillValues' | 'skillDisplayValues'
   | 'skillValuesMap' | 'skillDisplayValuesMap'>> | null | undefined;
 
+/** The roster position's skills with their parallel values (RosterPosition skillArray / skillValues /
+ *  skillDisplayValues). */
+export interface PositionSkillValues {
+  readonly skillArray?: readonly string[] | null;
+  readonly skillValues?: readonly (string | null)[] | null;
+  readonly skillDisplayValues?: readonly (string | null)[] | null;
+}
+
+const pickValue = (v: unknown): string | null => (v == null || String(v).trim() === '' ? null : String(v));
+
+/** Owner 11-11 (RickWreckless g1962735, "Loner not listed as x+"): the position's value for a skill it lists (display
+ *  value first), else null. A model sync leaves an innate skill's value ONLY here (an Ogre's Loner "3"). */
+export function positionSkillValue(position: PositionSkillValues | null | undefined, name: string): string | null {
+  const index = position?.skillArray?.indexOf(name) ?? -1;
+  if (index < 0) return null;
+  return pickValue(position?.skillDisplayValues?.[index]) ?? pickValue(position?.skillValues?.[index]);
+}
+
 /** Owner 09-09: a BASE skill's value — the parallel `skillValues` array (team serialization) or the
- *  `skillValuesMap` (model sync); the display variants win when the server filled them. Null when unvalued. */
-function baseSkillValue(player: PlayerLike, name: string, index: number): string | null {
-  const pick = (v: unknown): string | null => (v == null || String(v).trim() === '' ? null : String(v));
-  return pick(player?.skillDisplayValuesMap?.[name]) ?? pick(player?.skillDisplayValues?.[index])
-    ?? pick(player?.skillValuesMap?.[name]) ?? pick(player?.skillValues?.[index]);
+ *  `skillValuesMap` (model sync); the display variants win when the server filled them. Owner 11-11: else the roster
+ *  position's (RosterPlayer.getSkillValue / getDisplayValue, RosterPlayer.java:211-217: own value, else the
+ *  position's). Null when unvalued. */
+function baseSkillValue(player: PlayerLike, name: string, index: number, position?: PositionSkillValues | null): string | null {
+  return pickValue(player?.skillDisplayValuesMap?.[name]) ?? pickValue(player?.skillDisplayValues?.[index])
+    ?? pickValue(player?.skillValuesMap?.[name]) ?? pickValue(player?.skillValues?.[index])
+    ?? positionSkillValue(position, name);
 }
 
 function temporaryEntries(player: PlayerLike): [string, string][] {
@@ -81,16 +101,17 @@ function temporaryEntries(player: PlayerLike): [string, string][] {
 
 /**
  * Every skill the player has, base + temporary, with duplicates preserved per source — the decoded form of
- * Player.getSkillsIncludingTemporaryOnesWithDuplicates (Player.java:321-326).
+ * Player.getSkillsIncludingTemporaryOnesWithDuplicates (Player.java:321-326). `position` (owner 11-11): the player's
+ * roster position, which supplies a base skill's value when the player has none (never pass it for a zapped player).
  */
-export function decodePlayerSkills(player: PlayerLike): DecodedSkill[] {
+export function decodePlayerSkills(player: PlayerLike, position?: PositionSkillValues | null): DecodedSkill[] {
   const out: DecodedSkill[] = [];
   for (const [source, entry] of temporaryEntries(player)) {
     const { name, value } = decodeSkillWithValue(entry);
     out.push({ name, value, source });
   }
   (player?.skillArray ?? []).forEach((skill, index) => {
-    out.push({ name: String(skill), value: baseSkillValue(player, String(skill), index), source: null });
+    out.push({ name: String(skill), value: baseSkillValue(player, String(skill), index, position), source: null });
   });
   return out;
 }
@@ -161,8 +182,8 @@ function compareKeyword(a: string, b: string): number {
  * of temporarySkillsMap insertion order; a missing/blank value fails soft to
  * the bare `Hatred` label.
  */
-export function playerSkillDisplayEntries(player: PlayerLike): PlayerSkillDisplayEntry[] {
-  const decoded = decodePlayerSkills(player);
+export function playerSkillDisplayEntries(player: PlayerLike, position?: PositionSkillValues | null): PlayerSkillDisplayEntry[] {
+  const decoded = decodePlayerSkills(player, position);
   const out: PlayerSkillDisplayEntry[] = [];
   for (const name of playerSkillDisplayNames(player)) {
     if (normalizeSkillName(name) !== 'hatred') {
@@ -172,9 +193,12 @@ export function playerSkillDisplayEntries(player: PlayerLike): PlayerSkillDispla
     // Owner 09-09: the wire keyword is lower-case ("undead", "orc"); the card reads "Hatred (Orc)".
     const keywords = decoded
       .filter((skill) => normalizeSkillName(skill.name) === 'hatred')
-      .map((skill) => skill.value?.trim() ?? '')
+      // owner 11-11 (Sol): a value may list several keywords ("troll;orc", HatredKeyword ';'-joined) - one chip each;
+      // every word capitalised ("big guy" -> "Big Guy")
+      .flatMap((skill) => (skill.value ?? '').split(';'))
+      .map((keyword) => keyword.trim())
       .filter(Boolean)
-      .map((keyword) => keyword.charAt(0).toUpperCase() + keyword.slice(1))
+      .map((keyword) => keyword.replace(/(^|\s)(\S)/g, (_m, space: string, first: string) => space + first.toUpperCase()))
       .sort(compareKeyword);
     const seen = new Set<string>();
     for (const keyword of keywords) {

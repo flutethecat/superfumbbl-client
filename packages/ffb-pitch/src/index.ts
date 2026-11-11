@@ -60,6 +60,7 @@ export {
   isD6FaceValue,
   type D6FaceValue,
   type D6FaceVariant,
+  type D6FaceSize,
 } from './d6';
 export { presentationMs, setPresentationMode, SPECTATOR_PACING_FACTOR, type PresentationMode } from './presentationTiming';
 export { SPIKE_CURSOR, SPIKE_CURSOR_HOTSPOT, SPIKE_CURSOR_PRIMED } from './cursors';

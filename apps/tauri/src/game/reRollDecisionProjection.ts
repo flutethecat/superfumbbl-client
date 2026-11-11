@@ -1,4 +1,4 @@
-import { NetCommandId, playerHasSkill, type GameJson } from '@fumbbl40k/ffb-protocol';
+import { NetCommandId, decodePlayerSkills, normalizeSkillName, playerHasSkill, type GameJson, type PositionSkillValues } from '@fumbbl40k/ffb-protocol';
 import { prettySkillName } from './logic/prettySkillName';
 import { starRuleById } from './logic/coachActionDispatch';
 import type { PassReRollResult, ServerPassRollTruth } from './actionRollProjection';
@@ -288,13 +288,31 @@ export function valuedSkillLabel(rawSkill: string, displayValues: Record<string,
   return skillNameWithValue(displayValue, skillName);
 }
 
+/** The player's roster position (null for a zapped player, whose skills are his own). */
+function rosterPositionOf(g: GameJson | null | undefined, player: ReturnType<typeof playerById>): PositionSkillValues | null {
+  if (!g || !player || String((player as { playerKind?: unknown }).playerKind) === 'zappedPlayer') return null;
+  for (const team of [g.teamHome, g.teamAway]) {
+    if (!team?.playerArray?.some((p) => p.playerId === player.playerId)) continue;
+    const positions = ((team as { roster?: { positionArray?: unknown[] } }).roster?.positionArray ?? []) as (PositionSkillValues & { positionId?: string })[];
+    return positions.find((entry) => entry.positionId === player.positionId) ?? null;
+  }
+  return null;
+}
+
+/** Loner's roll for the reroll prompt - Java Player.getSkillIntValue with the ROLL evaluator (owner 11-11, Sol): the
+ *  LOWEST numeric value over the base Loner (the player's own, else his roster position's: an Ogre's "3") and every
+ *  temporary Loner grant; a non-numeric display value is shown as sent. */
 export function lonerValueForPlayer(g: GameJson | null | undefined, playerId: string): string | undefined {
   const player = playerById(g, playerId);
-  const rawValue = player?.skillDisplayValuesMap?.Loner ?? player?.skillValuesMap?.Loner;
-  if (rawValue == null) return undefined;
-  const value = String(rawValue).trim();
-  if (!value) return undefined;
-  return /^\d+$/.test(value) ? `${value}+` : value;
+  if (!player) return undefined;
+  const values = decodePlayerSkills(player, rosterPositionOf(g, player))
+    .filter((skill) => normalizeSkillName(skill.name) === 'loner')
+    .map((skill) => String(skill.value ?? '').trim())
+    .filter(Boolean);
+  if (!values.length) return undefined;
+  // Sol r2: a display value ("2+") carries the same number as the raw one
+  const numbers = values.map((v) => /^\+?(\d+)\+?$/.exec(v)?.[1]).filter((n): n is string => n != null).map(Number);
+  return numbers.length ? `${Math.min(...numbers)}+` : values[0];
 }
 
 export function singleUseReRollName(dp: Record<string, unknown>): string | null {

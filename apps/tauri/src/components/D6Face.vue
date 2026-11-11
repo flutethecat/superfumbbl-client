@@ -22,7 +22,8 @@ const valid = computed(() => isD6FaceValue(props.value));
 const teamSide = computed(() => (settings.d6FaceVariant === 'team' || props.variant === 'team') && (props.side === 'home' || props.side === 'away') ? props.side : null);
 const effectiveVariant = computed<D6FaceVariant>(() => teamSide.value ? 'team' : props.variant ?? settings.d6FaceVariant);
 const url = computed(() => valid.value
-  ? d6FaceUrl(props.value as 1 | 2 | 3 | 4 | 5 | 6, effectiveVariant.value, teamSide.value)
+  // owner 11-11: the 256 px copy - an HTML face is 24-84 CSS px; the 512 / 1254 px masters stay for the pitch
+  ? d6FaceUrl(props.value as 1 | 2 | 3 | 4 | 5 | 6, effectiveVariant.value, teamSide.value, 'small')
   : '');
 const imageStyle = computed(() => {
   const scale = d6FaceVisualScale(effectiveVariant.value);
@@ -56,7 +57,7 @@ watch(() => [props.value, effectiveVariant.value, teamSide.value], () => { faile
 .d6-face img {
   position: absolute;
   object-fit: contain;
-  image-rendering: auto; /* owner 09-09: the faces are 512/1254 px masters — nearest-neighbour decimated them at log size */
+  image-rendering: auto; /* owner 09-09: nearest-neighbour decimated the large faces at log size; 11-11: the 256 px copies are still downscaled */
 }
 .d6-face-value {
   position: absolute;
