@@ -1,8 +1,9 @@
 import { textureParserFor } from './artPack';
+import { createLongPress, isFingerPointer, tapSlopFor } from './touchInput';
 import { fitInSquare, holdInstalledUrls, loadInstalledTexture } from './installedTexture';
 import { Application, Assets, CanvasSource, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
 import 'pixi.js/gif';
-import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZONE_LETTERING, composeDisplayLettering, displayFontState, fitInkInBand, loadDisplayFonts, type DisplayLetteringStyle } from './displayLettering';
+import { DISPLAY_FONTS_LOADED, DISPLAY_FONTS_UNSUPPORTED, DUGOUT_LETTERING, ENDZONE_LETTERING, ENDZONE_LETTERING_ALPHA, ENDZONE_SNES_LETTERING, composeDisplayLettering, displayFontState, fitInkInBand, loadDisplayFonts, loadSnesFont, snesCovers, snesFontState, type DisplayLetteringStyle } from './displayLettering';
 import type { GifSource } from 'pixi.js/gif';
 import { acquireClassicIcons, classicIconFor, resetIconCaches, type ClassicIconLease } from './classicIcons';
 import { CROWD_STOMP_FANS, CROWD_STOMP_STAGGER_MS, PIPELINE_TIMINGS } from './blockPipeline';
@@ -72,6 +73,8 @@ const NO_STUN_DECORATION_HOLDS: ReadonlySet<string> = Object.freeze(new Set<stri
 /** A press that travels less than this (screen px) before release is a tap, not a drag. One threshold for the camera
  *  drag and the undecided Shift press on a dugout token (owner 10-14 / Astra pass 2). */
 const TAP_SLOP_PX = 5;
+// Touch mode (spec-touch-mode-2026-11-12 section 7): the tap tolerance widens for finger / pen pointers only
+// (tapSlopFor; a mouse keeps TAP_SLOP_PX), plus the pitch long-press and the free pinch that snaps on release.
 /** Owner 09-28 (S16): Hail Mary Pass scatter squares, derived by the host from received frames only. `decision.square`
  *  is null when the rolled direction leads off the pitch. */
 export interface HmpScatterMarksState {
@@ -88,6 +91,7 @@ import {
   buildWalkerToken,
   isWalkerToken,
   walkerChildScale,
+  adoptWalkerDecor,
   setWalkCastWeather,
   walkerDecorScale,
   walkerDecorLocalY,
@@ -1616,6 +1620,50 @@ const DEFAULT_MARKING_STYLE = {
  * spill into neighbouring squares. Long glyph sequences are horizontally
  * compressed inside this boundary while retaining their selected height. */
 const SKILL_MARKING_MAX_WIDTH = PLAYER_SPRITE_BASE * 1.1;
+/** Owner 11-11: the opt-in marking STATUS line (stat changes + niggling injuries, above the skill line) reuses the
+ *  player card's convention - an improved characteristic green, a reduction / niggle red (SpectateView .card-stat) -
+ *  as LIGHTER tints: the card's own #4fce6a / #f05050 sank into the grass at the whole-pitch zoom (headless shots,
+ *  docs/artifact-orchestration/stat-marks-proto). */
+const STATUS_MARK_INCREASE_COLOR = 0x8ef0a0;
+const STATUS_MARK_DECREASE_COLOR = 0xff7a7a;
+/** Gap between status-line pieces (source px): "+ST" "-MA" "N" read as separate marks, not one word. */
+const STATUS_MARK_GAP = 2;
+/** Owner 11-12 (checker disc, centred, two lines): the HEADLESS estimate of a glyph's ink height per px of font size
+ *  (capitals, digits, +/-: Arial bold caps ~0.72, rounded up), plus the stroke, centred on the text's anchor. Used only
+ *  where no canvas exists (unit tests, non-mounted fail-soft paths); a mounted client measures the selected fonts'
+ *  real ink (textInk) - a position font such as Nuffle is neither 0.8 em tall nor centred on its box. */
+const MARK_INK_PER_PX = 0.8;
+/** The glyphs a marking line is fitted for whatever it currently shows (capitals, digits, signs), so every token with
+ *  the same font gets the same fitted size; the line's own text is measured with them (a descender shrinks only it). */
+const MARK_INK_REFERENCE = 'ABDGHMNSTV0123456789+-';
+/** The capitals the position letter's ink is measured with (plus the letter itself), so two discs of one size never
+ *  differ in whether both lines fit just because one says "T" and the other "B". */
+const CHECKER_LETTER_INK_REFERENCE = 'ABCDGHKLRTW';
+/** Review 11-12: the smallest readable FITTED marking size (token px: the font size times the block scale at the
+ *  closest zoom). When the two-line block cannot fit on a checker disc at or above it, the status line is not drawn on
+ *  that token: the skill line alone renders exactly as it does with the option off. */
+const DISC_FIT_MIN_SIZE = 7;
+/** Gap (source px, scaled with the lines) between the two fitted lines' ink, and the clearance (token px) the fitted
+ *  block keeps from the position letter's ink and from the disc's rim. */
+const DISC_FIT_LINE_GAP = 1;
+const DISC_FIT_EDGE = 1;
+/** A checker-disc token's letter-layout inputs (review r2: re-laid out when a preserved token's marking changes). */
+/** Review r4: the pose a token's markings were built for (kept until the token is rebuilt). */
+type MarkingPoseToken = Container & { markingPoseAtBuild?: { down: boolean; feetWordArt: boolean } };
+type CheckerChip = { letter: Text; centreY: number; discR: number; iconsOnChip: boolean; fontRevision?: number };
+type CheckerChipToken = Container & {
+  chipCentre?: { y: number; r: number };
+  checkerChip?: CheckerChip;
+};
+/** A text's ink extent (source px) above (negative) and below its anchor point, for anchor y 0.5. */
+type TextInk = { top: number; bottom: number };
+/** The fitted two-line block's inputs on a checker disc: the disc, the letter's ink bottom and each line's ink. */
+type DiscFit = { cy: number; r: number; top: number; inks: [TextInk, TextInk] };
+/** One piece of a player's marking status line (setPlayerStatusMarkings). */
+export interface PlayerStatusMarkPart {
+  text: string;
+  tone: 'increase' | 'decrease';
+}
 // ball-carrier marker (owner 2026-07-02, queue item 9): KO styling, but the
 // text is BLUE and carries no shadow disc
 // Owner 2026-07-03: the ball-carrier marker inherits the ball's CYAN aura, so
@@ -2648,6 +2696,7 @@ export class PitchRenderer {
       const listener = (): void => {
         if (this.destroyed || !this.app || this.letteringFontListener !== listener) return;
         if (displayFontState() === this.letteringFontDrawn) return;
+        this.invalidateMarkingFonts(); // a face arrived: marking / checker-letter ink measured in the fallback is stale
         this.drawPitch();
         this.redrawDugoutsWithArrows();
         this.drawTurnTrack();
@@ -2661,6 +2710,26 @@ export class PitchRenderer {
       this.letteringFontLoadAsked = drawnState;
       void loadDisplayFonts().then(settle);
     }
+  }
+  /** Owner 11-11: the end zones letter a name SNES Italic draws in full (snesCovers) in that face; 'graduate-c' keeps
+   *  every end zone in Graduate C. */
+  private endZoneFace: 'graduate-c' | 'snes' = 'snes';
+  setEndZoneFace(face: 'graduate-c' | 'snes'): void {
+    if (face === this.endZoneFace) return;
+    this.endZoneFace = face;
+    if (this.app) this.drawPitch();
+  }
+  private snesLoadAsked = false;
+  /** An end zone that wants SNES while the face is still loading is drawn in Graduate C now and re-lettered ONCE when
+   *  the face settles (the display-font watch only follows Graduate / Nuffle). A face that failed, or was never
+   *  registered, leaves Graduate C in place. */
+  private watchSnesFont(state: string): void {
+    if (state !== 'pending' || this.snesLoadAsked) return;
+    this.snesLoadAsked = true;
+    void loadSnesFont().then(() => {
+      if (this.destroyed || !this.app || snesFontState() !== 'loaded') return;
+      this.drawPitch();
+    });
   }
   private stopLetteringFontListener(): void {
     if (!this.letteringFontListener) return;
@@ -2995,7 +3064,10 @@ export class PitchRenderer {
   /** Marking-only width guards. The wrapper retains the shared inverse-zoom
    * scale; its text child is squeezed on x when that scale would breach the
    * token-width boundary. */
-  private markingFit = new WeakMap<Container, { tag: Text; maxWidth: number }>();
+  /** Each marking line (the skill Text, and the status line's container when drawn) is squeezed to maxWidth on its own. */
+  /** Owner 11-12: `disc` = the checker-disc two-line block (fitDiscMarkings) - the disc, the letter's ink bottom and
+   *  the two lines' measured ink. */
+  private markingFit = new WeakMap<Container, { lines: Container[]; maxWidth: number; disc?: DiscFit }>();
   /** The camera-fit scale — the 100% reference for overlayZoomFactor. */
   private cameraFitScale = 1;
   /** Owner 09-05 (round 12): PIXEL ZOOM — every camera zoom target lands on a whole number of PHYSICAL pixels per art
@@ -3012,11 +3084,20 @@ export class PitchRenderer {
     const r = this.world.scale.x * (globalThis.devicePixelRatio ?? 1);
     return PitchRenderer.FREE_ZOOM_RUNGS.some((v) => Math.abs(v - r) < 1e-3);
   }
+  /** Owner 11-11: on the 1.5 rung the walker snap is decided in PHYSICAL pixels - this is the canvas backing pixels
+   *  per physical pixel (the render resolution scale) there, 0 elsewhere (every other rung keeps its backing-pixel
+   *  snap). So at 100%, 150%, 200% or 300% the figures draw the same 0.5 physical px per art px, from the exact 2x2
+   *  box-average sheet. */
+  private walkerPhysicalSnap(): number {
+    if (!this.app || !this.onMidZoomRung()) return 0;
+    return this.app.renderer.resolution / (globalThis.devicePixelRatio ?? 1);
+  }
   /** Re-land a diverged (zoomed) camera on the nearest whole physical ratio about the viewport centre. */
   private requantizeZoom(): void {
     if (!this.app || !this.pixelZoom) return;
     const oldScale = this.world.scale.x;
-    const newScale = this.quantizeZoom(oldScale, 'nearest');
+    // The 1.5 stop is wheel-only: a camera already ON it keeps it; a free camera (a held trigger) never lands there.
+    const newScale = this.quantizeZoom(oldScale, 'nearest', this.onMidZoomRung());
     if (Math.abs(newScale - oldScale) < 1e-6) return;
     const cx = this.app.screen.width / 2;
     const cy = this.app.screen.height / 2;
@@ -3026,7 +3107,25 @@ export class PitchRenderer {
     this.world.position.set(cx - worldCx * newScale, cy - worldCy * newScale);
     this.updateOverlayScales();
   }
-  private quantizeZoom(scale: number, mode: 'floor' | 'nearest' | 'up' | 'down'): number {
+  /** Owner 11-11: the in-between wheel stop below the 2x default (see quantizeZoom). */
+  static readonly MID_ZOOM_RUNG = 1.5;
+  /** Owner 11-11: the pitch-fit rung and MID_ZOOM_RUNG never sit closer than this ratio (the 2.25 lesson, S93). */
+  static readonly MIN_RUNG_RATIO = 1.12;
+  /** The cinematic's zoom: `zoom` x the fit (default 1.7), never below the viewer's saved scale (owner 07-08). The
+   *  nearest rung of that excludes the 1.5 wheel stop, so from a camera on 1.5 (or off the ladder after a held
+   *  trigger) it can round BELOW the saved scale; the next rung up is taken instead - never 1.5 itself. */
+  private cinematicZoomScale(savedScale: number, zoom = 1.7): number {
+    const q = this.quantizeZoom(Math.max(savedScale, this.cameraFitScale * zoom), 'nearest');
+    return q < savedScale - 1e-6 ? this.quantizeZoom(savedScale, 'up') : q;
+  }
+  /** True when the camera sits on the 1.5 stop (physical pixels). */
+  private onMidZoomRung(): boolean {
+    return Math.abs(this.world.scale.x * (globalThis.devicePixelRatio ?? 1) - PitchRenderer.MID_ZOOM_RUNG) < 1e-3;
+  }
+  /** `withMid` is off unless the caller asks: only the mouse wheel steps onto the 1.5 stop (zoomAt with `wheel`), and
+   *  a camera already sitting on it survives a resolution re-quantize. Keys, controller taps, pinch, the fit floor,
+   *  the double-click focus, the cinematics and the default view keep their established targets. */
+  private quantizeZoom(scale: number, mode: 'floor' | 'nearest' | 'up' | 'down', withMid = false): number {
     if (!this.pixelZoom) return scale;
     // Owner 09-05 (round 13, native capture): quantize in PHYSICAL screen pixels (devicePixelRatio), NOT canvas
     // resolution. At Resolution scale 200% the canvas backing is 2x the screen: a whole backing ratio (7) is 3.5
@@ -3046,12 +3145,21 @@ export class PitchRenderer {
     // rung 4) while the ground, grid, markers and discs zoom to 3.
     // Owner 10-02 (S93): the 2.25 rung read as a near-copy of the 2x default next to it (12% apart) - dropped in both
     // orientations; the full-pitch rung below 2 and the 3x rung above keep the steps distinct.
+    // Owner 11-11: 1.5 joins as the wheel stop between the whole-pitch view and the 2x default (1 -> 2 halved the
+    // visible area in one step). It is 0.44 device px per walker art px; snapWalker rounds that UP to the exact 2x2
+    // box-average ratio (0.5, the same mechanism as rung 3 -> 1:1), so the figures stay crisp while the ground,
+    // grid, markers and discs zoom to 1.5. There the snap is decided in PHYSICAL pixels (walkerPhysicalSnap) and the
+    // figures draw the half-resolution box-average sheet, so the render resolution changes neither.
     const ladder = [0.5, 1, 2, 3, 4, 4.5, 6, 8, 9, 10, 12, 16];
+    if (withMid) ladder.splice(2, 0, PitchRenderer.MID_ZOOM_RUNG);
     // JLeav 09-23: the first step in from the whole-stadium fit jumped straight to 2x. Add a rung at the scale
     // where just the 26x15 pitch fills the viewport, when that lands strictly between two fixed rungs.
     const pitchFit = this.pitchOnlyFitScale();
     if (pitchFit != null) {
       const p = pitchFit * res;
+      // Owner 11-11: a pitch-fit rung within 12% of the 1.5 stop replaces it (it already is the in-between step).
+      const mid = ladder.indexOf(PitchRenderer.MID_ZOOM_RUNG);
+      if (mid >= 0 && Math.abs(Math.log(p / PitchRenderer.MID_ZOOM_RUNG)) < Math.log(PitchRenderer.MIN_RUNG_RATIO)) ladder.splice(mid, 1);
       const i = ladder.findIndex((v) => v > p + 1e-3);
       if (i > 0 && ladder[i - 1]! < p - 1e-3) ladder.splice(i, 0, p);
     }
@@ -3076,6 +3184,8 @@ export class PitchRenderer {
   }
   private skillMarkingFontSize: number = DEFAULT_MARKING_STYLE.fontSize;
   private skillMarkingColor: number = DEFAULT_MARKING_STYLE.color;
+  /** Owner 11-11: the opt-in marking status line per playerId (drawn above the skill marking); empty = none. */
+  private playerStatusMarkings = new Map<string, readonly PlayerStatusMarkPart[]>();
   /** Per-skill-config icon-skill lists per playerId (owner 2026-07-03 r6f). When
    *  set, addSkillBadges draws exactly this player's list (already filtered by the
    *  MY TEAM / OPPOSITION behaviour + baseline); null = the legacy baseline filter. */
@@ -3606,7 +3716,7 @@ export class PitchRenderer {
     const zoomSettled = now >= this.walkerZoomSettleAt;
     // Owner 09-05 (round 10): pixel art samples NEAREST always — the linear-while-zooming pass read as a blur veil.
     setWalkSheetSampling('nearest');
-    tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt());
+    tickWalkers(this.walkerOwnerId, now, this.moveTweens, deviceScale, zoomSettled, this.walkerSnapExempt(), this.walkerPhysicalSnap());
     this.redrawBlockPreviewOnDecorChange();
     this.replaceActiveMarkerOnDecorChange();
     this.placeMoveBadge(); // Astra r2: a walker decor rung re-snapped the feet skill row
@@ -4883,6 +4993,59 @@ export class PitchRenderer {
   private spectatorTackleZoneSurface = false;
   /** Fired when the selection changes (null = cleared). */
   onSelectionChange: ((playerId: string | null) => void) | null = null;
+  /** Touch mode (host-set, spec-touch-mode-2026-11-12 section 7): the pitch long-press, a finger long-press never
+   *  becoming the right-click, and the free pinch that snaps to the nearest zoom stop when the fingers lift. */
+  private touchMode = false;
+  setTouchMode(on: boolean): void {
+    this.touchMode = on;
+    if (!on) { this.touchLongPress.cancel(); this.pinchCenter = null; }
+  }
+  /** Touch mode: a press-and-hold on the pitch - the player there (dugout token first), else the empty square. */
+  onLongPress: ((target: { playerId: string | null; square: [number, number] }) => void) | null = null;
+  /** The pointer type of the current press (the tap tolerance follows it). */
+  private pressPointerType = 'mouse';
+  /** Touch mode: the centre of the last pinch step (the snap on release zooms about it). */
+  private pinchCenter: { x: number; y: number } | null = null;
+  private readonly touchLongPress = createLongPress<{ x: number; y: number }>(
+    (at) => this.fireLongPress(at.x, at.y), () => this.pressTapSlop());
+  /** The tap tolerance of the current press: the finger / pen width only in touch mode, else TAP_SLOP_PX for every
+   *  pointer type (touch controls off = the pitch input of c8199d840, review finding 1). */
+  private pressTapSlop(): number { return this.touchMode ? tapSlopFor(this.pressPointerType) : TAP_SLOP_PX; }
+  /** Mark a player (the Shift-click arrow), for the touch press-and-hold row. */
+  markPlayer(playerId: string): void { this.markPlayerByShift(playerId, { ctrl: false, alt: false }); }
+  private fireLongPress(offsetX: number, offsetY: number): void {
+    // The press is consumed: no pan from here on, and its release is no tap (pointerup checks touchLongPress.up).
+    this.dragging = false;
+    const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+    const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+    const [sx, sy] = worldToSquare(worldX, worldY);
+    const playerId = this.playerAtCanvasPoint(offsetX, offsetY);
+    if (!playerId && !(sx >= 0 && sx < PITCH_COLS && sy >= 0 && sy < PITCH_ROWS)) return;
+    this.onLongPress?.({ playerId, square: [sx, sy] });
+  }
+  /** Touch mode pinch: free (unquantized) zoom about a point, inside the wheel's min / max. */
+  private zoomFree(screenX: number, screenY: number, factor: number): void {
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    this.noteManualCameraInput();
+    const oldScale = this.world.scale.x;
+    const minScale = this.clampToPitch ? this.cameraFitScale : 0.3;
+    const newScale = Math.min(PitchRenderer.MAX_WHEEL_ZOOM, Math.max(minScale, oldScale * factor));
+    if (newScale === oldScale) return;
+    const applied = newScale / oldScale;
+    this.world.position.x = screenX - (screenX - this.world.position.x) * applied;
+    this.world.position.y = screenY - (screenY - this.world.position.y) * applied;
+    this.world.scale.set(newScale);
+    this.clampCamera();
+    this.updateOverlayScales();
+  }
+  /** Touch mode: when the fingers lift, the zoom settles on the nearest stop of the existing ladder (quantizeZoom). */
+  private snapZoomToStop(screenX: number, screenY: number): void {
+    const oldScale = this.world.scale.x;
+    const minScale = this.clampToPitch ? this.cameraFitScale : 0.3;
+    const target = Math.min(PitchRenderer.MAX_WHEEL_ZOOM, Math.max(minScale, this.quantizeZoom(oldScale, 'nearest')));
+    if (Math.abs(target - oldScale) < 1e-9) return;
+    this.zoomFree(screenX, screenY, target / oldScale);
+  }
   /** Fired when the queued path changes (O8 confirm gate: the host shows Confirm). */
   onPathChange: ((path: Square[], playerId: string | null) => void) | null = null;
   /** O4/O5: declared action for the selected player; resets to auto on selection. */
@@ -5192,7 +5355,7 @@ export class PitchRenderer {
       await app.init({
         background: 0x14161a,
         resizeTo: host,
-        antialias: true,
+        antialias: this.antialias,
         // Owner 09-05: pixel art — every sprite lands on a whole device pixel (no sub-pixel placement).
         roundPixels: true,
         // B9-18: keep the canvas CSS size = host size while rendering at higher
@@ -5756,7 +5919,7 @@ export class PitchRenderer {
       // manually zoomed IN past the cinematic target, the cinematic used to yank them back
       // to 1.7× (read as "the auto-director resets to full zoom"). Clamp to their saved
       // scale so a cinematic CENTERS at their zoom; it still zooms in for un-zoomed viewers.
-      const zoomScale = this.quantizeZoom(Math.max(cine.savedScale, this.cameraFitScale * (cine.zoom ?? 1.7)), 'nearest');
+      const zoomScale = this.cinematicZoomScale(cine.savedScale, cine.zoom);
       // Kick tracking: follow the live point (the ball in flight) instead of a
       // fixed square.
       const target = cine.track ? cine.track() : cine.target;
@@ -6211,6 +6374,9 @@ export class PitchRenderer {
   /** i18n (Astra r2 #14): only a renderer that opts in draws localised words (the Modern view sets it); every other
    *  renderer, e.g. FUMBBL Classic's, keeps the English labels. */
   localiseLabels = false;
+  /** Edge smoothing (MSAA) for the Pixi canvas. Read ONCE when the renderer initialises, so set it before init();
+   *  the app turns it off for Low performance mode. Default true (unchanged look). */
+  antialias = true;
   /** The drawn text for an English display label: localised only when this renderer opted in. */
   private label(english: string): string {
     return this.localiseLabels ? pitchLabel(english) : english;
@@ -7029,6 +7195,7 @@ export class PitchRenderer {
       const acting = this.game.actingPlayer as { playerId?: string | null; sufferingBloodlust?: boolean } | undefined;
       const bloodlust = !!acting?.sufferingBloodlust && acting.playerId === data.playerId;
       if (!tokenWasPreserved) this.addStateMarkers(token, data.playerState, bloodlust, data.playerId, coordinate, isHome);
+      else this.refreshPreservedMarking(token, player, isDown(renderData.playerState)); // review r1: markings follow
       // Owner 08-18 (bullseye unify): the blitz target's ONLY mark is SpectateView's persistent
       // #94 DOM 🎯 badge (token-centred via tokenBodyCenterToCanvas). The renderer's transient
       // SELECTED_BLITZ_TARGET 🎯 (addBlitzTargetCrosshair) doubled it and is retired; the flag
@@ -8424,7 +8591,9 @@ export class PitchRenderer {
     // temporaryModifiersMap MA modifier, ruleset-clamped. Greasy Cleats' temporary -1 must shrink the planned
     // reach/preview; the base roster stat is never mutated.
     const ma = Number(effectiveMovement(player));
-    if (Number.isFinite(ma) && ma >= 0) return Math.min(ma, 9);
+    // P0 round-2 (P3): no upper cap. The old min(ma, 9) hid legal routes for MA above 9 (BB2016 / BB2020 rosters,
+    // fixtures; BB2025's limit is applied by effectiveStat to modified stats). The finite fallback below is the NaN-proofing.
+    if (Number.isFinite(ma) && ma >= 0) return ma;
     if (!this.badMovementWarned.has(player.playerId)) {
       this.badMovementWarned.add(player.playerId);
       console.warn('ffb-pitch: player has no numeric movement — planner falls back to MA 6', player.playerId, player.playerName, player.movement);
@@ -8451,7 +8620,9 @@ export class PitchRenderer {
     );
     if (!player) return null;
     let normal = this.safeMovement(player); // queue 9: NaN-proof MA
-    if (isDown(data.playerState)) normal = Math.max(0, normal - 3); // stand up costs 3 (C6)
+    // Owner 11-12 ("A should respect Jump Up"): the stand-up costs 3 only when it costs - Jump Up (the sole
+    // canStandUpForFree grantor, availableActions.ts) stands free, exactly as the feet badge (moveBadgeNormalLeftFor).
+    if (isDown(data.playerState) && !playerHasSkill(player, 'Jump Up')) normal = Math.max(0, normal - 3); // stand up costs 3 (C6)
     // Owner 09-06: a STUNNED player has NO movement this turn — inspecting one must not shade a range.
     if (baseState(data.playerState) === PlayerStateBase.STUNNED) return { player, data, normal: 0, rushes: 0, used: 0 };
     const baseNormal = normal; // MA after stand-up, BEFORE subtracting steps taken (drives the rush-used count)
@@ -8465,7 +8636,7 @@ export class PitchRenderer {
     normal = Math.max(0, baseNormal - used);
     // Owner 2026-07-14 (#10/#23): rushes ALREADY SPENT (steps beyond normal MA) reduce the remaining rush allotment
     // — the reach must key off the actingPlayer's REMAINING movement, not a fixed 2 (each rush used → one fewer GFI).
-    const totalRushes = playerHasSkill(player, 'Sprint') ? 3 : 2;
+    const totalRushes = this.rushAllowanceFor(player);
     const rushes = Math.max(0, totalRushes - Math.max(0, used - baseNormal));
     return { player, data, normal, rushes, used };
   }
@@ -8495,6 +8666,21 @@ export class PitchRenderer {
     return this.o66MovementBudgetAt(playerId, [data.playerCoordinate[0], data.playerCoordinate[1]], used);
   }
 
+  /** The rushes a player may make in one activation, as upstream UtilPlayer.hasMoveLeft:611-617 counts them: 2, +1
+   *  with Sprint (canMakeAnExtraGfi), +1 with Burst of Speed while it is still unused (canMakeAnExtraGfiOnce: neither
+   *  in the roster's usedSkills nor in this activation's). The Blitz block guard counts the same way; without the
+   *  Burst of Speed term the block-reserving search dropped a legal last-square approach (Astra, P0 g1963245). */
+  private rushAllowanceFor(player: PlayerJson): number {
+    const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
+    const acting = this.game?.actingPlayer as { playerId?: string | null; usedSkills?: unknown[] | null } | null | undefined;
+    const used = new Set([
+      ...(((player as { usedSkills?: unknown[] | null }).usedSkills) ?? []),
+      ...((acting?.playerId === player.playerId ? acting?.usedSkills : null) ?? []),
+    ].map(norm));
+    const burstUnused = playerHasSkill(player, 'Burst of Speed') && !used.has('burstofspeed');
+    return 2 + (playerHasSkill(player, 'Sprint') ? 1 : 0) + (burstUnused ? 1 : 0);
+  }
+
   /** Presentation companion to o66MovementBudget: same rules, but from one frozen visual cursor. */
   private o66MovementBudgetAt(
     playerId: string,
@@ -8512,7 +8698,8 @@ export class PitchRenderer {
     // auto / extended / contact path. o66PathToContact still answers [] beside the target (the block stays legal).
     if (isPinned(Number(data.playerState ?? 0))) return { from: [from[0], from[1]], normal: 0, rushes: 0, used };
     let normal = this.safeMovement(player);
-    if (isDown(data.playerState)) normal = Math.max(0, normal - 3); // stand up costs 3
+    // Owner 11-12 ("A should respect Jump Up"): no stand-up charge for Jump Up (canStandUpForFree), as the feet badge.
+    if (isDown(data.playerState) && !playerHasSkill(player, 'Jump Up')) normal = Math.max(0, normal - 3); // stand up costs 3
     const baseNormal = normal; // MA after stand-up, BEFORE subtracting steps taken (drives the rush-used count)
     // W27: On-the-Ball reactions have their own fixed allowance. Upstream UtilPlayer.hasMoveLeft uses
     // currentMove < 3 for PASS_BLOCK/KICKOFF_RETURN and isNextMoveGoingForIt returns false in both modes.
@@ -8524,7 +8711,7 @@ export class PitchRenderer {
     }
     normal = Math.max(0, baseNormal - used);
     // Owner 2026-07-14 (#10/#23): rushes already spent (steps beyond normal MA) reduce the remaining rush allotment.
-    const totalRushes = playerHasSkill(player, 'Sprint') ? 3 : 2;
+    const totalRushes = this.rushAllowanceFor(player);
     const rushes = Math.max(0, totalRushes - Math.max(0, used - baseNormal));
     return { from: [from[0], from[1]], normal, rushes, used };
   }
@@ -8609,14 +8796,18 @@ export class PitchRenderer {
     occupied.add(squareKey(ball[0], ball[1]));
   }
 
-  o66AutoPath(playerId: string, to: Square): Square[] | null {
+  /** P0 g1963245 (owner: "MA + 1 for planning"): `reserveForBlock` plans a Blitz approach with ONE square of the total
+   *  budget held back for the block (the block costs a square: upstream BlockLogicExtension.java:189). Only the search's
+   *  total shrinks; the rush threshold (b.normal) and the dodge/rush ranking are untouched. Omitted = unchanged. */
+  o66AutoPath(playerId: string, to: Square, opts?: { reserveForBlock?: boolean }): Square[] | null {
     const b = this.o66MovementBudget(playerId);
     if (!b) return null;
     const occupied = new Set(this.playersBySquare.keys());
     occupied.delete(squareKey(b.from[0], b.from[1]));
     this.blockIllegalO66WindowSquares(occupied);
     this.blockLooseBallSquare(occupied, to); // owner 09-06: never path THROUGH the ball
-    return planPath(occupied, this.markedSquaresFor(playerId), b.from, to, 0, b.normal, b.normal + b.rushes);
+    const total = Math.max(0, b.normal + b.rushes - (opts?.reserveForBlock ? 1 : 0));
+    return planPath(occupied, this.markedSquaresFor(playerId), b.from, to, 0, b.normal, total);
   }
 
   /** Waypoint routing (owner o66ad, FUMBBL planner): EXTEND an existing planned route by pathing from its LAST
@@ -8624,7 +8815,7 @@ export class PitchRenderer {
    *  player's whole budget, not fresh from the waypoint). If `to` already lies ON the prior route, TRUNCATE back to
    *  it (click a visited square to shorten the plan). Returns the full combined route (excl. the start square) or
    *  null if the extension can't be reached within the remaining budget. */
-  o66ExtendPath(playerId: string, priorRoute: Square[], to: Square): Square[] | null {
+  o66ExtendPath(playerId: string, priorRoute: Square[], to: Square, opts?: { reserveForBlock?: boolean }): Square[] | null {
     const b = this.o66MovementBudget(playerId);
     if (!b) return null;
     const toKey = squareKey(to[0], to[1]);
@@ -8637,7 +8828,8 @@ export class PitchRenderer {
     this.blockIllegalO66WindowSquares(occupied);
     // the already-planned squares are empties the player walks THROUGH — never treat them as blockers
     for (const s of priorRoute) occupied.delete(squareKey(s[0], s[1]));
-    const seg = planPath(occupied, this.markedSquaresFor(playerId), start, to, priorRoute.length, b.normal, b.normal + b.rushes);
+    const total = Math.max(0, b.normal + b.rushes - (opts?.reserveForBlock ? 1 : 0)); // P0 g1963245: see o66AutoPath
+    const seg = planPath(occupied, this.markedSquaresFor(playerId), start, to, priorRoute.length, b.normal, total);
     if (!seg || seg.length === 0) return null;
     return [...priorRoute, ...seg];
   }
@@ -8647,7 +8839,7 @@ export class PitchRenderer {
    *  neighbour otherwise, or null if no adjacent square is reachable within budget. Reuses o66AutoPath (which
    *  routes through dodges/rushes), so a contact that needs a dodge still plans (fixes the "planner didn't plot
    *  the path over to the player" foul case). */
-  o66PathToContact(attackerId: string, target: Square): Square[] | null {
+  o66PathToContact(attackerId: string, target: Square, opts?: { reserveForBlock?: boolean }): Square[] | null {
     const b = this.o66MovementBudget(attackerId);
     if (!b) return null;
     const cheby = (a: Square, c: Square) => Math.max(Math.abs(a[0] - c[0]), Math.abs(a[1] - c[1]));
@@ -8658,7 +8850,7 @@ export class PitchRenderer {
       if (!dx && !dy) continue;
       const sq: Square = [target[0] + dx, target[1] + dy];
       if (sq[0] < 0 || sq[1] < 0) continue;
-      const path = this.o66AutoPath(attackerId, sq);
+      const path = this.o66AutoPath(attackerId, sq, opts);
       if (path && path.length > 0 && (!best || better(path, best))) best = path;
     }
     return best;
@@ -17858,6 +18050,22 @@ export class PitchRenderer {
     this.queueProjectionRefresh();
   }
 
+  /** Owner 11-11: replaces the opt-in marking status lines (stat changes + niggling injuries per playerId). */
+  setPlayerStatusMarkings(markings: ReadonlyMap<string, readonly PlayerStatusMarkPart[]>): void {
+    const key = (parts: readonly PlayerStatusMarkPart[] | undefined) => (parts ?? []).map((p) => `${p.tone}:${p.text}`).join('\u0001');
+    const same = this.playerStatusMarkings.size === markings.size
+      && [...markings].every(([id, parts]) => this.playerStatusMarkings.has(id) && key(this.playerStatusMarkings.get(id)) === key(parts));
+    if (same) return;
+    this.playerStatusMarkings = new Map([...markings].map(([id, parts]) => [id, parts.map((p) => ({ ...p }))]));
+    this.queueProjectionRefresh();
+  }
+
+  /** Does this player draw any marking (a skill line or a status line)? */
+  private hasPlayerMarking(playerId: string): boolean {
+    return !!this.playerMarkings.get(playerId)?.trim()
+      || (this.playerStatusMarkings.get(playerId) ?? []).some((p) => !!p.text.trim());
+  }
+
   /** Shared Modern/Classic appearance control for on-token skill markings. */
   setSkillMarkingStyle(options: { fontFamily: string; fontSize: number; color: number }): void {
     this.skillMarkingFontFamily = options.fontFamily || DEFAULT_MARKING_STYLE.fontFamily;
@@ -19383,6 +19591,7 @@ export class PitchRenderer {
     const ew = getOrientation() === 'ew';
     const endZoneFonts = displayFontState();
     const endZoneKeys = new Set<string>();
+    const snesState = this.endZoneFace === 'snes' ? snesFontState() : 'off';
     for (const endX of [0, PITCH_COLS - 1]) {
       // Owner 2026-07-08: FUMBBL writes the TEAM NAME on its own end zone (home
       // south = endX 0, away north). 'touchdown' keeps the plain word. Fall back to
@@ -19390,14 +19599,21 @@ export class PitchRenderer {
       const teamName = endX === 0 ? this.game?.teamHome.teamName : this.game?.teamAway.teamName;
       const label = this.endZoneLabel === 'touchdown' ? this.label('TOUCHDOWN') : (teamName?.trim() || this.label('TOUCHDOWN'));
       // Owner 10-11: Graduate C lettering, composed once per label (letteringFor); the casing of the name as typed
-      // does not matter. Full alpha so the white stays white. `fit` is the box sized to the band: the letters' advance
-      // width and the capitals' height box, both centred on the sprite's centre.
-      const art = this.letteringFor('endzone', label, ENDZONE_LETTERING, endZoneFonts, endZoneKeys);
+      // does not matter. `fit` is the box sized to the band: the letters' advance width and the capitals' height box,
+      // both centred on the sprite's centre. Owner 11-11: slightly see-through (ENDZONE_LETTERING_ALPHA) so the white
+      // reads as paint on the grass.
+      // Owner 11-11: SNES Italic for a label the face draws in full, once it has loaded; anything else (an accented
+      // letter, a hyphen, a non-Latin name, the face still loading or failed) stays whole in Graduate C.
+      const snes = this.endZoneFace === 'snes' && snesCovers(label);
+      if (snes) this.watchSnesFont(snesState);
+      const art = snes && snesState === 'loaded'
+        ? this.letteringFor('endzone', label, ENDZONE_SNES_LETTERING, `${endZoneFonts}|snes`, endZoneKeys)
+        : this.letteringFor('endzone', label, ENDZONE_LETTERING, endZoneFonts, endZoneKeys);
       if (!art) continue;
       const td = new Sprite(art.texture);
       const fit = { width: art.fitWidth, height: art.fitHeight, ink: art.inkHeight };
       td.anchor.set(0.5, 0.5);
-      td.alpha = 1;
+      td.alpha = ENDZONE_LETTERING_ALPHA;
       if (ew) {
         // E-W TD fix: the end zone is a column that RECEDES up the sideline, so
         // its long edge is a slanted perspective line, NOT screen-vertical. Build
@@ -19717,9 +19933,10 @@ export class PitchRenderer {
         // owner: the disc carries the POSITION letter (B/T/C/BG…), not the number. Owner 09-15: when skill icons or
         // markings render ON the chip the letter moves to the chip's upper third so both stay readable.
         const discR = size * (big ? 58 : small ? 49 : 54) / 64 / 2;
-        const overlaysOnChip = (this.showSkillIcons && includeBadges && this.resolvedIconPosition() === 'centre'
-            && this.badgeSkillsFor(player, baselineSkills).length > 0)
-          || (this.resolvedMarkerPosition() === 'centre' && !!this.playerMarkings.get(player.playerId)?.trim());
+        const iconsOnChip = this.showSkillIcons && includeBadges && this.resolvedIconPosition() === 'centre'
+            && this.badgeSkillsFor(player, baselineSkills).length > 0;
+        const overlaysOnChip = iconsOnChip
+          || (this.resolvedMarkerPosition() === 'centre' && this.hasPlayerMarking(player.playerId));
         // Big outlined letter (owner 09-15): 14 px Nuffle bold with a 4 px ink stroke so it reads over the gloss highlight;
         // with overlays on the chip it sits in the upper band and the overlays take the lower two thirds.
         // Owner 09-15 (r2): 4x raster + linear filtering + mipmaps (the marking-text rule) — the 1x canvas read
@@ -19731,8 +19948,10 @@ export class PitchRenderer {
         // Owner 09-15 (r3): CENTRED on the disc — the capital's ink sits above the text box's centre (the box
         // carries the descender), so the anchor point drops by CHECKER_LETTER_DY of the box height.
         // (nr.height measures through a canvas — only touched when the knob is non-zero, so headless tests stay clean)
-        nr.position.set(0, (overlaysOnChip ? centreY - discR * 0.55 : centreY) + (CHECKER_LETTER_DY ? nr.height * CHECKER_LETTER_DY : 0));
-        (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre = { y: centreY + (overlaysOnChip ? discR * 0.28 : 0), r: discR };
+        // Review r2: the layout inputs ride on the token so a marking replaced on a preserved (moving) chip can move
+        // the letter and the overlay anchor exactly as this build does (layoutCheckerChip).
+        (token as CheckerChipToken).checkerChip = { letter: nr, centreY, discR, iconsOnChip, fontRevision: this.markingFontRevision };
+        this.layoutCheckerChip(token as CheckerChipToken, overlaysOnChip, this.centredMarkingLineCount(player.playerId, (token as CheckerChipToken).checkerChip));
         if (includeBadges) this.addSkillBadges(token, player, data, trim, team, baselineSkills, badgeOccluded);
         this.addMarkingText(token, player, down);
         token.addChild(nr); // after the overlays so the position letter always paints on top of them
@@ -19939,7 +20158,8 @@ export class PitchRenderer {
         showStunMark: this.showStunMark.bind(this),
         addDownDecoration: this.addDownDecoration.bind(this),
         addSkillBadges: this.addSkillBadges.bind(this),
-        addMarkingText: this.addMarkingText.bind(this),
+        // review r3: every walker build caches its as-built centre anchor first, whatever the marker anchor is
+        addMarkingText: (token: Container, player: PlayerJson, down: boolean) => { this.cacheMarkingCentre(token, true); this.addMarkingText(token, player, down); },
         applyActivationShading: this.applyActivationShading.bind(this),
         addPlayerNumber: this.addPlayerNumber.bind(this),
       };
@@ -20597,7 +20817,7 @@ export class PitchRenderer {
    *  Read from the same server state + loaded textures the markers key off, so the marking lift never desyncs. */
   private hasFeetWordArt(playerId: string): boolean {
     if (this.dodgySnackPlayers.has(playerId) && this.dodgySnackDecoTexture) return true;
-    const state = this.game?.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerState;
+    const state = this.game?.fieldModel?.playerDataArray?.find((d) => d.playerId === playerId)?.playerState;
     if (state == null) return false;
     if (this.rootedDecoTexture && hasFlag(state, PlayerStateFlag.ROOTED)) return true;
     if (this.chompedDecoTexture && hasFlag(state, PlayerStateFlag.CHOMPED)) return true;
@@ -20613,13 +20833,13 @@ export class PitchRenderer {
   }
 
   /** The 'feet' marking anchor (text hangs below it, anchor y 0). Shared with the Shift+click player label (owner 10-01). */
-  private markingFeetY(token: Container, playerId: string, down: boolean): number {
+  private markingFeetY(token: Container, playerId: string, down: boolean, feetWordArt = this.hasFeetWordArt(playerId)): number {
     // Owner 09-15 (upstream target): on a checker disc the feet markings hang directly under the disc's rim.
     const chipBelow = (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre;
     // Owner 09-15 (r2): TIGHT against the feet — the text top rides up into the boots (was a clear gap below).
     // Owner 09-15 (r3): DODGES a feet word-art state marker (ROOTED / DODGY SNACK / CHOMPED) by shifting UP the
     // token so the two never overlap — the marking stays the top-most layer either way.
-    const lift = this.hasFeetWordArt(playerId) ? FEET_ART_MARKING_LIFT : 0;
+    const lift = feetWordArt ? FEET_ART_MARKING_LIFT : 0;
     return (chipBelow ? chipBelow.y + chipBelow.r - 3 : down ? 3 : -2) - lift;
   }
 
@@ -20627,19 +20847,41 @@ export class PitchRenderer {
     // Markings are compact skill glyphs. Strip separators/newlines from both
     // current per-skill settings and legacy/imported FUMBBL marking payloads.
     const marking = this.playerMarkings.get(player.playerId)?.replace(/\s+/g, '');
-    if (!marking) return;
+    // Owner 11-11: the opt-in status line (stat changes + niggling injuries) draws ABOVE the skill line.
+    // Review r2: unlike the skill line, the status line keeps the coach's separator - a whitespace separator ("S S")
+    // stays a space; only line breaks / runs of whitespace fold to one space so the line never wraps.
+    let statusParts = (this.playerStatusMarkings.get(player.playerId) ?? [])
+      .map((p) => ({ text: p.text.replace(/\s+/g, ' '), tone: p.tone }))
+      .filter((p) => p.text.trim());
+    // Review r3: ONE construction path. This function builds the marking group for a fresh token AND for a marking
+    // replaced on a preserved (moving) token (refreshPreservedMarking), from the same build-time inputs: the checker
+    // chip layout is re-derived here from the same occupancy, and the centre anchor is the token's build-time centre
+    // (cached by the build, see cacheMarkingCentre) - never a measurement of a token whose decorations moved since.
+    // Review r4: the token's POSE as built (down, feet word-art lift). A preserved moving token keeps the pose it was
+    // built with until it is rebuilt, so a marking replaced on it uses that pose, never the model's newer state.
+    const pose = token as MarkingPoseToken;
+    if (pose.markingPoseAtBuild === undefined) pose.markingPoseAtBuild = { down, feetWordArt: this.hasFeetWordArt(player.playerId) };
+    down = pose.markingPoseAtBuild.down;
+    const chip = (token as CheckerChipToken).checkerChip;
+    // Review r4: the letter is promoted above the markings ONLY in the two-line centred layout; otherwise it keeps the
+    // ordinary order (a token child under the marking layer), restored when that layout goes away.
+    const liveChip = chip && !chip.letter.destroyed ? chip : undefined;
+    // Review 11-12: on a checker disc the two centred lines must fit on the disc at a readable size (discTwoLineFit);
+    // when they cannot, the status line is omitted and the token is built exactly as with the skill line alone.
+    const discFit = liveChip ? this.discTwoLineFit(liveChip, player.playerId) : null;
+    const centredLines = this.centredMarkingLineCount(player.playerId, liveChip);
+    if (liveChip && marking && statusParts.length && this.resolvedMarkerPosition() === 'centre' && !discFit) statusParts = [];
+    const twoLineChip = !!liveChip && centredLines === 2;
+    if (liveChip && !twoLineChip && liveChip.letter.parentRenderLayer === this.markingLayer) this.markingLayer.detach(liveChip.letter);
+    if (liveChip) this.layoutCheckerChip(token as CheckerChipToken, liveChip.iconsOnChip || centredLines > 0, centredLines);
+    if (!(token as CheckerChipToken).chipCentre) this.cacheMarkingCentre(token, false);
+    if (!marking && !statusParts.length) return;
     const group = new Container();
-    const tag = new Text({
-      text: marking,
-      style: new TextStyle({
-        fontFamily: this.skillMarkingFontFamily,
-        fontSize: this.skillMarkingFontSize,
-        fontWeight: 'bold',
-        fill: this.skillMarkingColor,
-        stroke: { color: 0x14161a, width: 2 },
-        wordWrap: false,
-        breakWords: false,
-      }),
+    // What this group shows (refreshPreservedMarking compares it on a token kept across a refresh).
+    (group as Container & { markingKey?: string }).markingKey = this.markingContentKey(player.playerId, !!chip);
+    const markingText = (text: string, fill: number) => new Text({
+      text,
+      style: this.markingTextStyle(fill),
       // Markings are routinely displayed smaller than their source texture.
       // A 2x canvas plus linear filtering/mipmaps preserves antialiased edges at
       // fit, zoomed-out, and depth-scaled pitch sizes.
@@ -20647,27 +20889,270 @@ export class PitchRenderer {
       textureStyle: { scaleMode: 'linear' },
       autoGenerateMipmaps: true,
     });
+    const tag = marking ? markingText(marking, this.skillMarkingColor) : null;
+    let statusLine: Container | null = null;
+    if (statusParts.length) {
+      // One Text per piece (each in its tone), laid left to right with a small gap, centred on the token axis.
+      statusLine = new Container();
+      statusLine.label = 'markingStatusLine';
+      const pieces = statusParts.map((p) => markingText(p.text, p.tone === 'increase' ? STATUS_MARK_INCREASE_COLOR : STATUS_MARK_DECREASE_COLOR));
+      const widths = pieces.map((piece) => this.markingSourceWidth(piece));
+      const total = widths.reduce((a, b) => a + b, 0) + STATUS_MARK_GAP * (pieces.length - 1);
+      let x = -total / 2;
+      pieces.forEach((piece, i) => {
+        piece.position.set(x, 0);
+        x += widths[i]! + STATUS_MARK_GAP;
+        statusLine!.addChild(piece);
+      });
+    }
+    // Both lines share one anchor; the status line sits one line ABOVE the skill line. A player with only one of the
+    // two shows it in the normal position.
+    const lineStep = this.skillMarkingFontSize;
+    const lines: Array<{ node: Container; texts: Text[] }> = [];
+    if (statusLine) lines.push({ node: statusLine, texts: statusLine.children as Text[] });
+    if (tag) lines.push({ node: tag, texts: [tag] });
     // owner 2026-07-03 r6f: markers default to the FEET (text hangs below), but can
     // render OVER THE HEAD (text sits above) like the icons.
     const markerPosition = this.resolvedMarkerPosition();
-    if (markerPosition === 'centre') {
-      group.position.set(0, this.markingCentreY(token));
-      tag.anchor.set(0.5, 0.5);
-    } else if (markerPosition === 'head') {
-      group.position.set(0, down ? -30 : -46);
-      tag.anchor.set(0.5, 1);
-    } else {
-      group.position.set(0, this.markingFeetY(token, player.playerId, down));
-      tag.anchor.set(0.5, 0);
-    }
+    const anchorY = markerPosition === 'centre' ? 0.5 : markerPosition === 'head' ? 1 : 0;
+    if (markerPosition === 'centre') group.position.set(0, this.markingCentreAnchor(token));
+    else if (markerPosition === 'head') group.position.set(0, down ? -30 : -46);
+    else group.position.set(0, this.markingFeetY(token, player.playerId, down, pose.markingPoseAtBuild.feetWordArt));
+    // feet and head: the LAST line (the skill line when there is one) keeps today's anchor and the status line sits one
+    // line above it (at the feet: over the boots - review r1, so the skill line never moves into the square below);
+    // centre: the stack centred on the anchor.
+    const firstY = anchorY === 0.5 ? -((lines.length - 1) * lineStep) / 2 : -(lines.length - 1) * lineStep;
+    lines.forEach((line, i) => {
+      for (const text of line.texts) text.anchor.set(line.node === text ? 0.5 : 0, anchorY);
+      line.node.y = firstY + i * lineStep;
+    });
     group.label = 'skillMarkings'; // owner 09-05: the BALL marker checks for feet markings by label
-    group.addChild(tag);
+    // children order: the skill Text first (tests and the ball marker read it), then the status line
+    if (tag) group.addChild(tag);
+    if (statusLine) group.addChild(statusLine);
     token.addChild(group);
     this.markingLayer.attach(group); // owner 09-15: painted above every token; detached with the token's removal
+    // Review r3: the markings paint in the marking layer, above every token - a checker's position letter (a token
+    // child) would sit UNDER them. Put the letter in the same layer, after the group, so it paints on top.
+    if (twoLineChip) { this.markingLayer.detach(chip!.letter); this.markingLayer.attach(chip!.letter); } // attach alone keeps an old slot
     this.overlayScaleGroups.push(group);
     const chipForFit = markerPosition === 'centre' ? (token as Container & { chipCentre?: { y: number; r: number } }).chipCentre : undefined;
-    this.markingFit.set(group, { tag, maxWidth: chipForFit ? chipForFit.r * 1.8 : SKILL_MARKING_MAX_WIDTH });
+    // Owner 11-12: on a checker disc the two centred lines are shrunk to fit ON the disc, under the letter (the skill
+    // line hung below the rim into the square beneath). Laid out by applyOverlayScale (fitDiscMarkings) - the one path
+    // for a fresh build, a replaced marking and every zoom.
+    const disc = twoLineChip && lines.length === 2 && discFit ? discFit : undefined;
+    this.markingFit.set(group, { lines: lines.map((line) => line.node), maxWidth: chipForFit ? chipForFit.r * 1.8 : SKILL_MARKING_MAX_WIDTH, ...(disc ? { disc } : {}) });
     this.applyOverlayScale(group, this.overlayZoomFactor());
+  }
+
+  /** Everything addMarkingText draws from for one player: both lines, the style, the anchor and the down pose. */
+  /** Review r4: CONTENT only (both lines, style, anchor) - never the player's state; the pose is the token's build pose. */
+  /** Review r7: plus what the FIT was decided from - the font revision (bumped when a face finishes loading: ink and
+   *  widths measured in the fallback are stale) and, on a checker chip, the position-letter font (its ink decides
+   *  whether both centred lines fit). */
+  private markingContentKey(playerId: string, checkerChip = false): string {
+    const status = (this.playerStatusMarkings.get(playerId) ?? []).map((p) => `${p.tone}:${p.text}`).join('\u0001');
+    return [this.playerMarkings.get(playerId) ?? '', status, this.skillMarkingFontFamily, this.skillMarkingFontSize,
+      this.skillMarkingColor, this.resolvedMarkerPosition(), this.markingFontRevision,
+      checkerChip ? this.checkerLetterFontFamily : ''].join('\u0002');
+  }
+
+  /** Bumped when a display face finishes loading (invalidateMarkingFonts). */
+  private markingFontRevision = 0;
+
+  /** Review r7: a font face finished loading (the lettering font listener, watchLetteringFonts). Ink and widths the
+   *  markings and the checker letters were measured with in the FALLBACK font are stale - and with them the cached
+   *  two-line fit and the one-line / two-line decision. Drop Pixi's cached metrics for those fonts, then rebuild:
+   *  refresh() rebuilds every token, and the one it keeps (the moving player's) has its marking group replaced
+   *  because the revision is part of markingContentKey. Nothing is measured on overlay updates, before or after. */
+  private invalidateMarkingFonts(): void {
+    this.markingFontRevision += 1;
+    try {
+      const letterStyle = CHECKER_LETTER_STYLE.clone();
+      letterStyle.fontFamily = this.checkerLetterFontFamily;
+      CanvasTextMetrics.clearMetrics(letterStyle._fontString);
+      CanvasTextMetrics.clearMetrics(this.markingTextStyle(0xffffff)._fontString);
+      // Pixi also keeps whole text measurements (box size, baseline) per text + style: those were taken in the fallback
+      (CanvasTextMetrics as unknown as { _measurementCache?: { clear(): void } })._measurementCache?.clear();
+    } catch { /* no canvas / no cache: nothing was measured */ }
+    this.refresh();
+  }
+
+  /** Review r7: a token kept across a refresh keeps its position LETTER too. Bring the letter up to the selected
+   *  position font, and redraw it once the font it was drawn in has finished loading. */
+  private syncPreservedCheckerLetter(chip: CheckerChip | undefined): void {
+    if (!chip || chip.letter.destroyed) return;
+    if (chip.letter.style.fontFamily !== this.checkerLetterFontFamily) chip.letter.style.fontFamily = this.checkerLetterFontFamily;
+    else if (chip.fontRevision !== this.markingFontRevision) chip.letter.style.update();
+    chip.fontRevision = this.markingFontRevision;
+  }
+
+  /** Review r1: refresh() keeps the actively presented token (and its tween) instead of rebuilding it, so its marking
+   *  group was never redrawn - a marking change (the status-line option, a new rule, a style change) left the old
+   *  lines on the moving player until the next rebuild. Rebuild ONLY the marking group, in place, when what it shows
+   *  changed; the token, its position and its tween are untouched. */
+  private refreshPreservedMarking(token: Container, player: PlayerJson, down: boolean): void {
+    const old = token.children.find((c) => c.label === 'skillMarkings') as (Container & { markingKey?: string }) | undefined;
+    const chip = (token as CheckerChipToken).checkerChip;
+    this.syncPreservedCheckerLetter(chip); // before the fit is retaken: it measures this letter
+    if (old && !old.destroyed && old.markingKey === this.markingContentKey(player.playerId, !!chip)) return;
+    if (!old && !this.hasPlayerMarking(player.playerId)) return;
+    if (old && !old.destroyed) {
+      this.markingLayer.detach(old);
+      this.overlayScaleGroups = this.overlayScaleGroups.filter((group) => group !== old);
+      old.parent?.removeChild(old);
+      old.destroy({ children: true });
+    }
+    // Review r3: the SAME constructor a fresh build uses (addMarkingText: chip layout, anchor, lines, fit at the
+    // build's basis), then the group is registered with the walker's decoration pass exactly as a fresh build's first
+    // capture registers it. No refit after the decoration scale: a fresh token is fitted before it, too.
+    this.addMarkingText(token, player, down);
+    const group = token.children.find((c) => c.label === 'skillMarkings') as Container | undefined;
+    if (group) adoptWalkerDecor(token, group);
+  }
+
+  /** The checker letter and the overlay anchor (chipCentre): the letter rises to the chip's upper band and the
+   *  overlays take the lower two thirds when icons or markings render ON the chip. */
+  private layoutCheckerChip(token: CheckerChipToken, overlaysOnChip: boolean, markingLines = 0): void {
+    const chip = token.checkerChip!;
+    chip.letter.position.set(0, this.checkerLetterY(chip, overlaysOnChip));
+    // Review r3: two centred marking lines (status + skills) need a second line of room - the stack's centre drops three quarters of a line (
+    // the top (status) line's box then clears the letter's on the smallest chip); the skill line may
+    // hang past the chip's rim (the marking layer paints above every token).
+    const extra = overlaysOnChip ? Math.max(0, markingLines - 1) * this.skillMarkingFontSize * 0.75 : 0;
+    token.chipCentre = { y: chip.centreY + (overlaysOnChip ? chip.discR * 0.28 + extra : 0), r: chip.discR };
+  }
+
+  /** How many marking lines draw CENTRED on the token (0 when the marker anchor is not 'centre'). On a checker disc
+   *  (`chip`) two lines count as ONE when the block cannot fit at a readable size: only the skill line is drawn. */
+  private centredMarkingLineCount(playerId: string, chip?: CheckerChip): number {
+    if (this.resolvedMarkerPosition() !== 'centre') return 0;
+    const skill = !!this.playerMarkings.get(playerId)?.replace(/\s+/g, '');
+    const status = (this.playerStatusMarkings.get(playerId) ?? []).some((p) => !!p.text.trim());
+    if (skill && status && chip && !this.discTwoLineFit(chip, playerId)) return 1;
+    return (skill ? 1 : 0) + (status ? 1 : 0);
+  }
+
+  /** The style every marking Text is drawn in (the skill line and each status piece). */
+  private markingTextStyle(fill: number): TextStyle {
+    return new TextStyle({
+      fontFamily: this.skillMarkingFontFamily,
+      fontSize: this.skillMarkingFontSize,
+      fontWeight: 'bold',
+      fill,
+      stroke: { color: 0x14161a, width: 2 },
+      wordWrap: false,
+      breakWords: false,
+    });
+  }
+
+  /** The checker letter's y with overlays on the chip (the upper band) or without (the disc's centre). */
+  private checkerLetterY(chip: CheckerChip, overlaysOnChip: boolean): number {
+    // (letter.height measures through a canvas — only touched when the knob is non-zero, so headless tests stay clean)
+    return (overlaysOnChip ? chip.centreY - chip.discR * 0.55 : chip.centreY)
+      + (CHECKER_LETTER_DY ? chip.letter.height * CHECKER_LETTER_DY : 0);
+  }
+
+  /** Review 11-12: a single-line text's INK extent about its anchor point (anchor y 0.5), in source px, stroke
+   *  included. Measured for the font actually selected: Pixi draws the baseline at stroke/2 + the font's ascent in a
+   *  box (ascent + descent + stroke) tall, and the canvas reports the string's own ink above / below the baseline.
+   *  Without a canvas (unit tests, non-mounted paths) it is the MARK_INK_PER_PX estimate, centred. */
+  private textInk(text: string, style: TextStyle): TextInk {
+    const stroke = style.stroke as unknown as { width?: number } | null | undefined;
+    const strokeWidth = typeof stroke === 'object' && stroke ? Number(stroke.width ?? 0) : 0;
+    const estimate = (Number(style.fontSize) * MARK_INK_PER_PX + strokeWidth) / 2;
+    if (typeof document === 'undefined') return { top: -estimate, bottom: estimate };
+    try {
+      const font = style._fontString;
+      const properties = CanvasTextMetrics.measureFont(font);
+      const context = (this.inkContext ??= document.createElement('canvas').getContext('2d'));
+      if (!context || !(properties.fontSize > 0)) return { top: -estimate, bottom: estimate };
+      context.font = font;
+      const metrics = context.measureText(text);
+      const up = metrics.actualBoundingBoxAscent;
+      const below = metrics.actualBoundingBoxDescent;
+      if (!Number.isFinite(up) || !Number.isFinite(below) || up + below <= 0) return { top: -estimate, bottom: estimate };
+      const baseline = (properties.ascent - properties.descent) / 2; // the baseline's y from the box centre
+      return { top: baseline - up - strokeWidth / 2, bottom: baseline + below + strokeWidth / 2 };
+    } catch {
+      return { top: -estimate, bottom: estimate };
+    }
+  }
+  private inkContext: CanvasRenderingContext2D | null | undefined;
+
+  /** Review 11-12: can this player's two centred marking lines (status over skills) sit on the checker disc, between
+   *  the position letter's ink and the rim, at a readable size? Returns the fitted block's inputs, or null when the
+   *  marker anchor is not the centre, the player does not have both lines, or the block would have to shrink below
+   *  DISC_FIT_MIN_SIZE (the token then draws the skill line alone). Decided at the closest zoom (overlay scale 1), so
+   *  the answer never changes with the camera; it depends only on the disc, the two fonts and the marking size. */
+  private discTwoLineFit(chip: CheckerChip, playerId: string): DiscFit | null {
+    if (this.resolvedMarkerPosition() !== 'centre') return null;
+    const skill = this.playerMarkings.get(playerId)?.replace(/\s+/g, '');
+    const status = (this.playerStatusMarkings.get(playerId) ?? [])
+      .map((p) => p.text.replace(/\s+/g, ' ')).filter((text) => text.trim()).join('');
+    if (!skill || !status) return null;
+    const style = this.markingTextStyle(0xffffff);
+    const inks: [TextInk, TextInk] = [this.textInk(MARK_INK_REFERENCE + status, style), this.textInk(MARK_INK_REFERENCE + skill, style)];
+    const fit: DiscFit = {
+      cy: chip.centreY,
+      r: chip.discR,
+      top: this.checkerLetterY(chip, true) + this.textInk(CHECKER_LETTER_INK_REFERENCE + chip.letter.text, chip.letter.style).bottom,
+      inks,
+    };
+    const size = this.skillMarkingFontSize * this.discFitLayout(fit, 1).scale;
+    return size + 1e-9 >= DISC_FIT_MIN_SIZE ? fit : null;
+  }
+
+  /** Where the fitted block's two lines go, and how large: the LARGEST block scale (never above `cap`, the ordinary
+   *  overlay scale) for which both line centres sit on whole token pixels, the status line's ink starts under the
+   *  letter's ink, the two lines' ink keeps its gap and the skill line's ink ends above the rim (DISC_FIT_EDGE clear at
+   *  both ends). Every whole-pixel pair of centres in the free band is tried; ties go to the tighter pair, then to the
+   *  pair best centred in the band. scale 0 = no room at all. */
+  private discFitLayout(fit: DiscFit, cap: number): { scale: number; firstCentre: number; step: number } {
+    const [first, second] = fit.inks;
+    const bandTop = fit.top + DISC_FIT_EDGE;
+    const bandBottom = fit.cy + fit.r - DISC_FIT_EDGE;
+    const up = Math.max(1e-6, -first.top); // the status line's ink above its centre
+    const between = Math.max(1e-6, first.bottom + DISC_FIT_LINE_GAP - second.top); // centre to centre at scale 1
+    const down = Math.max(1e-6, second.bottom); // the skill line's ink below its centre
+    let best = { scale: 0, firstCentre: Math.ceil(bandTop), step: 1 };
+    let bestOff = Infinity;
+    for (let firstCentre = Math.ceil(bandTop); firstCentre <= bandBottom; firstCentre++) {
+      for (let step = 1; firstCentre + step <= bandBottom; step++) {
+        const scale = Math.min(cap, (firstCentre - bandTop) / up, step / between, (bandBottom - firstCentre - step) / down);
+        if (scale <= 0 || scale < best.scale - 1e-9) continue;
+        const off = Math.abs((firstCentre - up * scale - bandTop) - (bandBottom - (firstCentre + step + down * scale)));
+        const better = scale > best.scale + 1e-9 || step < best.step || (step === best.step && off < bestOff - 1e-9);
+        if (!better) continue;
+        best = { scale, firstCentre, step };
+        bestOff = off;
+      }
+    }
+    return best;
+  }
+
+  /** Review r3: the token's centre marking anchor as BUILT, cached once per token. Walker builds always cache it (their
+   *  decorations are rescaled after the build, so a later measurement is wrong); other tokens cache it when a canvas
+   *  is available (text bounds need one). A checker chip uses chipCentre instead. */
+  private cacheMarkingCentre(token: Container, walkerBuild: boolean): void {
+    const anchored = token as Container & { markingCentreAtBuild?: number };
+    if (anchored.markingCentreAtBuild !== undefined || token.destroyed || (token as CheckerChipToken).chipCentre) return;
+    if (!walkerBuild && (isWalkerToken(token) || typeof document === 'undefined')) return;
+    try { anchored.markingCentreAtBuild = this.markingCentreY(token); } catch { /* unmeasurable: measured on use */ }
+  }
+
+  private markingCentreAnchor(token: Container): number {
+    const chip = (token as CheckerChipToken).chipCentre;
+    if (chip) return chip.y;
+    return (token as Container & { markingCentreAtBuild?: number }).markingCentreAtBuild ?? this.markingCentreY(token);
+  }
+
+  /** A marking Text's source width. Pixi's exact text bounds need a browser canvas; renderer unit tests and
+   *  non-mounted fail-soft paths run without `document`, so they keep a conservative glyph-width estimate. */
+  private markingSourceWidth(text: Text): number {
+    return typeof document === 'undefined'
+      ? text.text.length * Number(text.style.fontSize) * 0.85 + 4
+      : text.getLocalBounds().width;
   }
 
   /** Owner 2026-07-04: a single fading path-echo footprint at a square — sized to
@@ -22716,17 +23201,60 @@ export class PitchRenderer {
     const groupScale = walkerScale ? walkerScale.x : factor * (this.overlayBaseScale.get(group) ?? 1);
     if (walkerScale) group.scale.set(walkerScale.x, walkerScale.y); else group.scale.set(groupScale);
     const fit = this.markingFit.get(group);
-    if (!fit || fit.tag.destroyed) return;
-    fit.tag.scale.x = 1;
+    if (!fit) return;
+    if (fit.disc && !walkerScale) { this.fitDiscMarkings(group, fit.lines, fit.maxWidth, fit.disc, groupScale); return; }
+    // Each line (the skill Text; the status line's container) is squeezed to the token width on its own.
+    for (const line of fit.lines) {
+      if (line.destroyed) continue;
+      line.scale.x = 1;
+      const naturalWidth = this.markingLineSourceWidth(line) * groupScale;
+      line.scale.x = naturalWidth > 0 ? Math.min(1, fit.maxWidth / naturalWidth) : 1;
+    }
+  }
+
+  /** A marking line's source width (the skill Text, or the status line's container of pieces). */
+  private markingLineSourceWidth(line: Container): number {
     // Pixi's exact text bounds need a browser canvas. Renderer unit tests and
     // non-mounted fail-soft paths run without `document`, so retain a
     // conservative glyph-width estimate there instead of making presentation
     // setup depend on a DOM. Mounted clients use the exact antialiased bounds.
-    const sourceWidth = typeof document === 'undefined'
-      ? fit.tag.text.length * Number(fit.tag.style.fontSize) * 0.85 + 4
-      : fit.tag.getLocalBounds().width;
-    const naturalWidth = sourceWidth * groupScale;
-    fit.tag.scale.x = naturalWidth > 0 ? Math.min(1, fit.maxWidth / naturalWidth) : 1;
+    return line instanceof Text
+      ? this.markingSourceWidth(line)
+      : typeof document === 'undefined'
+        ? line.children.reduce((sum, child) => sum + (child instanceof Text ? this.markingSourceWidth(child) : 0), 0)
+          + STATUS_MARK_GAP * Math.max(0, line.children.length - 1)
+        : line.getLocalBounds().width;
+  }
+
+  /** Owner 11-12: the two centred marking lines on a CHECKER DISC (status line over skill line) shrink together until
+   *  the block fits on the disc between the position letter's ink and the rim, instead of the skill line hanging into
+   *  the square below. The group stays at the token origin at scale 1 and each line carries the block scale, so both
+   *  line centres land on whole token pixels (discFitLayout). The block never grows past the ordinary overlay scale
+   *  (the camera factor); when that is smaller than the fit it is centred in the free band. Each line is then squeezed
+   *  on x to the disc's chord across the middle of its ink (and the usual chip width cap): it never passes the rim
+   *  below, and its ends stay on the disc.
+   *  Review 11-12: the extents are the selected fonts' measured ink about each text's anchor (DiscFit.inks, textInk),
+   *  and a block that would be unreadably small never reaches here (discTwoLineFit). */
+  private fitDiscMarkings(group: Container, lines: Container[], maxWidth: number, disc: DiscFit, overlayScale: number): void {
+    group.position.set(0, 0);
+    group.scale.set(1);
+    const layout = this.discFitLayout(disc, overlayScale);
+    const scale = Math.max(0.01, layout.scale);
+    const { firstCentre, step } = layout;
+    const second = disc.inks[1];
+    lines.forEach((line, i) => {
+      if (line.destroyed) return;
+      const centre = firstCentre + i * step;
+      const ink = disc.inks[i] ?? second;
+      line.position.set(0, centre);
+      // the disc's chord across the middle of the line's ink: the text ends on the disc. (The chord across the ink's
+      // far edge squeezed the skill line, which sits next to the rim, into an unreadable sliver.)
+      const dy = Math.abs(centre + ((ink.top + ink.bottom) / 2) * scale - disc.cy);
+      const chord = 2 * Math.sqrt(Math.max(0, (disc.r - DISC_FIT_EDGE) ** 2 - dy * dy));
+      const naturalWidth = this.markingLineSourceWidth(line) * scale;
+      const squeeze = naturalWidth > 0 ? Math.min(1, Math.min(maxWidth, chord) / naturalWidth) : 1;
+      line.scale.set(scale * squeeze, scale);
+    });
   }
 
   /** True when an on-pitch player occupies square (x, y). */
@@ -23181,7 +23709,7 @@ export class PitchRenderer {
       // cine left it — no snap-back) and the gesture goes through; the director resumes on its next event.
       this.releaseCinematicForUser();
       const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-      this.zoomAt(event.offsetX, event.offsetY, factor);
+      this.zoomAt(event.offsetX, event.offsetY, factor, true);
     });
     this.listenCanvas(canvas, 'pointerdown', (event) => {
       this.releaseCinematicForUser(); // owner 09-25: see the wheel handler — a press releases the cinematic too
@@ -23238,6 +23766,9 @@ export class PitchRenderer {
       // Astra pass 2: a second pointer ends an undecided Shift press at once (pinch, never a later setup drag).
       if (this.shiftSetupPress && this.shiftSetupPress.pointerId !== event.pointerId) this.shiftSetupPress = null;
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (this.pointers.size === 1) this.pressPointerType = event.pointerType || 'mouse';
+      // Touch mode: a press may become the press-and-hold; a second pointer cancels it (a pinch).
+      if (this.touchMode && this.onLongPress) this.touchLongPress.down(event.pointerId, event.clientX, event.clientY, { x: event.offsetX, y: event.offsetY });
       if (this.pointers.size === 1) {
         this.dragging = true;
         this.dragDistance = 0;
@@ -23281,6 +23812,7 @@ export class PitchRenderer {
         return;
       }
       if (shiftPress && this.pointers.size !== 1) this.shiftSetupPress = null; // a second finger: pinch, not a press
+      this.touchLongPress.move(event.pointerId, event.clientX, event.clientY);
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
         const distance = this.currentPinchDistance();
@@ -23289,9 +23821,16 @@ export class PitchRenderer {
           const points = [...this.pointers.values()];
           const cx = (points[0]!.x + points[1]!.x) / 2 - rect.left;
           const cy = (points[0]!.y + points[1]!.y) / 2 - rect.top;
-          this.zoomAt(cx, cy, distance / this.pinchDistance);
+          // Touch mode: free while the fingers are down; the stop is chosen when they lift (snapZoomToStop).
+          if (this.touchMode) { this.zoomFree(cx, cy, distance / this.pinchDistance); this.pinchCenter = { x: cx, y: cy }; }
+          else this.zoomAt(cx, cy, distance / this.pinchDistance);
         }
         this.pinchDistance = distance;
+      } else if (this.dragging && this.touchMode && isFingerPointer(this.pressPointerType)
+          && this.dragDistance + Math.hypot(event.clientX - this.lastPointer.x, event.clientY - this.lastPointer.y) < this.pressTapSlop()) {
+        // A finger's travel inside the tap tolerance is still a tap: count it, do not pan yet.
+        this.dragDistance += Math.hypot(event.clientX - this.lastPointer.x, event.clientY - this.lastPointer.y);
+        this.lastPointer = { x: event.clientX, y: event.clientY };
       } else if (this.dragging) {
         this.noteManualCameraInput();
         this.dragDistance += Math.hypot(event.clientX - this.lastPointer.x, event.clientY - this.lastPointer.y);
@@ -23305,12 +23844,13 @@ export class PitchRenderer {
     // pointer (worldToSquare inverts the projection) and report the player.
     this.listenCanvas(canvas, 'pointerup', (event) => {
       if (event.button === 2) return; // B2-5: right-clicks never tap-select
+      if (this.touchLongPress.up(event.pointerId)) return; // touch mode: the press-and-hold consumed this press
       // Owner 10-10: a middle click the host has bound (Player cards on / off) is the host's, not a tap.
       // Astra pass 3: a tap needs the press record of THIS pointer. A second pointer consumes it (the gesture became a
       // pinch), so the surviving pointer's release can pan but never qualifies as a gameplay tap, and there is no
       // fallback to the release-time modifiers.
       const press = this.pressModifiers?.pointerId === event.pointerId ? this.pressModifiers : null;
-      const isTap = !!press && this.pointers.size === 1 && this.dragDistance < TAP_SLOP_PX;
+      const isTap = !!press && this.pointers.size === 1 && this.dragDistance < this.pressTapSlop();
       if (event.button === 1 && isTap && this.onMiddleClick?.()) return;
       // Astra pass 2: the gesture was decided at the PRESS. An undecided Shift press on a dugout token released under
       // the threshold marks the player it was pressed on, whatever the modifiers or the exact point at release.
@@ -23329,6 +23869,11 @@ export class PitchRenderer {
         if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
       } catch { /* capture may already have been released by the browser */ }
       this.pointers.delete(event.pointerId);
+      if (this.pointers.size === 0 && this.pinchCenter) {
+        const at = this.pinchCenter;
+        this.pinchCenter = null;
+        if (this.touchMode) this.snapZoomToStop(at.x, at.y);
+      }
       if (this.shiftSetupPress?.pointerId === event.pointerId) this.shiftSetupPress = null;
       if (this.pressModifiers?.pointerId === event.pointerId) this.pressModifiers = null;
       this.dragging = this.pointers.size === 1;
@@ -23358,6 +23903,7 @@ export class PitchRenderer {
     // Astra pass 2: capture lost mid-press (the browser or another element took it) ends an undecided Shift press.
     this.listenCanvas(canvas, 'lostpointercapture', (event) => this.cancelShiftSetupPress(event.pointerId));
     this.listenCanvas(canvas, 'pointercancel', (event) => {
+      this.touchLongPress.cancel();
       release(event);
       clearPointerHover();
     });
@@ -23372,6 +23918,7 @@ export class PitchRenderer {
     // One right-click anywhere clears the full plan and is swallowed; context menus exist only without waypoints.
     this.listenCanvas(canvas, 'contextmenu', (event) => {
       event.preventDefault();
+      if (this.touchMode && isFingerPointer((event as PointerEvent).pointerType || this.pressPointerType)) return; // touch mode: a finger long-press is the press-and-hold, never the right-click
       if (this.onRightClick?.(event.offsetX, event.offsetY)) return; // FUMBBL Controls Right Click (host-owned)
       this.contextAt(event.offsetX, event.offsetY);
     });
@@ -24121,7 +24668,7 @@ export class PitchRenderer {
     else if (this.cinematic) return;
     const rect = this.app.canvas.getBoundingClientRect();
     const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-    this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor);
+    this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, factor, true);
   }
   /** Controller support P1 (owner 10-07): one zoom level in (+1) or out (-1) about the screen centre (a trigger tap,
    *  the = / - keys). */
@@ -24149,13 +24696,14 @@ export class PitchRenderer {
     this.clampCamera();
     this.updateOverlayScales();
   }
-  private zoomAt(screenX: number, screenY: number, factor: number): void {
+  /** `wheel`: the step comes from a mouse wheel (canvas or overlay) - the only gesture that stops on the 1.5 rung. */
+  private zoomAt(screenX: number, screenY: number, factor: number, wheel = false): void {
     this.noteManualCameraInput();
     const oldScale = this.world.scale.x;
     // Owner 2026-07-08 (FC): clamp-to-pitch stops zoom-out at the fit scale.
     const minScale = this.clampToPitch ? this.cameraFitScale : 0.3;
     // Owner 09-05: wheel steps move one whole physical-pixel ratio at a time (pixel zoom).
-    const newScale = Math.min(PitchRenderer.MAX_WHEEL_ZOOM, Math.max(minScale, this.quantizeZoom(oldScale, factor > 1 ? 'up' : 'down')));
+    const newScale = Math.min(PitchRenderer.MAX_WHEEL_ZOOM, Math.max(minScale, this.quantizeZoom(oldScale, factor > 1 ? 'up' : 'down', wheel)));
     const applied = newScale / oldScale;
     this.world.position.x = screenX - (screenX - this.world.position.x) * applied;
     this.world.position.y = screenY - (screenY - this.world.position.y) * applied;

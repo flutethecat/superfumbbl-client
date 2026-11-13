@@ -8,6 +8,7 @@ import { D6_FACE_VALUES, PitchRenderer, blockFacesReady, bundledSkillBadgeUrl, t
 import D6Face from './D6Face.vue';
 import SetupLogStylePreview from './SetupLogStylePreview.vue';
 import { settings, settingsProvenance } from '../game/settings';
+import { setLowPerformanceMode } from '../game/lowPerformanceMode';
 import { flushFumbblPassword } from '../game/credentials';
 import { importFumbblMarkings } from '../game/fumbblMarkingsImport';
 import { invalidateMarkingsImports } from '../game/markingRules';
@@ -447,6 +448,13 @@ function finish(): void {
               </span>
             </label>
             <p class="setup-text-preview" :style="{ fontSize: `${settings.uiTextSize}px` }">{{ $t('setupWizard.setupPanel.subHeadersAndAnnotations') }}</p>
+            <!-- Owner 11-12: the same Low performance mode switch as Settings > Video (default off). -->
+            <label class="setup-check">
+              <input :checked="settings.lowPerformanceMode" type="checkbox" data-testid="setup-low-performance-mode"
+                @change="setLowPerformanceMode(settings, ($event.target as HTMLInputElement).checked)" />
+              <span>{{ $t('settings.display.video.lowPerformanceMode') }}</span>
+            </label>
+            <p class="setup-hint">{{ $t('setupWizard.setupPanel.lowPerformanceModeHint') }}</p>
             <label class="setup-check">
               <input v-model="settings.discordPresence" type="checkbox" />
               <span>{{ $t('setupWizard.setupPanel.discordRichPresenceShow') }}</span>

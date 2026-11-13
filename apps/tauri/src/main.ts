@@ -15,6 +15,7 @@ import { installPitchLabels } from './game/pitchLabels';
 import { installAccessibilityModes } from './game/accessibilityModes';
 import { installVisualSoundCues } from './game/visualSoundCues';
 import './styles/accessibilityModes.css';
+import './styles/touch-mode.css'; // touch mode sizing + the window X (both modes)
 import { initSettingsFile, settings } from './game/settings';
 import {
   assetMods,

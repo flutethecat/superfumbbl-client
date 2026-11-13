@@ -56,6 +56,8 @@ export interface TemplatePlayer {
   armour: number;
   cost: number;
   skills: readonly string[];
+  /** Skills and stat increases the player has gained beyond the roster position's own. Absent means none. */
+  gainedSkills?: number;
 }
 
 export interface TemplateLegalityOptions {
@@ -225,8 +227,13 @@ function compareIdentity(a: TemplatePlayer, b: TemplatePlayer): number {
   return a.nr - b.nr || a.playerId.localeCompare(b.playerId);
 }
 
+/** Owner 11-12: between otherwise equal candidates, a player who has gained a skill is fielded first. */
+function compareGained(a: TemplatePlayer, b: TemplatePlayer): number {
+  return (b.gainedSkills ?? 0) - (a.gainedSkills ?? 0);
+}
+
 function compareValue(a: TemplatePlayer, b: TemplatePlayer): number {
-  return b.cost - a.cost || a.armour - b.armour || compareIdentity(a, b);
+  return b.cost - a.cost || compareGained(a, b) || a.armour - b.armour || compareIdentity(a, b);
 }
 
 function matchingPredicate(predicate: SlotPredicate, players: readonly TemplatePlayer[]): SlotPredicate | null {
@@ -249,7 +256,11 @@ function choosePlayer(predicate: SlotPredicate, players: readonly TemplatePlayer
       if (matched.kind === 'highestValue') return compareValue(a, b);
       const aScore = scorePlayerForPredicate(matched, a) ?? 0;
       const bScore = scorePlayerForPredicate(matched, b) ?? 0;
-      return bScore - aScore || (matched.kind === 'highestMovement' ? compareValue(a, b) : compareIdentity(a, b));
+      // An open slot keeps shirt-number order so it never pulls a specialist off a later slot; resolveTemplate
+      // brings benched skilled players into open slots afterwards.
+      if (matched.kind === 'anyAvailable') return compareIdentity(a, b);
+      return bScore - aScore || compareGained(a, b)
+        || (matched.kind === 'highestMovement' ? compareValue(a, b) : compareIdentity(a, b));
     })[0]!;
 }
 
@@ -288,6 +299,7 @@ export function resolveTemplate(
 ): TemplateResolution {
   const remaining = [...players].sort(compareIdentity);
   const placements: ResolvedPlacement[] = [];
+  const openSlotIds = new Set<string>();
   const target = Math.min(remaining.length, opts.maxPlayersOnField);
 
   for (const slot of orderedSlots(template)) {
@@ -303,8 +315,26 @@ export function resolveTemplate(
     if ((isLeftWideColumn(y) || isRightWideColumn(y)) && sameZoneCount >= opts.maxPlayersInWideZone) continue;
 
     const player = choosePlayer(slot.predicate, remaining);
+    if (matchingPredicate(slot.predicate, remaining)?.kind === 'anyAvailable') openSlotIds.add(slot.id);
     remaining.splice(remaining.findIndex((candidate) => candidate.playerId === player.playerId), 1);
     placements.push({ playerId: player.playerId, slotId: slot.id, coordinate: [x, y] });
+  }
+
+  // Owner 11-12: a benched player who has gained a skill takes an open slot from a player with fewer gains. The
+  // player with the fewest gains goes first, so every skilled player who can be fielded is; among those, one of
+  // the benched player's own position, then the highest shirt number.
+  const byId = new Map(players.map((player) => [player.playerId, player] as const));
+  const bench = remaining.filter((player) => (player.gainedSkills ?? 0) > 0)
+    .sort((a, b) => compareGained(a, b) || compareIdentity(a, b));
+  for (const benched of bench) {
+    const swap = placements
+      .filter((placement) => openSlotIds.has(placement.slotId))
+      .map((placement) => ({ placement, player: byId.get(placement.playerId)! }))
+      .filter(({ player }) => (player.gainedSkills ?? 0) < (benched.gainedSkills ?? 0))
+      .sort((a, b) => compareGained(b.player, a.player)
+        || Number(b.player.positionName === benched.positionName) - Number(a.player.positionName === benched.positionName)
+        || compareIdentity(b.player, a.player))[0];
+    if (swap) swap.placement.playerId = benched.playerId;
   }
 
   const placedIds = new Set(placements.map((placement) => placement.playerId));

@@ -23,6 +23,7 @@ import { ref, shallowRef, type Directive } from 'vue';
 import { activeInput, setCameraStickDirectionTaker, type ActiveInput } from './controls';
 import type { PadEvent } from './gamepad';
 import { promptCardAcceptsPress } from './promptDodgeDom';
+import { $t } from '../i18n';
 
 export type PadFocusKey = 'X' | 'Y' | 'LB' | 'RB' | 'View';
 export type PadDir = 'Up' | 'Down' | 'Left' | 'Right';
@@ -48,6 +49,10 @@ export interface PadFocusOptions {
   /** A scrollable body inside the card: the right stick scrolls it (Up / Down, with the stick's repeat). Given the
    *  step's direction, so a card with nested scroll boxes can hand the step to the box that can still move that way. */
   scroll?: (direction: 'Up' | 'Down') => HTMLElement | null;
+  /** Window X (review finding 2, explicit per-card metadata): what the card's decline is. 'dismiss' = a client-only
+   *  close, nothing is sent (X in both input modes, named Close); 'answer' = the decline sends a server answer (X in
+   *  touch mode only, named after that answer). Absent = no X in either mode. */
+  close?: 'dismiss' | 'answer';
 }
 
 /** One right-stick step of a card's scrollable body, in pixels. */
@@ -446,9 +451,95 @@ export function resetPadFocus(): void {
   refreshPadFocus();
 }
 
+// ---- Window X (spec-touch-mode-2026-11-12 section 6; review finding 2) -------------------------------------------------
+// A card gets an X only from its explicit `close` metadata, never by inference:
+//  - 'dismiss': a client-only close (nothing sent): mouse AND touch mode, named Close.
+//  - 'answer':  the decline sends a server answer: TOUCH mode only, its accessible name / tooltip = that answer (the
+//    decline control's own label), never Close. Mouse mode keeps the labelled buttons and Escape.
+// The X sends exactly the card's B answer (the `cancel` option, else its `[data-pad-cancel]` control via padActivate).
+// Mandatory cards, disabled (spectator) views, `data-no-window-x` cards and cards with no decline get none.
+
+let windowXTouch: () => boolean = () => false;
+const liveWindowX = new Map<HTMLElement, PadFocusOptions>();
+/** The client's touch-mode reader (touchModeRuntime registers it); every live card is re-synced. Null = mouse. */
+export function setWindowXTouchMode(fn: (() => boolean) | null): void {
+  windowXTouch = fn ?? (() => false);
+  resyncWindowX();
+}
+export function resyncWindowX(): void {
+  for (const [el, options] of [...liveWindowX]) syncWindowX(el, options);
+}
+
+function declineControl(el: HTMLElement): HTMLElement | undefined {
+  return focusableControls(el).find((c) => c.hasAttribute('data-pad-cancel'));
+}
+
+/** The answer a card's X sends, or null when the card gets no X (in the current input mode). */
+export function windowCloseAnswer(el: HTMLElement, options: PadFocusOptions, touch: boolean = windowXTouch()): (() => void) | null {
+  if (!options.close || options.disabled || options.mandatory || el.hasAttribute('data-no-window-x')) return null;
+  if (options.close === 'answer' && !touch) return null;
+  if (options.cancel) return options.cancel;
+  const decline = declineControl(el);
+  return decline ? () => { padActivate(decline); } : null;
+}
+
+/** The X's accessible name and tooltip: Close for a dismissal; for a server answer the decline's own label. */
+export function windowCloseLabel(el: HTMLElement, options: PadFocusOptions): string {
+  if (options.close !== 'answer') return $t('hud.touch.closeWindow');
+  const decline = declineControl(el);
+  const named = decline?.getAttribute('aria-label') || decline?.getAttribute('title') || decline?.textContent || '';
+  return named.replace(/s+/g, ' ').trim() || $t('hud.touch.decline');
+}
+
+const windowX = new WeakMap<HTMLElement, { button: HTMLButtonElement; options: PadFocusOptions }>();
+/** Adds, keeps or removes the card's X to match its current answer and input mode. */
+export function syncWindowX(el: HTMLElement, options: PadFocusOptions): void {
+  liveWindowX.set(el, options);
+  const has = windowX.get(el);
+  const answer = windowCloseAnswer(el, options);
+  if (!answer) {
+    if (has) { has.button.remove(); windowX.delete(el); }
+    return;
+  }
+  const label = windowCloseLabel(el, options);
+  if (has) {
+    has.options = options;
+    has.button.setAttribute('aria-label', label);
+    has.button.title = label;
+    if (has.button.parentElement !== el) el.appendChild(has.button);
+    return;
+  }
+  const doc = el.ownerDocument;
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.className = 'window-x';
+  button.textContent = '×';
+  button.setAttribute('data-pad-skip', '');
+  button.setAttribute('data-testid', 'window-x');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  const entry = { button, options };
+  button.addEventListener('pointerdown', (event) => event.stopPropagation()); // never starts a card drag
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    windowCloseAnswer(el, entry.options)?.(); // re-read at click time: the answer the card has NOW
+  });
+  try {
+    const view = doc.defaultView;
+    if (view && view.getComputedStyle(el).position === 'static') el.style.position = 'relative';
+  } catch { /* no layout (tests) */ }
+  el.appendChild(button);
+  windowX.set(el, entry);
+}
+export function removeWindowX(el: HTMLElement): void {
+  liveWindowX.delete(el);
+  const has = windowX.get(el);
+  if (has) { has.button.remove(); windowX.delete(el); }
+}
+
 /** `v-pad-focus` / `v-pad-focus="{ cancel, keys, pitch }"` / `v-pad-focus="false"`. */
 export const vPadFocus: Directive<HTMLElement, PadFocusOptions | boolean | null | undefined> = {
-  mounted(el, binding) { registerPadFocusScope(el, normalise(binding.value)); },
-  updated(el, binding) { updatePadFocusScope(el, normalise(binding.value)); },
-  beforeUnmount(el) { unregisterPadFocusScope(el); },
+  mounted(el, binding) { const o = normalise(binding.value); registerPadFocusScope(el, o); syncWindowX(el, o); },
+  updated(el, binding) { const o = normalise(binding.value); updatePadFocusScope(el, o); syncWindowX(el, o); },
+  beforeUnmount(el) { unregisterPadFocusScope(el); removeWindowX(el); },
 };

@@ -103,7 +103,7 @@ onSoundError(({ soundId, src, code, message }) => {
   log('system', `⚠ sound "${soundId}" failed to play (${code === null ? '' : `media error ${code}: `}${message}) — ${file}`);
 });
 import { settings } from './settings';
-import { effectiveControlLayer } from './controlLayerSwitch';
+import { inputControlLayer } from './controlLayerSwitch';
 import { effectiveForkHost } from './forkAccess';
 import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
@@ -121,7 +121,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, playerPinned, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, playerPinned, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -1697,6 +1697,22 @@ function clearFallOver(): void {
 /** Astra confirmation of e986add18 (B3): batch ids are unique for the life of the session - a clear (catch-up cleanup,
  *  reset, seek, game change) never restarts the numbering, so a "shown" report can only ever name the batch it is for. */
 let actionDiceBatchSeq = 0;
+/** Owner 11-12: where the last setup swap's players should be once the server echoes it (null = reserve box). A
+ *  second swap touching one of them waits for that echo: the setup surface still shows the old squares, and trading
+ *  from them can send a player to a square the first swap just filled. Fails open after SETUP_SWAP_ECHO_WAIT_MS. */
+const SETUP_SWAP_ECHO_WAIT_MS = 2000;
+const setupSwapAwaited = new Map<string, { gameId: unknown; at: number; from: [number, number] | null; viaBox: boolean }>();
+/** Retire every wait the setup surface has answered. Echoed = the surface no longer shows the player where his swap
+ *  found him; the one exception is the first player of the three-step trade, whose stop in the box on the way to the
+ *  other square is not the echo. Run on every surface rebuild, so a wait once answered cannot come back. */
+function settleSetupSwapEchoes(players: readonly { playerId: string; coord: [number, number] | null }[], gameId: unknown): void {
+  for (const [id, awaited] of setupSwapAwaited) {
+    const now = players.find((player) => player.playerId === id)?.coord ?? null;
+    const unmoved = now && awaited.from ? now[0] === awaited.from[0] && now[1] === awaited.from[1] : !now && !awaited.from;
+    const echoed = !unmoved && !(awaited.viaBox && !now);
+    if (echoed || awaited.gameId !== gameId || Date.now() - awaited.at >= SETUP_SWAP_ECHO_WAIT_MS) setupSwapAwaited.delete(id);
+  }
+}
 /** Bumped by every dice clear: show waiters registered before it are discarded (never run), not just unreachable. */
 let actionDiceClearEpoch = 0;
 /** Astra round 3 (R1): whoever needs to know when a batch it is ABOUT to publish is shown registers here, keyed by
@@ -14940,6 +14956,7 @@ function forceSnapshotTick() {
 const playbackResetRev = ref(0);
 function resetPlayback() {
   playbackResetRev.value += 1;
+  movementAwaitingEcho = null; // review fix (1a98974d8 P1): a sent square's echo latch never crosses a reset
   // Owner 10-13 (Astra): the block reroll re-tumble state never crosses a reset (disconnect, reconnect, a fresh game or
   // seat: SERVER_GAME_STATE resets here), so a die chosen before it cannot steer a later observed reroll.
   ownBlockRerollIndices = null;
@@ -15169,6 +15186,7 @@ function clearCinematics(hardGameBoundary = false) {
   actionDiceShownWaiters.clear();
   state.rerollResultPending = null;
   state.reRollPrompt = null; state.skillChoice = null; state.setupPhase = null;
+  setupSwapAwaited.clear();
   state.solidDefenceError = null; solidDefenceSelection = null; solidDefenceEntryField = null; solidDefenceErrorNr = -1;
   state.sendOff = null; state.sendOffResult = null; clearSendOffWaiting(); sendOffKey = ''; sendOffAnsweredKey = null;
   // Owner 2026-07-04 interaction rails (wave 0 + 1.1): pick/yes-no/followup
@@ -16483,10 +16501,115 @@ function blitzHoldOffers(g: GameJson, blitzerId: string, targetId: string, reque
     && adjacentStandingEnemyIds(g, blitzerId).includes(targetId);
   return { offers: blitzBlockCommitOffers(g, blitzerId, targetId, everyAlternative), everyAlternative, armedAction };
 }
+/** P0 g1963245 (FUMBBL match 4754539: a third Rush in one Blitz): the ONE store refusal of a Blitz attack with no square
+ *  left to spend on it. Upstream BlockLogicExtension.java:189 only sends a Blitz block when the player cannot move
+ *  (pinned) or UtilPlayer.isNextMovePossible; the server does not check (bb2025 StepInitBlocking:128-158 accepts
+ *  CLIENT_BLOCK / Gored's CLIENT_USE_SKILL, StepGoForIt:145-148 then charges a square and rolls a Rush past MA with no
+ *  cap). Every Blitz block send - plain, each block alternative's USING_* flag, Gored's use-skill pair, the chooser card,
+ *  the planner's act leg - passes here. True = refused (logged, the coach is told why, nothing sent). */
+/** Review fix (1a98974d8, P1; round 2): movement SENT for the acting player and not yet echoed. The applied model then
+ *  still shows the movement before those squares, so the move-left rule would pass a block the server processes AFTER
+ *  them. Keyed on "sent and not echoed" - never on a presentation intent, which can outlive the walk (pipelined first
+ *  step: rollsUnknown until the echo binds). Set in sendCommand for every CLIENT_MOVE / CLIENT_BLITZ_MOVE (the squares
+ *  accumulate while unresolved); read lazily against the applied model. It ends ONLY on an authoritative outcome:
+ *   - the acting player's currentMove or square differs from the values at send AND no server dialog (a Rush / Dodge
+ *     reroll) is open;
+ *   - the game, turn or acting player changes, or resetPlayback (disconnect / reconnect / replacement snapshot).
+ *  Time NEVER releases it. Two timed releases were tried and both reopened the hole: a plain 8 s fail-open re-read the
+ *  same stale model (round-2 P1), and a "legal even with the unechoed squares counted" projection undercounted a
+ *  pending jump, which the server charges two points (round-3 P1, bb2025 StepMove:101). The barrier only stops Blitz
+ *  attacks: End Activation and End Turn stay available, and a reconnect / replacement snapshot clears it, so a move
+ *  the server never answers cannot wedge the turn. */
+type MovementAwaitingEcho = {
+  playerId: string; currentMove: number; from: string; gameId: string; turnKey: string; sentAt: number;
+  /** squares sent and not yet echoed */
+  squares: number;
+  /** the planner plan that sent EVERY one of them (its own confirmed move-then-act), or null (a manual step, an
+   *  earlier plan, or a mix) */
+  planSeq: number | null;
+};
+let movementAwaitingEcho: MovementAwaitingEcho | null = null;
+/** Set by the planner around its own square sends (round-2 P2): marks the latch as that plan's. */
+let plannerOwnSendSeq: number | null = null;
+function plannerSendsOwnSquare<T>(seq: number, send: () => T): T {
+  plannerOwnSendSeq = seq;
+  try { return send(); } finally { plannerOwnSendSeq = null; }
+}
+function noteMovementSent(cmd: Record<string, unknown>): void {
+  const g = game.value;
+  const playerId = String(cmd.actingPlayerId ?? '');
+  if (!g || !playerId) return;
+  const squares = Math.max(1, Array.isArray(cmd.coordinatesTo) ? cmd.coordinatesTo.length : 1);
+  const open = unechoedMovement(playerId);
+  if (open) { // still unresolved: count the further squares from the same baseline
+    open.squares += squares;
+    if (open.planSeq !== plannerOwnSendSeq) open.planSeq = null;
+    open.sentAt = Date.now();
+    return;
+  }
+  const acting = g.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
+  const data = g.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+  movementAwaitingEcho = {
+    playerId, currentMove: Number(acting?.playerId === playerId ? acting?.currentMove ?? 0 : 0),
+    from: JSON.stringify(data?.playerCoordinate ?? null), gameId: currentGameId(), turnKey: currentTurnKey(g), sentAt: Date.now(),
+    squares, planSeq: plannerOwnSendSeq,
+  };
+}
+/** The unresolved sent movement of `playerId`'s activation, or null (see movementAwaitingEcho). Clears itself on an
+ *  authoritative outcome; never on time. */
+function unechoedMovement(playerId: string): MovementAwaitingEcho | null {
+  const latch = movementAwaitingEcho;
+  const g = game.value;
+  if (!latch || !g) return null;
+  const acting = g.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
+  if (currentGameId() !== latch.gameId || currentTurnKey(g) !== latch.turnKey || String(acting?.playerId ?? '') !== latch.playerId) {
+    movementAwaitingEcho = null;
+    return null;
+  }
+  if (latch.playerId !== playerId) return null;
+  const data = g.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
+  const moved = Number(acting?.currentMove ?? 0) !== latch.currentMove || JSON.stringify(data?.playerCoordinate ?? null) !== latch.from;
+  if (moved && g.dialogParameter == null) { movementAwaitingEcho = null; return null; }
+  return latch;
+}
+/** The shared Blitz attack guard: 'wait' = sent movement is not echoed yet (nothing sent, nothing consumed - the coach
+ *  confirms again once it lands); 'refuse' = upstream would not send it (no move left, or the rush prompt); null = go.
+ *  `ownPlanSeq`: the planner's act leg passes its plan, so ITS own squares read as 'wait' (it fires on their echo) while
+ *  a square sent outside it reads as 'waitForeign' (the leg retires; the coach confirms again). */
+function blitzAttackGate(attackerId: string, ownPlanSeq: number | null = null): 'wait' | 'waitForeign' | 'refuse' | null {
+  const g = game.value;
+  if (!g || blitzBlockMoveVerdict(g, attackerId) === 'notBlitz') return null;
+  // A PINNED blitzer (failed Take Root, or Chomped) cannot be moved by a queued square: a step clicked just before
+  // the Take Root roll failed is dropped by the server with no change to currentMove or the square, so the barrier
+  // would never lift and the legal block beside the target (upstream BlockLogicExtension:189 playerCanNotMove) would
+  // be refused for the whole activation. The move-left verdict below still decides.
+  const pending = playerPinned(g, attackerId) ? null : unechoedMovement(attackerId);
+  if (pending) {
+    log('system', 'block not sent — waiting for the server to confirm the last square (confirm again once it lands)');
+    return ownPlanSeq != null && pending.planSeq !== ownPlanSeq ? 'waitForeign' : 'wait';
+  }
+  return blitzBlockRefusedNoMove(attackerId) ? 'refuse' : null;
+}
+function blitzBlockRefusedNoMove(attackerId: string): boolean {
+  const g = game.value;
+  if (!g) return false;
+  const verdict = blitzBlockMoveVerdict(g, attackerId);
+  if (verdict === 'notBlitz' || verdict === 'allowed') return false;
+  if (verdict === 'rushPrompt') {
+    // BlitzLogicModule.java:50-51: upstream opens the acting player's action context here and sends nothing.
+    log('system', 'ignored: the next square is a Rush the server has not flagged yet - open the player menu first');
+    return true;
+  }
+  log('system', lt('store.gameStore.blitzBlockNoMoveLeft'));
+  state.actionNotice = { text: $t('hud.text.blitzBlockNoMoveLeft'), seq: (state.actionNotice?.seq ?? 0) + 1 };
+  return true;
+}
 /** Blitz-commit hold (planner act leg + test seam): arm the chooser card when there is anything to choose. */
 function holdBlitzBlockChoice(blitzerId: string, targetId: string, requestEveryAlternative = false): boolean {
   const g = game.value;
   if (!g || state.blitzBlockChoice) return false;
+  // P0 g1963245: no chooser for a Blitz block that cannot be made (every offer on the card would be refused).
+  if (!blitzBlockMoveAvailable(g, blitzerId)) return false;
   // Owner 09-28 (Sol review round 3, item 2): the acting action is recorded AT ARM TIME — Classic's SAME call site
   // (ClassicView.vue ~805) arms this hold for Putrid Regurgitation / The Flashing Blade too (their router
   // 'block' intent, order66Interaction.ts ~1017-1037), not only ordinary `blitz`/`blitzMove`. Staleness compares
@@ -17056,7 +17179,7 @@ function localDecisionCardOpen(opts: { besidesInducementBuy?: boolean } = {}): b
  *  is refused - the whole-path CLIENT_MOVE / CLIENT_BLITZ_MOVE fallback never fires (#99: it skipped per-square rolls).
  *  The Super FUMBBL layer keeps its fallback exactly as before. */
 function fumbblWholePathRefused(playerId: string): boolean {
-  if (effectiveControlLayer(settings) !== 'fumbbl') return false;
+  if (inputControlLayer(settings) !== 'fumbbl') return false;
   log('system', `ignored: ${playerName(game.value, playerId)}'s run could not start square by square (FUMBBL Controls never sends a whole path)`);
   return true;
 }
@@ -17100,6 +17223,13 @@ function plannerStart(input: {
     if (turnData?.blitzUsed && !declaredOwnBlitz) {
       log('system', lt('store.text.blitzCancelledThisTeam'));
       state.actionNotice = { text: $t('store.text.blitzAlreadyUsedThis'), seq: (state.actionNotice?.seq ?? 0) + 1 };
+      return false;
+    }
+    // P0 g1963245: a move-then-block plan whose walk leaves no square for the block is never started (the block
+    // costs one: BlockLogicExtension.java:189 + bb2025 StepGoForIt:145-148). Shared rule, pather-independent.
+    if (input.targetPlayerId && !input.declareOnly && !blitzBlockFitsAfterSteps(game.value, playerId, (input.route ?? []).length)) {
+      log('system', lt('store.gameStore.blitzBlockNoMoveLeft'));
+      state.actionNotice = { text: $t('hud.text.blitzBlockNoMoveLeft'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
   }
@@ -17230,7 +17360,7 @@ function sendPipelinedFirstStep(): void {
   if (!from || !first || Math.max(Math.abs(first[0] - from[0]), Math.abs(first[1] - from[1])) !== 1) return;
   pipelinedFirstStepSend = true;
   let accepted = false;
-  try { accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: [from[0], from[1]], coordinatesTo: [[first[0], first[1]]] }); }
+  try { accepted = plannerSendsOwnSquare(p.seq, () => sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: [from[0], from[1]], coordinatesTo: [[first[0], first[1]]] })); }
   finally { pipelinedFirstStepSend = false; }
   if (!accepted) return; // refused locally: the ordinary echo-driven first step follows as before
   publishMovementIntent(p.playerId, [from[0], from[1]], first, { rollsUnknown: true });
@@ -17334,6 +17464,20 @@ function plannerFireAct() {
   // followupChoice/reRollPrompt); the queue drives declare→target→walk then RELEASES here (Echo: don't template
   // the block sub-choices). Plain block (no flavor) — matches the retired o66BlitzExecute.
   else if (p.actKind === 'blitz' && p.targetPlayerId) {
+    // P0 g1963245: at contact with no square left for the block, the plan ends here - nothing is sent (no chooser,
+    // no Gored use-skill, no block). The coach still holds the activation and ends it as usual.
+    // Review fix: the shared attack guard runs before Gored's CLIENT_USE_SKILL too. 'wait' = the last square is not
+    // echoed yet: the act leg fires again on the next applied frame (plannerAdvance).
+    const attackGate = blitzAttackGate(p.playerId, p.seq);
+    if (attackGate === 'wait') return; // this plan's own last square: the act fires on its echo (one coach intention)
+    if (attackGate === 'waitForeign') {
+      // Round-2 P2: a square sent OUTSIDE this plan (a manual step, an earlier plan) is unresolved. The automatic
+      // terminal leg retires; nothing is sent on its echo. The coach confirms the block again once the square lands.
+      plannerSet(null); plannerClearAbort();
+      state.actionNotice = { text: $t('hud.text.blitzBlockConfirmAgain'), seq: (state.actionNotice?.seq ?? 0) + 1 };
+      return;
+    }
+    if (attackGate === 'refuse') { plannerSet(null); plannerClearAbort(); state.blitzBlockChoice = null; return; }
     // Owner 11-03 (option A, replaces the 10-12 stop-at-contact menu and the plan-owned chooser hold): when there is
     // anything to choose (a block alternative against this target, or a server-decorated Gored by the Bull offer), every
     // Blitz plan RETIRES at contact and arms the SAME chooser as a hand-walked Blitz, as a no-plan hold. One lifecycle
@@ -17449,9 +17593,9 @@ function plannerAdvance() {
           // The declaration acknowledgement owns the authoritative first-step roll values. Refresh here rather
           // than trusting the pre-declaration planning snapshot.
           p.squareResolutions[0] = plannerSquareResolutions(g, first[0]!);
-          const accepted = p.actKind === 'blitz' || p.actKind === 'blitzWalk'
+          const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
             ? gameStore.o66BlitzMove(p.playerId, first)
-            : gameStore.o66Move(p.playerId, first);
+            : gameStore.o66Move(p.playerId, first)));
           // A refused send has no server echo to wait for. Keep the declaring index intact and retry only when
           // another authoritative frame calls plannerAdvance; never manufacture an 8s phantom-response timeout.
           if (!accepted) { plannerClearAbort(); return; }
@@ -17563,9 +17707,9 @@ function plannerAdvance() {
           p.spentMove = null; // cleared before the send: a duplicate applied frame cannot issue it twice
           // The spent move never rolled its square: bind the owed Dodge/Rush/Pickup results from the fresh offer.
           if (!rescuedByReRoll) p.squareResolutions[p.sentIdx] = plannerSquareResolutions(g, retry);
-          const accepted = p.actKind === 'blitz' || p.actKind === 'blitzWalk'
+          const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
             ? gameStore.o66BlitzMove(p.playerId, [retry], priorRevision)
-            : gameStore.o66Move(p.playerId, [retry], priorRevision);
+            : gameStore.o66Move(p.playerId, [retry], priorRevision)));
           if (!accepted) {
             if (wasRescued) p.retryResolvedIdx = p.sentIdx;
             if (lash) p.spentMove = spent;
@@ -17595,9 +17739,9 @@ function plannerAdvance() {
         // Every later step has a new server-authored Dodge/Rush/Pickup offer. The initial route snapshot cannot
         // know those values several squares ahead (g907 failed on step four), so bind the owed results now.
         p.squareResolutions[nextIdx] = plannerSquareResolutions(g, next[0]!);
-        const accepted = p.actKind === 'blitz' || p.actKind === 'blitzWalk'
+        const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
           ? gameStore.o66BlitzMove(p.playerId, next)
-          : gameStore.o66Move(p.playerId, next);
+          : gameStore.o66Move(p.playerId, next)));
         // Commit the sent index only after the command reached transport. A later model frame retries the same
         // square after a refusal; once accepted, the new index makes duplicate frames idempotent as before.
         if (!accepted) { plannerClearAbort(); return; }
@@ -19712,7 +19856,7 @@ export function installGoredBlitzTestHarness(
   ].find((p) => p.playerId === playerId);
   const place = (playerId: string, coordinate: [number, number]) => {
     const entry = fixture.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
-    if (entry) { (entry as { playerCoordinate: unknown }).playerCoordinate = coordinate; (entry as { playerState: unknown }).playerState = 1; }
+    if (entry) { (entry as { playerCoordinate: unknown }).playerCoordinate = coordinate; (entry as { playerState: unknown }).playerState = 257; } // STANDING | ACTIVE: a real acting blitzer is active (P0 g1963245 isAbleToMove)
   };
 
   return {
@@ -20617,6 +20761,7 @@ export function installServerAddPlayerTestHarness(
   interactiveSetup = false;
   fastPregame = false;
   state.setupPhase = null;
+  setupSwapAwaited.clear();
   state.addPlayerPuff = null;
   session = {
     send(command: Record<string, unknown>) {
@@ -20733,6 +20878,7 @@ export function installSetupErrorRecoveryTestHarness(
   interactiveSetup = seat !== 'spectator';
   fastPregame = false;
   state.setupPhase = null;
+  setupSwapAwaited.clear();
   state.swarmingPhase = null;
   state.playerPick = null;
   retireUseInducement();
@@ -22811,6 +22957,7 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     const declarationSwitch = detectDeclarationSwitch(cmd); // owner 10-15: detect only - the command goes out unchanged
     session.send(outgoing as never);
     emittedCommandCount += 1; // Astra pass 3: only after the transport accepted it (past every late refusal above)
+    if (cmd.netCommandId === NetCommandId.CLIENT_MOVE || cmd.netCommandId === NetCommandId.CLIENT_BLITZ_MOVE) noteMovementSent(cmd);
     if (declarationSwitch) reportDeclarationSwitch(declarationSwitch); // after the count: a throwing report must not lose it
     // Owner 10-15: a declaration is in flight until its acting-player echo; an accepted null cancel answers it and
     // latches (P0 #2: one cancel per activation); a new declaration re-opens it.
@@ -27218,6 +27365,7 @@ function computeSetupPhase(g: GameJson) {
     setupErrors: ownedSetupErrors(g, team.teamId ?? null),
     seq: (state.setupPhase?.seq ?? 0) + 1,
   };
+  settleSetupSwapEchoes(players, g.gameId);
 }
 
 /** SetupError is a local information box upstream, not an election. Preserve its server text and audience. */
@@ -30136,34 +30284,39 @@ export const gameStore = {
    *  A steps off to the reserve box, B takes A's old square (now empty), then A takes B's old square (now empty);
    *  three CLIENT_SETUP_PLAYER echoes, no two players ever share a square mid-swap. The server echoes each;
    *  computeSetupPhase rebuilds from the model. ⚖ law: placement renders the SERVER's echo, not a local guess. */
-  setupSwap(a: string, b: string) {
-    if (!state.setupPhase || !game.value || !setupSurfaceIsServerArmed(game.value)) return;
+  setupSwap(a: string, b: string): boolean {
+    if (!state.setupPhase || !game.value || !setupSurfaceIsServerArmed(game.value)) return false;
     const setupPlayers = state.setupPhase.players.filter((player) => player.playerId === a || player.playerId === b);
-    if (setupPlayers.length !== 2 || setupPlayers.some((player) => player.inert)) return;
-    const onPitch = (c: unknown): c is [number, number] => Array.isArray(c) && c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14;
-    const byId = new Map((game.value.fieldModel?.playerDataArray ?? []).map((d) => [d.playerId, d] as const));
-    const ra = byId.get(a)?.playerCoordinate;
-    const rb = byId.get(b)?.playerCoordinate;
-    const ca = onPitch(ra) ? ra : null;
-    const cb = onPitch(rb) ? rb : null;
+    if (setupPlayers.length !== 2 || setupPlayers.some((player) => player.inert)) return false;
+    // Placed or reserve is the setup surface's answer (player state AND coordinate, computeSetupPhase), never the raw
+    // coordinate alone: a boxed player can keep his old pitch coordinate, and reading him as placed would send the
+    // three-step trade and field an extra player.
+    const ca = setupPlayers.find((player) => player.playerId === a)?.coord ?? null;
+    const cb = setupPlayers.find((player) => player.playerId === b)?.coord ?? null;
+    if (!ca && !cb) return false;
+    settleSetupSwapEchoes(state.setupPhase.players, game.value.gameId);
+    if (setupSwapAwaited.has(a) || setupSwapAwaited.has(b)) return false;
+    setupSwapAwaited.set(a, { gameId: game.value.gameId, at: Date.now(), from: ca, viaBox: !!ca && !!cb });
+    setupSwapAwaited.set(b, { gameId: game.value.gameId, at: Date.now(), from: cb, viaBox: false });
     // Owner 09-09 (drag-drop onto an occupied square): a RESERVE dragged onto a placed player swaps too —
     // the occupant steps off to the reserve box, then the reserve takes the vacated square (two echoes).
     if (!ca && cb) {
       sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: b, coordinate: freeReserveCoordinate(game.value) });
       sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: a, coordinate: [cb[0], cb[1]] });
-      return;
+      return true;
     }
     // Owner 09-09 (two-click, placed FIRST then a reserve): the same trade the other way round — the placed
     // player steps off to the box, the reserve takes its square.
     if (ca && !cb) {
       sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: a, coordinate: freeReserveCoordinate(game.value) });
       sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: b, coordinate: [ca[0], ca[1]] });
-      return;
+      return true;
     }
-    if (!ca || !cb) return;
+    if (!ca || !cb) return false;
     sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: a, coordinate: freeReserveCoordinate(game.value) });
     sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: b, coordinate: [ca[0], ca[1]] });
     sendCommand({ netCommandId: NetCommandId.CLIENT_SETUP_PLAYER, playerId: a, coordinate: [cb[0], cb[1]] });
+    return true;
   },
 
   /** Pull a player back to the reserve box (server SETUP_PLAYER with a dugout/box
@@ -32968,6 +33121,14 @@ export const gameStore = {
     }
     const offer = kind == null ? null : c.offers.find((candidate) => candidate.kind === kind);
     if (kind != null && !offer) return; // accept only an alternative present in the held upstream-mirrored offer set
+    // P0 g1963245: a Blitz card whose block can no longer be made retires with no wire (Gored's use-skill included).
+    const attackGate = c.origin === 'blitz' ? blitzAttackGate(c.blitzerId) : null;
+    if (attackGate === 'wait' || attackGate === 'waitForeign') return; // the card stays: confirm again once the square lands
+    if (attackGate === 'refuse') {
+      state.blitzBlockChoice = null;
+      if (plannerPlan) { plannerSet(null); plannerClearAbort(); }
+      return;
+    }
     state.blitzBlockChoice = null;
     if (c.origin === 'blitz' && plannerPlan) {
       plannerPlan.blockChoiceResolved = true;
@@ -33233,6 +33394,8 @@ export const gameStore = {
   ): boolean {
     if (!play.active || !game.value) return false;
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
+    // P0 g1963245: a Blitz block (any flavor) needs a square left to spend on it, or a pinned blitzer.
+    if (blitzAttackGate(attackerId)) return false;
     const actingAction = String((game.value.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
     if (actingAction === 'maximumCarnage'
         && maximumCarnageConfirmedInstanceKey !== maximumCarnageEntryKey(game.value, attackerId)) {
@@ -33347,6 +33510,14 @@ export const gameStore = {
     if (!attackerId || !iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
     const action = String(acting?.playerAction ?? '');
     if (action !== 'kickEmBlock' && action !== 'kickEmBlitz') { log('system', 'ignored: no kick-em action declared'); return false; }
+    // mixed/KickEmBlitzLogicModule.java:37-38 (it extends BlitzLogicModule): while the next square is a Rush the server
+    // has not flagged, upstream opens the action context and sends nothing. No move-left check: upstream has none
+    // (:39-44 sends with only unused canUseChainsawOnDownedOpponents + prone/stunned + adjacent). Kick 'Em Block
+    // (KickEmBlockLogicModule:25-31) has no rush prompt.
+    if (action === 'kickEmBlitz' && rushPromptBeforeAttack(game.value)) {
+      log('system', 'ignored: the next square is a Rush the server has not flagged yet - open the player menu first');
+      return false;
+    }
     if (!kickEmCommitAllowed(game.value, attackerId, defenderId)) { log('system', lt('store.gameStore.kickEmNeedsAn')); return false; }
     followupHandled.clear();
     const accepted = sendCommand({
@@ -33570,6 +33741,8 @@ export const gameStore = {
   o66BlitzExecute(attackerId: string, defenderId: string, path: [number, number][]) {
     if (!play.active || !game.value) return;
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
+    // Review of 1a98974d8 (finding 5): no shipping caller, but a future one must not bypass the Blitz move-left rule.
+    if (!blitzBlockFitsAfterSteps(game.value, attackerId, path.length)) { log('system', lt('store.gameStore.blitzBlockNoMoveLeft')); return; }
     if (blockInFlight) { log('system', 'blitz already pending — waiting for the server (ignoring re-click)'); return; }
     blockInFlight = true;
     followupHandled.clear();
@@ -33580,6 +33753,7 @@ export const gameStore = {
     }
     // block after the walk resolves (the server steps + aborts each square); adjacent = fire almost immediately.
     scheduleGameTimeout(() => {
+      if (blitzAttackGate(attackerId)) { blockInFlight = false; return; } // the shared attack guard (finding 5)
       const accepted = sendCommand({
         netCommandId: NetCommandId.CLIENT_BLOCK, actingPlayerId: attackerId, defenderId,
         usingStab: false, usingChainsaw: false, usingVomit: false, usingBreatheFire: false, usingChomp: false,
@@ -33978,6 +34152,8 @@ export const gameStore = {
     if (!play.active || !game.value) return;
     if (isSelfBlitzNomination(game.value, defenderId, attackerId)) return;
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
+    // Review of 1a98974d8 (finding 5): the legacy fresh-Blitz macro reads the same move-left rule (walk + block).
+    if (!blitzBlockFitsAfterSteps(game.value, attackerId, path.length)) { log('system', lt('store.gameStore.blitzBlockNoMoveLeft')); return; }
     // g313 (Yularen correction b): a blitz is a block declaration too — debounce re-declares (owner #21 "declared blitz again") so a re-click doesn't re-arm the clear-then-set race mid-drive.
     if (blockInFlight) { log('system', 'blitz already pending — waiting for the server (ignoring re-click)'); return; }
     blockInFlight = true;
@@ -34000,6 +34176,7 @@ export const gameStore = {
       }, 700);
       // 4) block — now dispatched because playerAction is BLITZ_MOVE
       scheduleGameTimeout(() => {
+        if (blitzAttackGate(attackerId)) { blitzDriving = false; blitzAttackerId = null; blockInFlight = false; return; } // finding 5
         const accepted = sendCommand({
           netCommandId: NetCommandId.CLIENT_BLOCK, actingPlayerId: attackerId, defenderId,
           usingStab: false, usingChainsaw: false, usingVomit: false, usingBreatheFire: false, usingChomp: false,

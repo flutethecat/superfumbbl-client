@@ -75,6 +75,16 @@ export function effectiveControlLayer(s: Pick<ControlLayerSettings, 'controlLaye
   return pendingControlLayerSwitch.value?.from ?? s.controlLayer;
 }
 
+let inputTouchOverride: () => boolean = () => false;
+/** Touch mode (review finding 6): the touch runtime registers its reader; null = never overridden. */
+export function setInputControlLayerTouchOverride(fn: (() => boolean) | null): void { inputTouchOverride = fn ?? (() => false); }
+/** The layer that decides INPUT (clicks, taps, step keys, Right Click, the planner's whole-path refusal). Touch mode
+ *  forces the Super FUMBBL path so the touch commit policy is the only one that applies; the confirmation values keep
+ *  following effectiveControlLayer, so nothing the coach saved changes. */
+export function inputControlLayer(s: Pick<ControlLayerSettings, 'controlLayer'>): ControlLayer {
+  return inputTouchOverride() ? 'super' : effectiveControlLayer(s);
+}
+
 function stopWatchdog(): void {
   if (watchdog) clearInterval(watchdog);
   watchdog = null;

@@ -25,7 +25,11 @@
 .sf-lm.lm-game {
   --font-display: var(--font-heading);
   --font-graduate: var(--font-heading);
-  --ui-font: var(--font-body);
+  /* the user's UI font pick (App.vue --ui-font-user, set only off the Nuffle default) wins over the Modern sans */
+  --ui-font: var(--ui-font-user, var(--font-body));
+  /* the game root's own face (lm-theme.css .sf-lm sets --font-body directly): the pick, else the Modern sans, so
+     inherited text (player card, log, dialogs) follows the setting too */
+  font-family: var(--ui-font-user, var(--font-body));
 }
 /* ---- secondary ink (final review): the League Manager dark --ui-muted (#848689) reads 4.25:1 on the raised faces the
    game view is full of (--ui-surface-2, the panel gradient), under the 4.5:1 its small labels need. Inside the game root

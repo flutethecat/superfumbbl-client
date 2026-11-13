@@ -17,7 +17,13 @@
  * replaces it; storage that cannot be read keeps the session's games in memory only. Never a throw, never a wait on the
  * end screen.
  *
- * Privacy: LOCAL ONLY. Nothing here makes a network request, and the history is never attached to a bug report.
+ * Owner 11-12: the Coach Stats pane's "Sync FUMBBL games" button (coachStatsSync.ts) also adds records: the logged-in
+ * coach's recent FUMBBL games, built through the same coachGameRecord from a cached Details snapshot or a replay
+ * download, marked `synced`, ordered by when they were played.
+ *
+ * Privacy: the history is stored locally and never attached to a bug report. Nothing in this file makes a network
+ * request; the only network use behind the history is that sync button (only on a press: the FUMBBL match list and
+ * replay downloads the Play and Replay blades already make).
  */
 import { reactive } from 'vue';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
@@ -52,7 +58,8 @@ export interface CoachGameRecord {
   gameId: string;
   /** The server's finished stamp as it sent it (null when the final frame carried none). */
   finished: string | null;
-  /** ms epoch when this client saw the final result (orders the history; the footer's "since" date). */
+  /** ms epoch when this client saw the final result, or for a `synced` record when the game was played (orders the
+   *  history; the footer's "since" date). */
   savedAt: number;
   /** The server target ('fumbbl', 'fork', a local one ...) and the FUMBBL / Super FUMBBL kind the filter reads. */
   server: string;
@@ -82,6 +89,10 @@ export interface CoachGameRecord {
   /** Owner 11-04: OPTIONAL - the KO recovery rolls of my team (`for`) and the opponent's (`against`) in this game, from
    *  the turnEnd reports' knockoutRecoveryArray (diceStats koRecovery). Old records have none. */
   koRecovery?: { for?: CoachActionKind; against?: CoachActionKind };
+  /** Owner 11-12: OPTIONAL - set on a record the Coach Stats sync added rather than the end of a game played here:
+   *  'details' = built from a cached end-of-game Details snapshot, 'replay' = from a downloaded replay. Its `savedAt` is
+   *  when the game was played (the snapshot's settle time, or the server's finished stamp). Absent on played records. */
+  synced?: 'details' | 'replay';
   luck: Record<CoachLuckKey, CoachLuckFigure>;
   /** The Armour row's counters: the team's armour rolls against the opponent, broken, and the fair expectation. */
   armourBreaks: { actual: number; rolls: number; expected: number } | null;
@@ -223,14 +234,15 @@ export function isCoachGameRecord(value: unknown): value is CoachGameRecord {
 const isActionKind = (v: unknown): boolean => isObj(v) && isNum(v.n) && isNum(v.x6) && isNum(v.unmeasured) && isNum(v.passed) && isNum(v.expected)
   && validKinds(v.kinds, STORED_KIND_MAX_COUNT) && Object.values(v.kinds).reduce((a, c) => a + c, 0) === v.n;
 /**
- * Sol r1 P1: the OPTIONAL fields (`stats`, `actionKinds`, `opponentCr`, `koRecovery`) are never part of the record check; a malformed
+ * Sol r1 P1: the OPTIONAL fields (`stats`, `actionKinds`, `opponentCr`, `koRecovery`, `synced`) are never part of the record check; a malformed
  * one is DROPPED from the record (a malformed entry inside `stats` / `actionKinds` drops just that entry) and the rest
  * of the record stays. Applied to every record read (file, localStorage) and every record written.
  */
 export function sanitizeCoachRecord(r: CoachGameRecord): CoachGameRecord {
   const raw = r as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = { ...raw };
-  delete out.stats; delete out.actionKinds; delete out.opponentCr; delete out.koRecovery;
+  delete out.stats; delete out.actionKinds; delete out.opponentCr; delete out.koRecovery; delete out.synced;
+  if (raw.synced === 'details' || raw.synced === 'replay') out.synced = raw.synced;
   if (isObj(raw.koRecovery)) {
     const ko = Object.fromEntries(Object.entries(raw.koRecovery).filter(([side, k]) => (side === 'for' || side === 'against') && isActionKind(k)));
     if (Object.keys(ko).length) out.koRecovery = ko;
@@ -492,6 +504,26 @@ export function ensureCoachHistoryLoaded(): Promise<void> {
 }
 
 /**
+ * Owner 11-12 (coach stats sync review 3): re-reads the STORED history into `coachHistory.games`, replacing this
+ * window's in-memory copy, so games another window wrote since this one loaded are seen (the sync dedupes against
+ * them). Queued on the same chain as appends. Resolves whether the store was read; with the store unavailable (memory
+ * only) the in-memory copy stays as it is. Never throws. Nothing else calls it: the end-of-game path is unchanged.
+ */
+export function refreshCoachHistory(): Promise<boolean> {
+  return ensureCoachHistoryLoaded().then(() => (chain = chain.then(async () => {
+    if (!coachHistory.persisting) return false;
+    try {
+      const loaded = await store().load();
+      if (loaded.state === 'ok') showStored(loaded.text);
+      // no stored history (never written, removed, or unreadable and moved aside): the store holds no games, and
+      // neither may this window's copy, or the sync would skip games as already held that a restart would not show
+      else coachHistory.games = [];
+      return true;
+    } catch (error) { goMemoryOnly(error); return false; }
+  })) as Promise<boolean>);
+}
+
+/**
  * Sol r1 P3: a CR that arrives AFTER its game's record was written (the game ended - a concession - before the rank
  * bar's lookup answered). Patches ONLY `opponentCr` into that record, in memory and through the backend's own locked
  * write, when the record exists for this server + game, names this opponent and has no CR yet. No request; never an
@@ -512,21 +544,31 @@ export function patchCoachGameOpponentCr(found: CoachOpponentCr): Promise<boolea
   })) as Promise<boolean>);
 }
 
-/** Appends one finished game (the store's merge, never a whole-history write). Resolves whether it was stored; with
- *  the store unavailable the game is still shown this session (memory only). */
-export function appendCoachGame(record: CoachGameRecord): Promise<boolean> {
+/** Owner 11-12 (coach stats sync review 4): what one append did. 'written' = the store saved it; 'duplicate' = the
+ *  store already held a record for this server + game and kept that one; 'unsaved' = nothing was persisted (the store
+ *  is unavailable or the write failed) - the game is shown this session only and a restart loses it. */
+export type CoachAppendOutcome = 'written' | 'duplicate' | 'unsaved';
+
+/** Appends one finished game and says what happened (appendCoachGame's richer twin; same chain, same merge). */
+export function appendCoachGameOutcome(record: CoachGameRecord): Promise<CoachAppendOutcome> {
   record = sanitizeCoachRecord(record);
-  return ensureCoachHistoryLoaded().then(() => (chain = chain.then(async () => {
+  return ensureCoachHistoryLoaded().then(() => (chain = chain.then(async (): Promise<CoachAppendOutcome> => {
     const remember = () => { const next = withCoachGame(coachHistory.games, record); if (next) coachHistory.games = next; };
-    if (!coachHistory.persisting) { remember(); return false; }
+    if (!coachHistory.persisting) { remember(); return 'unsaved'; }
     try {
       const { written, text } = await store().append([record]);
       showStored(text);
-      return written > 0;
+      return written > 0 ? 'written' : 'duplicate';
     } catch (error) {
       goMemoryOnly(error);
       remember();
-      return false;
+      return 'unsaved';
     }
-  })) as Promise<boolean>);
+  })) as Promise<CoachAppendOutcome>);
+}
+
+/** Appends one finished game (the store's merge, never a whole-history write). Resolves whether it was stored; with
+ *  the store unavailable the game is still shown this session (memory only). The live end-of-game path's API. */
+export function appendCoachGame(record: CoachGameRecord): Promise<boolean> {
+  return appendCoachGameOutcome(record).then((outcome) => outcome === 'written');
 }

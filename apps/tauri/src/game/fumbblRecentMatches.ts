@@ -28,7 +28,7 @@ export interface FumbblRecentMatch {
   opponentTv?: number;
 }
 
-type FetchLike = (input: string) => Promise<Response>;
+type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export function parseTeamMatches(payload: unknown, teamId: number): FumbblRecentMatch[] {
   if (!Array.isArray(payload)) return [];
@@ -133,35 +133,74 @@ export interface RecentTeamCap { shown: number; total: number }
 export function recentTeamCapNote(cap: RecentTeamCap | undefined): string {
   return cap ? `Showing games from ${cap.shown} of ${cap.total} teams (most recently active first)` : '';
 }
-async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+/** `signal` (owner 11-12): an aborted signal stops the workers taking further items. */
+async function mapLimited<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>, signal?: AbortSignal): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < items.length) { const i = next++; out[i] = await fn(items[i]!); }
+    while (next < items.length && !signal?.aborted) { const i = next++; out[i] = await fn(items[i]!); }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
 }
 
+/** Owner 11-12 (coach stats sync): optional cancel and a bounded wait per request. Callers that pass nothing get the
+ *  calls exactly as before (no request init). */
+export interface RecentMatchesOptions {
+  signal?: AbortSignal;
+  /** abort any single request (and its body) that takes longer than this */
+  requestTimeoutMs?: number;
+}
+
+const abortError = (): DOMException => new DOMException('The request was aborted.', 'AbortError');
+
+/** One request's init: the caller's signal, plus the per-request timeout. `done` clears both. */
+function requestInit(options: RecentMatchesOptions): { init?: RequestInit; done(): void } {
+  if (!options.signal && !options.requestTimeoutMs) return { done() {} };
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort(abortError());
+  if (options.signal?.aborted) ctl.abort(abortError());
+  else options.signal?.addEventListener('abort', onAbort, { once: true });
+  const timer = options.requestTimeoutMs ? setTimeout(() => ctl.abort(new DOMException('The request timed out.', 'TimeoutError')), options.requestTimeoutMs) : null;
+  return { init: { signal: ctl.signal }, done() { if (timer) clearTimeout(timer); options.signal?.removeEventListener('abort', onAbort); } };
+}
+
 /** `localTeamIds`: the LOCAL coach's teams played in the last 30 days, most recent first (recentPlayedTeams.localPlayedTeamIds).
  *  Only a caller listing the local coach's own games passes it; a search for another coach passes nothing. */
-export async function fetchRecentFumbblMatches(coach: string, fetcher: FetchLike, limit = 30, localTeamIds: readonly number[] = []): Promise<{
+export async function fetchRecentFumbblMatches(coach: string, fetcher: FetchLike, limit = 30, localTeamIds: readonly number[] = [], options: RecentMatchesOptions = {}): Promise<{
   teams: FumbblCoachTeam[];
   matches: FumbblRecentMatch[];
   /** false = FUMBBL knows no such coach (owner 10-06: the Replay pane then tries a league) */
   found: boolean;
   /** set when the coach has more teams than RECENT_TEAM_CAP: only `shown` of `total` teams were read */
   teamCap?: RecentTeamCap;
+  /** owner 11-12: team match pages requested, and how many of them failed (an error or a non-OK answer). A failed
+   *  page still reads as no games (as before); these say whether the list is complete. */
+  pagesRequested: number;
+  pagesFailed: number;
 }> {
-  const result = await fetchFumbblCoachTeams(coach, fetcher as unknown as typeof fetch);
-  if (result.kind === 'not-found') return { teams: [], matches: [], found: false };
+  const first = requestInit(options);
+  let result: Awaited<ReturnType<typeof fetchFumbblCoachTeams>>;
+  try { result = await fetchFumbblCoachTeams(coach, fetcher as unknown as typeof fetch, first.init); } finally { first.done(); }
+  if (options.signal?.aborted) throw abortError();
+  if (result.kind === 'not-found') return { teams: [], matches: [], found: false, pagesRequested: 0, pagesFailed: 0 };
   const picked = pickRecentTeams(result.teams, RECENT_TEAM_CAP, localTeamIds);
+  let pagesRequested = 0, pagesFailed = 0;
   const lists = await mapLimited(picked, RECENT_FETCH_CONCURRENCY, async (team) => {
+    const req = requestInit(options);
+    pagesRequested++;
     try {
-      const res = await fetcher(`${FUMBBL_SITE}/api/team/matches/${team.id}/0`);
-      return res.ok ? parseTeamMatches(await res.json(), team.id) : [];
-    } catch { return []; }
-  });
-  const out = { teams: result.teams, matches: mergeRecent(lists, limit), found: true as boolean };
+      const url = `${FUMBBL_SITE}/api/team/matches/${team.id}/0`;
+      const res = await (req.init ? fetcher(url, req.init) : fetcher(url));
+      if (!res.ok) { pagesFailed++; return []; }
+      const payload: unknown = await res.json();
+      // review 2 (#3): FUMBBL answers some errors with HTTP 200 and a JSON string ("Error:3 No such command."): a page
+      // that is not an array is a failed page (still read as no games, as before)
+      if (!Array.isArray(payload)) { pagesFailed++; return []; }
+      return parseTeamMatches(payload, team.id);
+    } catch { pagesFailed++; return []; } finally { req.done(); }
+  }, options.signal);
+  if (options.signal?.aborted) throw abortError();
+  const out = { teams: result.teams, matches: mergeRecent(lists.map((l) => l ?? []), limit), found: true as boolean, pagesRequested, pagesFailed };
   return result.teams.length > picked.length ? { ...out, teamCap: { shown: picked.length, total: result.teams.length } } : out;
 }

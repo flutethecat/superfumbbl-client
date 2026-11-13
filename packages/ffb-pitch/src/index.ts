@@ -78,3 +78,4 @@ export { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayCapsWords, displayWord
 export { surfLandingSquare, surfOutward, isSurfLanding, isCrowdSquare, thrownCrowdLanding } from './crowdSurf';
 export { DUGOUT_LETTERING, composeDisplayLettering, loadDisplayFonts } from './displayLettering';
 export * from './fontStacks';
+export { LONG_PRESS_MS, MOUSE_TAP_SLOP_PX, TOUCH_TAP_SLOP_PX, createLongPress, isFingerPointer, tapSlopFor, type LongPress, type LongPressTimers } from './touchInput';

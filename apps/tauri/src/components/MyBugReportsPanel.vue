@@ -75,7 +75,7 @@ function page(dir: 1 | -1): void {
   if (el) el.scrollTop += dir * Math.max(120, Math.round(el.clientHeight * 0.9));
 }
 const padOptions = computed(() => ({
-  cancel: close, priority: PAD_FOCUS_PRIORITY.confirmation, scroll: () => body.value,
+  cancel: close, priority: PAD_FOCUS_PRIORITY.confirmation, scroll: () => body.value, close: 'dismiss' as const,
   keys: { LB: () => page(-1), RB: () => page(1) },
 }));
 const padHint = computed(() => padFocusControllerMode());

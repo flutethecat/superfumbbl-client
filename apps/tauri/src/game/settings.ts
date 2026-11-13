@@ -6,6 +6,17 @@ import { setWireLogSecondClientProbe } from './bugReportHost';
 import { requireForkBaseUrl } from './forkBase';
 import type { EdgePanelPosition } from './edgePanelLayout';
 import { FLOAT_QUEUE_MIN, sanitizeFloatPos, sanitizeFloatSize, sanitizeFloatZoom } from './fumbblFloatLayout';
+import { PLAYER_CARD_MIN_SIZE } from './playerCardGeometry';
+export { PLAYER_CARD_MIN_SIZE };
+/** The selected-player card's stored geometry: anything malformed reads as "never moved / resized" (the docked
+ *  default). The view clamps a valid value into the pitch host when the card shows. */
+export function sanitizePlayerCardPos(value: unknown): { x: number; y: number } | null {
+  const pos = sanitizeFloatPos(value);
+  return pos ? { x: Math.max(0, Math.round(pos.x)), y: Math.max(0, Math.round(pos.y)) } : null;
+}
+export function sanitizePlayerCardSize(value: unknown): { w: number; h: number } | null {
+  return sanitizeFloatSize(value, PLAYER_CARD_MIN_SIZE);
+}
 import { md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
@@ -13,9 +24,11 @@ import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type Confirmation
 import { applyLayerConfirmations, CONTROL_LAYER_DEFAULTS, normalizeControlLayerSettings, type ControlLayerSettings } from './controlLayer';
 import { chordLabel, defaultFumbblKeyBindings, fumbblKeyAction, fumbblKeyHolder, isFumbblChord, normalizeFumbblKeyBindings, type FumbblKeyActionId, type FumbblKeyBindings } from './fumbblKeys';
 import { STICK_DEADZONE, clampDeadzone } from './gamepad';
+import { TOUCH_BUTTON_PX, TOUCH_HOLD_MS, clampTouchButtonPx, clampTouchHoldMs, normaliseTouchModeChoice, normaliseTouchModeSetting, type TouchModeChoice, type TouchModeSetting } from './touchMode';
 import { CROSSHAIR_SPEED_DEFAULT, clampCrosshairSpeed } from './crosshair';
 import { DEFAULT_SPECTATOR_VIEW, normalizeSpectatorView, type SpectatorView } from './spectatorView';
 import { CONTROL_ACTIONS, CONTROL_BINDINGS_REVISION, MOUSE_MIDDLE, isMouseInput, bindingConflict, controlAction, getBinding, normaliseBindingsRevision, defaultControlBindings, migrateControlBindings, type BindingMethod, type BindingSlot, type ControlActionId, type ControlBindings, type InputMethod } from './controls';
+import { FPS_CAP_CHOICES, RENDER_SCALE_CHOICES, normalizeLowPerformanceRestore, type LowPerformanceRestore } from './lowPerformanceMode';
 import { $t, mapLegacyEnglish, normalizeLocale, systemLanguageTags, type Locale } from '../i18n';
 
 /**
@@ -208,6 +221,15 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
    *  off nothing reads a gamepad: no poller, no listeners, no input switching, no crosshair / glyphs / rumble / toasts
    *  (game/controllerRuntime.ts). Ticking the box asks first (the "mostly untested" notice). */
   controllerSupportEnabled: boolean;
+  /** Touch mode (spec-touch-mode-2026-11-12 section 3): 'auto' = finger-primary devices start in touch mode (game/
+   *  touchMode.ts resolveTouchMode); 'on' / 'off' pin it. Settings > Controls "Touch controls (beta)". */
+  touchMode: TouchModeSetting;
+  /** The remembered answer to the one-time Touch / Mouse question on a device with both ('' = never asked). */
+  touchModeChoice: TouchModeChoice;
+  /** Touch mode: how long End Turn / End Setup must be held, ms (400-2000, default 800). */
+  touchEndTurnHoldMs: number;
+  /** Touch mode: minimum action-center / touch button size, CSS px (48-72, default 48). */
+  touchButtonSize: number;
   /** Controller support P1 (owner 10-07): 'auto' (default) follows the last device used (game/controls.ts activeInput);
    *  'keyboard' / 'controller' pin it. The mouse and keyboard keep working in every mode. */
   inputMethod: InputMethod;
@@ -258,6 +280,9 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   skillMarkingColor: string;
   skillMarkingFont: 'arial' | 'helvetica' | 'system' | 'nuffle';
   skillMarkingSize: number;
+  /** Owner 11-11 (opt-in, default off): text markings draw stat increases, stat decreases and niggling injuries on
+   *  their own line above the skill marks, for every player (game/markings.ts generateMarkingLines). */
+  markingStatusLine: boolean;
   /** Owner 09-15: the font of the position letter on the Checkers discs (Display > Player sprites). */
   checkerLetterFont: 'arial' | 'helvetica' | 'system' | 'nuffle';
   /** One-shot legacy BB2/BB3 migration hint; installed-pack identity owns rendering. */
@@ -314,6 +339,12 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   fpsCap: number | 'display';
   /** Owner 08-19: stadium bowl on/off (Modern; Classic forces off via its preset). */
   showStadium: boolean;
+  /** Owner 11-12: one switch for weak machines (game/lowPerformanceMode.ts). On = the preset's low video values were
+   *  written into the individual settings; the coach may still change any of them while it stays on. */
+  lowPerformanceMode: boolean;
+  /** The coach's own values of the preset keys from before Low performance mode was switched on; null = none held.
+   *  Turning the mode off restores each one whose setting still holds the preset's low value. */
+  lowPerformanceRestore: LowPerformanceRestore | null;
   /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles, 'classic' = seat atlas + fan sprites (default again, owner 10-05). */
   stadiumStands: 'crowd' | 'classic';
   /** Owner 10-12: what sits behind the stadium. 'skybox' = the fantasy skybox (default, unchanged), 'space', 'parking'
@@ -362,6 +393,10 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   showServerSequencingEvents: boolean;
   logPos: EdgePanelPosition | null;
   logSize: { w: number; h: number } | null;
+  /** The selected-player card's dragged position (pitch-host px, left/top) and resized box. Null keeps the docked
+   *  default / the CSS size. Written at the end of a drag or resize; clamped into the host when the card shows. */
+  playerCardPos: { x: number; y: number } | null;
+  playerCardSize: { w: number; h: number } | null;
   /** Floating setup-template browser geometry. Null keeps the compact responsive default. */
   setupBrowserPos: EdgePanelPosition | null;
   setupBrowserSize: { w: number; h: number } | null;
@@ -789,6 +824,10 @@ const DEFAULTS: AppSettings = {
   logExpandKey: 'KeyL', // owner 10-02: L doubles the Log window, L again restores it
   cameraPanSpeed: 16, // owner 10-07: 9 -> 16 px per frame
   controllerSupportEnabled: false, // owner 10-10: opt-in
+  touchMode: 'auto',
+  touchModeChoice: '',
+  touchEndTurnHoldMs: TOUCH_HOLD_MS.default,
+  touchButtonSize: TOUCH_BUTTON_PX.default,
   inputMethod: 'auto',
   showInputSwitchNotice: true,
   controlBindings: defaultControlBindings(),
@@ -812,6 +851,7 @@ const DEFAULTS: AppSettings = {
   skillMarkingColor: '#f5c542',
   skillMarkingFont: 'arial',
   skillMarkingSize: 12,
+  markingStatusLine: false,
   checkerLetterFont: 'arial',
   skillIconStyle: 'bb3',
   skillBadgeFamily: 'illustrated', // owner 09-10: the illustrated set is the default
@@ -835,6 +875,8 @@ const DEFAULTS: AppSettings = {
   uiLayout: {},
   fpsCap: 60,
   showStadium: true,
+  lowPerformanceMode: false, // owner 11-12: opt-in only; never auto-enabled
+  lowPerformanceRestore: null,
   stadiumStands: 'classic',
   backdrop: 'skybox',
   backdropColor: DEFAULT_BACKDROP_COLOR,
@@ -857,6 +899,8 @@ const DEFAULTS: AppSettings = {
   chatDockRosterTab: false, // owner 10-02: roster lives in the Helmet pop-out; Settings > UI brings the dock tab back
   bottomBarsSwapped: true, // owner 2026-07-08: Log bottom-left, Quick bar bottom-right (default)
   logSize: null,
+  playerCardPos: null,
+  playerCardSize: null,
   setupBrowserPos: null,
   setupBrowserSize: null,
   uiFont: 'nuffle',
@@ -1246,8 +1290,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // back to the safe install defaults.
     const videoChoice = (value: unknown, allowed: readonly number[], fallback: number): number =>
       typeof value === 'number' && Number.isFinite(value) && allowed.includes(value) ? value : fallback;
-    merged.renderScale = videoChoice(merged.renderScale, [0, 0.5, 0.75, 1, 1.5, 2, 3, 4], DEFAULTS.renderScale); // owner 09-05: 300/400% added
-    merged.fpsCap = merged.fpsCap === 'display' ? 'display' : videoChoice(merged.fpsCap, [30, 60, 120], 60); // owner 10-13: 'Match display'; never 0 / unbounded
+    merged.renderScale = videoChoice(merged.renderScale, RENDER_SCALE_CHOICES, DEFAULTS.renderScale); // owner 09-05: 300/400% added
+    merged.fpsCap = merged.fpsCap === 'display' ? 'display' : videoChoice(merged.fpsCap, FPS_CAP_CHOICES, 60); // owner 10-13: 'Match display'; never 0 / unbounded
     merged.soundStyles = raw.soundStyles && typeof raw.soundStyles === 'object' && !Array.isArray(raw.soundStyles)
       ? Object.fromEntries(Object.entries(raw.soundStyles).filter(([key, value]) => key.length > 0 && typeof value === 'string'))
       : { ...DEFAULTS.soundStyles };
@@ -1279,6 +1323,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.uniformFigures = typeof raw.uniformFigures === 'boolean' ? raw.uniformFigures : DEFAULTS.uniformFigures;
     merged.uniformFiguresEw = typeof raw.uniformFiguresEw === 'boolean' ? raw.uniformFiguresEw : DEFAULTS.uniformFiguresEw;
     merged.blockDice3d = raw.blockDice3d !== false;
+    merged.lowPerformanceMode = raw.lowPerformanceMode === true;
+    merged.lowPerformanceRestore = normalizeLowPerformanceRestore(raw.lowPerformanceRestore);
     merged.actionDecorations = raw.actionDecorations === 'emoji' ? 'emoji' : 'art';
     merged.walkFps = typeof raw.walkFps === 'number' && Number.isInteger(raw.walkFps)
       && raw.walkFps >= 1 && raw.walkFps <= 30 ? raw.walkFps : null;
@@ -1309,6 +1355,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.skillMarkingFont = ['arial', 'helvetica', 'system', 'nuffle'].includes(String(raw.skillMarkingFont))
       ? raw.skillMarkingFont as AppSettings['skillMarkingFont']
       : DEFAULTS.skillMarkingFont;
+    merged.markingStatusLine = raw.markingStatusLine === true;
     merged.checkerLetterFont = ['arial', 'helvetica', 'system', 'nuffle'].includes(String(raw.checkerLetterFont))
       ? raw.checkerLetterFont as AppSettings['checkerLetterFont']
       : DEFAULTS.checkerLetterFont;
@@ -1334,6 +1381,8 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.fumbblFloatSize = sanitizeFloatSize(raw.fumbblFloatSize);
     merged.fumbblFloatQueueSize = sanitizeFloatSize(raw.fumbblFloatQueueSize, FLOAT_QUEUE_MIN);
     merged.fumbblFloatZoom = sanitizeFloatZoom(raw.fumbblFloatZoom);
+    merged.playerCardPos = sanitizePlayerCardPos(raw.playerCardPos);
+    merged.playerCardSize = sanitizePlayerCardSize(raw.playerCardSize);
     merged.tackleZoneMode = ['off', 'opposition', 'friendly', 'both'].includes(String(raw.tackleZoneMode))
       ? raw.tackleZoneMode as AppSettings['tackleZoneMode']
       : DEFAULTS.tackleZoneMode;
@@ -1399,6 +1448,10 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // Controller support P1 (owner 10-07): the registry keeps every stored binding and takes the (validated) legacy
     // keys above as their actions' keyboard primary — an existing coach's H / L / Space carry over untouched.
     merged.controllerSupportEnabled = raw.controllerSupportEnabled === true; // owner 10-10: off unless the coach ticked the box
+    merged.touchMode = normaliseTouchModeSetting(raw.touchMode);
+    merged.touchModeChoice = normaliseTouchModeChoice(raw.touchModeChoice);
+    merged.touchEndTurnHoldMs = clampTouchHoldMs(raw.touchEndTurnHoldMs);
+    merged.touchButtonSize = clampTouchButtonPx(raw.touchButtonSize);
     merged.inputMethod = raw.inputMethod === 'controller' || raw.inputMethod === 'keyboard' ? raw.inputMethod : 'auto';
     merged.showInputSwitchNotice = raw.showInputSwitchNotice !== false;
     // An older stored map (no revision) is r1: LT chords move to LB, untouched LB / RB zoom defaults take the new ones.

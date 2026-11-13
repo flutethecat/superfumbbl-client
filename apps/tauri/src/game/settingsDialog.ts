@@ -71,7 +71,7 @@ export function resolveSettingsTab(value: unknown): SettingsTab {
 /** Values changed by other app surfaces or immediate OS/keychain operations do not
  * participate in the Settings preview transaction. */
 export const SETTINGS_TRANSACTION_EXCLUDED = new Set([
-  'logPos', 'logSize', 'setupBrowserPos', 'setupBrowserSize', 'uiLayout', 'chatPoppedOut', 'chatPopPos', 'chatPopSize',
+  'logPos', 'logSize', 'playerCardPos', 'playerCardSize', 'setupBrowserPos', 'setupBrowserSize', 'uiLayout', 'chatPoppedOut', 'chatPopPos', 'chatPopSize',
   'coach', 'password', 'coach40k', 'activeServerTarget',
   'completedFirstRun', 'savedSetupPreviews',
   'recentPlayedTeams', // owner 10-11: written when an official game is joined, never by the dialog

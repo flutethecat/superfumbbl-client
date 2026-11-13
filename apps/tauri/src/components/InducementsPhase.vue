@@ -416,7 +416,7 @@ const confirmedText = computed(() => (props.presetMode ? props.presetStatus : 'â
 </script>
 
 <template>
-  <div id="indgrid" ref="rootEl" v-pad-focus="padFocus" class="ind-grid" data-testid="inducements-phase" :data-phase="phase" :data-preset="presetMode">
+  <div id="indgrid" ref="rootEl" v-pad-focus="padFocus" data-no-window-x class="ind-grid" data-testid="inducements-phase" :data-phase="phase" :data-preset="presetMode">
     <!-- Preset (tournament/league) allocations: full-width banner over the whole phase. -->
     <div v-if="presetMode" class="ind-tournament-banner" data-testid="tournament-banner">
       <template v-for="(w, i) in words(presetBanner)" :key="i"><span v-if="w.space" class="nbsp">&nbsp;</span><span class="cap">{{ w.head }}</span>{{ w.rest }}</template>

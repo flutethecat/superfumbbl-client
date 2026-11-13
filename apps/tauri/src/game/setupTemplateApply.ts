@@ -22,6 +22,11 @@ interface PlayerLike {
   armour?: number;
   cost?: number;
   skillArray?: string[];
+  skillValues?: (string | null)[];
+  skillDisplayValues?: (string | null)[];
+  skillValuesMap?: Record<string, unknown>;
+  skillDisplayValuesMap?: Record<string, unknown>;
+  playerKind?: unknown;
 }
 
 interface PositionLike {
@@ -34,6 +39,8 @@ interface PositionLike {
   armour?: number;
   cost?: number;
   skillArray?: string[];
+  skillValues?: (string | null)[];
+  skillDisplayValues?: (string | null)[];
 }
 
 export interface TeamLike {
@@ -63,6 +70,30 @@ function numberOr(value: unknown, fallback: unknown): number {
   return Number.isFinite(Number(fallback)) ? Number(fallback) : 0;
 }
 
+/**
+ * How many of the player's skills are his own rather than the position's: a name the position does not list, or a
+ * listed one the player carries his own value for (skillDisplay.playerRosterSkills). A zapped player's are all his own.
+ * Loner never counts: it comes with hiring a journeyman or mercenary and is not something a player earned.
+ */
+function gainedSkillCount(player: PlayerLike, position: PositionLike | undefined): number {
+  const own = player.skillArray ?? [];
+  if (!position) return 0;
+  if (String(player.playerKind) === 'zappedPlayer') return own.filter((skill) => skill !== 'Loner').length;
+  const innate = new Set(position.skillArray ?? []);
+  const ownKeys = new Set([...Object.keys(player.skillValuesMap ?? {}), ...Object.keys(player.skillDisplayValuesMap ?? {})]);
+  const text = (value: unknown): string => String(value ?? '').trim().toLowerCase();
+  // A team serialization carries values in arrays parallel to skillArray instead of the maps; there a listed skill
+  // is the player's own when its value differs from the position's.
+  const ownValue = (skill: string, index: number): boolean => {
+    const mine = text(player.skillDisplayValues?.[index]) || text(player.skillValues?.[index]);
+    if (!mine) return false;
+    const at = (position.skillArray ?? []).indexOf(skill);
+    return mine !== (text(position.skillDisplayValues?.[at]) || text(position.skillValues?.[at]));
+  };
+  return own.filter((skill, index) =>
+    skill !== 'Loner' && (!innate.has(skill) || ownKeys.has(skill) || ownValue(skill, index))).length;
+}
+
 /** Mirrors computeSetupPhase's player -> roster-position projection. */
 export function templatePlayersFromTeam(team: TeamLike, _fieldModel: FieldModelLike): TemplatePlayer[] {
   const positions = team.roster?.positionArray ?? [];
@@ -79,6 +110,7 @@ export function templatePlayersFromTeam(team: TeamLike, _fieldModel: FieldModelL
       movement: numberOr(player.movement, position?.movement),
       cost: numberOr(position?.cost, 0),
       skills: player.skillArray ?? position?.skillArray ?? [],
+      gainedSkills: gainedSkillCount(player, position),
     };
   });
 }

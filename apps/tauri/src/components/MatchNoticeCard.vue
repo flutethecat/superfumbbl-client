@@ -71,6 +71,7 @@ const padOptions = computed(() => ({
   exclusive: true, // Astra r12: the modal owns the pad outright (above mandatory server cards, every input swallowed)
   mandatory: cancelIndex.value < 0,
   cancel: cancelIndex.value >= 0 ? () => choose(cancelIndex.value) : null,
+  close: 'dismiss' as const, // both uses are client notices (beta notice, "Not now" on the switch-watcher report prompt)
 }));
 </script>
 

@@ -101,7 +101,7 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
 .sf-lm.lm-game .log-panel .tabs button.stencil-tab:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
 .sf-lm.lm-game .log-panel .tabs button.stencil-tab:disabled { color: var(--ui-text-dim); border-color: var(--sf-panel-line); }
 .sf-lm.lm-game .log-panel .tabs .tab-stencil {
-  font-family: var(--sf-band-font);
+  font-family: var(--ui-font-user, var(--sf-band-font));
   letter-spacing: 0.08em;
   color: inherit;
   text-shadow: none;
@@ -109,7 +109,7 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
 .sf-lm.lm-game .log-panel .tabs button.stencil-tab[data-active='true'] .tab-stencil { color: inherit; text-shadow: none; }
 /* the unread count: the .sf-count face on the scarlet (urgent) chip tone */
 .sf-lm.lm-game .log-panel .tabs .chat-badge {
-  font-family: var(--sf-band-font);
+  font-family: var(--ui-font-user, var(--sf-band-font));
   color: var(--ui-scarlet-contrast);
   background: var(--ui-scarlet);
   border-radius: 2px;
@@ -218,7 +218,7 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
 .sf-lm.lm-game .log-panel .roster .loc[data-status='Reserves'] { color: var(--ui-info); }
 
 /* ---- chat (docked or popped out: no .log-panel in these selectors, the popped chat lives under body) */
-.sf-lm.lm-game .chat-log .log-name { font-family: var(--sf-band-font); }
+.sf-lm.lm-game .chat-log .log-name { font-family: var(--ui-font-user, var(--sf-band-font)); }
 /* bubbles (ChatBubbleRows, scoped): an .hm-panel face; the speaker's seat rides the 5px left edge and a soft wash of
    the seat's dark shade (game/chatBubbles.ts writes --chat-bubble-mid / -edge inline) */
 .sf-lm.lm-game .chat-log .chat-bubble {
@@ -232,7 +232,7 @@ html.sf-high-contrast .sf-lm.lm-game.chat-dock.chat-dock {
   box-shadow: inset 0 1px 0 var(--sf-panel-hi), 0 2px 0 var(--sf-panel-drop);
 }
 .sf-lm.lm-game .chat-log .chat-bubble .chat-bubble-name {
-  font-family: var(--sf-band-font);
+  font-family: var(--ui-font-user, var(--sf-band-font));
   color: var(--chat-bubble-edge, var(--ui-text));
   text-shadow: none;
 }

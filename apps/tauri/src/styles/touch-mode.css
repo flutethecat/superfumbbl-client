@@ -1,0 +1,91 @@
+/* Touch mode (spec-touch-mode-2026-11-12). The window X ships in both input modes (section 6); every rule under
+   [data-touch="on"] applies only while touch mode is active (game/touchModeRuntime.ts sets it on <html>), so mouse
+   mode is unchanged. --touch-target = Settings > Touch controls > Button size (48-72 px). */
+
+.window-x {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 18px/1 system-ui, sans-serif;
+  color: inherit;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.window-x:hover { background: rgba(0, 0, 0, 0.55); }
+
+[data-touch='on'] .window-x {
+  width: var(--touch-target, 48px);
+  height: var(--touch-target, 48px);
+  top: 2px;
+  right: 2px;
+  font-size: 26px;
+}
+
+/* ---- Touch mode sizing (spec section 8): every tap target at least --touch-target (48 px default). ---- */
+
+/* Match view: dialog / card / dice / pick-bar buttons and menu rows. The invisible square hit-targets keep their
+   square size (Quick Snap targets); the action center and quick menu size themselves from the same token. */
+[data-touch='on'] .pitch-host button:not(.quicksnap-target):not(.window-x),
+[data-touch='on'] .pitch-host [role='button'],
+[data-touch='on'] .pitch-host [role='option'],
+[data-touch='on'] .pitch-host [role='menuitem'],
+[data-touch='on'] .pitch-host li.reroll-menu-item,
+[data-touch='on'] .pitch-host select {
+  min-height: var(--touch-target, 48px);
+  min-width: var(--touch-target, 48px);
+}
+[data-touch='on'] .pitch-host .context-menu li,
+[data-touch='on'] .pitch-host .reroll-menu li {
+  min-height: var(--touch-target, 48px);
+  display: flex;
+  align-items: center;
+}
+/* The quick bar's buttons give way to the corner quick menu (its match controls stay). */
+[data-touch='on'] .config-bar[data-touch-hidden-quick] > button:has(> .quick-button-content),
+[data-touch='on'] .config-bar[data-touch-hidden-quick] > .ui-grip,
+[data-touch='on'] .config-bar[data-touch-hidden-quick] > .ui-resizer,
+[data-touch='on'] .config-bar[data-touch-hidden-quick] > .ui-reset {
+  display: none;
+}
+
+/* The rest of the client (lobby, team pages, settings, replay launcher): no redesign, only tap-sized controls. */
+[data-touch='on'] .settings-pane button,
+[data-touch='on'] .settings-pane select,
+[data-touch='on'] .settings-pane [role='tab'],
+[data-touch='on'] .waiting-board button,
+[data-touch='on'] .tm button,
+[data-touch='on'] .tm select,
+[data-touch='on'] .lm-replay button,
+[data-touch='on'] .lm-page button,
+[data-touch='on'] .modal-backdrop button {
+  min-height: var(--touch-target, 48px);
+}
+[data-touch='on'] .settings-pane input[type='checkbox'],
+[data-touch='on'] .settings-pane input[type='radio'] {
+  width: 28px;
+  height: 28px;
+}
+[data-touch='on'] .settings-pane input[type='range'] { min-height: var(--touch-target, 48px); }
+
+/* Press-and-hold tooltip bubble (game/touchTooltips.ts). */
+.touch-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 280px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.9);
+  color: #fff;
+  font: 14px/1.35 system-ui, sans-serif;
+  pointer-events: none;
+}

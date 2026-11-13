@@ -69,13 +69,14 @@ function hide(): void {
 .ccc-n {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  font-size: max(calc(var(--ui-min-text-size, 12px) + 1px), 13px);
+  /* --plate-text-scale: the coach plate's drawn scale (SpectateView .coach-panel), so the drawn size keeps the floor */
+  font-size: max(calc((var(--ui-min-text-size, 12px) + 1px) / var(--plate-text-scale, 1)), 13px);
   font-weight: 900;
   color: #fff;
   text-shadow: 0 1px 1px #000, 0 0 2px #000;
 }
 .ccc-label {
-  font-size: max(calc(var(--ui-min-text-size, 12px) - 1px), 11px);
+  font-size: max(calc((var(--ui-min-text-size, 12px) - 1px) / var(--plate-text-scale, 1)), 11px);
   font-weight: 800;
   letter-spacing: 0.02em;
   text-align: left;

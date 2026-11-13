@@ -1,5 +1,5 @@
 import { DISPLAY_CAPS_LEAD_SCALE, displayCapsRuns, displayGraphemes, type DisplayCapsRun } from './displayCaps';
-import { FALLBACK_FONT_FACES, FONT_DISPLAY_FAMILY, FONT_FALLBACK_FAMILY, FONT_GRADUATE_FAMILY } from './fontStacks';
+import { FALLBACK_FONT_FACES, FONT_DISPLAY_FAMILY, FONT_FALLBACK_FAMILY, FONT_GRADUATE_FAMILY, FONT_SNES_FAMILY } from './fontStacks';
 
 /**
  * Pitch lettering in the "Graduate C" style (owner 10-11): each word's first letter in Nuffle, 25% larger, the rest
@@ -60,6 +60,9 @@ export interface DisplayLetteringStyle {
   capFill: number;
   /** Raster scale of the canvas (the old `Text` objects used `resolution: 4`). */
   resolution: number;
+  /** Owner 11-11: 'snes' draws the whole label in SNES Italic capitals (the wordmark face) instead of Graduate C. The
+   *  caller decides per label with `snesCovers`; this compositor does not fall back on its own. */
+  face?: 'graduate-c' | 'snes';
 }
 
 /** Owner 10-11: on the pitch the Graduate letters are 15% larger than in the first cut, the Nuffle lead unchanged. */
@@ -74,6 +77,66 @@ export const PITCH_LEAD_SCALE = DISPLAY_CAPS_LEAD_SCALE / PITCH_REST_GROWTH;
 export const ENDZONE_LETTERING: DisplayLetteringStyle = {
   fontPx: 28 * PITCH_REST_GROWTH, leadScale: PITCH_LEAD_SCALE, fontWeight: 'bold', restWeight: 'normal', letterSpacing: 6, fill: '#ffffff', restOutline: 0, capFill: 0.88, resolution: 4,
 };
+/** Owner 11-11: the end-zone lettering is drawn slightly see-through so it reads as PAINTED on the grass (the turf
+ *  texture shows through the white) rather than laid on top of it. The letters keep their weight (no bolder face);
+ *  the alpha applies to the whole composed label, so overlapping glyph edges never double up. */
+export const ENDZONE_LETTERING_ALPHA = 0.8;
+/** Owner 11-11: the end-zone lettering in SNES Italic, the "Super FUMBBL" wordmark face, for a label the font fully
+ *  draws (`snesCovers`). The face has one weight and only capitals (its lowercase code points carry the capital
+ *  glyphs), so the label is drawn upper case, the wordmark's own look (lm-blades.css: text-transform uppercase). Its
+ *  capitals stand 0.70 em, so 40 px puts them near the Graduate C lead capitals (35 px Nuffle); the renderer fits the
+ *  label to the band either way. */
+export const ENDZONE_SNES_LETTERING: DisplayLetteringStyle = {
+  fontPx: 40, leadScale: 1, fontWeight: 'normal', letterSpacing: 3, fill: '#ffffff', restOutline: 0, capFill: 0.88, resolution: 4, face: 'snes',
+};
+
+/** Every character SNES-Italic.ttf (apps/tauri/public/fonts) draws with ink, read from its own cmap + glyf (11-11): the
+ *  space, ! ' , . ?, the digits and A-Z / a-z (identical capital glyphs). Its cmap also maps the rest of Latin-1 (every
+ *  accented letter), the hyphen, & : / ( ) and the typographic quotes, but to EMPTY glyphs: a "covered" code point
+ *  there draws a blank, which is why the cmap alone is no test (lm-theme.css limits its "SF Band Italic" alias to the
+ *  same set). */
+export const SNES_INKED_CHARACTERS = " !',.0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const SNES_INKED = new Set(SNES_INKED_CHARACTERS);
+/** True when SNES Italic draws EVERY character of `label` (and it has at least one letter or digit). A name with even
+ *  one character outside the set (an accent, a hyphen, a non-Latin letter) is drawn whole in Graduate C instead:
+ *  never two faces inside one name. */
+export function snesCovers(label: string): boolean {
+  const text = label.trim();
+  if (!/[0-9A-Za-z]/.test(text)) return false;
+  for (const ch of text) if (!SNES_INKED.has(ch)) return false;
+  return true;
+}
+
+/** Where the SNES face stands: 'loaded', 'pending' (registered, not loaded yet), 'error', 'absent' (not registered:
+ *  main.ts registers it only once loaded, so absent at draw time normally means its load failed) or 'unsupported'
+ *  (no Font Loading API). Only 'loaded' letters an end zone in SNES. */
+export function snesFontState(): 'loaded' | 'pending' | 'error' | 'absent' | 'unsupported' {
+  try {
+    if (typeof document === 'undefined' || !document.fonts?.forEach) return 'unsupported';
+    const own: FontFace[] = [];
+    (document.fonts as unknown as FontFaceSetLike).forEach((face) => { if (familyOf(face) === 'SNES') own.push(face); });
+    if (own.some((face) => face.status === 'loaded')) return 'loaded';
+    if (own.some((face) => face.status === 'unloaded' || face.status === 'loading')) return 'pending';
+    return own.length ? 'error' : 'absent';
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/** Start loading a registered SNES face that has not loaded yet. Resolves when it settles; never rejects. */
+export async function loadSnesFont(): Promise<void> {
+  try {
+    if (typeof document === 'undefined' || !document.fonts?.forEach) return;
+    const pending: FontFace[] = [];
+    (document.fonts as unknown as FontFaceSetLike).forEach((face) => {
+      if (familyOf(face) === 'SNES' && (face.status === 'unloaded' || face.status === 'loading')) pending.push(face);
+    });
+    await Promise.all(pending.map((face) => face.load().catch(() => undefined)));
+  } catch {
+    /* the end zones keep Graduate C */
+  }
+}
+
 /** Dugout box labels (INJURED / RESERVES) and the APOTHECARY caption. Owner 2026-07-02: bold white, no dark outline;
  *  they were 11 px Nuffle bold with 2 px tracking (capitals 9.8 px tall). The lead is 17.5 px, the rest
  *  14 * 1.15 = 16.1 px, so the Graduate small capitals stand a little taller than those old capitals; the renderer
@@ -206,6 +269,7 @@ type SpacingContext = CanvasRenderingContext2D & { letterSpacing?: string };
  *  label has nothing to draw; the caller then draws nothing. */
 export function composeDisplayLettering(label: string, style: DisplayLetteringStyle): DisplayLettering | null {
   if (typeof document === 'undefined') return null;
+  if (style.face === 'snes') return composeSnesLettering(label, style);
   const runs = displayCapsRuns(label);
   if (!runs.length) return null;
   let canvas: HTMLCanvasElement;
@@ -319,6 +383,65 @@ export function composeDisplayLettering(label: string, style: DisplayLetteringSt
     }
   }
   return { canvas, width, height, fitWidth, fitHeight, inkHeight, inkUp, inkDown, inkTall, capHeight, smallCapHeight, baseline, runs: drawn };
+}
+
+/** Owner 11-11: the whole label in SNES Italic capitals, one run. The italic leans its tops to the right of its
+ *  advance, so the label is centred on its measured INK (actualBoundingBoxLeft / Right), not on the advance: the
+ *  slant then stays inside the band symmetrically in both orientations and under the 180 degree turn. */
+function composeSnesLettering(label: string, style: DisplayLetteringStyle): DisplayLettering | null {
+  const text = label.trim().replace(/ +/g, ' ').toUpperCase();
+  if (!text) return null;
+  let canvas: HTMLCanvasElement;
+  let ctx: SpacingContext | null;
+  try {
+    canvas = document.createElement('canvas');
+    ctx = canvas.getContext('2d') as SpacingContext | null;
+  } catch {
+    return null;
+  }
+  if (!ctx) return null;
+  const font = `italic ${style.fontWeight} ${style.fontPx}px ${FONT_SNES_FAMILY}`;
+  const nativeSpacing = 'letterSpacing' in ctx;
+  const prepare = (target: SpacingContext): void => {
+    target.font = font;
+    target.fillStyle = style.fill;
+    if (nativeSpacing) target.letterSpacing = `${style.letterSpacing}px`;
+    target.textBaseline = 'alphabetic';
+    target.textAlign = 'left';
+  };
+  prepare(ctx);
+  const cap = ctx.measureText('H');
+  const capHeight = cap.actualBoundingBoxAscent || style.fontPx * 0.7;
+  const metrics = ctx.measureText(text);
+  const advance = metrics.width;
+  // Ink extent about the pen origin; a stand-in without bounding boxes falls back to the advance.
+  const inkLeft = Number.isFinite(metrics.actualBoundingBoxLeft) ? metrics.actualBoundingBoxLeft : 0;
+  const inkRight = Number.isFinite(metrics.actualBoundingBoxRight) && metrics.actualBoundingBoxRight > 0
+    ? metrics.actualBoundingBoxRight : advance - (nativeSpacing ? style.letterSpacing : 0);
+  const fitWidth = Math.max(1, inkLeft + inkRight);
+  const inkUp = Math.max(capHeight / 2, (metrics.actualBoundingBoxAscent || capHeight) - capHeight / 2);
+  const inkDown = Math.max(capHeight / 2, (metrics.actualBoundingBoxDescent || 0) + capHeight / 2);
+  const inkHalf = Math.max(inkUp, inkDown);
+  const fitHeight = capHeight / style.capFill;
+  const pad = 3;
+  const half = Math.max(fitHeight / 2, inkHalf + pad);
+  const width = Math.ceil(fitWidth + pad * 2);
+  const height = Math.ceil(half * 2);
+  canvas.width = Math.max(1, Math.ceil(width * style.resolution));
+  canvas.height = Math.max(1, Math.ceil(height * style.resolution));
+  ctx.setTransform(style.resolution, 0, 0, style.resolution, 0, 0);
+  prepare(ctx); // resizing the canvas reset the context state
+  const centre = height / 2;
+  const baseline = centre + capHeight / 2;
+  const x = (width - fitWidth) / 2 + inkLeft; // the pen origin that puts the ink's middle on the canvas middle
+  ctx.fillText(text, x, baseline);
+  const slack = capHeight * 0.03;
+  return {
+    canvas, width, height, fitWidth, fitHeight, inkHeight: inkHalf * 2, inkUp, inkDown,
+    inkTall: inkUp > capHeight / 2 + slack || inkDown > capHeight / 2 + slack,
+    capHeight, smallCapHeight: capHeight, baseline,
+    runs: [{ text, kind: 'lead', font, x, baseline, width: advance }],
+  };
 }
 
 /** A point on screen. */

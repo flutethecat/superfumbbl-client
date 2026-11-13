@@ -2,7 +2,7 @@
 import { updateHintAfterReport } from '../game/updateSignal';
 import { actingMenuHasOptions, ffbLacksRow, ffbSafePathToPlayer, fumbblStepKeyEffect, fumbblTileIsPassTarget, ttmMateAdjacent, ffbClientAction, ffbMenuLetter, ffbOrderedRows, ffbSafePath, fumbblPlayerClick, fumbblSquareClick, isAdjacent as fumbblAdjacent, rightClickEffect, stepSquareForDirection, type FumbblRuleset, type StepDirection } from '../game/logic/fumbblControls';
 import { rightClickBehaviourFor } from '../game/controlLayer';
-import { activationProbeFrom, clearControlLayerActivationProbe, effectiveControlLayer, recheckPendingControlLayer, setControlLayerActivationProbe } from '../game/controlLayerSwitch';
+import { activationProbeFrom, clearControlLayerActivationProbe, inputControlLayer, recheckPendingControlLayer, setControlLayerActivationProbe } from '../game/controlLayerSwitch';
 import { fumbblKeyActionForEvent, FUMBBL_KEY_MENU_ROW, FUMBBL_STEP_DIRECTION, type FumbblKeyActionId } from '../game/fumbblKeys';
 declare const __APP_VERSION__: string;
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
@@ -66,6 +66,7 @@ import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
 import { multiBlockDieButtonState, multiBlockDieClick, type MultiBlockDieRow } from '../game/multiBlockDieButton';
 import DisplayCaps from '../components/DisplayCaps.vue';
+import { createPlayerCardGeometry, isPrimaryCardPointer } from '../game/playerCardGeometry';
 import D6Face from '../components/D6Face.vue';
 import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
 import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
@@ -108,6 +109,15 @@ import { confirmCardLocked as confirmCardLockOpen, lockedConfirmTarget, lockedEs
 import { PROMPT_ANSWER_SELECTOR, installPromptPointerTracker, vPromptDodge } from '../game/promptDodgeDom';
 import { deferredSwitchClick, deferredSwitchFollowUpFresh, deferredSwitchStillValid, type DeferredFriendlySwitch } from '../game/deferredFriendlySwitch';
 import ConfirmActionButton from '../components/ConfirmActionButton.vue';
+import ActionCenter from '../components/ActionCenter.vue';
+import TouchQuickMenu, { type TouchQuickItem } from '../components/TouchQuickMenu.vue';
+import { actionCenterMode, touchEndControl } from '../game/actionCenterModel';
+import { touchModeActive } from '../game/touchModeRuntime';
+import { opponentTapDeclares, secondTapCommits, touchCancelPreStep, touchCancelVisible, touchMoveRollFree, type TouchMoveRisk } from '../game/touchCancel';
+import { createTouchStageHolder, touchStageContext, touchStageKey, type TouchStage } from '../game/touchStage';
+import { createTouchConfirmDispatcher, createTouchPreviewCoordinator, type TouchPreviewKind } from '../game/touchPreview';
+import { TOUCH_COMMIT_REASONS, touchCommitPlan, type TouchCommitReason, type TouchCommitSenders, type TouchCommitSnapshot } from '../game/touchCommit';
+import { buildTouchPlan, createTouchNoteQueue, createTouchPlanDrawer, sameSquares, sameTarget, type TouchPlan, type TouchPlanDrawer } from '../game/touchPlan';
 import PlayerDetailSkillList from '../components/PlayerDetailSkillList.vue';
 import ApothecaryPrompt from '../components/ApothecaryPrompt.vue';
 import ApothecaryResultChoice from '../components/ApothecaryResultChoice.vue';
@@ -220,7 +230,7 @@ import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { blitzTargetCostText, blitzTargetCostShortText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
-import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned } from '../game/logic/availableActions';
+import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps } from '../game/logic/availableActions';
 import { rootedBlitzEndServerConfirmed, rootedBlitzReadyArm, rootedBlitzReadyReconcile, rootedBlitzReadyStageLive } from '../game/logic/rootedBlitzReady';
 import { deriveClientState, type ClientStateContext, type ClientStateId } from '../game/logic/clientStateMachine';
 import { localMoverId, selectPlayerLeftClick, commitLocalWalk, proneTeammateSwitchMenu } from '../game/logic/localSelection';
@@ -329,6 +339,9 @@ const furySecondBlockTargeting = computed(() => {
 function chooseBlitzBlockAlternative(kind: BlockKind | null) {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
   if (kind === 'chainsaw') { chainsawBlitzConfirm.value = true; return; }
+  touchCardConfirm(null, () => commitChosenBlitzBlock(kind)); // round 7: never under a drawn touch route
+}
+function commitChosenBlitzBlock(kind: BlockKind | null): void {
   // SR-241: commitBlitzBlock sends the already-declared Blitz's clientBlock with this kind's existing USING_* flag.
   const held = gameStore.state.blitzBlockChoice;
   gameStore.commitBlitzBlock(kind);
@@ -366,13 +379,12 @@ const foulChoiceChainsawTarget = computed(() => {
 });
 function chooseFoulKind(usingChainsaw: boolean) {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
-  gameStore.commitFoulChoice(usingChainsaw);
+  touchCardConfirm(null, () => gameStore.commitFoulChoice(usingChainsaw)); // round 7: never under a drawn touch route
 }
 function confirmChainsawBlitz() {
   if (pitchHeldByConfirmation()) return; // Astra pass 4 (10-04): nothing commits under an open End Turn / End Activation confirmation
-  chainsawBlitzConfirm.value = false;
   // Confirmation is still display-only UI; the store emits USING_CHAINSAW on clientBlock, never a new declare.
-  gameStore.commitBlitzBlock('chainsaw');
+  touchCardConfirm(null, () => { chainsawBlitzConfirm.value = false; gameStore.commitBlitzBlock('chainsaw'); }); // round 7
 }
 watch(() => gameStore.state.blitzBlockChoice, (choice) => {
   if (!choice) { chainsawBlitzConfirm.value = false; o66ExplicitBlockChoice.value = null; return; }
@@ -508,7 +520,7 @@ import {
   stageFumbblPlayerLobby,
   type BrowserMatch,
 } from '../game/jnlpRouting';
-import { generateAllMarkings } from '../game/markings';
+import { generateAllMarkingLines, generateAllMarkings } from '../game/markings';
 import { computeIconSkills, effectiveMarkingConfig, markerGlyph, jumpUpMenuPresentation, playerCardSkills, playerDetailSkills } from '../game/skillDisplay';
 import type { PlayerDetailSkill } from '../game/skillDisplay';
 import apothecaryIconUrl from '../assets/resources/apothecary.png';
@@ -540,6 +552,7 @@ import { createCrosshair, createPadCancel, crosshairGate, padPristineAction, typ
 import { PAD_FOCUS_PRIORITY, padFocusOwnsInput, setPadFocusGuard, setPadFocusMandatoryPitch, vPadFocus } from '../game/cardFocus';
 import PadGlyph from '../components/PadGlyph.vue';
 import { createPadSetupHost } from '../game/padSetup';
+import { setupTapDecision } from '../game/setupTap';
 import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCardRules';
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
@@ -1279,7 +1292,9 @@ watch(() => settings.bottomBarsSwapped, async () => {
   }
 });
 const logTextStyle = computed(() => ({
-  fontSize: `${settings.logFontSize}px`,
+  // The slider value is the size at the normal window width; under 1000 px wide it shrinks by --log-window-scale
+  // (0.8, the coach plates' own step) but never below the minimum text size (or the slider value, if that is lower).
+  fontSize: `max(min(${settings.logFontSize}px, var(--ui-min-text-size, 12px)), calc(${settings.logFontSize}px * var(--log-window-scale, 1)))`,
   fontFamily: LOG_FONTS[settings.logFont] ?? LOG_FONTS.nuffle!,
   '--log-row-strength': String(Math.min(100, Math.max(0, settings.logTintStrength)) / 100), // owner 10-15: row tint slider
 }));
@@ -1475,7 +1490,13 @@ function uiPanelStyle(id: string): Record<string, string> | null {
   const L = settings.uiLayout[id];
   if (!L) return null;
   const scale = L.scale * (coachPanelIsPlaying(id) ? COACH_ACTIVE_SCALE_MULTIPLIER : 1);
-  return scaledPanelStyle(L, scale, !!panelScaleResizeActive[id]);
+  // --panel-scale: the drawn scale, so plate text floors can divide by it (a 12 px floor on a 0.5 plate is set at
+  // 24 px and draws at 12). Absent until the user moves/resizes the panel, so the default plates are unchanged.
+  // Only a finite, positive scale is published: an entry that lost its scale (clampUiToViewport rewrites an
+  // out-of-range entry from the clamp result, which carries no `scale`) would otherwise set NaN, and the plate's
+  // text floors would compute to 0 px (invisible). Without it the floors fall back to 1 (no compensation).
+  const style = scaledPanelStyle(L, scale, !!panelScaleResizeActive[id]);
+  return Number.isFinite(scale) && scale > 0 ? { ...style, '--panel-scale': String(scale) } : style;
 }
 /** Bind on each customizable panel (merges with any panel-specific style). */
 function customPanelStyle(id: string): Record<string, string> {
@@ -1619,6 +1640,7 @@ function clampUiToViewport() {
       settings.uiLayout[id] = next;
     }, panelOverhang(el));
   }
+  void clampPlayerCardIntoHost(); // the dragged / restored player card (settings.playerCardPos)
 }
 
 function onLogScroll(which: 'log' | 'chat', event: Event) {
@@ -5496,25 +5518,23 @@ function startSetupPlayerDrag(playerId: string, clientX: number, clientY: number
   if (!setupDragMode.eligible(playerId)) { autoShowPopup(playerId); return; }
   startPlayerDrag(setupDragMode, playerId, clientX, clientY, pointerId);
 }
-// Owner 2026-07-14 (setup overhaul #5/#3): a TAP on a PLACED player selects it; a 2nd tap on another placed
-// player swaps. Shared by onSetupClick and a stationary setup-drag release (on-pitch pointerdowns are intercepted
+// Owner 2026-07-14 (setup overhaul #5/#3): a TAP on a player selects it; a 2nd tap on another player swaps when
+// either of the two is placed (game/setupTap.ts). Shared by onSetupClick and a stationary setup-drag release (on-pitch pointerdowns are intercepted
 // for the drag, so their taps route here). A reserve tap is a no-op (its action is the drag).
 function handleSetupPlayerTap(playerId: string) {
   autoShowPopup(playerId); // owner 09-14: a setup tap surfaces the player card (portrait + details) exactly as in live play
-  const players = setupPhase.value?.players ?? [];
-  const tapped = players.find((p) => p.playerId === playerId);
-  if (!tapped || tapped.inert) return; // not fieldable → inert (the card still shows)
-  const sel = selectedSetupPlayerId.value;
-  const selPlaced = !!sel && !!players.find((p) => p.playerId === sel)?.coord;
-  // Two PLACED players → SWAP their squares. Owner 09-09: a PLACED selection then a RESERVE tap swaps too — the
+  // Not fieldable / inert → nothing (the card still shows). Two PLACED players → SWAP their squares. Owner 09-09: a
+  // PLACED selection then a RESERVE tap swaps too; owner 11-12: so does a RESERVE selection then a PLACED tap — the
   // placed player steps off to the box and the reserve takes its square (setupSwap handles the reserve side).
-  if (sel && sel !== playerId && selPlaced) {
-    gameStore.setupSwap(sel, playerId);
-    selectedSetupPlayerId.value = null;
+  const decision = setupTapDecision(setupPhase.value?.players ?? [], selectedSetupPlayerId.value, playerId);
+  if (decision.kind === 'none') return;
+  if (decision.kind === 'swap') {
+    // a swap still waiting on the previous swap's echo is not sent: the selection stays for the next tap
+    if (gameStore.setupSwap(decision.a, decision.b)) selectedSetupPlayerId.value = null;
     return;
   }
   // Owner 2026-07-15 (click-to-place): otherwise SELECT the tapped player — a PLACED one to move/swap/return, a
-  // RESERVE one to place onto the pitch with a following empty-square tap (was a no-op; reserves were drag-only).
+  // RESERVE one to place onto the pitch with a following empty-square tap, or to swap in with a placed-player tap.
   // Returning a placed player to reserves is the tap-empty-dugout / drag-off-pitch / ↩ Reserve path — never a
   // reserve-token tap, so tapping a reserve can't accidentally yank an already-selected placed player off.
   selectedSetupPlayerId.value = playerId;
@@ -7023,8 +7043,7 @@ function confirmPuntV2() {
   const g = gameStore.game.value;
   if (!g || !isPuntTargeting(g) || !o66PendingPunt.value) return;
   const af = puntActingFrom(g); if (!af) return;
-  gameStore.sendFieldCoordinate(af.actingId, o66PendingPunt.value);
-  o66PendingPunt.value = null;
+  touchCardConfirm(null, () => { gameStore.sendFieldCoordinate(af.actingId, o66PendingPunt.value!); o66PendingPunt.value = null; }); // round 7
 }
 function isHailMaryPassAction(g: { actingPlayer?: unknown }): boolean {
   return String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'hailMaryPass';
@@ -7531,6 +7550,28 @@ function pickQuickSnapTarget(coord: [number, number]) {
   gameStore.sendQuickSnapMove(selectedQuickSnap.value, coord); // ⚖ view-gated move; server echoes + rebuilds quickSnapPhase
   selectedQuickSnap.value = null; // re-select the player to move it again
 }
+/** The square-pick answer, shared by the mouse click and the touch Confirm (round-3 finding 2): a refused Dump-Off
+ *  send keeps the pick (same seq, so its watch does not re-fire); re-arm the crosshairs so the coach can try again. */
+function answerSquarePick(c: [number, number]): void {
+  renderer?.setTilePick(false);
+  gameStore.resolveSquarePick(c);
+  // Ham1356 10-14: a refused Dump-Off send keeps the pick; re-arm the crosshairs here so the coach can click again.
+  const kept = gameStore.state.squarePick;
+  if (kept?.kind === 'dumpOff') renderer?.setTargetSelectPick(kept.squares, kept.skill);
+}
+/** Round-2 finding 4: a Quick Snap target tap sends the move at once - in touch mode it is staged for Confirm. */
+function tapQuickSnapTarget(coord: [number, number]): void {
+  const mover = selectedQuickSnap.value;
+  if (mover && touchStageTap({ kind: 'quickSnap', target: `${mover}@${coord[0]},${coord[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+    revalidate: () => selectedQuickSnap.value === mover && gameStore.game.value?.turnMode === 'quickSnap',
+    commit: () => {
+      // The selection is dropped only when the move went out, so a refused send can be retried (round-3 finding 2).
+      const before = gameStore.gameplaySendCount();
+      gameStore.sendQuickSnapMove(mover, coord);
+      if (gameStore.gameplaySendCount() !== before) selectedQuickSnap.value = null;
+    } })) return;
+  pickQuickSnapTarget(coord);
+}
 
 // BB2025 Swarming is setup-shaped upstream, but its dedicated surface has only rolled-count and square legality.
 // Owner (this window): give Swarming the SAME drag-from-reserves UX as normal setup — drag an eligible dugout
@@ -7842,7 +7883,9 @@ function commitPlannedPassFromDestination(actorId: string | null, square: [numbe
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (!g || !pend || pend.route.length === 0 || !actingId || (actorId && actorId !== actingId)) return false;
   if (deriveClientState(g, o66Ctx()) !== 'PASS') return false;
-  if (gameStore.startPlan({ playerId: actingId, actKind: 'pass', route: pend.route, targetCoordinate: square, targetPlayerId })) {
+  const route = touchSendRoute(pend.route, targetPlayerId ?? square); // round 5: touch mode sends only the route on screen
+  if (!route) return true; // refused with a reason; nothing else is sent
+  if (gameStore.startPlan({ playerId: actingId, actKind: 'pass', route, targetCoordinate: square, targetPlayerId })) {
     bridgeActivePassPlan(square, pend.dest);
   }
   o66PendingMove.value = null; renderer?.setO66Path([]);
@@ -7905,7 +7948,9 @@ function commitPlannedHandOffFromDestination(actorId: string, receiverId: string
   if (!pend || !dest || dest[0] !== plannedOrigin[0] || dest[1] !== plannedOrigin[1]) return;
   const declareAction = plannedHandOffAction(g);
   if (!declareAction || !handOffReceiverIdsFrom(g, actingId, dest).includes(receiverId)) return;
-  gameStore.startPlan({ playerId: actingId, actKind: 'handOver', route: pend.route, targetPlayerId: receiverId, declareAction });
+  const route = touchSendRoute(pend.route, receiverId); // round 5: touch mode sends only the route on screen
+  if (!route) return;
+  gameStore.startPlan({ playerId: actingId, actKind: 'handOver', route, targetPlayerId: receiverId, declareAction });
   o66PendingMove.value = null; renderer?.setO66Path([]);
 }
 
@@ -7945,6 +7990,43 @@ watch([
   renderer.setPassRevealDP(!!preview);
 });
 /** o66PathSquares[0] is always the route origin; renderer chips and numbering depend on it. */
+/** Touch mode (review finding 7): everything about starting this move that could make it roll. */
+function touchMoveRisk(g: GameJson, actorId: string, route: readonly [number, number][], localWalk: boolean): TouchMoveRisk {
+  const ap = g.actingPlayer as { playerId?: string | null; currentMove?: number; leaping?: boolean } | undefined;
+  const declared = String(ap?.playerId ?? '') === actorId;
+  const player = [...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === actorId);
+  const pd = (g.fieldModel.playerDataArray as { playerId: string; playerState?: number }[]).find((d) => d.playerId === actorId);
+  return {
+    rollCost: renderer?.o66RouteRollCost(actorId, route) ?? Number.POSITIVE_INFINITY,
+    picksUpBall: routePicksUpBall(g, route),
+    freshActivation: localWalk || !declared || Number(ap?.currentMove ?? 0) === 0,
+    actorSkills: player ? playerSkillNames(player) : [],
+    actorProne: ((pd?.playerState ?? 0) & 0xff) === 3,
+    leaping: declared && ap?.leaping === true,
+    movesRandomly: movesRandomly(g, actorId),
+    starPlayer: (player as { playerType?: string } | undefined)?.playerType === 'Star',
+    fieldHazard: touchFieldHazard(g),
+  };
+}
+/** Round-2 finding 5: a server-published hazard or card effect that may add a roll to a move - any trapdoor on the
+ *  field, any card effect on a player, any active inducement card. When in doubt, Confirm. */
+function touchFieldHazard(g: GameJson): boolean {
+  const fm = g.fieldModel as { trapDoors?: unknown[]; playerDataArray?: { cardEffects?: unknown[] }[] };
+  if ((fm.trapDoors?.length ?? 0) > 0) return true;
+  if ((fm.playerDataArray ?? []).some((d) => (d.cardEffects?.length ?? 0) > 0)) return true;
+  const active = (t: unknown) => ((t as { inducementSet?: { cardsActive?: unknown[] } } | undefined)?.inducementSet?.cardsActive?.length ?? 0) > 0;
+  return active((g as { turnDataHome?: unknown }).turnDataHome) || active((g as { turnDataAway?: unknown }).turnDataAway);
+}
+/** Touch mode safe-move rule: the route steps onto a loose ball on the ground (a pick-up roll). */
+function routePicksUpBall(g: GameJson, route: readonly [number, number][]): boolean {
+  const fm = g.fieldModel as { ballCoordinate?: unknown; ballMoving?: boolean; ballInPlay?: boolean } | undefined;
+  const ball = normSquare(fm?.ballCoordinate);
+  if (!ball || fm?.ballInPlay === false) return false;
+  const holder = (g.fieldModel.playerDataArray as { playerCoordinate?: unknown }[])
+    .some((d) => { const sq = normSquare(d.playerCoordinate); return !!sq && sq[0] === ball[0] && sq[1] === ball[1]; });
+  if (holder) return false;
+  return route.some((sq) => sq[0] === ball[0] && sq[1] === ball[1]);
+}
 function setO66PathFromOrigin(from: [number, number] | null, route: [number, number][], moverId: string) {
   if (!renderer) return;
   if (!from || !route.length) { renderer.setO66Path([], moverId); return; }
@@ -7956,8 +8038,9 @@ function previewLeftClickBlitzRoute(actingId: string, targetId: string): [number
   return leftClickBlitzContactRoute({
     target,
     waypointRoute: o66PendingMove.value?.route ?? [],
-    directContact: () => renderer?.o66PathToContact(actingId, target) ?? null,
-    extendWaypoint: (route, destination) => renderer?.o66ExtendPath(actingId, route, destination) ?? null,
+    // P0 g1963245 (owner: "MA + 1 for planning"): a Blitz approach is planned with one square held back for the block.
+    directContact: () => renderer?.o66PathToContact(actingId, target, { reserveForBlock: true }) ?? null,
+    extendWaypoint: (route, destination) => renderer?.o66ExtendPath(actingId, route, destination, { reserveForBlock: true }) ?? null,
     routeCost: (route) => renderer?.o66RouteRollCost(actingId, route) ?? 0, // owner 10-03: rushes before dodges
   })?.route ?? null;
 }
@@ -8522,6 +8605,7 @@ function applyMarkings() {
   if (!game) {
     renderer.setPlayerIconSkills(null);
     renderer.setPlayerMarkings(new Map());
+    renderer.setPlayerStatusMarkings(new Map());
     return;
   }
   // Icons: the per-skill config (MY TEAM / OPPOSITION behaviour + baseline) decides
@@ -8529,6 +8613,7 @@ function applyMarkings() {
   renderer.setPlayerIconSkills(computeIconSkills(game));
   // Markings: the per-skill MARKER config if the user opted a skill in, else the
   // FUMBBL auto-marking JSON (backward compatible), else none.
+  renderer.setPlayerStatusMarkings(new Map()); // owner 11-11: only the opt-in two-line branch below sets status lines
   if (settings.skillDisplay !== 'markings') {
     renderer.setPlayerMarkings(new Map());
     return;
@@ -8536,6 +8621,19 @@ function applyMarkings() {
   // Owner 09-25: ONE effective config (imported JSON combos/injuries + the per-skill table) through the upstream
   // precedence rules — a configured marker no longer switches the JSON off (combo rules never drew before).
   const config = effectiveMarkingConfig(settings.markingsConfig);
+  // Owner 11-11 (opt-in): stat changes + niggling injuries on their own line above the skill marks, for every player,
+  // with or without rules; stat/injury-only rules move to that line.
+  if (settings.markingStatusLine) {
+    try {
+      const lines = generateAllMarkingLines(game, config);
+      renderer.setPlayerMarkings(new Map([...lines].filter(([, l]) => l.skills).map(([id, l]) => [id, l.skills])));
+      renderer.setPlayerStatusMarkings(new Map([...lines].filter(([, l]) => l.status.length).map(([id, l]) => [id, l.status])));
+    } catch (err) {
+      console.warn('[markings] failed to generate the two-line markings — markings off:', err);
+      renderer.setPlayerMarkings(new Map());
+    }
+    return;
+  }
   if (!config) {
     renderer.setPlayerMarkings(new Map());
     return;
@@ -8550,7 +8648,7 @@ function applyMarkings() {
   }
 }
 watch(
-  () => [settings.markingsConfig, settings.skillDisplay, effectiveIconStyle.value, settings.iconPosition, settings.markerPosition, settings.skillBadgeFamily],
+  () => [settings.markingsConfig, settings.skillDisplay, effectiveIconStyle.value, settings.iconPosition, settings.markerPosition, settings.skillBadgeFamily, settings.markingStatusLine],
   () => applyMarkings(),
 );
 watch(() => settings.skillConfig, () => applyMarkings(), { deep: true });
@@ -8599,13 +8697,72 @@ const playerCardEl = ref<HTMLElement | null>(null);
 // RESIZABLE via a TOP-RIGHT handle (owner 2026-07-03 — CSS `resize:both` only
 // gives a bottom-right handle, so the resize is hand-rolled). A dragged position
 // overrides the docked TOP-right default; a resize overrides the CSS size.
-const cardPos = ref<{ x: number; y: number } | null>(null);
-const cardSize = ref<{ w: number; h: number } | null>(null);
+// Both persist as the user's PREFERENCE (settings.playerCardPos / playerCardSize, written only by a real drag or resize);
+// cardPos / cardSize are the DISPLAYED geometry, the preference fitted into the pitch host (game/playerCardGeometry.ts),
+// so a smaller window or larger text moves the card in without losing the spot it returns to.
+const cardPos = ref<{ x: number; y: number } | null>(settings.playerCardPos ? { ...settings.playerCardPos } : null);
+const cardSize = ref<{ w: number; h: number } | null>(settings.playerCardSize ? { ...settings.playerCardSize } : null);
+function playerCardHostSize(): { w: number; h: number } | null {
+  const host = pitchHost.value;
+  return host && popup.visible && playerCardEl.value ? { w: host.clientWidth, h: host.clientHeight } : null;
+}
+const playerCardGeometry = createPlayerCardGeometry({
+  host: playerCardHostSize,
+  rendered: () => {
+    const card = playerCardEl.value;
+    if (!card) return null;
+    const r = card.getBoundingClientRect();
+    return { w: r.width, h: r.height };
+  },
+  afterLayout: () => nextTick(),
+  save: (pref) => { settings.playerCardPos = pref.pos; settings.playerCardSize = pref.size; },
+  // The gesture's own listeners: the module filters by the starting pointer and detaches them exactly once (on its
+  // pointer's release, pointercancel / lostpointercapture, window blur, the card hiding or unmount).
+  // Pointer listeners run in the window's CAPTURE phase, so a surface that stops pointerup propagation (the
+  // turn banners' @pointerup.stop) cannot swallow the release when pointer capture is unavailable.
+  listen: (h) => {
+    const at = (ev: PointerEvent) => { const p = cardPointer(ev); return p ? { id: ev.pointerId, ...p, buttons: ev.buttons } : null; };
+    const move = (ev: PointerEvent) => { const e = at(ev); if (e) h.move(e); };
+    const up = (ev: PointerEvent) => { const e = at(ev); if (e) h.up(e); else h.cancel(ev.pointerId); };
+    const lost = (ev: PointerEvent) => h.cancel(ev.pointerId);
+    const blur = () => h.cancel();
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', lost, true);
+    window.addEventListener('lostpointercapture', lost, true);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', lost, true);
+      window.removeEventListener('lostpointercapture', lost, true);
+      window.removeEventListener('blur', blur);
+    };
+  },
+}, { pos: settings.playerCardPos, size: settings.playerCardSize }, { pos: cardPos, size: cardSize });
+onBeforeUnmount(() => playerCardGeometry.cancel());
+/** Fit the preferred card geometry into the pitch host (against the RENDERED card: the em-based CSS min sizes can
+ *  make it bigger than its stored size). Runs when the card shows, when the pitch host resizes (clampUiToViewport +
+ *  playerCardHostObserver) and when the card's text size changes; deferred while a drag / resize is in progress. */
+function clampPlayerCardIntoHost(): Promise<void> {
+  return playerCardGeometry.fit();
+}
+let playerCardHostObserver: ResizeObserver | null = null;
+function watchPlayerCardHost(on: boolean): void {
+  playerCardHostObserver?.disconnect();
+  playerCardHostObserver = null;
+  if (!on || !pitchHost.value || typeof ResizeObserver === 'undefined') return;
+  playerCardHostObserver = new ResizeObserver(() => { void clampPlayerCardIntoHost(); });
+  playerCardHostObserver.observe(pitchHost.value);
+}
+onBeforeUnmount(() => watchPlayerCardHost(false));
+watch(() => [settings.logFontSize, settings.uiTextSize] as const, () => nextTick(() => clampPlayerCardIntoHost()));
 const cardDodgePos = ref<{ x: number; y: number } | null>(null);
 const cardDockPos = anchorRef<{ x: number; y: number } | null>(null);
 let playerCardDodgeRaf = 0;
 const cardStyle = computed(() => {
-  const style: Record<string, string> = {};
+  // The card's text follows the Log font size slider (15 px = the default = scale 1, today's card).
+  const style: Record<string, string> = { '--card-text-scale': String(Math.max(0.1, settings.logFontSize) / 15) };
   const placed = cardPos.value ?? cardDodgePos.value;
   if (placed) {
     style.left = `${placed.x}px`;
@@ -8633,8 +8790,10 @@ watch(() => [popup.visible, popup.playerId] as const, async () => {
   cancelAnimationFrame(playerCardDodgeRaf);
   cardDodgePos.value = null;
   cardDockPos.value = null;
-  if (!popup.visible) return;
+  watchPlayerCardHost(popup.visible);
+  if (!popup.visible) { playerCardGeometry.cancel(); return; } // a hidden card abandons its gesture (nothing saved)
   await nextTick();
+  await clampPlayerCardIntoHost();
   const host = pitchHost.value;
   const card = playerCardEl.value;
   if (!host || !card) return;
@@ -8666,60 +8825,47 @@ watch(() => [popup.visible, popup.playerId] as const, async () => {
   follow();
 });
 onBeforeUnmount(() => cancelAnimationFrame(playerCardDodgeRaf));
-function startCardDrag(event: PointerEvent) {
-  const card = (event.currentTarget as HTMLElement).closest('.player-card') as HTMLElement | null;
+/** Pointer position in pitch-host coordinates (measured live: the host can resize mid-gesture). */
+function cardPointer(ev: PointerEvent): { x: number; y: number } | null {
   const host = pitchHost.value;
-  if (!card || !host) return;
-  event.preventDefault();
+  if (!host) return null;
+  const hr = host.getBoundingClientRect();
+  return { x: ev.clientX - hr.left, y: ev.clientY - hr.top };
+}
+/** Capture the gesture's pointer on its handle so the stream stays with it (a lost capture cancels the gesture). */
+function captureCardPointer(event: PointerEvent): void {
+  // Not capturable: the capture-phase window listeners still see the release, and a buttonless move ends it.
+  try { (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId); } catch { /* see above */ }
+}
+function cardRectInHost(card: HTMLElement): { x: number; y: number; w: number; h: number } | null {
+  const host = pitchHost.value;
+  if (!host) return null;
   const rect = card.getBoundingClientRect();
   const hostRect = host.getBoundingClientRect();
-  const dx = event.clientX - rect.left;
-  const dy = event.clientY - rect.top;
-  const move = (ev: PointerEvent) => {
-    cardPos.value = {
-      x: Math.max(0, Math.min(ev.clientX - hostRect.left - dx, hostRect.width - 120)),
-      y: Math.max(0, Math.min(ev.clientY - hostRect.top - dy, hostRect.height - 60)),
-    };
-  };
-  const up = () => {
-    window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up);
-  };
-  window.addEventListener('pointermove', move);
-  window.addEventListener('pointerup', up);
+  return { x: rect.left - hostRect.left, y: rect.top - hostRect.top, w: rect.width, h: rect.height };
+}
+function startCardDrag(event: PointerEvent) {
+  if (!isPrimaryCardPointer(event)) return; // right / middle / barrel buttons never move the card
+  const card = (event.currentTarget as HTMLElement).closest('.player-card') as HTMLElement | null;
+  const rect = card ? cardRectInHost(card) : null;
+  const p = cardPointer(event);
+  if (!rect || !p) return;
+  event.preventDefault();
+  if (playerCardGeometry.beginDrag({ id: event.pointerId, button: event.button, pointerType: event.pointerType }, p, rect)) captureCardPointer(event);
 }
 /** Owner 2026-07-03: TOP-RIGHT resize handle. Anchors the card's BOTTOM-LEFT
  *  corner (a north-east drag), so dragging right widens and dragging up grows it
  *  taller — the top edge follows the cursor. Converts the CSS-docked default to
  *  an explicit left/top anchor so the math is stable wherever the card sits. */
 function startCardResize(event: PointerEvent) {
+  if (!isPrimaryCardPointer(event)) return; // right / middle / barrel buttons never resize the card
   const card = (event.currentTarget as HTMLElement).closest('.player-card') as HTMLElement | null;
-  const host = pitchHost.value;
-  if (!card || !host) return;
+  const rect = card ? cardRectInHost(card) : null;
+  const p = cardPointer(event);
+  if (!rect || !p) return;
   event.preventDefault();
   event.stopPropagation();
-  const rect = card.getBoundingClientRect();
-  const hostRect = host.getBoundingClientRect();
-  const left = rect.left - hostRect.left; // fixed left edge
-  const bottom = rect.bottom - hostRect.top; // fixed bottom edge
-  const startX = event.clientX;
-  const startY = event.clientY;
-  const startW = rect.width;
-  const startH = rect.height;
-  const MIN_W = 154;
-  const MIN_H = 84;
-  const move = (ev: PointerEvent) => {
-    const w = Math.max(MIN_W, Math.min(startW + (ev.clientX - startX), host.clientWidth - left - 4));
-    const h = Math.max(MIN_H, Math.min(startH - (ev.clientY - startY), bottom - 4));
-    cardSize.value = { w, h };
-    cardPos.value = { x: left, y: bottom - h };
-  };
-  const up = () => {
-    window.removeEventListener('pointermove', move);
-    window.removeEventListener('pointerup', up);
-  };
-  window.addEventListener('pointermove', move);
-  window.addEventListener('pointerup', up);
+  if (playerCardGeometry.beginResize({ id: event.pointerId, button: event.button, pointerType: event.pointerType }, p, rect)) captureCardPointer(event);
 }
 // Owner 09-10: the rules-text skill descriptions (and the SailThe7Seas gate that unlocked them) are removed — the
 // hover tooltip names the skill only.
@@ -9077,6 +9223,10 @@ interface MenuItem {
   ffbHidden?: boolean;
   /** FUMBBL keyboard shortcuts: the FFB popup letter shown on the row (and the key that picks it). */
   shortcut?: string;
+  /** Touch mode action center: the CoachAction.action / flavour of a menu row (game/actionCenterModel.ts fixed places). */
+  actionId?: string;
+  blockKind?: string;
+  usingChainsaw?: boolean;
 }
 const ctxMenu = reactive({ visible: false, x: 0, y: 0, items: [] as MenuItem[], playerId: '' });
 watch(() => ctxMenu.visible, (visible) => {
@@ -9161,7 +9311,7 @@ function o66Ctx(): ClientStateContext {
 // Spectate and replay are unaffected (no game input). The Super FUMBBL layer (the default) takes none of these branches.
 // =====================================================================================================================
 function fumbblControls(): boolean {
-  return props.mode === 'play' && !!settings.order66 && gameStore.isPlaying.value && effectiveControlLayer(settings) === 'fumbbl';
+  return props.mode === 'play' && !!settings.order66 && gameStore.isPlaying.value && inputControlLayer(settings) === 'fumbbl';
 }
 /** A left click on an own player opens its action menu (the Super layer's "Left click opens context menu" setting, or
  *  always under FUMBBL Controls: SelectLogicModule opens the popup, never a local select). */
@@ -9210,6 +9360,7 @@ function wasdPanOff(code: string): boolean {
 /** A FUMBBL shortcut key press (either control layer). True = consumed. */
 function fumbblKeyDown(event: KeyboardEvent): boolean {
   if (!settings.fumbblShortcuts || props.mode !== 'play' || !gameStore.isPlaying.value) return false;
+  if (touchModeActive.value) return false; // round-6 finding 3: they step / declare / commit at once, bypassing Confirm
   if (keyboardOwnedByTextControl(event.target)) return false;
   // An open action menu: its rows' FFB letters pick them (IPlayerPopupMenuKeys).
   if (ctxMenu.visible && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
@@ -9264,7 +9415,7 @@ function runFumbblKey(id: FumbblKeyActionId): void {
     if (!to) return;
     const keySt = deriveClientState(g, o66Ctx());
     const keyEffect = fumbblStepKeyEffect({
-      layer: effectiveControlLayer(settings), serverMoveSquare: serverMoveSquares(g).some((sq) => sq[0] === to[0] && sq[1] === to[1]), state: keySt,
+      layer: inputControlLayer(settings), serverMoveSquare: serverMoveSquares(g).some((sq) => sq[0] === to[0] && sq[1] === to[1]), state: keySt,
       puntTargeting: keySt === 'PUNT' && isPuntTargeting(g),
       // a Jump square or a Ball & Chain aim: the tile handler's own single-square send
       singleSquarePick: !!(g.actingPlayer as { leaping?: boolean } | undefined)?.leaping || movesRandomly(g, actingId),
@@ -9369,7 +9520,7 @@ function controlLayerActivationProbe() {
 // Sol r1 #6: when the layer in effect changes, every client-only stage / preview / plan of the old layer is retired
 // (a quick-Blitz stage, a plotted route, a local selection, armed targets) - nothing a server activation owns, and
 // nothing is sent. A switch during an own activation only applies once that activation is over (controlLayerSwitch).
-watch(() => effectiveControlLayer(settings), (layer, prev) => {
+watch(() => inputControlLayer(settings), (layer, prev) => {
   if (layer === prev) return;
   clearO66Arms();
   clearFumbblHoverPath();
@@ -9411,7 +9562,7 @@ function rightClickOwnedByPrompt(): boolean {
  *  right-click is handled here; false = today's right-click (the Super FUMBBL cascade) runs. */
 function pitchRightClick(x: number, y: number): boolean {
   if (props.mode !== 'play' || !settings.order66 || !gameStore.isPlaying.value || !renderer) return false;
-  const layer = effectiveControlLayer(settings);
+  const layer = inputControlLayer(settings);
   const g = gameStore.game.value;
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const myActing = !!actingId && !!gameStore.myTurn.value && gameStore.iControl(actingId);
@@ -9635,6 +9786,11 @@ watch([gameStore.game, o66PendingLeftClickBlitzPlan], ([g, plan]) => {
   if (playerPinned(g, plan.playerId)) { retireStoredBlitzRoute(); rearmO66MovementSurface(); return; }
   // At contact the plan hands over to the "Stab or Block?" chooser when there is anything to choose (owner 11-03,
   // option A; store plannerFireAct).
+  // P0 g1963245: a stored route that would leave no square for the block is retired (the store refuses it and says why).
+  if (!blitzBlockFitsAfterSteps(g, plan.playerId, plan.route.length)) {
+    gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId });
+    retireStoredBlitzRoute(); rearmO66MovementSurface(); return;
+  }
   if (gameStore.startPlan({ playerId: plan.playerId, actKind: 'blitz', route: plan.route, targetPlayerId: plan.targetId })) retireStoredBlitzRoute();
 }, { deep: true, flush: 'post' });
 // Owner 11-03 (Take Root): a ROOTED acting player has no walk - every plotted route goes (the reach is already empty,
@@ -9808,6 +9964,9 @@ function o66ActionMenuItems(actions: CoachAction[], playerId: string, _refresh: 
       ffb: ffbClientAction(a),
       ffbHidden: ffbLacksRow(a),
       icon,
+      actionId: a.action || undefined,
+      blockKind: a.blockKind,
+      usingChainsaw: a.usingChainsaw,
       action: a.kind === 'endMove' ? endActivationFromMenu : () => runO66Action(a, playerId),
     };
   });
@@ -10084,6 +10243,8 @@ function presentFumbblMenuRows(items: MenuItem[]): MenuItem[] {
  *  / #111 / blitz-special menus use). Extracted so #128 Case B and openO66Menu share one placement. */
 function placeCtxMenu(items: MenuItem[], x: number, y: number, playerId = '') {
   items = presentFumbblMenuRows(items);
+  // Touch mode (spec section 4): no menu opens under the finger - the rows go to the action center (with Back).
+  if (touchModeActive.value) { ctxMenu.visible = false; touchMenuRows.value = items; return; }
   const host = pitchHost.value!;
   const menuH = items.length * 18 + 8;
   const BOTTOM_SAFE = 72;
@@ -10217,6 +10378,14 @@ function openO66Menu(target: ContextTarget, x: number, y: number) {
     const targetIsAdjacentEnemy = !!target.playerId && !!actingNow && !gameStore.iControl(target.playerId)
       && adjacentStandingEnemyIds(g, actingNow).includes(target.playerId);
     if ((attackState === 'BLOCK' || attackState === 'BLITZ') && targetIsAdjacentEnemy) {
+      // P0 g1963245: upstream sends no Blitz block here. No square left: no attack rows, one disabled row says why. The
+      // rush prompt (BlitzLogicModule.java:50-51): the acting player's menu opens instead, as on a target click.
+      const blitzVerdict = attackState === 'BLITZ' ? blitzBlockMoveVerdict(g, actingNow) : 'notBlitz';
+      if (blitzVerdict === 'rushPrompt') { openActingRushPromptMenu(actingNow); return; }
+      if (blitzVerdict === 'noMoveLeft') {
+        placeCtxMenu([{ label: $t('hud.text.blitzBlockNoMoveLeft'), disabled: true }], x, y, target.playerId);
+        return;
+      }
       const kinds: BlockKind[] = blockAlternativeOffers(g, actingNow).map((offer) => offer.kind);
       // Astra 10-12: this menu belongs to ONE target, so Chomp is offered only against a target this player has not
       // chomped yet (upstream checks the chosen defender). The acting player's own rows keep the any-adjacent rule.
@@ -10267,6 +10436,21 @@ function plottedRouteCancelRow(): MenuItem {
   };
 }
 
+/** Touch mode Cancel while the Kick 'em picker is armed (B is inert there): the right-click's own precedence - the
+ *  route first, else the nomination (kickEmCancelDecision). False = nothing for it to cancel ('passThrough'). */
+function touchKickEmCancel(): boolean {
+  const g = gameStore.game.value;
+  const decision = kickEmCancelDecision({
+    hasRoute: (o66PendingMove.value?.route.length ?? 0) > 0,
+    hasNomination: !!gameStore.state.kickEmBlitzTarget,
+    pickerArmed: true,
+    confirmationCardOpen: !!gameStore.state.yesNo?.key.startsWith('kickEmConfirm:'),
+    clientState: g ? deriveClientState(g, o66Ctx()) : null,
+  });
+  if (decision === 'clearRoute') { clearO66Arms(); playCancelCue(); return true; }
+  if (decision === 'cancelNomination') { gameStore.clearKickEmBlitzNomination(); playCancelCue(); return true; }
+  return false;
+}
 function openContextMenu(target: ContextTarget, x: number, y: number) {
   const fromOffPitch = !!target.offPitch; // owner 10-20: an off-pitch right-click keeps cancelling a plotted route
   // Owner 10-14: an off-pitch right-click (sidelines, dugouts, surround) is the acting player's rail menu when I have
@@ -10730,9 +10914,10 @@ watch(() => settings.reduceFlashing, (on) => renderer?.setReduceFlashing(on));
 
 /** Shared rail 5 nominate/confirm arm; changing the square or action re-nominates. TTM uses the same selector,
  * destination cue, confirm gesture, and teardown as a regular throw while retaining its exact upstream sender. */
-function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' | 'fireball' | 'throwTeamMate'): void {
+function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' | 'fireball' | 'throwTeamMate', fromConfirm = false): void {
   if (o66PendingThrowKind.value === kind && o66PendingPass.value
     && o66PendingPass.value[0] === square[0] && o66PendingPass.value[1] === square[1]) {
+    if (!fromConfirm && !touchSecondTapCommits()) return; // touch mode: only Confirm throws
     if (kind === 'throwTeamMate') {
       const g = gameStore.game.value;
       const st = g ? deriveClientState(g, o66Ctx()) : '';
@@ -10753,6 +10938,7 @@ function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' 
   } else {
     o66PendingPass.value = square;
     o66PendingThrowKind.value = kind;
+    touchPreviewSquare(square);
   }
   o66PendingHandOff.value = null;
 }
@@ -10811,6 +10997,7 @@ function nominateOrConfirmPunt(g: Parameters<typeof o66SquareClick>[0], actingId
   if (ix.kind !== 'fieldCoordinate') return;
   const pending = o66PendingPunt.value;
   if (pending && pending[0] === ix.square[0] && pending[1] === ix.square[1]) {
+    if (!touchSecondTapCommits()) return; // touch mode: only Confirm kicks
     gameStore.sendFieldCoordinate(actingId, ix.square);
     o66PendingPunt.value = null;
   } else {
@@ -10929,6 +11116,7 @@ function lockedConfirm(): boolean {
   const target = lockedConfirmTarget(openConfirmCards(confirmCardLockInput()));
   if (target === 'consume') return true;
   if (target === 'endConfirmation' && answerOpenConfirmation()) return true;
+  if (target === 'blockAttack' && touchModeActive.value) { touchCardConfirm('aggro', () => confirmAggroStage()); return true; } // round 7: the plan
   if (target === 'blockAttack' && confirmAggroStage()) return true;
   if (target === 'actionTarget' && renderer?.hasArmedAction()) { renderer.confirmArmedAction(); return true; }
   nudgeConfirmCard();
@@ -11094,7 +11282,7 @@ function o66ConfirmPending(): boolean {
     // stale landing (out of the thrower's range after a walk) ⇒ drop the nomination but KEEP o66ThrownMate so the
     //   still-held team-mate can be re-nominated to a legal square (never abandon the pickup on a stale confirm).
     if (ttmTargetInTemplate(g, actingId, o66PendingPass.value)) {
-      nominateOrConfirmThrow(o66PendingPass.value, 'throwTeamMate');
+      nominateOrConfirmThrow(o66PendingPass.value, 'throwTeamMate', true);
     } else {
       o66PendingPass.value = null;
       o66PendingThrowKind.value = null;
@@ -11135,6 +11323,20 @@ function showQuickClickBlitzUnavailable(targetId: string, reason: 'modern' | 'us
     : reason === 'unreachable' ? $t('hud.text.canTReachA')
       : $t('hud.text.declareBlitzFromThe');
   showToast(text, p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+}
+/** Upstream's rush prompt (BlitzLogicModule.java:50-51): instead of the attack, the acting player's action menu opens. */
+function openActingRushPromptMenu(actingId: string) {
+  const target = renderer?.contextTargetFor(actingId);
+  if (!target) return;
+  const at = renderer?.playerScreenPos(actingId);
+  openO66Menu(target, at?.x ?? 200, at?.y ?? 200);
+}
+/** P0 g1963245: the Blitz block is not available - the blitzer has no square left to spend on it (upstream
+ *  BlockLogicExtension.java:189). The unavailable-action toast on the target; nothing is sent. */
+function showBlitzBlockNoMoveLeft(targetId: string) {
+  const sq = playerSquareById(targetId);
+  const p = sq ? renderer?.squareToCanvas(sq) : null;
+  showToast($t('hud.text.blitzBlockNoMoveLeft'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
 }
 /** Fives lane 08-19: confirm the current aggressive stage. Blitz revalidates the menu offer before declaring. */
 /** Owner 09-06: a block/blitz TARGET click must not leave the defender selected — return the renderer selection to
@@ -11188,6 +11390,17 @@ function confirmAggroStage(): boolean {
     // flavor rides the existing CLIENT_BLOCK flags; no second Blitz declare or target-selection command is sent.
     if (deriveClientState(g, o66Ctx()) === 'BLITZ' && actingId
         && adjacentStandingEnemyIds(g, actingId).includes(st.target)) {
+      // P0 g1963245: upstream sends no Blitz block here - no chooser, no send. No square left (BlockLogicExtension.java:189):
+      // say why. The rush prompt (BlitzLogicModule.java:50-51): the acting player's menu opens, the staged attack stays.
+      const blitzVerdict = blitzBlockMoveVerdict(g, actingId);
+      if (blitzVerdict === 'rushPrompt') { openActingRushPromptMenu(actingId); return true; }
+      if (blitzVerdict === 'noMoveLeft') {
+        o66AggroStage.value = null;
+        o66PendingBlitzBlockKind.value = null;
+        o66ExplicitBlockChoice.value = null;
+        showBlitzBlockNoMoveLeft(st.target);
+        return true;
+      }
       // Owner 09-28 (S6, g987 #6; follow-up per Sol review): the manual walk-by-tile-clicks path lands here with
       // no menu-picked flavor — try the SAME blitz-commit hold the planner's act leg takes before sending a plain
       // block, so a Gored by the Bull / Chainsaw offer isn't skipped. An explicit flavor already bypasses the
@@ -11224,6 +11437,8 @@ function confirmAggroStage(): boolean {
     if (!blitzAction) { showQuickClickBlitzUnavailable(st.target); return true; }
     const route = previewLeftClickBlitzRoute(actingId, st.target);
     if (!route) { showQuickClickBlitzUnavailable(st.target, 'unreachable'); return true; }
+    // P0 g1963245: the planned walk leaves the block no square - refuse up front, nothing declared or sent.
+    if (!blitzBlockFitsAfterSteps(g, actingId, route.length)) { o66AggroStage.value = null; showBlitzBlockNoMoveLeft(st.target); return true; }
     o66AggroStage.value = null;
     o66PendingBlitzTarget.value = st.target;
     o66PendingLeftClickBlitzPlan.value = { playerId: actingId, targetId: st.target, route };
@@ -11442,7 +11657,15 @@ function escapeCascade(): void {
  *  False when there was nothing to confirm. */
 function confirmShortcut(): boolean {
   if (cancelDeferredFriendlySwitch()) { popup.visible = false; return true; }
-  if (answerOpenConfirmation() || confirmAggroStage() || o66ConfirmPending()) return true;
+  if (answerOpenConfirmation()) return true;
+  // Round-6 finding 3: in touch mode the confirm key / pad Confirm is the action center's Confirm - the plan on the pitch,
+  // never the legacy attack / pending cascade. With nothing to confirm the key is not handled.
+  if (touchModeActive.value) {
+    if (!touchConfirmLabel.value) return false;
+    touchConfirm();
+    return true;
+  }
+  if (confirmAggroStage() || o66ConfirmPending()) return true;
   if (queuedSteps.value > 0) { confirmMove(); return true; }
   return false;
 }
@@ -11677,6 +11900,458 @@ const crosshairActions: CrosshairActionDeps = {
   cycle: (direction) => crosshair.cycle(direction, crosshairCycleOrder()),
   togglePrecision: () => { crosshair.togglePrecision(); },
 };
+
+// ---- Touch mode (spec-touch-mode-2026-11-12 sections 4-6): the action center, Confirm-only commits, Cancel. --------
+/** The own player the action center shows rows for (the renderer selection; the acting player wins). */
+const touchSelectedId = ref<string | null>(null);
+/** A menu the view raised (placeCtxMenu) shown in the action center instead of the floating menu, with Back. */
+const touchMenuRows = ref<MenuItem[] | null>(null);
+/** Long-press rows (Mark player / Mark square ...) shown in the bottom row, with Back (section 7). */
+const touchOverrideRows = ref<MenuItem[] | null>(null);
+/** Touch mode (review findings 4, 5, 10): one staged dice-rolling / irreversible commit, bound to the game, half, turn,
+ *  turn mode, actor, action and the actor's square at the tap (game/touchStage.ts). Only the action center's Confirm
+ *  sends it, after re-running the tap's own legality check; any change of that binding drops it. */
+const touchStage = shallowRef<(TouchStage & { key: string }) | null>(null);
+const touchStageKeyNow = () => touchStageKey(touchStageContext(gameStore.game.value));
+const touchStages = createTouchStageHolder(touchStageKeyNow, (stage) => {
+  touchStage.value = stage;
+  if (stage) touchNotes.note('stage');
+}, () => gameStore.gameplaySendCount());
+watch(touchStageKeyNow, () => touchStages.sync());
+/** Round-2 findings 3 / 6: ONE current preview (game/touchPreview.ts). Every preview the view creates is reported
+ *  (synchronously, inside the tap that made it); the newest is current and every unrelated one is retired. */
+const touchPreviewCurrent = ref<TouchPreviewKind | null>(null);
+const touchPreviews = createTouchPreviewCoordinator({
+  isSet: (k) => k === 'stage' ? !!touchStage.value : k === 'move' ? !!o66PendingMove.value : k === 'aggro' ? !!o66AggroStage.value
+    : k === 'throw' ? !!o66PendingPass.value : k === 'punt' ? !!o66PendingPunt.value : k === 'foul' ? !!o66PendingFoul.value
+      : !!gameStore.armedGazeVictimId(),
+  clear: (k) => {
+    if (k === 'stage') touchStages.clear();
+    else if (k === 'move') { o66PendingMove.value = null; renderer?.setO66Path([]); }
+    else if (k === 'aggro') { o66AggroStage.value = null; o66PendingBlock.value = null; }
+    else if (k === 'throw') { o66PendingPass.value = null; o66PendingThrowKind.value = null; }
+    else if (k === 'punt') o66PendingPunt.value = null;
+    else if (k === 'foul') o66PendingFoul.value = null;
+    else disarmGazeVictim();
+  },
+  routeServes: (k) => touchRouteServes(k),
+}, (k) => { touchPreviewCurrent.value = k; });
+/** Round-4 finding 1: the drawn route still serves this walk-then-act target. */
+function touchRouteServes(k: TouchPreviewKind): boolean {
+  const g = gameStore.game.value;
+  const route = o66PendingMove.value?.route ?? [];
+  const end = route.length ? route[route.length - 1]! : null;
+  if (!g || !end) return false;
+  const nextTo = (id: string | null | undefined) => {
+    const sq = id ? playerSquareById(id) : null;
+    return !!sq && Math.max(Math.abs(sq[0] - end[0]), Math.abs(sq[1] - end[1])) === 1;
+  };
+  if (k === 'foul') return nextTo(o66PendingFoul.value);
+  if (k === 'aggro') return nextTo(o66AggroStage.value?.target);
+  if (k === 'gaze') return nextTo(gameStore.armedGazeVictimId());
+  if (k === 'throw') return o66PendingThrowKind.value === 'pass' && !!o66PendingPass.value && passTargetInRangeFrom(g, end, o66PendingPass.value);
+  return true;
+}
+/** Round-4 finding 1: a re-plot retires a Pass / Hand-off card armed over the previous route (its walk is gone). */
+function touchRetireArmedCard(): void {
+  if (!actionModal.value) return;
+  renderer?.cancelArmedAction();
+  actionModal.value = null;
+}
+/** Round-4 finding 2: a commit that sends nothing says why, on the existing toast surface. */
+function touchShowReason(reason: TouchCommitReason): void {
+  showToast($t(reason.key, reason.params ?? {}), (pitchHost.value?.clientWidth ?? 400) / 2, (pitchHost.value?.clientHeight ?? 400) - 160, 2600);
+}
+/** Round-5 finding 3: notes wait until the tap's handler has finished, so a preview is judged complete (a pass target
+ *  together with its kind), in the order its parts were made. */
+const touchNotes = createTouchNoteQueue((k) => { if (touchModeActive.value && touchPreviewSlotSet(k)) touchPreviews.note(k); });
+function touchPreviewSlotSet(k: TouchPreviewKind): boolean {
+  return k === 'stage' ? !!touchStage.value : k === 'move' ? !!o66PendingMove.value : k === 'aggro' ? !!o66AggroStage.value
+    : k === 'throw' ? !!o66PendingPass.value : k === 'punt' ? !!o66PendingPunt.value : k === 'foul' ? !!o66PendingFoul.value
+      : !!gameStore.armedGazeVictimId();
+}
+watch(() => o66PendingMove.value, (v, old) => { if (touchModeActive.value && v && v !== old) { touchRetireArmedCard(); touchNotes.note('move'); } }, { flush: 'sync' });
+watch(() => o66AggroStage.value, (v, old) => { if (touchModeActive.value && v && v !== old) touchNotes.note('aggro'); }, { flush: 'sync' });
+watch(() => o66PendingPass.value, (v, old) => { if (touchModeActive.value && v && v !== old) touchNotes.note('throw'); }, { flush: 'sync' });
+watch(() => o66PendingPunt.value, (v, old) => { if (touchModeActive.value && v && v !== old) touchNotes.note('punt'); }, { flush: 'sync' });
+watch(() => o66PendingFoul.value, (v, old) => { if (touchModeActive.value && v && v !== old) touchNotes.note('foul'); }, { flush: 'sync' });
+watch(() => gameStore.armedGazeVictimId(), (v, old) => { if (touchModeActive.value && v && v !== old) touchNotes.note('gaze'); }, { flush: 'sync' });
+/** Round 5: THE touch preview value - kind, actor, exact route and target. The pitch path is drawn only from it
+ *  (touchPlanDrawer; every other path draw is ignored in touch mode) and Confirm sends only from it. */
+const touchPlan = computed<TouchPlan | null>(() => {
+  if (!touchModeActive.value) return null;
+  void touchPreviewCurrent.value;
+  const g = gameStore.game.value;
+  return buildTouchPlan({
+    kind: touchPreviews.dispatchKind(),
+    actorId: o66ActorId(g),
+    previewRoute: o66PendingMove.value?.route ?? null,
+    stageRoute: touchStage.value?.route ?? null,
+    targets: {
+      stage: touchStage.value?.target ?? null, aggro: o66AggroStage.value?.target ?? null, throw: o66PendingPass.value,
+      punt: o66PendingPunt.value, foul: o66PendingFoul.value, gaze: gameStore.armedGazeVictimId(),
+      move: actionModal.value?.targetId ?? null,
+    },
+  });
+});
+let touchPlanDrawer: TouchPlanDrawer | null = null;
+function touchPublishPlan(): void {
+  if (!touchPlanDrawer || !touchModeActive.value) return;
+  const plan = touchPlan.value;
+  touchPlanDrawer.publish(plan, plan?.actorId ? playerSquareById(plan.actorId) : null);
+}
+watch(touchPlan, () => touchPublishPlan(), { deep: true });
+/** Round-6 finding 1: touch mode switched off. Every touch-only piece goes (menus, the staged tap, the current preview,
+ *  queued notes, the plan's drawing); what survives is the mouse-owned plotted route, drawn again by the mouse's own
+ *  path call so mouse mode draws and commits exactly as before. */
+function touchLeave(): void {
+  touchMenuRows.value = null;
+  touchOverrideRows.value = null;
+  touchStages.clear();
+  touchPreviews.reset();
+  touchPlanDrawer?.publish(null, null); // the plan's last drawing is wiped
+  const g = gameStore.game.value;
+  const pend = o66PendingMove.value;
+  const actor = g ? o66ActorId(g) : '';
+  if (pend && pend.route.length && actor) setO66PathFromOrigin(playerSquareById(actor), pend.route, actor);
+}
+/** Round 5: a commit path that still reads a legacy ref (the armed Pass / Hand-off card, which mouse mode shares) asks
+ *  this first. Mouse mode: the legacy route, unchanged. Touch mode: the route on screen, and only while the legacy
+ *  route and target equal what the plan drawer last drew; otherwise nothing is sent and the coach is told why. */
+/** Round-7 finding: a confirmation CARD whose own Confirm (button, Space, pad A) commits directly. Mouse mode, or no
+ *  route drawn: the card's own handler, unchanged (what it does is what is on screen). Touch mode with a route drawn:
+ *  a card that confirms the current plan's act (`kind`) runs the plan - its validation and its walk-then-act commit,
+ *  exactly the action center's Confirm; any other card would act from where the player stands, so it refuses and
+ *  says why (the drawn route is never dropped). */
+function touchCardConfirm(kind: TouchPreviewKind | null, legacy: () => unknown): void {
+  const route = touchModeActive.value ? (touchPlan.value?.route ?? null) : null;
+  if (!route || route.length === 0) { legacy(); return; }
+  if (kind && touchPreviews.dispatchKind() === kind) { touchConfirmPlan(); return; }
+  touchShowReason({ key: TOUCH_COMMIT_REASONS.routeNotUsed });
+}
+function touchSendRoute(legacy: [number, number][], target: string | [number, number] | null): [number, number][] | null {
+  if (!touchModeActive.value) return legacy;
+  // What the coach saw is what the drawer last drew (the commit may already be clearing refs the plan reads).
+  const shown = touchPlanDrawer?.drawn() ?? null;
+  const holds = !!shown && sameSquares(shown.route, legacy) && (target === null || sameTarget(shown.target, target));
+  if (!holds) { touchShowReason({ key: TOUCH_COMMIT_REASONS.planChanged }); touchPublishPlan(); return null; }
+  return shown!.route ?? [];
+}
+/** Round-3 finding 1: the plan on the pitch, read for Confirm (game/touchCommit.ts decides what to send). */
+function touchCommitSnapshot(): TouchCommitSnapshot {
+  const g = gameStore.game.value;
+  const route = touchPlan.value?.route ?? null; // round 5: the plan's route, the one on screen
+  const end = route && route.length ? route[route.length - 1]! : null;
+  const adjacent = (a: [number, number] | null, b: [number, number] | null) => !!a && !!b && Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) === 1;
+  const aggroTarget = o66AggroStage.value?.target ?? null;
+  const victim = o66PendingFoul.value;
+  const throwSquare = o66PendingPass.value;
+  const armed = route && actionModal.value && renderer?.hasArmedAction() ? actionModal.value.mode : null;
+  const actingId = currentActingId();
+  const actorSq = actingId ? playerSquareById(actingId) : null;
+  const name = (id: string | null) => (id && g ? String(([...g.teamHome.playerArray, ...g.teamAway.playerArray].find((p) => p.playerId === id) as { playerName?: string } | undefined)?.playerName ?? '') : '');
+  return {
+    state: g ? deriveClientState(g, o66Ctx()) : '',
+    route,
+    aggroTarget,
+    routeEndsAdjacentToAggroTarget: adjacent(end, aggroTarget ? playerSquareById(aggroTarget) : null),
+    throwSquare,
+    throwKind: o66PendingThrowKind.value,
+    throwInRangeFromRouteEnd: !!(g && end && throwSquare && passTargetInRangeFrom(g, end, throwSquare)),
+    puntSquare: o66PendingPunt.value,
+    foulVictim: victim,
+    routeEndsAdjacentToFoulVictim: adjacent(end, victim ? playerSquareById(victim) : null),
+    gazeConfirmable: canConfirmArmedGaze.value,
+    armedCardOverRoute: armed === 'pass' || armed === 'handoff' ? armed : null,
+    aggroTargetName: name(aggroTarget),
+    attackerAdjacentToAggroTarget: adjacent(actorSq, aggroTarget ? playerSquareById(aggroTarget) : null),
+    routeEndLabel: end ? squareLabel(end[0], end[1]) : '',
+    throwInRangeFromHere: !!(g && actingId && throwSquare) && (o66PendingThrowKind.value === 'throwTeamMate'
+      ? ttmTargetInTemplate(g!, actingId, throwSquare!) : passTargetInTemplate(g!, actingId, throwSquare!)),
+    foulVictimName: name(victim),
+    foulerAdjacentToVictim: adjacent(actorSq, victim ? playerSquareById(victim) : null),
+    gazeRefusal: g && gameStore.state.gazeIntent ? gazeConfirmRefusalReason(g, gameStore.state.gazeIntent) : null,
+    routeEndsAdjacentToGazeVictim: adjacent(end, gameStore.armedGazeVictimId() ? playerSquareById(gameStore.armedGazeVictimId()!) : null),
+    gazeVictimName: name(gameStore.armedGazeVictimId()),
+  };
+}
+/** The existing senders each plan uses (the same calls the mouse second click / Confirm bar makes). */
+const touchCommitSenders: TouchCommitSenders = {
+  walk: (route) => {
+    const g = gameStore.game.value;
+    if (!g) return;
+    const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const localMover = actingId ? '' : o66LocalMover(g);
+    if (localMover) commitO66LocalWalk(localMover, route);
+    else if (actingId && deriveClientState(g, o66Ctx()) === 'BLITZ') gameStore.o66BlitzMove(actingId, route);
+    else if (actingId) gameStore.o66Move(actingId, route);
+    o66PendingMove.value = null; renderer?.setO66Path([]);
+  },
+  confirmArmedCard: () => { renderer?.confirmArmedAction(); },
+  stagedAttack: () => { confirmAggroStage(); },
+  blitzWalkThenBlock: (route, targetId) => {
+    const actingId = currentActingId();
+    if (!actingId || gameStore.isPlanActive()) return;
+    const blockKind = o66PendingBlitzBlockKind.value;
+    if (gameStore.startPlan({ playerId: actingId, actKind: 'blitz', route, targetPlayerId: targetId, blockKind: blockKind ?? null })) {
+      o66PendingBlitzBlockKind.value = null; o66ExplicitBlockChoice.value = null;
+    }
+    o66AggroStage.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
+  },
+  passFromRouteEnd: (_route, square) => {
+    const actingId = currentActingId();
+    o66PendingPass.value = null; o66PendingThrowKind.value = null;
+    if (actingId) commitPlannedPassFromDestination(actingId, square, null);
+  },
+  throwFromHere: (kind, square) => {
+    const g = gameStore.game.value;
+    const actingId = currentActingId();
+    if (!g || !actingId) return;
+    if (kind === 'throwTeamMate') {
+      if (ttmTargetInTemplate(g, actingId, square)) nominateOrConfirmThrow(square, 'throwTeamMate', true);
+      return;
+    }
+    o66PendingPass.value = null; o66PendingThrowKind.value = null;
+    if (!passTargetInTemplate(g, actingId, square)) return;
+    if (kind === 'bomb') gameStore.sendBombTarget(square); else sendDirectPassWithBridge(square);
+    clearHailMaryPassRulerAfterCommit();
+  },
+  punt: (square) => {
+    const g = gameStore.game.value;
+    const actingId = currentActingId();
+    o66PendingPunt.value = null;
+    if (!g || !actingId) return;
+    const ix = o66SquareClick(g, o66Ctx(), square);
+    if (ix.kind === 'fieldCoordinate') gameStore.sendFieldCoordinate(actingId, ix.square);
+  },
+  foulFromRoute: (victimId, route) => {
+    const actingId = currentActingId();
+    if (!actingId) return;
+    gameStore.startPlan({ playerId: actingId, actKind: 'foul', route, targetPlayerId: victimId });
+    o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
+  },
+  foulInPlace: (victimId) => {
+    // Round-4 finding 1: only when the fouler already stands next to the victim (no walk at all).
+    const actingId = currentActingId();
+    if (!actingId) return false;
+    const ok = gameStore.startPlan({ playerId: actingId, actKind: 'foul', route: [], targetPlayerId: victimId });
+    o66PendingFoul.value = null;
+    return ok;
+  },
+  gaze: () => { confirmArmedGaze(); },
+  stage: () => {
+    // A stage whose binding or legality moved on, or whose send was refused (kept to retry), says so.
+    const r = touchStages.confirm();
+    if (r === 'stale') return { key: TOUCH_COMMIT_REASONS.notAvailable };
+    if (r === 'refused') return { key: TOUCH_COMMIT_REASONS.notSent };
+    return null;
+  },
+};
+/** Run one kind's plan; a refusal is shown (round-4 finding 2). */
+function touchRunPlan(kind: TouchPreviewKind): void {
+  const result = touchCommitPlan(kind, touchCommitSnapshot(), touchCommitSenders);
+  if ('reason' in result) touchShowReason(result.reason);
+}
+/** Confirm acts on the current preview only, each kind through its own plan (never the Space / bar cascade). */
+const touchConfirmDispatch = createTouchConfirmDispatcher({
+  stage: () => touchRunPlan('stage'),
+  aggro: () => touchRunPlan('aggro'),
+  move: () => touchRunPlan('move'),
+  throw: () => touchRunPlan('throw'),
+  punt: () => touchRunPlan('punt'),
+  foul: () => touchRunPlan('foul'),
+  gaze: () => touchRunPlan('gaze'),
+});
+/** Touch mode: stage the tap's commit instead of sending it. True = touch mode took the tap (staged, or the same
+ *  staged target again, which does nothing); false = mouse mode, the caller sends exactly as before. */
+function touchStageTap(stage: TouchStage): boolean {
+  if (!touchModeActive.value) return false;
+  touchStages.tap(stage);
+  return true;
+}
+/** Revalidation through the router the tap used: the same tap on the live game still means the same thing. */
+function touchRouterStill(playerId: string, kind: string): boolean {
+  const g = gameStore.game.value;
+  return !!g && o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid)).kind === kind;
+}
+/** Revalidation for a square tap: the surface state and the actor are still the ones the tap was made in. */
+function touchSquareStill(state: string, actorId: string, square: [number, number], serverSquare: boolean): boolean {
+  const g = gameStore.game.value;
+  if (!g || o66SurfaceState(g) !== state || o66ActorId(g) !== actorId) return false;
+  return !serverSquare || serverMoveSquares(g).some((q) => q[0] === square[0] && q[1] === square[1]);
+}
+/** Touch mode (spec section 5): a second tap on the same target never commits - only Confirm does. */
+function touchSecondTapCommits(): boolean { return secondTapCommits(touchModeActive.value); }
+/** Touch mode: a first tap shows what the pointer hover shows with a mouse (pass range line, throw / catch rolls). */
+function touchPreviewSquare(square: [number, number]): void {
+  if (!touchModeActive.value) return;
+  // After the tap's own pointer release (hover runs only with no pointer down).
+  setTimeout(() => { renderer?.virtualPointer('hover', { square }); renderer?.onSquareHover?.(square); }, 0);
+}
+watch(touchModeActive, (on) => {
+  renderer?.setTouchMode(on);
+  if (!on) { touchLeave(); return; }
+  // Round 5: switching touch on hands the path to the plan - a route plotted with the mouse becomes the preview.
+  if (o66PendingMove.value) touchNotes.note('move');
+  touchPublishPlan();
+});
+watch(touchSelectedId, () => { touchMenuRows.value = null; touchOverrideRows.value = null; });
+watch(() => gameStore.myTurn.value, () => { touchMenuRows.value = null; touchOverrideRows.value = null; });
+/** The turn / phase the action center's End Turn hold belongs to (review finding 8). */
+const touchTurnKey = computed(() => {
+  const c = touchStageContext(gameStore.game.value);
+  return [c.gameId, c.half, c.turnHome, c.turnAway, c.homePlaying ? 'H' : 'A', c.turnMode, setupPhase.value ? 'setup' : 'play'].join('|');
+});
+/** A completed End Turn / End Setup hold: only for the turn it was started on, while End Turn is still available. */
+/** Round-3 finding 3: what the held End control ends now (its label and the phase end it runs). */
+const touchEndControlNow = computed(() => {
+  const g = gameStore.game.value;
+  return touchEndControl({ clientState: g ? deriveClientState(g, o66Ctx()) : '', turnMode: String(g?.turnMode ?? ''),
+    setup: !!setupPhase.value || endTurnButtonKind.value === 'confirmSetup' });
+});
+function touchEndTurn(heldOn: string): void {
+  if (heldOn !== touchTurnKey.value || !gameStore.myTurn.value || endTurnUnavailableDuringReaction.value) return;
+  // The panels' own phase-end buttons are hidden in touch mode; the hold runs the same end they ran.
+  const end = touchEndControlNow.value;
+  if (end.action === 'highKick') { confirmHighKick(); return; }
+  if (end.action === 'swarming') { if (swarmingPhase.value?.countLegal) gameStore.swarmingConfirm(); return; }
+  endTurn();
+}
+const actionCenterModeNow = computed(() => actionCenterMode({
+  touch: touchModeActive.value, isPlaying: gameStore.isPlaying.value, myTurn: gameStore.myTurn.value,
+  setup: !!setupPhase.value || endTurnButtonKind.value === 'confirmSetup', gameOver: gameOver.value,
+  pending: !!touchStage.value || touchOwesPitchPick(),
+}));
+/** Round-2 finding 1: the server is waiting for a pitch pick of mine (a push direction, a player pick, a square pick,
+ *  the kick-off aim) - on the opponent's turn too, so the respond bar keeps Confirm / Cancel reachable. */
+function touchOwesPitchPick(): boolean {
+  return !!(gameStore.state.pushChoice || gameStore.state.playerPick || gameStore.state.squarePick || gameStore.state.kickPlacement);
+}
+/** The selected own player's rows: exactly the right-click menu's (assembleActingPlayerRows), FUMBBL layer applied. */
+const actionCenterRows = computed<MenuItem[]>(() => {
+  // Review finding 11: read the renderer-ready counter and the selection before any early return, so the rows re-run
+  // when the (non-reactive) renderer arrives or the selection changes.
+  void rendererReady.value;
+  const sel = touchSelectedId.value;
+  if (actionCenterModeNow.value !== 'play') return [];
+  if (touchMenuRows.value) return touchMenuRows.value;
+  const g = gameStore.game.value;
+  if (!g || !renderer) return [];
+  const acting = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const pid = acting && gameStore.iControl(acting) ? acting : (sel && gameStore.iControl(sel) ? sel : '');
+  if (!pid || (pid !== acting && gameStore.state.actedPlayers.includes(pid))) return [];
+  const target = renderer.contextTargetFor(pid);
+  return target ? presentFumbblMenuRows(assembleActingPlayerRows(target, 0, 0)) : [];
+});
+function runActionCenterRow(row: MenuItem): void {
+  const fromMenu = !!touchMenuRows.value;
+  runMenuItem(row);
+  if (fromMenu) { touchMenuRows.value = null; o66ProneSwitchMenu.value = null; }
+  touchOverrideRows.value = null;
+}
+/** Back out of a view-raised menu: the same as dismissing the floating menu (the prone-switch hold included). */
+function actionCenterBack(): void {
+  touchOverrideRows.value = null;
+  if (!touchMenuRows.value) return;
+  touchMenuRows.value = null;
+  const held = o66ProneSwitchMenu.value;
+  if (!held) return;
+  o66ProneSwitchMenu.value = null;
+  const actingNow = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (actingNow === held.fromId) renderer?.selectPlayer(held.fromId);
+}
+/** Confirm in the action center: the on-pitch Confirm bars' own handlers, plus the targets touch mode previews. */
+const touchConfirmLabel = computed<string | null>(() => {
+  if (!touchModeActive.value) return null;
+  void touchPreviewCurrent.value; // the label follows the current preview
+  const kind = touchPreviews.dispatchKind();
+  if (kind === 'stage') return touchStage.value?.label ?? null;
+  if (kind === 'aggro') return aggroConfirmLabel.value;
+  if (kind === 'throw' && !o66PendingConfirmLabel.value) return $t('hud.touch.confirmThrow');
+  if (kind) return o66PendingConfirmLabel.value ?? $t('hud.confirm');
+  return o66PendingConfirmLabel.value;
+});
+function touchConfirm(): void {
+  if (pitchHeldByConfirmation() || guardConfirmCard()) return;
+  touchConfirmPlan();
+}
+/** The action center's Confirm after the card guard; a confirmation card that confirms the current plan runs it too. */
+function touchConfirmPlan(): void {
+  if (pitchHeldByConfirmation()) return;
+  // Round 5: Confirm sends only what is on screen - the drawn route and target must be exactly the plan.
+  const plan = touchPlan.value;
+  if (plan && touchPlanDrawer && !touchPlanDrawer.shows(plan)) { touchShowReason({ key: TOUCH_COMMIT_REASONS.planChanged }); touchPublishPlan(); return; }
+  // Round-2 finding 3: only the current preview is confirmed.
+  if (!touchConfirmDispatch(touchPreviews.dispatchKind())) confirmPlannerFromButton();
+}
+function boardPickUndoAvailable(): boolean {
+  const boardPick = gameStore.state.playerPick;
+  const undoable = boardPick?.key.startsWith('pchoice:dwarfenWisdom:')
+    || boardPick?.key.startsWith('pchoice:knuckleDusters:')
+    || boardPick?.key.startsWith('pchoice:ironMan:')
+    || boardPick?.key.startsWith('pchoice:blessedStatueOfNuffle:')
+    || boardPick?.key.startsWith('pchoice:furiousOutburst:');
+  return !!undoable && boardPick!.picked.length > 0;
+}
+const touchCancelInput = computed(() => ({
+  playing: gameStore.isPlaying.value, myTurn: gameStore.myTurn.value,
+  hasSelection: hasSelection.value, setupSelection: !!setupPhase.value && selectedSetupPlayerId.value !== null,
+  hasPlan: o66HasPlan() || !!o66PendingMove.value || !!o66PendingPass.value || !!o66PendingPunt.value || !!o66PendingFoul.value
+    || !!o66PendingHandOff.value || !!touchStage.value || !!o66PendingBlitzTarget.value || !!o66PendingLeftClickBlitzPlan.value
+    || !!o66ThrownMate.value || !!gameStore.armedGazeVictimId(),
+  aggroStage: !!o66AggroStage.value, deferredSwitch: !!deferredFriendlySwitch.value, boardPickUndo: boardPickUndoAvailable(),
+  furySecondBlock: !!furySecondBlockTargeting.value, rootedBlitzReady: rootedBlitzReadyLive(),
+  foulChoiceHeld: gameStore.foulChoiceHeld(), blitzBlockChoiceDismissible: !!gameStore.state.blitzBlockChoice && gameStore.blitzBlockChoiceDismissible(),
+  kickEmNominated: !!gameStore.state.kickEmBlitzTarget,
+}));
+const touchCanCancel = computed(() => touchModeActive.value && touchCancelVisible(touchCancelInput.value));
+/** Cancel = the controller's B (createPadCancel), after the right-click-only steps it does not reach (touchCancel.ts). */
+function touchCancel(): void {
+  touchMenuRows.value = null;
+  touchOverrideRows.value = null;
+  if (touchStage.value) { touchStages.clear(); playCancelCue(); return; }
+  const input = touchCancelInput.value;
+  switch (touchCancelPreStep({ ...input, kickEmRailArmed: gameStore.state.playerPick?.key.startsWith('kickEmTarget:') ?? false })) {
+    case 'disarm-rooted-blitz':
+      o66AggroStage.value = null;
+      rootedBlitzReadyArmed.value = null;
+      playCancelCue();
+      return;
+    case 'undo-board-pick': gameStore.undoLastPlayerPick(); return;
+    case 'decline-fury': gameStore.endActivation(); return;
+    case 'drop-setup-selection': selectedSetupPlayerId.value = null; return;
+    case 'kick-em': if (touchKickEmCancel()) return; break;
+    default: break;
+  }
+  if (gameStore.foulChoiceHeld()) { gameStore.dismissFoulChoice(); return; }
+  controllerCancel();
+}
+/** Touch mode quick menu (spec section 7): the quick bar's and the keyboard shortcuts' own handlers. */
+const touchQuickItems = computed<TouchQuickItem[]>(() => [
+  { id: 'tackleZones', label: $t('hud.touch.tackleZones'), active: tackleZonesActive.value },
+  { id: 'roster', label: $t('hud.touch.roster'), active: rosterPopoutOpen.value },
+  { id: 'gameMenu', label: $t('hud.touch.gameMenu'), active: ui.gameMenuOpen },
+  { id: 'flipPitch', label: $t('hud.touch.flipPitch'), active: settings.pitchFlipped },
+  { id: 'enlargeLog', label: $t('hud.touch.enlargeLog'), active: logExpanded.value },
+  { id: 'sprites', label: $t('hud.configBar.spritesSpritechoicelabel', { spriteChoiceLabel: spriteChoiceLabel.value }) },
+  { id: 'skillDisplay', label: $t('hud.configBar.skillDisplayP0', { p0: SKILL_MODE_LABELS[skillMode.value] }) },
+  { id: 'autoDirector', label: settings.autoDirector ? $t('hud.configBar.autoDirectorOnAuto') : $t('hud.configBar.autoDirectorOffCalm'), active: settings.autoDirector },
+  { id: 'report', label: $t('hud.configBar.report') },
+]);
+function runTouchQuickItem(id: string): void {
+  switch (id) {
+    case 'tackleZones': cycleTackleZones(); return;
+    case 'roster': quickToggleRoster(); return;
+    case 'gameMenu': quickToggleGameMenu(); return;
+    case 'flipPitch': settings.pitchFlipped = !settings.pitchFlipped; return; // = the F shortcut (togglePitchFlip)
+    case 'enlargeLog': logExpanded.value = !logExpanded.value; if (logExpanded.value) panelCollapsed.value = false; return; // = L
+    case 'sprites': cycleSprites(); return;
+    case 'skillDisplay': cycleSkillDisplay(); return;
+    case 'autoDirector': toggleAutoDirector(); return;
+    case 'report': quickOpenReport(); return;
+    default: return;
+  }
+}
 /** Player card call (owner round 2): pad Y = the crosshair player; key P = the hovered player, else the selected one.
  *  Calling it again for the same player closes it. */
 function onPlayerCardCall(source: InputSource): void {
@@ -11733,7 +12408,8 @@ const runAction = createInGameActionRunner({
   closeRoster: () => { rosterPopoutOpen.value = false; },
   escapeCascade,
   confirm: confirmShortcut,
-  endTurnAvailable: () => gameStore.isPlaying.value && gameStore.myTurn.value && !endTurnUnavailableDuringReaction.value,
+  // Round-6 finding 3: touch mode ends the turn only through the action center's held control (no key / pad press).
+  endTurnAvailable: () => !touchModeActive.value && gameStore.isPlaying.value && gameStore.myTurn.value && !endTurnUnavailableDuringReaction.value,
   endTurn,
   toggleRoster: quickToggleRoster,
   toggleLogExpand: () => {
@@ -11882,6 +12558,7 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault();
     runAction('openChat', 'keyboard');
   } else if (hasSelection.value && /^Digit[1-6]$/.test(event.code)) {
+    if (touchModeActive.value) return; // round-6 finding 3: touch mode declares from the action center only
     if (guardConfirmCard()) return; // owner 10-15: no action hotkey under an open confirmation card
     const button = hotbarActions.value[Number(event.code.slice(5)) - 1];
     if (button && !button.used) setAction(button.mode);
@@ -11989,6 +12666,7 @@ onMounted(async () => {
   }
 
   const mountedRenderer = new PitchRenderer();
+  mountedRenderer.antialias = !settings.lowPerformanceMode; // owner 11-12: read once at init; a toggle applies at the next pitch
   mountedRenderer.localiseLabels = true; // i18n (Astra r2 #14): the Modern pitch draws localised words; Classic stays English
   renderer = mountedRenderer;
   // Owner 09-28 (S7 v3): seed the splash-showing flag now the renderer exists — the turnover watcher's `immediate` pass
@@ -12167,7 +12845,12 @@ onMounted(async () => {
     const furyTargeting = furySecondBlockTargeting.value;
     if (furyTargeting) {
       if (furyTargeting.targetIds.includes(playerId)) {
-        gameStore.sendBlock(furyTargeting.playerId, playerId);
+        const furyAttacker = furyTargeting.playerId;
+        if (!touchStageTap({
+          kind: 'furyBlock', target: playerId, label: $t('hud.aggroConfirmLabel.confirmBlock'),
+          revalidate: () => furySecondBlockTargeting.value?.playerId === furyAttacker && !!furySecondBlockTargeting.value?.targetIds.includes(playerId),
+          commit: () => gameStore.sendBlock(furyAttacker, playerId),
+        })) gameStore.sendBlock(furyTargeting.playerId, playerId);
       }
       swallowBlockTargetSelection(playerId); // owner 09-06: the target click is the block driver's, not a selection
       return;
@@ -12196,7 +12879,11 @@ onMounted(async () => {
       blitzBlockChoiceHeld: !!gameStore.state.blitzBlockChoice || gameStore.foulChoiceHeld(),
       isHeldTarget: gameStore.state.blitzBlockChoice?.targetId === playerId,
     })) {
-      case 'commitPlain': swallowBlockTargetSelection(playerId); gameStore.commitBlitzBlock(null); return;
+      case 'commitPlain':
+        swallowBlockTargetSelection(playerId);
+        if (touchStageTap({ kind: 'chooserPlainBlock', target: playerId, label: $t('hud.aggroConfirmLabel.confirmBlock'),
+          revalidate: () => gameStore.state.blitzBlockChoice?.targetId === playerId, commit: () => gameStore.commitBlitzBlock(null) })) return;
+        gameStore.commitBlitzBlock(null); return;
       case 'swallowed': return;
       case 'normal': break;
     }
@@ -12210,6 +12897,11 @@ onMounted(async () => {
         // replaces: `!iControl(p)` reduced to the opposition term here anyway, since this branch already sits
         // behind `deriveClientState === 'THROW_KEG'` (⇒ my turn), and iControlPlayer is `myPlayIds.has(p) && isMyTurn`.
         if (kegTargetIds(gk, kegActing).includes(playerId)) {
+          if (touchStageTap({
+            kind: 'kegTarget', target: playerId, label: $t('hud.confirm'),
+            revalidate: () => { const g2 = gameStore.game.value; return !!g2 && deriveClientState(g2, o66Ctx()) === 'THROW_KEG' && kegTargetIds(g2, kegActing).includes(playerId); },
+            commit: () => gameStore.sendThrowKegTarget(playerId),
+          })) return;
           gameStore.sendThrowKegTarget(playerId);
           return;
         }
@@ -12232,7 +12924,7 @@ onMounted(async () => {
         // Fives lane 08-19: same-target click confirms; any different player cancels before normal routing.
         const stagedQuickBlitz = o66AggroStage.value?.kind === 'blitz' ? o66AggroStage.value : null;
         if (stagedQuickBlitz) {
-          if (stagedQuickBlitz.target === playerId) { confirmAggroStage(); return; }
+          if (stagedQuickBlitz.target === playerId) { if (touchSecondTapCommits()) confirmAggroStage(); return; } // touch: only Confirm
           o66AggroStage.value = null;
         }
         // #299 / Meero SR-240 Option B: BOMB player targets bypass the PC-1 router, which only returns a target
@@ -12321,6 +13013,9 @@ onMounted(async () => {
         }
         if (ix.kind === 'swoopCoordinate') {
           const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+          const sq = ix.square;
+          if (actingId && touchStageTap({ kind: 'swoop', target: `${sq[0]},${sq[1]}`, label: $t('hud.confirm'),
+            revalidate: () => touchRouterStill(playerId, 'swoopCoordinate'), commit: () => gameStore.sendSwoop(actingId, sq) })) return;
           if (actingId) gameStore.sendSwoop(actingId, ix.square);
           return;
         }
@@ -12328,12 +13023,27 @@ onMounted(async () => {
           const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
           if (actingId && deriveClientState(g, o66Ctx()) === 'PUNT' && isPuntTargeting(g)) {
             nominateOrConfirmPunt(g, actingId, ix.square);
-          } else if (actingId) gameStore.sendFieldCoordinate(actingId, ix.square);
+          } else if (actingId) {
+            const sq = ix.square;
+            if (touchStageTap({ kind: 'fieldCoordinate', target: `${sq[0]},${sq[1]}`, label: $t('hud.confirm'),
+              revalidate: () => touchRouterStill(playerId, 'fieldCoordinate'), commit: () => gameStore.sendFieldCoordinate(actingId, sq) })) return;
+            gameStore.sendFieldCoordinate(actingId, ix.square);
+          }
           return;
         }
         // ORDER 66 (A.4): in SELECT_BLITZ_TARGET a click on an enemy nominates the target. Wide-rail specials
         // hold it locally until Use/Continue; backing out sends neither the skill nor the target.
         if (ix.kind === 'targetSelected') {
+          const blitzDefender = ix.defenderId;
+          if (touchStageTap({ kind: 'blitzTarget', target: blitzDefender, label: $t('hud.o66PendingConfirmLabel.confirmBlitz'),
+            revalidate: () => touchRouterStill(blitzDefender, 'targetSelected'),
+            local: true, // the wide-rail election may hold the target locally (nothing sent yet)
+            commit: () => nominateBlitzTarget(
+              blitzDefender,
+              (defenderId) => gameStore.wideRailActivationElection(defenderId),
+              (defenderId) => { o66PendingBlitzTarget.value = defenderId; },
+              (defenderId) => gameStore.sendTargetSelected(defenderId),
+            ) })) return;
           nominateBlitzTarget(
             ix.defenderId,
             (defenderId) => gameStore.wideRailActivationElection(defenderId),
@@ -12343,10 +13053,29 @@ onMounted(async () => {
           return;
         }
         // Star S8: Kick 'em chainsaw commit + Blastin' target — router-gated, dedicated store senders.
-        if (ix.kind === 'kickEmBlock') { swallowBlockTargetSelection(ix.defenderId); gameStore.sendKickEmBlock(ix.defenderId); return; }
-        if (ix.kind === 'blastinTarget') { swallowBlockTargetSelection(ix.targetId); o66SendBlastinTarget(ix.targetId); return; }
+        if (ix.kind === 'kickEmBlock') {
+          const kickDefender = ix.defenderId;
+          swallowBlockTargetSelection(kickDefender);
+          if (touchStageTap({ kind: 'kickEmBlock', target: kickDefender, label: $t('hud.aggroConfirmLabel.confirmBlock'),
+            revalidate: () => touchRouterStill(kickDefender, 'kickEmBlock'), commit: () => gameStore.sendKickEmBlock(kickDefender) })) return;
+          gameStore.sendKickEmBlock(ix.defenderId); return;
+        }
+        if (ix.kind === 'blastinTarget') {
+          const blastinTarget = ix.targetId;
+          swallowBlockTargetSelection(blastinTarget);
+          if (touchStageTap({ kind: 'blastinTarget', target: blastinTarget, label: $t('hud.confirm'),
+            revalidate: () => touchRouterStill(blastinTarget, 'blastinTarget'), commit: () => o66SendBlastinTarget(blastinTarget) })) return;
+          o66SendBlastinTarget(ix.targetId); return;
+        }
         // In SYNCHRONOUS_MULTI_BLOCK, clicking a legal opponent toggles target selection; the store owns commit.
         if (ix.kind === 'multiBlockToggle') {
+          // Touch mode: the toggle that completes the pair commits the Multiple Block - it waits for Confirm.
+          const mbDefender = ix.defenderId;
+          const mbSel = gameStore.state.multiBlockSel;
+          const completesPair = !!mbSel && !mbSel.committed && mbSel.targets.length === 1 && !mbSel.targets.some((t) => t.playerId === mbDefender);
+          if (completesPair && touchStageTap({ kind: 'multiBlock', target: mbDefender, label: $t('hud.aggroConfirmLabel.confirmBlock'),
+            revalidate: () => touchRouterStill(mbDefender, 'multiBlockToggle') && (gameStore.state.multiBlockSel?.targets.length ?? 0) === 1,
+            commit: () => gameStore.toggleMultiBlockTarget(mbDefender) })) return;
           gameStore.toggleMultiBlockTarget(ix.defenderId);
           return;
         }
@@ -12362,6 +13091,13 @@ onMounted(async () => {
             if (actingTarget && actingMenuHasOptions(assembleActingPlayerRows(actingTarget, clickX, clickY))) { openO66Menu(actingTarget, clickX, clickY); return; }
           }
           requestEndActivation();
+          return;
+        }
+        // P0 g1963245: an adjacent Blitz target with no square left for the block - say why, send nothing.
+        if (ix.kind === 'blitzBlockUnavailable') {
+          swallowBlockTargetSelection(ix.defenderId);
+          o66AggroStage.value = null;
+          showBlitzBlockNoMoveLeft(ix.defenderId);
           return;
         }
         // BLOCK (A.3) and the BLITZ block-commit (A.4) both return `block` — send it with any remembered flavor
@@ -12392,7 +13128,7 @@ onMounted(async () => {
                 o66AggroStage.value = { kind: stageKind, target: ix.defenderId, stage: 2 };
                 return;
               }
-              confirmAggroStage();
+              if (touchSecondTapCommits()) confirmAggroStage(); // touch mode: only Confirm blocks
               return;
             }
             // Owner o66ah: in BLITZ, the 3rd click on the nominated target EXECUTES — if the blitzer isn't adjacent
@@ -12400,7 +13136,13 @@ onMounted(async () => {
             // manually via the planner), just block. A plain BLOCK state has no walk (always adjacent) → sendBlock.
             const st = deriveClientState(g, o66Ctx());
             const dsq = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[]).find((d) => d.playerId === ix.defenderId)?.playerCoordinate);
-            const path = st === 'BLITZ' && dsq ? (renderer?.o66PathToContact(atk, dsq) ?? []) : [];
+            const path = st === 'BLITZ' && dsq ? (renderer?.o66PathToContact(atk, dsq, { reserveForBlock: true }) ?? []) : [];
+            // P0 g1963245: a walk that would leave the block no square is not started (store-side check, no re-route).
+            if (st === 'BLITZ' && !blitzBlockFitsAfterSteps(g, atk, path.length)) {
+              showBlitzBlockNoMoveLeft(ix.defenderId);
+              o66PendingBlockKind.value = null; o66AggroStage.value = null;
+              return;
+            }
             // A declared Blitz walks via CLIENT_BLITZ_MOVE, then pauses for flavor choice before the terminal block.
             if (st === 'BLITZ') {
               // Owner ruling: the end-activation dialog owns interaction until it resolves; a target click behind it
@@ -12417,17 +13159,35 @@ onMounted(async () => {
               }
             }
             // Preserve ix.blockKind; the server selects special block behavior from CLIENT_BLOCK flags.
-            else if (st === 'BLOCK') o66SendStandaloneBlock(atk, ix.defenderId, ix.blockKind ?? o66PendingBlockKind.value);
-            else o66SendBlock(atk, ix.defenderId, (ix.blockKind ?? o66PendingBlockKind.value) as BlockKind | null);
+            else {
+              const blockTarget = ix.defenderId;
+              const blockKindNow = ix.blockKind ?? o66PendingBlockKind.value;
+              const sendBlockNow = () => {
+                if (st === 'BLOCK') o66SendStandaloneBlock(atk, blockTarget, blockKindNow);
+                else o66SendBlock(atk, blockTarget, blockKindNow as BlockKind | null);
+              };
+              // Touch mode: the one-click special block intents (Stab, Putrid Regurgitation, ...) wait for Confirm.
+              if (!touchStageTap({ kind: 'blockTarget', target: `${blockTarget}#${blockKindNow ?? ''}`, label: $t('hud.aggroConfirmLabel.confirmBlock'),
+                revalidate: () => touchRouterStill(blockTarget, 'block'), commit: sendBlockNow })) sendBlockNow();
+            }
           }
           o66PendingBlockKind.value = null; o66AggroStage.value = null;
           return;
         }
         // A.5 (o66j #8): FOUL / HAND-OFF / PASS target clicks (the acting player already declared the moving
         // variant + optionally walked; these send the trailing command, state = ack).
-        if (ix.kind === 'foulTarget') { gameStore.sendFoulTargetOrChoose(ix.defenderId); return; }
+        if (ix.kind === 'foulTarget') {
+          const foulVictim = ix.defenderId;
+          if (touchStageTap({ kind: 'foulTarget', target: foulVictim, label: $t('hud.o66PendingConfirmLabel.confirmFoul'),
+            revalidate: () => touchRouterStill(foulVictim, 'foulTarget'), commit: () => gameStore.sendFoulTargetOrChoose(foulVictim) })) { swallowBlockTargetSelection(foulVictim); return; } // preview; Confirm sends
+          gameStore.sendFoulTargetOrChoose(ix.defenderId); return;
+        }
         // Hand-off to an already adjacent receiver commits on one click; there is no durable two-click arm.
         if (ix.kind === 'handOverTarget') {
+          const handOffCatcher = ix.catcherId;
+          if (touchStageTap({ kind: 'handOverTarget', target: handOffCatcher, label: $t('hud.touch.confirmHandOff'),
+            revalidate: () => touchRouterStill(handOffCatcher, 'handOverTarget'),
+            commit: () => { gameStore.sendHandOverTarget(handOffCatcher); o66PendingHandOff.value = null; } })) { swallowBlockTargetSelection(handOffCatcher); return; } // preview; Confirm sends
           gameStore.sendHandOverTarget(ix.catcherId); o66PendingHandOff.value = null;
           return;
         }
@@ -12462,7 +13222,7 @@ onMounted(async () => {
             if (endActConfirm.value) return;
             const gazeClick = gazeVictimClick(g, gameStore.state.gazeIntent, playerId);
             if (gazeClick === 'confirm') {
-              confirmArmedGaze();
+              if (touchSecondTapCommits()) confirmArmedGaze(); // touch mode: only Confirm gazes
               return;
             }
             if (gazeClick === 'arm') {
@@ -12492,6 +13252,7 @@ onMounted(async () => {
                 contactReach: (square) => renderer?.o66ContactReach(gazeActing, square) ?? null,
               });
               if (step.kind === 'walk') {
+                if (!touchSecondTapCommits()) return; // touch mode: Confirm walks it
                 // 2nd click: walk the plotted route as an ordinary gaze move. Nothing gaze-specific is sent.
                 gameStore.o66Move(gazeActing, step.route);
                 o66PendingMove.value = null; renderer?.setO66Path([]);
@@ -12508,6 +13269,16 @@ onMounted(async () => {
               // 1st click: arm the victim and show the walk to contact from the shared stance picker (unchanged).
               if (!gameStore.armGazeTarget(playerId)) return;
               o66PendingGaze.value = playerId;
+              if (touchModeActive.value) {
+                // Round 5 (the finding-1 rule for Gaze): a plotted approach that already ends beside the victim is kept;
+                // otherwise the contact walk becomes the preview route. The plan draws it; never drawn alone.
+                const plotted = o66PendingMove.value?.route ?? [];
+                const end = plotted.length ? plotted[plotted.length - 1]! : null;
+                const vsq = playerSquareById(playerId);
+                const beside = !!end && !!vsq && Math.max(Math.abs(end[0] - vsq[0]), Math.abs(end[1] - vsq[1])) === 1;
+                if (!beside) o66PendingMove.value = { dest: step.route[step.route.length - 1]!, route: step.route };
+                return;
+              }
               o66PendingMove.value = { dest: step.route[step.route.length - 1]!, route: step.route };
               setO66PathFromOrigin(playerSquareById(gazeActing), step.route, gazeActing);
               return;
@@ -12536,9 +13307,16 @@ onMounted(async () => {
               // ORDER 66 (#6.4): walk-to-contact→pickup via the planner queue (no blind timer; pickup fires from
               // the arrival square). Already declared throwTeamMateMove (menu) → the queue skips the re-declare.
               // The LANDING stays a separate user click (o66ThrowMateLand); o66ThrownMate arms it as before.
-              gameStore.startPlan({ playerId: ttmActing, actKind: tst === 'KICK_TEAM_MATE' ? 'kickTeamMate' : 'throwTeamMate', route: path, targetPlayerId: playerId });
-              o66ThrownMate.value = playerId;
-              o66PendingThrowKind.value = 'throwTeamMate';
+              const ttmPickup = () => {
+                gameStore.startPlan({ playerId: ttmActing, actKind: tst === 'KICK_TEAM_MATE' ? 'kickTeamMate' : 'throwTeamMate', route: path, targetPlayerId: playerId });
+                o66ThrownMate.value = playerId;
+                o66PendingThrowKind.value = 'throwTeamMate';
+              };
+              if (touchStageTap({ kind: 'ttmPickup', target: playerId, label: $t('hud.confirm'),
+                route: path, // round 5: the plan draws exactly this walk, and Confirm sends it
+                revalidate: () => { const g2 = gameStore.game.value; return !!g2 && deriveClientState(g2, o66Ctx()) === tst && !o66ThrownMate.value && gameStore.iControl(playerId); },
+                commit: ttmPickup })) return;
+              ttmPickup();
               return;
             }
           }
@@ -12566,6 +13344,7 @@ onMounted(async () => {
               o66PendingFoul.value = playerId; o66PendingMove.value = null;
             }
             if (o66PendingFoul.value === playerId) {
+              if (!touchSecondTapCommits()) return; // touch mode: only Confirm fouls
               // 2nd click: EXECUTE. Honor a plotted adjacent route; else auto-route to contact.
               const planned = o66PendingMove.value?.route ?? null;
               const lastSq = planned && planned.length > 0 ? planned[planned.length - 1] : null;
@@ -12585,6 +13364,16 @@ onMounted(async () => {
               return;
             }
             o66PendingFoul.value = playerId;
+            if (touchModeActive.value) {
+              // Round-5 finding 1: the walk Confirm will send is the preview route. Keep a plotted approach that ends beside
+              // the victim; otherwise the contact walk becomes the preview route (drawn from the plan, never drawn alone).
+              const plotted = o66PendingMove.value?.route ?? [];
+              const plottedEnd = plotted.length ? plotted[plotted.length - 1]! : null;
+              const reachesVictim = !!plottedEnd && !!vsq && Math.max(Math.abs(plottedEnd[0] - vsq[0]), Math.abs(plottedEnd[1] - vsq[1])) === 1;
+              const contact = reach?.path ?? [];
+              if (!reachesVictim && contact.length) o66PendingMove.value = { dest: contact[contact.length - 1]!, route: contact };
+              return;
+            }
             setO66PathFromOrigin(playerSquareById(foulActing), reach?.path ?? [], foulActing);
             return;
           }
@@ -12597,7 +13386,8 @@ onMounted(async () => {
           const actLocal = o66LocalMover(g);
           const actActingId = actLocal || String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
           // FUMBBL Controls: MoveLogicModule ignores an opponent click (no click-to-act Block / Blitz); it inspects only.
-          if (actActingId && !gameStore.iControl(playerId) && o66SurfaceState(g) === 'MOVE' && !fumbblControls() /* fumbbl-gate:click-to-act-block fumbbl-gate:quick-click-blitz */) {
+          if (actActingId && !gameStore.iControl(playerId) && o66SurfaceState(g) === 'MOVE' && !fumbblControls() /* fumbbl-gate:click-to-act-block fumbbl-gate:quick-click-blitz */
+              && opponentTapDeclares(touchModeActive.value) /* touch mode: Block / Blitz are declared from the action center */) {
             const pd = (g.fieldModel.playerDataArray as { playerId: string; playerState?: number; playerCoordinate?: unknown }[]).find((d) => d.playerId === playerId);
             const base = (pd?.playerState ?? 0) & 0xff;
             const enemySq = normSquare(pd?.playerCoordinate);
@@ -12666,6 +13456,12 @@ onMounted(async () => {
                 showQuickClickBlitzUnavailable(playerId, 'unreachable');
                 return;
               }
+              // P0 g1963245: the planned walk leaves the block no square - say so up front, plot nothing.
+              if (!blitzBlockFitsAfterSteps(g, actActingId, route.length)) {
+                o66AggroStage.value = null;
+                showBlitzBlockNoMoveLeft(playerId);
+                return;
+              }
               const from = playerSquareById(actActingId);
               const destination = route.at(-1) ?? from;
               if (destination) o66PendingMove.value = { dest: destination, route };
@@ -12694,6 +13490,7 @@ onMounted(async () => {
             }
             // SECOND click on the SAME target → COMMIT via the standalone-block chooser seam (RR-2: the declare
             // already fired at first-click; state-IS-the-ack; this is commit-only, NOT playerBlock which would re-declare).
+            if (!touchSecondTapCommits()) return;
             o66SendStandaloneBlock(actActingId, playerId, o66PendingBlockKind.value);
             o66AggroStage.value = null;
             return;
@@ -12843,7 +13640,13 @@ onMounted(async () => {
   };
   // Owner 2026-07-03: the coach clicks a candidate push square (gold arrow) to
   // choose the push direction — sends the real clientPushback.
-  renderer.onPushChoice = (coord) => gameStore.resolvePushback(coord);
+  renderer.onPushChoice = (coord) => {
+    // Touch mode: the push direction (irreversible) waits for Confirm.
+    const push = gameStore.state.pushChoice;
+    if (touchStageTap({ kind: 'pushback', target: `${push?.key ?? ''}@${coord[0]},${coord[1]}`, label: $t('hud.confirm'),
+      revalidate: () => gameStore.state.pushChoice === push, commit: () => gameStore.resolvePushback(coord) })) return;
+    gameStore.resolvePushback(coord);
+  };
   // Owner 2026-07-04 (interaction catalog 0.1): an armed player-pick — a tap on an
   // eligible player's crosshair answers it (Decline lives on the pick bar).
   // g478 #1: during HIGH_KICK the same crosshair mechanism arms the eligible nominees, so a tap here is a High
@@ -12857,6 +13660,11 @@ onMounted(async () => {
     // Owner 10-08: the touchback nomination also opens the player card, so the coach can see who has SPP before
     // giving the ball away. The pick is confirm-mode: the tap only toggles the nominee, Confirm sends it.
     const touchbackPick = gameStore.state.playerPick?.key === 'touchback';
+    // Touch mode: an immediate-answer pick (the first click answers the server) waits for Confirm; a confirm-mode pick
+    // only toggles a selection its own Confirm sends, so it stays a tap.
+    const pick = gameStore.state.playerPick;
+    if (pick && !pick.confirm && pick.maxPicks === 1 && touchStageTap({ kind: 'playerPick', target: `${pick.key}@${playerId}`, label: $t('hud.confirm'),
+      revalidate: () => gameStore.state.playerPick === pick, commit: () => gameStore.resolvePlayerPick(playerId) })) return;
     gameStore.resolvePlayerPick(playerId);
     if (touchbackPick) autoShowPopup(playerId);
   };
@@ -12966,14 +13774,19 @@ onMounted(async () => {
     // Legacy server-armed picks (Trickster / unknown-call coordinate) take precedence — dialog-driven.
     if (gameStore.state.squarePick) {
       if (gameStore.state.squarePick.kind === 'wizard' && gameStore.state.squarePick.skill === 'Fireball') {
+        // Round-2 finding 2: touch mode stages the Fireball square against this pick occurrence; Confirm sends exactly
+        // resolveSquarePick(square) (the pass rail's Confirm needs an acting player, which a wizard has not).
+        const fireballPick = gameStore.state.squarePick;
+        if (touchStageTap({ kind: 'fireball', target: `${fireballPick.seq}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
+          revalidate: () => gameStore.state.squarePick === fireballPick,
+          commit: () => gameStore.resolveSquarePick(c) })) return;
         nominateOrConfirmThrow(c, 'fireball');
       } else {
-        renderer?.setTilePick(false);
-        gameStore.resolveSquarePick(c);
-        // Ham1356 10-14: a refused Dump-Off send keeps the pick (same seq, so its watch does not re-fire); re-arm
-        // the crosshairs here so the coach can click again.
-        const kept = gameStore.state.squarePick;
-        if (kept?.kind === 'dumpOff') renderer?.setTargetSelectPick(kept.squares, kept.skill);
+        const pick = gameStore.state.squarePick;
+        if (touchStageTap({ kind: 'squarePick', target: `${pick.seq}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
+          revalidate: () => gameStore.state.squarePick === pick,
+          commit: () => answerSquarePick(c) })) return; // touch: a server square answer waits for Confirm
+        answerSquarePick(c);
       }
       return;
     }
@@ -12994,7 +13807,11 @@ onMounted(async () => {
         if (st === 'SELECT_BLITZ_TARGET' && actingId && !blitzUsedActingSide(g)
             && (renderer?.o66Reach(actingId)?.squares ?? []).some((s) => s[0] === c[0] && s[1] === c[1])) {
           // Owner 10-04: "Keep blitz should also get its own settings line" - off = the click converts at once.
-          if (!settings.confirmBlitzToMove) { gameStore.convertBlitzToMove(c); return; }
+          if (!settings.confirmBlitzToMove) {
+            if (touchStageTap({ kind: 'blitzToMove', target: `${actingId}@${c[0]},${c[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+              revalidate: () => touchSquareStill('SELECT_BLITZ_TARGET', actingId, c, false), commit: () => gameStore.convertBlitzToMove(c) })) return;
+            gameStore.convertBlitzToMove(c); return;
+          }
           blitzMoveModalTile.value = c;
           return;
         }
@@ -13008,13 +13825,22 @@ onMounted(async () => {
         // clientSwoop{targetCoordinate} — a click on one of THOSE squares sends it (never client-predicted).
         if (st === 'SWOOP' && actingId) {
           const ix = o66SquareClick(g, o66Ctx(), c);
-          if (ix.kind === 'swoopCoordinate') gameStore.sendSwoop(actingId, ix.square);
+          if (ix.kind === 'swoopCoordinate') {
+            const sq = ix.square;
+            if (touchStageTap({ kind: 'swoop', target: `${sq[0]},${sq[1]}`, label: $t('hud.confirm'),
+              revalidate: () => touchSquareStill('SWOOP', actingId, c, false), commit: () => gameStore.sendSwoop(actingId, sq) })) return;
+            gameStore.sendSwoop(actingId, ix.square);
+          }
           return;
         }
         // Star S8: FURIOUS_OUTBURST teleport pick — a server-offered square sends CLIENT_FIELD_COORDINATE
         // (StepFirst-/SecondMoveFuriousOutburst eligibleSquares; the HIT_AND_RUN/SWOOP server-square shape).
         if (st === 'FURIOUS_OUTBURST' && actingId) {
-          if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) gameStore.sendFieldCoordinate(actingId, c);
+          if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) {
+            if (touchStageTap({ kind: 'furiousOutburst', target: `${actingId}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
+              revalidate: () => touchSquareStill('FURIOUS_OUTBURST', actingId, c, true), commit: () => gameStore.sendFieldCoordinate(actingId, c) })) return;
+            gameStore.sendFieldCoordinate(actingId, c);
+          }
           return;
         }
         // After the in-action Punt escalation, the server replaces the walking squares with four punt targets.
@@ -13053,6 +13879,8 @@ onMounted(async () => {
           // Ball & Chain tile clicks send one aim step; the server owns random scatter and final placement.
           if (st === 'MOVE' && movesRandomly(g, actingId)) {
             if (walkStillOnScreen()) return;
+            if (touchStageTap({ kind: 'ballAndChain', target: `${actingId}@${c[0]},${c[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+              revalidate: () => touchSquareStill('MOVE', actingId, c, false), commit: () => gameStore.stepMove(actingId, c) })) return;
             gameStore.stepMove(actingId, c);
             return;
           }
@@ -13063,7 +13891,12 @@ onMounted(async () => {
           if (JUMP_MOVE_STATES.has(st) && (g.actingPlayer as { leaping?: boolean } | undefined)?.leaping) {
             if (playerPinned(g, actingId)) return; // Sol r2 (P1): a pinned jumper's stale jump square is inert
             if (walkStillOnScreen()) return;
-            if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) gameStore.stepMove(actingId, c);
+            if (serverMoveSquares(g).some((s) => s[0] === c[0] && s[1] === c[1])) {
+              if (touchStageTap({ kind: 'leap', target: `${actingId}@${c[0]},${c[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+                revalidate: () => touchSquareStill(st, actingId, c, true) && !!(gameStore.game.value?.actingPlayer as { leaping?: boolean } | undefined)?.leaping,
+                commit: () => gameStore.stepMove(actingId, c) })) return;
+              gameStore.stepMove(actingId, c);
+            }
             return;
           }
           // TTM/KTM LANDING (owner o66am): once the team-mate is PICKED UP, a click on a pass-range square LANDS the
@@ -13121,13 +13954,18 @@ onMounted(async () => {
             const reactingClick = ON_THE_BALL_MOVE_STATES.has(st) ? reactingMovePlanClick(pend?.dest ?? null, c) : null;
             const confirmsPlannedMove = reactingClick === 'confirm'
               || (reactingClick === null && pend !== null && pend.dest[0] === c[0] && pend.dest[1] === c[1]);
+            if (confirmsPlannedMove && pend && !touchSecondTapCommits()) return; // touch mode: only Confirm sends a previewed route
             if (confirmsPlannedMove && pend) { // confirm — send the whole path
               if (localWalk) commitO66LocalWalk(actingId, pend.route); // owner 10-15: the declaration goes out HERE
               else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.o66BlitzMove(actingId, pend.route); else gameStore.o66Move(actingId, pend.route);
               o66PendingMove.value = null; renderer?.setO66Path([]);
               return;
             }
-            if (pend) {
+            const touchReplot = !!pend && touchModeActive.value && reactingClick === null;
+            if (touchReplot) {
+              // Touch mode (spec section 5): a tap elsewhere RE-PLOTS from the player (no waypoint extension).
+              o66PendingMove.value = null; renderer?.setO66Path([]);
+            } else if (pend) {
               // EXTEND from the LAST PLANNED square to the new click (owner o66ad waypoint routing): stitch a
               // segment from pend.dest → c and append, keeping rush/dodge accounting global. Clicking a square
               // already on the plan TRUNCATES back to it. If the detour can't fit the remaining budget, keep the
@@ -13140,9 +13978,26 @@ onMounted(async () => {
               return;
             }
             const route = renderer?.o66AutoPath(actingId, c) ?? null;
+            if ((!route || route.length === 0) && touchReplot) return; // no route from the player: nothing to re-plot
             if (!route || route.length === 0) { // fallback: single step
-              if (localWalk) commitO66LocalWalk(actingId, [c]); // owner 10-15: declare `move`, then the one step
-              else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.sendBlitzMove(actingId, c); else gameStore.stepMove(actingId, c);
+              const singleStep = () => {
+                if (localWalk) commitO66LocalWalk(actingId, [c]); // owner 10-15: declare `move`, then the one step
+                else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.sendBlitzMove(actingId, c); else gameStore.stepMove(actingId, c);
+              };
+              if (touchStageTap({ kind: 'step', target: `${actingId}@${c[0]},${c[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+                revalidate: () => { const g2 = gameStore.game.value; return !!g2 && o66SurfaceState(g2) === st && o66ActorId(g2) === actingId; },
+                commit: singleStep })) return;
+              singleStep();
+              return;
+            }
+            // Touch mode (spec section 5, review finding 7): a route from which no roll at all can result commits on the
+            // first tap, exactly as its confirm would; anything that may roll (dodge, rush, pick-up, an activation roll, a
+            // stand-up, a leap, Ball & Chain) previews and waits for Confirm.
+            if (touchModeActive.value && reactingClick === null
+                && touchMoveRollFree(touchMoveRisk(g, actingId, route, localWalk))) {
+              if (localWalk) commitO66LocalWalk(actingId, route);
+              else if (isBlitzMovementState(st) || fumblerooskieBlitzWalk) gameStore.o66BlitzMove(actingId, route); else gameStore.o66Move(actingId, route);
+              renderer?.setO66Path([]);
               return;
             }
             o66PendingMove.value = { dest: c, route }; // preview
@@ -13156,6 +14011,13 @@ onMounted(async () => {
             // sequenced plan — declare→walk→throw, ball flies from the ARRIVAL square (no teleport). The planned
             // path already went through its own waypoint confirm, so it commits directly (not two-click).
             const pend = o66PendingMove.value;
+            if (pend && pend.route.length > 0 && touchModeActive.value) {
+              // Touch mode: the target previews (template, ruler, rolls from the route's end); Confirm walks and throws.
+              if (!passTargetInRangeFrom(g, pend.dest, c)) return;
+              o66PendingPass.value = c; o66PendingThrowKind.value = 'pass';
+              touchPreviewSquare(c);
+              return;
+            }
             if (pend && pend.route.length > 0) {
               if (gameStore.startPlan({ playerId: actingId, actKind: 'pass', route: pend.route, targetCoordinate: c })) {
                 bridgeActivePassPlan(c, pend.dest);
@@ -13199,6 +14061,13 @@ onMounted(async () => {
     const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!actingId) return;
     const st = deriveClientState(g, o66Ctx());
+    const aim = coord as [number, number];
+    // Touch mode: a Ball & Chain aim step and a Swoop direction (both roll) wait for Confirm.
+    const aimSend = st === 'MOVE' && movesRandomly(g, actingId) ? () => gameStore.stepMove(actingId, aim)
+      : st === 'SWOOP' ? () => gameStore.sendSwoop(actingId, aim) : null;
+    if (aimSend && touchStageTap({ kind: 'bncAim', target: `${actingId}@${aim[0]},${aim[1]}`, label: $t('hud.o66PendingConfirmLabel.confirmMove'),
+      revalidate: () => { const g2 = gameStore.game.value; return !!g2 && deriveClientState(g2, o66Ctx()) === st && o66ActorId(g2) === actingId; },
+      commit: aimSend })) return;
     if (st === 'MOVE' && movesRandomly(g, actingId)) gameStore.stepMove(actingId, coord as [number, number]);
     else if (st === 'PUNT' && isPuntTargeting(g)) nominateOrConfirmPunt(g, actingId, coord as [number, number]);
     else if (st === 'SWOOP') gameStore.sendSwoop(actingId, coord as [number, number]);
@@ -13228,7 +14097,38 @@ onMounted(async () => {
   renderer.onRightClick = (x, y) => pitchRightClick(x, y);
   renderer.oneClickActionTargets = () => fumbblControls(); // rig g1100 #1: one click throws / hands off (no card)
   // path-planning clicks shouldn't leave a stale stats card behind
+  // Touch mode (spec section 7): press-and-hold on the pitch. A player opens their card and offers Mark player; an
+  // empty square offers Mark square / row / column / Clear marks (the Shift-click marks). Rows show in the action
+  // center's bottom row with Back (also on the opponent's turn, where only these rows show).
+  renderer.setTouchMode(touchModeActive.value);
+  {
+    // Round 5: in touch mode the pitch path is a pure function of touchPlan - only the plan drawer draws it.
+    const r = renderer;
+    const rawSetO66Path = r.setO66Path.bind(r);
+    touchPlanDrawer = createTouchPlanDrawer((path, moverId) => rawSetO66Path(path, moverId || null));
+    r.setO66Path = (squares, moverId) => { if (touchModeActive.value) return; rawSetO66Path(squares, moverId); };
+    touchPublishPlan();
+  }
+  renderer.onLongPress = (target) => {
+    const r = renderer;
+    if (!touchModeActive.value || !r) return;
+    if (target.playerId) {
+      const pid = target.playerId;
+      showPopup(pid);
+      touchOverrideRows.value = [{ get label() { return $t('hud.touch.markPlayer'); }, action: () => r.markPlayer(pid) }];
+      return;
+    }
+    const sq = target.square;
+    const rows: MenuItem[] = [
+      { get label() { return $t('hud.touch.markSquare'); }, action: () => r.toggleMarkSquare(sq) },
+      { get label() { return $t('hud.touch.markRow'); }, action: () => r.markRow(sq) },
+      { get label() { return $t('hud.touch.markColumn'); }, action: () => r.markColumn(sq) },
+    ];
+    if (r.hasMarks()) rows.push({ get label() { return $t('hud.touch.clearMarks'); }, action: () => r.clearMarks() });
+    touchOverrideRows.value = rows;
+  };
   renderer.onSelectionChange = (playerId) => {
+    touchSelectedId.value = playerId; // touch mode: the action center follows the selection
     pitchSelectionRevision += 1; // Astra round 5: every selection change counts, however brief
     // Owner 09-08: an empty-square click while an opposition token is inspected during MY activation hands the
     // selection back to the actor (the renderer only deselects; the opponent's turn keeps the plain deselect).
@@ -13270,7 +14170,13 @@ onMounted(async () => {
   renderer.onActionRejected = showToast;
   // Owner o66an: a click on the hovered ball-crosshair kick square sends the kick-off. Owner 10-13: with Settings >
   // Confirm kick-off square ON it opens the "Kick to ...?" card instead (pickKickSquare; OFF = the same send as before).
-  renderer.onKickPick = (coord) => gameStore.pickKickSquare(coord as [number, number]);
+  renderer.onKickPick = (coord) => {
+    // Touch mode: with the kick-off confirmation card switched off the click kicks at once; it waits for Confirm.
+    const placement = gameStore.state.kickPlacement;
+    if (!settings.confirmKickoffSquare && touchStageTap({ kind: 'kickoff', target: `${placement?.seq ?? ''}@${coord[0]},${coord[1]}`, label: $t('hud.confirm'),
+      revalidate: () => gameStore.state.kickPlacement === placement, commit: () => gameStore.pickKickSquare(coord as [number, number]) })) return;
+    gameStore.pickKickSquare(coord as [number, number]);
+  };
   renderer.onPathChange = (path) => {
     queuedSteps.value = path.length;
   };
@@ -15794,7 +16700,7 @@ watch(() => [
           </span>
           <span class="sb-cell sb-turn home" :data-active="homePanel?.playing ?? false"
             :title="$t('hud.uiPanel.p0TurnP1', { p0: homePanel?.coach ?? $t('hud.uiPanel.home'), p1: homePanel?.turnNr ?? 0 })">{{ $t('hud.uiPanel.turnP0', { p0: homePanel?.turnNr ?? 0 }) }}</span>
-          <button v-if="gameStore.isPlaying.value" class="sb-cell end-turn"
+          <button v-if="gameStore.isPlaying.value && !touchModeActive" class="sb-cell end-turn"
             :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction"
             :data-opponent="!gameStore.myTurn.value"
             :data-setup="endTurnButtonKind === 'confirmSetup'"
@@ -15843,7 +16749,7 @@ watch(() => [
         </div>
         <!-- BB3-style config buttons (owner 2026-07-02); positioned under the
              top-left coach panel + matched to its width (owner 2026-07-03) -->
-        <nav class="config-bar ui-panel"
+        <nav class="config-bar ui-panel" :data-touch-hidden-quick="touchModeActive ? '' : undefined"
           :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['config-bar'], 'bar-right': settings.bottomBarsSwapped, 'bar-left': !settings.bottomBarsSwapped, 'endgame-front': endGameFront }"
           :style="configBarStyle">
           <template v-if="settings.uiCustomize">
@@ -16099,7 +17005,7 @@ watch(() => [
             </form>
           </ChatDock>
         </div>
-        <ConfirmActionButton v-if="queuedSteps > 0 && !settings.spectatorClean && !settings.hideConfirmBar" class="confirm-move"
+        <ConfirmActionButton v-if="queuedSteps > 0 && !settings.spectatorClean && !settings.hideConfirmBar && !touchModeActive" class="confirm-move"
           :disabled="!gameStore.state.demoMode && !gameStore.isPlaying.value"
           :label="plannedAction ? $t('hud.confirmMove.action', { action: terms(plannedAction), n: queuedSteps }) : $t('hud.confirmMove.move', { n: queuedSteps })"
           :shortcut-code="settings.confirmKey"
@@ -16107,19 +17013,28 @@ watch(() => [
           @activate="confirmMove()" />
         <!-- Owner 2026-07-13 (#7): the bottom Confirm-Blitz / Confirm-Block bar — mirrors the move-confirm bar
              (same Space binding shown), shown while the Blitz/Block stage is armed. Clickable too. -->
-        <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
+        <ConfirmActionButton v-if="aggroConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value && !touchModeActive"
           class="confirm-move confirm-aggro" tone="aggressive" :label="aggroConfirmLabel"
           :shortcut-code="settings.confirmKey" @activate="guardConfirmCard() || confirmAggroStage()" />
         <div v-if="blitzConfirmCostNote && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
           class="blitz-confirm-cost" data-testid="blitz-confirm-cost">{{ blitzConfirmCostNote }}</div>
         <!-- #48 (owner, confirm-bar parity): the same bar for a nominated o66 MOVE route / FOUL (mirrors the
              blitz/block bar; Space also confirms via o66ConfirmPending). Pass/hand-off stay single-click (EX-1). -->
-        <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value"
+        <ConfirmActionButton v-if="o66PendingConfirmLabel && !settings.spectatorClean && !settings.hideConfirmBar && gameStore.isPlaying.value && !touchModeActive"
           class="confirm-move confirm-aggro" tone="aggressive" :label="o66PendingConfirmLabel"
           :shortcut-code="settings.confirmKey" @activate="confirmPlannerFromButton()" />
+        <!-- Touch mode (spec section 7): the corner quick menu replaces the quick bar's buttons and the keyboard shortcuts. -->
+        <TouchQuickMenu v-if="touchModeActive" :items="touchQuickItems" :button-px="settings.touchButtonSize" @pick="runTouchQuickItem" />
+        <!-- Touch mode (spec-touch-mode-2026-11-12 section 4): the action center replaces the floating menu and the Confirm bars. -->
+        <ActionCenter v-if="actionCenterModeNow !== 'hidden' || (touchModeActive && !!touchOverrideRows)" :mode="actionCenterModeNow === 'hidden' ? 'inspect' : actionCenterModeNow" :rows="actionCenterRows" :show-back="!!touchMenuRows"
+          :override="touchOverrideRows" :confirm-label="touchConfirmLabel" :can-cancel="touchCanCancel || (actionCenterModeNow === 'respond' && !!touchStage)"
+          :end-turn-label="$t(touchEndControlNow.labelKey)" :end-turn-enabled="gameStore.myTurn.value && !endTurnUnavailableDuringReaction"
+          :hold-ms="settings.touchEndTurnHoldMs" :button-px="settings.touchButtonSize"
+          :turn-key="touchTurnKey" @run="runActionCenterRow" @confirm="touchConfirm()" @cancel="touchCancel()" @end-turn="touchEndTurn" @back="actionCenterBack()"
+          @formations="setupPanelSection = 'templates'" @saved-setups="setupPanelSection = 'saved'; savedSetupsCollapsed = false" />
 
         <!-- Server-derived single/multiple Apothecary election. -->
-        <ApothecaryPrompt v-if="gameStore.apothecaryCardVisible.value" v-pad-focus="gameStore.apothecaryCardVisible.value.mine ? {} : false" :key="gameStore.apothecaryCardVisible.value.seq"
+        <ApothecaryPrompt v-if="gameStore.apothecaryCardVisible.value" v-pad-focus="gameStore.apothecaryCardVisible.value.mine ? { close: 'answer' } : false" :key="gameStore.apothecaryCardVisible.value.seq"
           :prompt="gameStore.apothecaryCardVisible.value" :lingering="gameStore.apothecaryCardLingering.value" :icon-url="apothecaryIconUrl"
           :portrait="apoChoicePortrait" :skills="apoChoiceSkills"
           :skill-mode="skillMode" :skill-icon-style="effectiveIconStyle"
@@ -16319,7 +17234,7 @@ watch(() => [
              coach; a 20%-opacity player silhouette behind. Spectators see the
              same tooltip (no buttons) until the coach resolves it. -->
         <!-- #237 (owner-fg 07-29): body drag; answer controls are excluded in the shared pointer guard. -->
-        <div v-if="gameStore.state.skillChoice?.mine" v-pad-focus class="skill-choice"
+        <div v-if="gameStore.state.skillChoice?.mine" v-pad-focus="{ close: 'answer' }" class="skill-choice"
           v-prompt-dodge="promptDodge('skillChoice', gameStore.state.skillChoice.seq, skillChoicePos.ready)"
           :style="reactivePromptStyle('skillChoice', skillChoicePos.ready ? { x: skillChoicePos.x, y: skillChoicePos.y } : undefined)"
           :title="$t('hud.dragToMove')" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
@@ -16385,7 +17300,7 @@ watch(() => [
           <div class="fu-title">{{ passiveSkillDecisionText }}</div>
         </div>
 
-        <PitchConfirmationPanel v-if="wideRailActivationPrompt" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.specialAbility')"
+        <PitchConfirmationPanel v-if="wideRailActivationPrompt" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'answer' }" :title="$t('hud.specialAbility')"
           v-prompt-dodge="promptDodge('wideRailActivation', wideRailActivationPrompt.seq)"
           :label="$t('hud.activationSpecialConfirmation')">
           <div>{{ $t('hud.useASpecialBefore', { playerAction: wideRailActivationPrompt.playerAction }) }}</div>
@@ -16636,7 +17551,7 @@ watch(() => [
             {{ $t('hud.setupPanel.selected') }} <b>{{ swarmingPlayers.find((player) => player.playerId === selectedSwarming)?.name }}</b>{{ $t('hud.setupPanel.chooseASquareTo') }}
           </div>
           <div class="setup-actions">
-            <button class="setup-btn done" :disabled="!swarmingPhase.countLegal" @click="gameStore.swarmingConfirm()">{{ $t('hud.setupPanel.done') }}</button>
+            <button v-if="!touchModeActive" class="setup-btn done" :disabled="!swarmingPhase.countLegal" @click="gameStore.swarmingConfirm()">{{ $t('hud.setupPanel.done') }}</button>
           </div>
         </div>
 
@@ -16646,7 +17561,7 @@ watch(() => [
         </div>
 
         <!-- Modern-only referee decision surface. ClassicView retains its direct-port dialog. -->
-        <SendOffPrompt v-if="gameStore.state.sendOff" v-pad-focus
+        <SendOffPrompt v-if="gameStore.state.sendOff" v-pad-focus="{ close: 'answer' }"
           :player-name="gameStore.state.sendOff.playerName"
           :can-argue="gameStore.state.sendOff.canArgue"
           :can-bribe="gameStore.state.sendOff.canBribe"
@@ -16795,7 +17710,7 @@ watch(() => [
 
         <!-- Owner 10-05 (g1950414): Raise the Dead - the raising coach picks the new player's roster position. Every
              button is an exact position id offered by DialogSelectPosition; Cancel only when the server allows none. -->
-        <div v-if="gameStore.state.selectPosition" v-pad-focus="{ mandatory: gameStore.state.selectPosition.minSelects !== 0 }" class="yesno-card select-skill-card" data-testid="select-position-card">
+        <div v-if="gameStore.state.selectPosition" v-pad-focus="{ mandatory: gameStore.state.selectPosition.minSelects !== 0, close: 'answer' }" class="yesno-card select-skill-card" data-testid="select-position-card">
           <div class="yesno-text">{{ selectPositionTitle }}</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.selectPosition.options" :key="option.positionId"
@@ -16811,7 +17726,7 @@ watch(() => [
         </div>
 
         <!-- Upstream DialogUseInducement: every server-offered inducement/card plus decline. -->
-        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus class="yesno-card select-skill-card">
+        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer' }" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
           <div class="skill-select-list">
             <button v-for="option in gameStore.state.inducementUse.options"
@@ -16825,7 +17740,7 @@ watch(() => [
 
         <!-- #8 (owner tester): voluntary End-Turn guard — a client-side confirm when own players
              are still unactivated (server acted-flag count, Meero C-8). NOT a server dialog. -->
-        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.endTurn')" :label="$t('hud.endTurnConfirmation')"
+        <PitchConfirmationPanel v-if="endTurnWarnCount !== null" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :title="$t('hud.endTurn')" :label="$t('hud.endTurnConfirmation')"
           :position-style="reactivePromptStyle('endTurnWarn')" draggable
           @drag-start="startReactivePromptDrag('endTurnWarn', $event)">
           <template v-if="endTurnWarnBallAction">{{ $t('hud.yourP0HasNot', { p0: END_TURN_ACTION_NOUN[endTurnWarnBallAction] }) }} </template>
@@ -16837,7 +17752,7 @@ watch(() => [
         </PitchConfirmationPanel>
 
         <!-- Owner 10-03: Confirm Setup asks first; an illegal setup lists what is wrong (arrows mark the offenders). -->
-        <PitchConfirmationPanel v-if="setupConfirm" v-pad-focus="{ pitch: true, priority: PAD_FOCUS_PRIORITY.confirmation }" :title="setupConfirm.problems.length ? $t('hud.setupNotLegal') : $t('hud.confirmSetup')"
+        <PitchConfirmationPanel v-if="setupConfirm" v-pad-focus="{ pitch: true, priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :title="setupConfirm.problems.length ? $t('hud.setupNotLegal') : $t('hud.confirmSetup')"
           :label="$t('hud.setupConfirmation')" test-id="setup-confirm"
           :position-style="reactivePromptStyle('setupConfirm')" draggable
           @drag-start="startReactivePromptDrag('setupConfirm', $event)">
@@ -16872,7 +17787,7 @@ watch(() => [
         </PitchConfirmationPanel>
 
         <!-- #12/#231: the single shared confirmation surface for every guarded end-activation trigger. -->
-        <PitchConfirmationPanel v-if="endActConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="endActConfirm.title ?? $t('hud.endActivation')" :label="$t('hud.endActivationConfirmation')"
+        <PitchConfirmationPanel v-if="endActConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :title="endActConfirm.title ?? $t('hud.endActivation')" :label="$t('hud.endActivationConfirmation')"
           :position-style="reactivePromptStyle('endActConfirm')" draggable
           @drag-start="startReactivePromptDrag('endActConfirm', $event)">
           {{ endActConfirm.text }}
@@ -16885,7 +17800,7 @@ watch(() => [
         <!-- #91 (owner): declared-but-unconfirmed blitz + a floor-tile click → "convert to a plain Move?". Accept
              un-consumes the blitz (server-safe) and moves; right-click (or Keep Blitz) dismisses with NO wire,
              leaving the blitz declaration pending. -->
-        <PitchConfirmationPanel v-if="blitzMoveModalTile" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.keepBlitz')" :label="$t('hud.blitzConversionConfirmation')"
+        <PitchConfirmationPanel v-if="blitzMoveModalTile" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :title="$t('hud.keepBlitz')" :label="$t('hud.blitzConversionConfirmation')"
           :position-style="reactivePromptStyle('blitzMove')" draggable
           @drag-start="startReactivePromptDrag('blitzMove', $event)" @contextmenu.prevent="dismissBlitzMoveModal()">
           {{ $t('hud.youVeDeclaredA') }}
@@ -16911,7 +17826,7 @@ watch(() => [
         </div>
 
         <!-- Owner 2026-07-04d: minimal BUY-CARD menu — pick a card or Done. -->
-        <div v-if="gameStore.state.cardChoice" v-pad-focus class="yesno-card card-buy-menu"
+        <div v-if="gameStore.state.cardChoice" v-pad-focus="{ close: 'answer' }" class="yesno-card card-buy-menu"
           :style="reactivePromptStyle('cardChoice')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('cardChoice', $event)">
           <div class="yesno-text">{{ $t('hud.yesnoCard.buyACard') }} <span class="card-gold">{{ $t('hud.yesnoCard.availablegoldGp', { availableGold: gameStore.state.cardChoice.availableGold }) }}</span></div>
@@ -16927,7 +17842,7 @@ watch(() => [
 
         <!-- case 478: BUY CARDS WITH GOLD — spend inducement gold on random cards drawn from
              per-type decks. Click a deck to buy one (server draws + re-shows to loop), or Done. -->
-        <div v-if="gameStore.state.cardBuy" v-pad-focus class="yesno-card card-buy-menu"
+        <div v-if="gameStore.state.cardBuy" v-pad-focus="{ close: 'answer' }" class="yesno-card card-buy-menu"
           :style="reactivePromptStyle('cardBuy')" :title="$t('hud.yesnoCard.dragToMove')"
           @pointerdown="startReactivePromptDrag('cardBuy', $event)">
           <div class="yesno-text">{{ $t('hud.yesnoCard.buyCards') }}
@@ -16986,7 +17901,7 @@ watch(() => [
 
         <!-- Owner 2026-07-04 (interaction catalog 0.2): generic YES/NO prompt —
              renders any accompanying server text verbatim. -->
-        <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq" v-pad-focus
+        <PitchConfirmationPanel v-if="gameStore.state.yesNo" :key="'yn-' + gameStore.state.yesNo.seq" v-pad-focus="{ close: 'answer' }"
           :title="$t('hud.confirm')" :label="$t('hud.confirmation')" :position-style="reactivePromptStyle('yesNo')" draggable
           :spaced="!!gameStore.state.yesNo.bullets"
           @drag-start="startReactivePromptDrag('yesNo', $event)">
@@ -17004,7 +17919,7 @@ watch(() => [
         <!-- Bloodlust reroll/decision card. The feed beat uses the pitch player-pick rail. -->
         <!-- #237 (owner-fg 07-29): manual drag position takes precedence over the RAF token anchor. -->
         <div v-if="gameStore.state.bloodlust && gameStore.state.bloodlust.stage !== 'bite'" :key="'bl-' + gameStore.state.bloodlust.seq"
-          v-pad-focus class="skill-choice reroll-bar bloodlust-card"
+          v-pad-focus="{ close: 'answer' }" class="skill-choice reroll-bar bloodlust-card"
           :style="reactivePromptStyle('bloodlust', bloodlustPos.ready ? { x: bloodlustPos.x, y: bloodlustPos.y } : undefined)"
           :title="$t('hud.rerollBar.dragToMove')" @pointerdown="startReactivePromptDrag('bloodlust', $event)">
           <!-- Owner W37 mock: the RE-ROLL beat restructures to 3 lines — headline states the failure plainly
@@ -17064,19 +17979,19 @@ watch(() => [
              the prompt + red Decline beside the movement confirm bar's slot. -->
         <!-- #237 (owner-fg 07-29): body drag leaves buttons, labels, and inputs on their original click path. -->
         <!-- Triage #4 (owner 08-11): the SHADOWING class retires this bottom bar for a position-anchored pill below. -->
-        <ChargePickPanel v-if="chargePick" v-pad-focus="{ pitch: true }" :max="chargePick.maxPicks" :selected="chargePick.picked.length"
+        <ChargePickPanel v-if="chargePick" v-pad-focus="{ pitch: true, close: 'answer' }" :max="chargePick.maxPicks" :selected="chargePick.picked.length"
           :confirm-disabled="chargePick.picked.length < chargePick.minPicks || chargePick.picked.length === 0"
           :declinable="chargePick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <ChargePickPanel v-else-if="dwarfenWisdomPick" v-pad-focus="{ pitch: true }" :title="$t('hud.dwarfenWisdom')"
+        <ChargePickPanel v-else-if="dwarfenWisdomPick" v-pad-focus="{ pitch: true, close: 'answer' }" :title="$t('hud.dwarfenWisdom')"
           :label="$t('hud.dwarfenWisdomPlayerSelection')" :roll="dwarfenWisdomPick.roll"
           :max="dwarfenWisdomPick.maxPicks" :selected="dwarfenWisdomPick.picked.length"
           :confirm-disabled="dwarfenWisdomPick.picked.length < dwarfenWisdomPick.minPicks"
           :declinable="dwarfenWisdomPick.declinable" @confirm="gameStore.confirmPlayerPick()"
           @decline="gameStore.resolvePlayerPick(null)" />
 
-        <ChargePickPanel v-else-if="prayerBoardPick" v-pad-focus="{ pitch: true }" :title="prayerBoardTitle"
+        <ChargePickPanel v-else-if="prayerBoardPick" v-pad-focus="{ pitch: true, close: 'answer' }" :title="prayerBoardTitle"
           :label="$t('hud.prayerboardtitlePlayerSelection', { prayerBoardTitle })"
           :max="prayerBoardPick.maxPicks" :selected="prayerBoardPick.picked.length"
           :confirm-disabled="prayerBoardPick.picked.length < prayerBoardPick.minPicks"
@@ -17084,7 +17999,7 @@ watch(() => [
           @decline="gameStore.resolvePlayerPick(null)" />
 
         <PitchConfirmationPanel v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && !pickMeUpPrompt"
-          v-pad-focus="{ pitch: true }" :title="$t('hud.selectPlayers')" :label="$t('hud.playerSelectionConfirmation')" :position-style="reactivePromptStyle('playerPick')"
+          v-pad-focus="{ pitch: true, close: 'answer' }" :title="$t('hud.selectPlayers')" :label="$t('hud.playerSelectionConfirmation')" :position-style="reactivePromptStyle('playerPick')"
           draggable @drag-start="startReactivePromptDrag('playerPick', $event)">
           <span>{{ gameStore.state.playerPick.prompt }}</span>
           <span v-if="gameStore.state.playerPick.confirm && gameStore.state.playerPick.maxPicks > 1" class="pick-count">
@@ -17110,7 +18025,7 @@ watch(() => [
 
         <!-- Pick-Me-Up remains token/scoreboard anchored; it is a contextual election, not a global confirm. -->
         <div v-if="gameStore.state.playerPick && !mvpPick && !assignPick && !chargePick && !dwarfenWisdomPick && !prayerBoardPick && !shadowingPick && !tentaclesPick && pickMeUpPrompt"
-          v-pad-focus="{ pitch: true }" class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
+          v-pad-focus="{ pitch: true, close: 'answer' }" class="player-pick-bar" :style="{ ...reactivePromptStyle('playerPick', pickMeUpCardAnchor), bottom: 'auto' }"
           :title="$t('hud.playerPickBar.dragToMove')" @pointerdown="startReactivePromptDrag('playerPick', $event)">
           <span class="pick-prompt">{{ gameStore.state.playerPick.prompt }}</span>
           <button v-if="gameStore.state.playerPick.confirm" class="pick-confirm" data-pad-key="X"
@@ -17130,7 +18045,7 @@ watch(() => [
         <!-- Triage #4 (owner 08-11): SHADOWING pill — a position-anchored Confirm/Decline at the shadower (the
              reactive-election / follow-up idiom), replacing the bottom bar for this class. Same playerPick wire. -->
         <!-- Owner 10-05: the Shadowing chip rides the modern confirmation panel too (Tentacles / pick-me-up language). -->
-        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" v-pad-focus :title="$t('hud.shadowTheRunner')" :label="$t('hud.shadowingDecision')"
+        <PitchConfirmationPanel v-if="shadowingPick && shadowingPos" v-pad-focus="{ close: 'answer' }" :title="$t('hud.shadowTheRunner')" :label="$t('hud.shadowingDecision')"
           compact draggable test-id="shadowing-panel"
           v-prompt-dodge="promptDodge('shadowing', shadowingPick.seq)"
           :position-style="reactivePromptStyle('shadowing', { x: shadowingPos.x, y: shadowingPos.y, leftEdge: true })"
@@ -17150,7 +18065,7 @@ watch(() => [
              (higher STR, tie → number). Same playerPick wire; Decline only when the server allows it (minSelects).
              Owner 10-05: the card is the modern confirmation panel (the pick-me-up / End Turn? language), still
              anchored beside the tentacler and draggable. -->
-        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" v-pad-focus :title="$t('hud.useTentacles')" :label="$t('hud.tentaclesDecision')"
+        <PitchConfirmationPanel v-if="tentaclesPick && tentaclesPos" v-pad-focus="{ close: 'answer' }" :title="$t('hud.useTentacles')" :label="$t('hud.tentaclesDecision')"
           compact draggable test-id="tentacles-panel"
           v-prompt-dodge="promptDodge('tentacles', tentaclesPick.seq)"
           :position-style="reactivePromptStyle('tentacles', { x: tentaclesPos.x, y: tentaclesPos.y, leftEdge: true })"
@@ -17326,7 +18241,7 @@ watch(() => [
             </span>
             <span v-if="quickSnapAllowance.exhausted" class="pick-count">{{ quickSnapExhaustedText(quickSnapAllowance.exhausted.limitReached) }}</span>
           </div>
-          <template #actions>
+          <template v-if="!touchModeActive" #actions>
             <button v-if="quickSnapAllowance" class="pick-confirm" @click="gameStore.playerEndTurn()">{{ $t('hud.confirm') }}</button>
             <button v-else class="pick-confirm" @click.stop="confirmHighKick()">{{ $t('hud.confirm') }}</button>
           </template>
@@ -17340,6 +18255,9 @@ watch(() => [
         <PitchConfirmationPanel v-if="furySecondBlockTargeting" :title="$t('hud.furyOfTheBlood')"
           :label="$t('hud.furyOfTheBlood2')" test-id="fury-second-block-targeting" compact>
           {{ $t('hud.selectAnotherPlayerTo') }}
+          <!-- Touch mode spec section 6 (both modes): Fury's second block is optional - Decline sends what the
+               right-click sends here (CLIENT_ACTING_PLAYER{null}, StepInitBlocking's decline). -->
+          <template #actions><button data-pad-cancel data-testid="fury-decline" @click="gameStore.endActivation()">{{ $t('hud.touch.decline') }}</button></template>
         </PitchConfirmationPanel>
 
         <PitchConfirmationPanel v-if="gameStore.state.onTheBallMover" :title="$t('hud.onTheBall')"
@@ -17351,7 +18269,7 @@ watch(() => [
              hit-targets (RAF-followed) — #161 moved the visual to the renderer's push-arrows (setQuickSnapArrows).
              Click one → sendQuickSnapMove (clientSetupPlayer); Confirm ends the phase. -->
         <button v-for="(t, i) in quickSnapTargets" :key="'qs-' + i" class="quicksnap-target"
-          :style="{ left: t.x + 'px', top: t.y + 'px', width: t.w + 'px', height: t.h + 'px' }" @click="pickQuickSnapTarget(t.coord)"></button>
+          :style="{ left: t.x + 'px', top: t.y + 'px', width: t.w + 'px', height: t.h + 'px' }" @click="tapQuickSnapTarget(t.coord)"></button>
 
         <!-- Non-owning seats: public-safe pending cue (Fives ruling 08-12 — same class as the block-dice
              "opponent is deciding" note; reveals only that a decision is pending, kept per no-private-overlay). -->
@@ -17413,12 +18331,18 @@ watch(() => [
              has fired. Only the four property-derived offers carried by the store are rendered; a plain player never
              mounts this modal. The normal Blitz declare already happened; the choice changes only clientBlock's
              existing USING_* flavor flag. -->
-        <BlockAttackConfirmModal v-if="blockAttackConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :preview="blockAttackConfirm.preview"
-          :target-name="blockAttackConfirm.targetName" @confirm="confirmAggroStage()"
+        <BlockAttackConfirmModal v-if="blockAttackConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :preview="blockAttackConfirm.preview"
+          :target-name="blockAttackConfirm.targetName" @confirm="touchCardConfirm('aggro', () => confirmAggroStage())"
           @cancel="o66AggroStage = null" />
         <div v-if="(gameStore.state.blitzBlockChoice && !chainsawBlitzConfirm) || gameStore.state.foulChoiceHold" v-pad-focus="{ cancel: padDismissBlockAlternative }" class="block-alt-modal"
+          data-no-window-x
           :style="reactivePromptStyle('blockAlternative')" :title="$t('hud.blockAltModal.dragToMove')"
           @pointerdown="startReactivePromptDrag('blockAlternative', $event)">
+          <!-- Touch mode spec section 6 (both modes): the chooser's own close - the same dismiss as right-click / Esc / B
+               (nothing sent; a blitz returns to its confirm stage). Only while the hold is dismissible. -->
+          <button v-if="gameStore.state.foulChoiceHold || gameStore.blitzBlockChoiceDismissible?.()" type="button" class="window-x" data-pad-skip
+            data-testid="block-alt-close" :aria-label="$t('hud.touch.closeWindow')" :title="$t('hud.touch.closeWindow')"
+            @pointerdown.stop @click.stop="padDismissBlockAlternative()">&#215;</button>
           <template v-if="gameStore.state.foulChoiceHold">
             <div class="block-alt-title">{{ $t('hud.blockAltModal.chooseTheFoul') }}</div>
             <div class="block-alt-actions">
@@ -17455,7 +18379,7 @@ watch(() => [
           </div>
           </template>
         </div>
-        <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
+        <PitchConfirmationPanel v-if="gameStore.state.blitzBlockChoice && chainsawBlitzConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }"
           :title="$t('hud.chainsawAttack')" :label="$t('hud.chainsawAttackConfirmation')"
           :position-style="reactivePromptStyle('blockAlternative')" draggable
           @drag-start="startReactivePromptDrag('blockAlternative', $event)">
@@ -17477,7 +18401,7 @@ watch(() => [
              CLIENT_KICKOFF the click sends with the setting off. Another click on the pitch re-targets (the locked
              crosshair moves with it). Like every PitchConfirmationPanel it takes the clicks under its own footprint
              (it has no backdrop); it is draggable, so a covered square stays reachable (Astra kickconfirm-1 P2). -->
-        <PitchConfirmationPanel v-if="kickConfirmCard" :key="'kick-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
+        <PitchConfirmationPanel v-if="kickConfirmCard" :key="'kick-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }"
           :title="$t('hud.confirmKickoff')" :label="$t('hud.confirmKickoff')" test-id="kickoff-square-confirm" compact
           :position-style="reactivePromptStyle('kickConfirm')" draggable
           :data-square="kickConfirmCard.square.join(',')"
@@ -17490,7 +18414,7 @@ watch(() => [
         <!-- Owner 10-20 (RickWreckless g1955027): free-select Pass ("Throw Pass" from the passer's menu). The first click
              on an in-template square holds it here; Confirm sends the same CLIENT_PASS the second click sent; Go back
              (or right-click / Esc) drops it and keeps free-select armed; another in-template click moves it. -->
-        <PitchConfirmationPanel v-if="passConfirmCard" :key="'pass-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }"
+        <PitchConfirmationPanel v-if="passConfirmCard" :key="'pass-confirm'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }"
           :title="$t('hud.throwPass')" :label="$t('hud.throwPass')" test-id="free-select-pass-confirm" compact
           :position-style="reactivePromptStyle('passConfirm', passConfirmAnchor)" draggable
           :data-square="passConfirmCard.square.join(',')"
@@ -17504,9 +18428,9 @@ watch(() => [
 
         <!-- Owner o66aa: 2-click target cue — 🏈 over a pass/hand-off target, 🥾 AV+ over a foul victim. -->
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
-        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze, 'pass-destination': o66TargetCue.throwRoll != null }"
+        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !touchModeActive && (!!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze), 'pass-destination': o66TargetCue.throwRoll != null }"
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
-          @click="guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton()))">
+          @click="!touchModeActive && (guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton())))">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">{{ $t('hud.pass') }}
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="$t('hud.passNeedsThrowroll', { throwRoll: o66TargetCue.throwRoll })" />+
@@ -17519,7 +18443,7 @@ watch(() => [
           </span>
         </div>
 
-        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :title="$t('hud.castZap')"
+        <PitchConfirmationPanel v-if="gameStore.state.wizardTargetConfirm" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :title="$t('hud.castZap')"
           :label="$t('hud.zapTargetConfirmation')" compact>
           {{ $t('hud.playernameZapRequires', { playerName: gameStore.state.wizardTargetConfirm.playerName }) }}
           <D6Face :value="gameStore.state.wizardTargetConfirm.requiredRoll"
@@ -17575,7 +18499,7 @@ watch(() => [
         <!-- Owner 2026-07-04 (interaction catalog 28, PRIORITY): follow-up chip card
              at the block square (offset so the square stays visible); the passive
              shared passive variant carries no buttons. -->
-        <div v-if="gameStore.state.followupChoice && followupPos" v-pad-focus class="followup-chip"
+        <div v-if="gameStore.state.followupChoice && followupPos" v-pad-focus="{ close: 'answer' }" class="followup-chip"
           v-prompt-dodge="promptDodge('followup', gameStore.state.followupChoice.seq)"
           :style="reactivePromptStyle('followup', { x: followupPos.x, y: followupPos.y })"
           :title="$t('hud.followupChip.dragToMove')" @pointerdown="startReactivePromptDrag('followup', $event)">
@@ -17802,7 +18726,7 @@ watch(() => [
              off fumblerooskieActive (the existing election signal), so it clears the instant the ball settles. -->
         <div v-if="fumblerooskieActive" class="fumblerooskie-banner">{{ $t('hud.fumblerooskieBanner.ballWillDropOn') }}</div>
 
-        <ul v-if="ctxMenu.visible" class="context-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }">
+        <ul v-if="ctxMenu.visible && !touchModeActive" class="context-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }">
           <li v-for="(item, i) in ctxMenu.items" :key="i" :data-disabled="item.disabled ?? false"
             :data-parent="!!item.children" :title="item.hint" @click="runMenuItem(item)">
             <img v-if="item.icon" class="ctx-item-icon" :src="item.icon" alt="" />{{ item.label }}<span v-if="item.shortcut" class="ctx-shortcut" data-testid="ctx-shortcut">{{ item.shortcut }}</span><span v-if="item.children" class="submenu-arrow">▸</span>
@@ -18025,7 +18949,7 @@ watch(() => [
 
         <!-- BB2025 Foul Appearance in a Multiple Block (reRollForTargets): the attacking coach rerolls ONE failed target
              with a server-offered source, or declines. Sources and targets are exactly the dialog's (store). -->
-        <div v-if="gameStore.state.reRollForTargets" v-pad-focus="{}"
+        <div v-if="gameStore.state.reRollForTargets" v-pad-focus="{ close: 'answer' }"
           class="multi-block-resolution reroll-for-targets"
           :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
@@ -18080,7 +19004,7 @@ watch(() => [
 
         <!-- Owner 2026-07-04c/d: armed-action confirm modal ("Perform foul?" …) —
              compact (33% smaller) + DRAGGABLE by its body (owner 2026-07-04d). -->
-        <ActionTargetConfirmModal v-if="actionModal" :key="actionModal.seq" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation }" :modal="actionModal"
+        <ActionTargetConfirmModal v-if="actionModal" :key="actionModal.seq" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' }" :modal="actionModal"
           :position-style="actionModalStyle" :foul-skull-url="blockSkullUrl"
           @drag-start="startActionModalDrag" @confirm="renderer?.confirmArmedAction()"
           @cancel="renderer?.cancelArmedAction()" />
@@ -18107,7 +19031,7 @@ watch(() => [
              (data-chosen) before the rest of the events render. -->
         <template v-if="gameStore.state.reRollPrompt">
           <!-- #237 (owner-fg 07-29): both reroll presentations share the same manual override. -->
-          <div v-pad-focus="gameStore.state.reRollPrompt.mine ? {} : false" class="block-partial reroll-bar"
+          <div v-pad-focus="gameStore.state.reRollPrompt.mine ? { close: 'answer' } : false" class="block-partial reroll-bar"
             :data-spectator="!gameStore.state.reRollPrompt.mine"
             :style="reactivePromptStyle('reroll', { x: rerollMenuPos.x, y: rerollMenuPos.y + 18 })"
             :title="$t('hud.rerollBar.dragToMove')" @pointerdown="startReactivePromptDrag('reroll', $event)">
@@ -18329,6 +19253,13 @@ watch(() => [
 .coach-panel.away[data-playing='true'] { transform: scale(1.03488); }
 /* Bug 10-13: the playing scale above, for syncHudTopClearance (keep equal; hudTopClearance.test.ts checks it). */
 .coach-panel { --coach-panel-active-scale: 1.03488; }
+/* Plate text floors divide by --plate-text-scale so the DRAWN text keeps the minimum text size. --panel-scale is the
+   user's scale (inline from uiPanelStyle, only once a plate is moved/resized); --coach-panel-drawn-scale is the CSS
+   default scale (resting or playing, per breakpoint). Owner 11-12: every plate is compensated, so an untouched plate
+   falls back to the drawn scale. */
+.coach-panel { --coach-panel-drawn-scale: var(--coach-panel-base-scale, 1); }
+.coach-panel[data-playing='true'] { --coach-panel-drawn-scale: var(--coach-panel-active-scale, 1); }
+.coach-panel { --plate-text-scale: var(--panel-scale, var(--coach-panel-drawn-scale)); }
 .hud-center.scoreboard {
   transform: translateX(-50%) scale(0.96);
   transform-origin: top center;
@@ -18442,7 +19373,7 @@ watch(() => [
   box-shadow: 0 5px 9px #0009;
   color: #ffe8b0;
   font-family: var(--font-display);
-  font-size: max(var(--ui-min-text-size, 12px), clamp(0.42rem, 0.75vw, 0.51rem));
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), clamp(0.42rem, 0.75vw, 0.51rem));
   font-weight: 900;
   letter-spacing: 0.02em;
   line-height: 1;
@@ -18456,7 +19387,7 @@ watch(() => [
   font-family: var(--font-display);
   /* Owner 10-08: larger label; the tag hugs its text (the old scaleX(0.8) squeeze left the box 25% wider than the
      words, which read as a dead margin on the outer side). */
-  font-size: max(calc(var(--ui-min-text-size, 12px) + 2px), clamp(0.56rem, 0.95vw, 0.68rem));
+  font-size: max(calc((var(--ui-min-text-size, 12px) + 2px) / var(--plate-text-scale, 1)), clamp(0.56rem, 0.95vw, 0.68rem));
   font-weight: 900;
   letter-spacing: 0.01875em;
   line-height: 1.05;
@@ -18481,7 +19412,9 @@ watch(() => [
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  font-size: max(var(--ui-min-text-size, 12px), 0.7rem);
+  /* plate text floors divide by the user's plate scale (--panel-scale, inline from uiPanelStyle) so the DRAWN size
+     never falls under the minimum text size; 1 (no change) on an unmoved plate */
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.7rem);
   font-weight: 800;
   letter-spacing: 0.04em;
   color: #d8d4c8;
@@ -18497,7 +19430,7 @@ watch(() => [
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 0.88rem);
+  font-size: max(calc(var(--ui-min-primary-text-size, 16px) / var(--plate-text-scale, 1)), 0.88rem);
   font-weight: bold;
   color: var(--ui-accent);
   background: linear-gradient(90deg, #000d, #0007);
@@ -18558,7 +19491,7 @@ watch(() => [
 }
 /* owner 09-06: a FIXED 64 px box — the 256 px masters land at an exact 4:1 (box-filtered, auto); the four 38 px icons
    stretch 1.68x until they are regenerated at 64 px. */
-.inducement-fans { color: #ffe9a8; font-size: max(var(--ui-min-text-size, 12px), 0.7rem); font-weight: 900; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px #000; }
+.inducement-fans { color: #ffe9a8; font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.7rem); font-weight: 900; line-height: 1.1; text-align: center; text-shadow: 0 1px 1px #000; }
 .inducement[data-chip='cheering_fans'] { border-color: #9d762d; }
 .inducement img { width: 64px; height: 64px; max-width: 100%; max-height: 100%; object-fit: contain; image-rendering: auto; }
 .inducement-quantity {
@@ -18573,7 +19506,7 @@ watch(() => [
   border-radius: 7px;
   background: #b30e14;
   color: #fff;
-  font-size: max(var(--ui-min-text-size, 12px), 0.54rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.54rem);
   line-height: 1.05;
   text-align: center;
   text-shadow: 0 1px 1px #000;
@@ -22495,7 +23428,7 @@ watch(() => [
   border-radius: 7px;
   background: #e5484d;
   color: #fff;
-  font-family: var(--font-display);
+  font-family: var(--ui-font-user, var(--font-display)); /* the user's UI font pick (App.vue) when off Nuffle */
   font-weight: 800;
   font-size: max(var(--ui-min-text-size, 12px), 0.5rem);
   line-height: 13px;
@@ -22510,7 +23443,7 @@ watch(() => [
 .config-bar button .quick-helmet { width: 24px; height: 24px; object-fit: contain; image-rendering: auto; }
 .tab-icon { width: 0.9rem; height: 0.9rem; object-fit: contain; flex: none; image-rendering: auto; }
 .tab-stencil {
-  font-family: var(--font-display);
+  font-family: var(--ui-font-user, var(--font-display)); /* the user's UI font pick (App.vue) when off Nuffle */
   font-weight: 800;
   font-size: max(var(--ui-min-text-size, 12px), 0.46rem);
   letter-spacing: 0.08em;
@@ -22551,13 +23484,18 @@ watch(() => [
      unselectable; selectability of both logs is now an explicit property of .log. */
   user-select: text;
 }
+/* The Log/Chat body text steps down with the window the way the coach plates do: the plates go from scale(0.80784)
+   to scale(0.646272) under a 1000 px wide window, a 0.8 ratio, which logTextStyle applies to the slider size. */
+@media (max-width: 1000px) {
+  .log { --log-window-scale: 0.8; }
+}
 /* Owner 08-19: chat message text is PLAIN (--ui-text); only the coach NAME carries the
    seat colour (inline, same logNameColor source as log names). The old full-line side
    colours are retired. */
 .log [data-kind='talk'] { color: var(--ui-text); }
 /* owner 08-19: chat typography — Nuffle names over sans-serif message text; spectator lines pale green (inline style). */
 .chat-log { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-.chat-log .log-name { font-family: var(--font-display); }
+.chat-log .log-name { font-family: var(--ui-font-user, var(--font-display)); }
 /* Owner 10-16 (Chat style "Bubbles"): the chat builds FROM THE BOTTOM - newest bubble on the bottom edge, older ones
    stacked above, a short chat leaves the space above empty. A flex column whose FIRST child takes margin-top: auto is
    the bottom anchor (justify-content: flex-end would push overflowing bubbles past the top, where they cannot be
@@ -23440,7 +24378,8 @@ watch(() => [
      font-size drives width/padding/text, so dropping it shrinks the panel; the
      portrait max-height is bumped by the inverse below to hold its pixel size. */
   /* Owner 09-09: zoom + size for every element (~+30% base), the dead space around the portrait removed. */
-  font-size: max(var(--ui-min-text-size, 12px), clamp(0.6rem, 0.4rem + 0.5vw, 0.92rem));
+  /* --card-text-scale (cardStyle): the Log font size slider / 15, so 1 at the default */
+  font-size: max(var(--ui-min-text-size, 12px), calc(clamp(0.6rem, 0.4rem + 0.5vw, 0.92rem) * var(--card-text-scale, 1)));
   width: 24em;
   background: color-mix(in srgb, var(--ui-surface) 95%, transparent);
   border: 1px solid var(--ui-border);
@@ -23458,6 +24397,11 @@ watch(() => [
   max-height: 80vh;
 }
 .player-card .card-name { cursor: move; user-select: none; padding: 0 34px 0 14px; }
+/* The drag / resize handles own their touch gestures (a vertical touch drag would otherwise become native scrolling
+   of the card and cancel the pointer stream); the card body keeps scrolling. */
+.player-card .card-name,
+.player-card .card-grip,
+.player-card .card-resize { touch-action: none; }
 /* top-left drag grip (owner 2026-07-03) */
 .player-card .card-grip {
   position: absolute;
@@ -23532,7 +24476,7 @@ watch(() => [
 .card-stats {
   display: flex;
   flex-direction: column;
-  gap: 0.3em;
+  gap: 0.15em; /* owner-approved mockup: ~25% less height per MA/ST/AG/PA/AV row (was 0.3em gap, 0.22em pad) */
   min-width: 6em; /* owner 09-09: bigger stat cards */
 }
 .card-stat {
@@ -23542,7 +24486,8 @@ watch(() => [
   background: var(--ui-surface);
   border: 1px solid var(--ui-border);
   border-radius: 5px;
-  padding: 0.22em 0.65em;
+  padding: 0.08em 0.65em;
+  line-height: 1.1;
   font-size: 1.22em; /* owner 09-09: stat value size */
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -23717,12 +24662,12 @@ watch(() => [
 .pitch-host.hud-minimalist .coach-lines { gap: 1px; }
 .pitch-host.hud-minimalist .coach-name {
   padding: 1px 4px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.62rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.62rem);
   line-height: 1.05;
 }
 .pitch-host.hud-minimalist .team-title {
   padding: 1px 5px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.78rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.78rem);
   line-height: 1.08;
 }
 .pitch-host.hud-minimalist .inducements {
@@ -23739,7 +24684,7 @@ watch(() => [
   right: -5px;
   min-width: 16px;
   padding: 1px 2px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.54rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.54rem);
 }
 .pitch-host.hud-minimalist .scoreboard:not(.flat-hud) {
   gap: 2px 6px;
@@ -23882,12 +24827,12 @@ watch(() => [
 }
 .pitch-host.hud-chrome .coach-name {
   padding: 1px 4px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.62rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.62rem);
   line-height: 1.05;
 }
 .pitch-host.hud-chrome .team-title {
   padding: 1px 5px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.78rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.78rem);
   line-height: 1.08;
 }
 .pitch-host.hud-chrome .inducements {
@@ -23912,7 +24857,7 @@ watch(() => [
   right: -5px;
   min-width: 16px;
   padding: 1px 2px;
-  font-size: max(var(--ui-min-text-size, 12px), 0.54rem);
+  font-size: max(calc(var(--ui-min-text-size, 12px) / var(--plate-text-scale, 1)), 0.54rem);
 }
 
 .pitch-host.hud-chrome .hud-center.scoreboard {

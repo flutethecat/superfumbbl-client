@@ -3,7 +3,7 @@
  * Owner 11-03 (spec-coach-card-stats-2026-11-03.md): the coach card's EXPANDED stats panel - win rate by race,
  * matchups, TDs and casualties per game, dice luck by category over 10 / 25 / all games with armour breaks vs expected,
  * a FUMBBL / Super FUMBBL / all filter and a footer. Everything from the LOCAL game history (game/coachGameHistory.ts)
- * through game/coachStats.ts: no request, server-derived numbers only.
+ * through game/coachStats.ts: server-derived numbers only, and no request except the footer's sync button (below).
  *
  * A modal dialog: focus moves to it on open and is trapped in it (Tab / Shift+Tab), Escape and the close button close
  * it, the controller drives it through v-pad-focus (B = close). Modern / Retro: under Settings > Interface style Modern
@@ -30,13 +30,19 @@
  * tall, its body scrolling inside; the type is ~+20% over the first version (1.2rem body, headers to match) and the
  * table rows grow with it (36 px). Tables sit three to a row (Win rate by race | Matchups | Opponent coaches), then
  * Per game beside the Dice luck table; one column under 1000 px. At 1280 x 720 the panel is 1229 x 662: nothing clips.
+ *
+ * Owner 11-12: the footer's "Sync FUMBBL games" button (game/coachStatsSync.ts) adds the logged-in coach's last 30
+ * FUMBBL games to the history, on a press only, once a day per coach, with "Syncing 7 of 30" progress and a Cancel.
+ * Shown only on Official FUMBBL and only when this panel shows the logged-in coach. It is the panel's only request.
  */
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { settings } from '../../../game/settings';
 import { lmRootClass } from '../../../game/lmTheme';
 import { motionReduced } from '../../../game/accessibilityModes';
 import { PAD_FOCUS_PRIORITY, padFocusControllerMode, padFocusedControl, vPadFocus } from '../../../game/cardFocus';
 import { COACH_LUCK_KEYS, type CoachGameRecord, type CoachLuckKey, type CoachStatKey } from '../../../game/coachGameHistory';
+import { COACH_SYNC_GAMES, cancelCoachStatsSync, coachSyncState, coachSyncVisible, readCoachSyncAvailability } from '../../../game/coachStatsSync';
+import { coachSyncStorage, syncFumbblCoachGames } from '../../../game/coachStatsSyncRuntime';
 import {
   ACTION_ROLL_GROUPS, actionBreakdown, actionRollFallbackName, crBands, koRecoveries, diceWindows, filterByServer, historySince, matchups, opponentCoaches, perGameStats, raceRecords, recordText, signedLuck,
   type CoachServerFilter, type LuckSummary,
@@ -129,6 +135,73 @@ function closeDetails(): void {
 }
 const since = computed(() => historySince(props.games));
 const sinceText = computed(() => (since.value == null ? '' : new Date(since.value).toLocaleDateString()));
+/** Owner 11-12: how many of the shown games the sync added (the footer says so; they were not played in this client). */
+const syncedCount = computed(() => props.games.filter((g) => g.synced).length);
+
+// ---- owner 11-12: Sync FUMBBL games ----
+const syncVisible = computed(() => coachSyncVisible({ serverTarget: settings.activeServerTarget, loggedInCoach: settings.coach, shownCoach: props.name }));
+const now = ref(Date.now());
+const nowTimer = setInterval(() => { now.value = Date.now(); }, 30_000);
+/** another window writing the cooldown or the lease re-reads it here at once */
+const onStorage = () => { now.value = Date.now(); };
+if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+onBeforeUnmount(() => { clearInterval(nowTimer); if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage); });
+/** available / cooling (until) / busy (another window syncs) / unavailable (the cooldown cannot be saved) */
+const availability = computed(() => { void coachSyncState.running; return readCoachSyncAvailability(coachSyncStorage(), settings.coach, now.value); });
+const cooldownUntil = computed(() => (availability.value.state === 'cooling' ? availability.value.until : null));
+const cooldownText = computed(() => (cooldownUntil.value == null ? '' : new Date(cooldownUntil.value).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })));
+/** this coach's sync is the one running (another coach's run never shows here) */
+const syncRunning = computed(() => coachSyncState.running && coachSyncState.coach.toLowerCase() === settings.coach.trim().toLowerCase());
+const syncBlocked = computed(() => availability.value.state !== 'available' || coachSyncState.running);
+const syncButtonText = computed(() => {
+  const a = availability.value;
+  if (a.state === 'cooling') return t('coachStats.sync.cooldown', { time: cooldownText.value });
+  if (a.state === 'busy') return t('coachStats.sync.busy');
+  return t('coachStats.sync.button');
+});
+const syncProgressText = computed(() => {
+  const p = coachSyncState.progress;
+  return !p || p.phase === 'listing' ? t('coachStats.sync.listing') : t('coachStats.sync.progress', { i: p.index, n: p.total });
+});
+const syncResultText = computed(() => {
+  if (availability.value.state === 'unavailable') return t('coachStats.sync.unavailable');
+  const r = coachSyncState.last;
+  if (!r || coachSyncState.coach.toLowerCase() !== settings.coach.trim().toLowerCase()) return '';
+  const notes: string[] = [];
+  if (r.status === 'failed') notes.push(t('coachStats.sync.failed'));
+  else if (r.status === 'cancelled') notes.push(t('coachStats.sync.cancelled', { n: r.imported }));
+  else if (r.status === 'busy') notes.push(t('coachStats.sync.busy'));
+  else if (r.status === 'unavailable') notes.push(t('coachStats.sync.unavailable'));
+  else if (r.status === 'stopped') notes.push(t('coachStats.sync.stopped'));
+  else if (r.status === 'done') notes.push(r.failed ? t('coachStats.sync.doneSkipped', { n: r.imported, failed: r.failed }) : t('coachStats.sync.done', { n: r.imported }));
+  if (r.status !== 'failed' && !r.listComplete) notes.push(t('coachStats.sync.incomplete'));
+  if (r.notAdded) notes.push(t('coachStats.sync.notAdded', { n: r.notAdded }));
+  if (r.teamCap) notes.push(t('coachStats.sync.teamCap', { shown: r.teamCap.shown, total: r.teamCap.total }));
+  return notes.join(' ');
+});
+const syncBtn = ref<HTMLButtonElement | null>(null);
+const cancelBtn = ref<HTMLButtonElement | null>(null);
+/** Review P2: the pressed button leaves the DOM when the sync starts, so focus moves to Cancel; when the run ends it
+ *  returns to the sync button, or (cooling down, so disabled) another enabled control in the dialog.
+ *  Review 2 (#5): only when the control that leaves the DOM HELD the focus (read before the update, flush 'pre'), and
+ *  never while a pop-out (Details / Extra stats) is open: focus is not pulled out from under a modal. */
+watch(syncRunning, (running) => {
+  const leaving = running ? syncBtn.value : cancelBtn.value;
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  const held = !!leaving && (active === leaving || (running && (!active || active === document.body)));
+  if (!held) return;
+  void nextTick(() => {
+    if (detailsOpen.value || extraOpen.value) return;
+    if (running) { cancelBtn.value?.focus(); return; }
+    const target = syncBtn.value && !syncBtn.value.disabled ? syncBtn.value : extraBtn.value ?? closeBtn.value;
+    target?.focus();
+  });
+}, { flush: 'pre' });
+async function syncNow(): Promise<void> {
+  if (!syncVisible.value || syncBlocked.value) return;
+  try { await syncFumbblCoachGames(settings.coach.trim()); } finally { now.value = Date.now(); }
+}
+function cancelSync(): void { cancelCoachStatsSync(); }
 const one = (v: number) => v.toFixed(1);
 const ROW_LABEL: Record<CoachLuckKey, string> = { all: 'coachStats.dice.all', block: 'coachStats.dice.block', armour: 'coachStats.dice.armour', action: 'coachStats.dice.action' };
 const verdictText = (s: LuckSummary) => (s.verdict === 'lucky' ? t('pg.luck.lucky') : s.verdict === 'unlucky' ? t('pg.luck.unlucky') : t('coachStats.luck.even'));
@@ -193,7 +266,7 @@ const padHint = computed(() => padFocusControllerMode());
 <template>
   <Teleport to="body">
     <div class="cs-overlay" :class="lmClass" :data-motion="reduced ? 'reduced' : 'full'" data-testid="coach-stats-overlay" @click.self="close">
-      <section ref="root" v-pad-focus="padOptions" class="cs-panel" :class="{ 'lm-panel': modern }" role="dialog" aria-modal="true"
+      <section ref="root" v-pad-focus="padOptions" data-no-window-x class="cs-panel" :class="{ 'lm-panel': modern }" role="dialog" aria-modal="true"
         aria-labelledby="coach-stats-title" data-testid="coach-stats-panel" @keydown="onKeydown">
         <header class="cs-head" :class="{ 'hm-band': modern }">
           <h2 id="coach-stats-title">{{ t('coachStats.panel.title') }}</h2>
@@ -286,7 +359,18 @@ const padHint = computed(() => padFocusControllerMode());
 
         <p v-if="padHint" class="cs-pad-hint" data-testid="coach-stats-pad-hint">{{ t('coachStats.panel.padScrollHint') }}</p>
         <footer class="cs-foot">
-          <span v-if="games.length" data-testid="coach-stats-footer">{{ t('coachStats.footer', { n: games.length, date: sinceText }) }}</span>
+          <span v-if="games.length" data-testid="coach-stats-footer">{{ syncedCount
+            ? t('coachStats.footerSynced', { n: games.length, date: sinceText, m: syncedCount })
+            : t('coachStats.footer', { n: games.length, date: sinceText }) }}</span>
+          <span v-if="syncVisible" class="cs-sync" data-testid="coach-stats-sync">
+            <!-- one live region that stays mounted, so progress and the result are announced (politely) as they change -->
+            <span class="cs-sync-status" role="status" aria-live="polite" data-testid="coach-stats-sync-status"><span v-if="syncRunning"
+              class="cs-sync-progress" data-testid="coach-stats-sync-progress">{{ syncProgressText }}</span><span v-else-if="syncResultText"
+              class="cs-sync-result" data-testid="coach-stats-sync-result">{{ syncResultText }}</span></span>
+            <button v-if="syncRunning" ref="cancelBtn" type="button" class="cs-sync-btn" :class="{ 'sf-btn small': modern }" data-testid="coach-stats-sync-cancel" @click="cancelSync">{{ t('coachStats.sync.cancel') }}</button>
+            <button v-else ref="syncBtn" type="button" class="cs-sync-btn" :class="{ 'sf-btn small': modern }" data-testid="coach-stats-sync-button"
+              :disabled="syncBlocked" :title="t('coachStats.sync.help', { n: COACH_SYNC_GAMES })" @click="syncNow">{{ syncButtonText }}</button>
+          </span>
           <button v-if="games.length" ref="extraBtn" type="button" class="cs-extra" :class="{ 'sf-btn small': modern }" data-testid="coach-stats-extra"
             aria-haspopup="dialog" :aria-expanded="extraOpen" @click="openExtra">{{ t('coachStats.extra.open') }}</button>
         </footer>
@@ -406,6 +490,12 @@ const padHint = computed(() => padFocusControllerMode());
 .cs-empty { margin: 0; padding: 14px 0; }
 .cs-foot { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 20px; font-size: 1.05rem; }
 .cs-extra { margin-left: auto; font: inherit; cursor: pointer; }
+/* Owner 11-12: the sync control sits by "Extra stats" (both pushed right together). */
+.cs-sync { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-left: auto; }
+.cs-sync + .cs-extra { margin-left: 0; }
+.cs-sync-btn { font: inherit; cursor: pointer; }
+.cs-sync-btn:disabled { cursor: default; opacity: .7; }
+.cs-sync-progress, .cs-sync-result { font-variant-numeric: tabular-nums; }
 .cs-note { margin: 8px 0 0; font-size: .9em; opacity: .8; }
 .cs-extra-section { margin-top: 22px; }
 .cs-pad-hint { flex: none; margin: 0; padding: 4px 20px 0; font-size: .9rem; opacity: .8; }
@@ -417,13 +507,13 @@ const padHint = computed(() => padFocusControllerMode());
 }
 .cs-overlay:not(.sf-lm) .cs-head { padding: 14px 22px; border-bottom: 1px solid color-mix(in srgb, var(--ui-forest, #1A401C) 30%, transparent); }
 .cs-overlay:not(.sf-lm) .cs-head h2 { font-family: var(--font-display); font-size: 1.8rem; }
-.cs-overlay:not(.sf-lm) .cs-close, .cs-overlay:not(.sf-lm) .cs-filter-btn, .cs-overlay:not(.sf-lm) .cs-details, .cs-overlay:not(.sf-lm) .cs-extra {
+.cs-overlay:not(.sf-lm) .cs-close, .cs-overlay:not(.sf-lm) .cs-filter-btn, .cs-overlay:not(.sf-lm) .cs-details, .cs-overlay:not(.sf-lm) .cs-extra, .cs-overlay:not(.sf-lm) .cs-sync-btn {
   min-height: 38px; padding: 0 14px; border: 1px solid var(--ui-forest, #1A401C); border-radius: 4px; color: var(--ui-forest, #1A401C);
   background: color-mix(in srgb, var(--ui-forest, #1A401C) 8%, transparent); font: inherit; cursor: pointer;
 }
 .cs-overlay:not(.sf-lm) .cs-details { min-height: 30px; padding: 0 10px; }
 .cs-overlay:not(.sf-lm) .cs-filter-btn[aria-pressed='true'] { color: var(--ui-old-lace, #F8F5E7); background: var(--ui-forest, #1A401C); }
-.cs-overlay:not(.sf-lm) :is(.cs-close, .cs-filter-btn, .cs-details, .cs-extra):focus-visible { outline: 2px solid var(--ui-focus, #ff3b3b); outline-offset: 2px; }
+.cs-overlay:not(.sf-lm) :is(.cs-close, .cs-filter-btn, .cs-details, .cs-extra, .cs-sync-btn):focus-visible { outline: 2px solid var(--ui-focus, #ff3b3b); outline-offset: 2px; }
 .cs-overlay:not(.sf-lm) .cs-table th, .cs-overlay:not(.sf-lm) .cs-table td { border-bottom: 1px solid color-mix(in srgb, var(--ui-forest, #1A401C) 18%, transparent); }
 .cs-overlay:not(.sf-lm) .cs-table thead th { font-size: .9rem; text-transform: uppercase; letter-spacing: .06em; color: color-mix(in srgb, var(--ui-forest, #1A401C) 72%, transparent); }
 .cs-overlay:not(.sf-lm) .cs-foot, .cs-overlay:not(.sf-lm) .cs-empty, .cs-overlay:not(.sf-lm) .cs-k { color: color-mix(in srgb, var(--ui-forest, #1A401C) 72%, transparent); }

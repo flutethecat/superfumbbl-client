@@ -1,5 +1,5 @@
 import { textureParserFor } from './artPack';
-import { Assets, Container, Graphics, Rectangle, Sprite, Texture, type TextureSource } from 'pixi.js';
+import { Assets, BufferImageSource, Container, Graphics, Rectangle, Sprite, Texture, type TextureSource } from 'pixi.js';
 import { getOrientation, PITCH_COLS, PITCH_ROWS, squareAnchor, TILE_H, TILE_W } from './geometry';
 import type { PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import type { AssetSide } from './skillIcons';
@@ -51,6 +51,11 @@ export interface WalkerAsset {
   /** Owner 09-05: optional HALF-resolution frames (32 px art per 64-unit frame, exact 2x2 box average, source.resolution 1/2) — drawn
    *  1:1 with nearest sampling at the default zoom so the pixel detail survives; the full frames serve zoom-in. */
   displayFrames?: Texture[][];
+  /** Owner 11-11: the exact 2x2 box average of the master behind displayFrames, built on first use by the 1.5 zoom
+   *  rung (ensureHalfFrames); destroyed with the asset. */
+  halfSheet?: TextureSource;
+  /** Owner 11-11: the master could not be read back, so there are no half frames (the walkers draw the master). */
+  halfSheetUnavailable?: boolean;
   /** Owner 10-22 ("some player tokens are not centered in their square"): the figure's measured visual centre per
    *  facing (DIRECTIONS order), in frame UNITS relative to the frame centre, read once at load from each row's IDLE
    *  frame - so every walk frame of a row shares one anchor and the stride never wobbles. Absent = unreadable art
@@ -435,6 +440,11 @@ function framePx(source: TextureSource, frame: number): number {
 
 function sourcePixels(source: TextureSource, sourceRow: number, frame: number): Uint8ClampedArray | null {
   const px = framePx(source, frame);
+  return sourceRegionPixels(source, 0, sourceRow * px, px, px);
+}
+
+/** RGBA (straight alpha) of a pixel rectangle of the sheet, or null when the source cannot be read back. */
+function sourceRegionPixels(source: TextureSource, x: number, y: number, w: number, h: number): Uint8ClampedArray | null {
   const resource = source.resource as {
     width?: number;
     height?: number;
@@ -442,24 +452,24 @@ function sourcePixels(source: TextureSource, sourceRow: number, frame: number): 
   } | null;
   try {
     const direct = resource?.getContext?.('2d', { willReadFrequently: true });
-    if (direct) return direct.getImageData(0, sourceRow * px, px, px).data;
+    if (direct) return direct.getImageData(x, y, w, h).data;
     const Canvas = globalThis.OffscreenCanvas;
     if (Canvas && resource) {
-      const canvas = new Canvas(px, px);
+      const canvas = new Canvas(w, h);
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (context) {
-        context.drawImage(resource as CanvasImageSource, 0, sourceRow * px, px, px, 0, 0, px, px);
-        return context.getImageData(0, 0, px, px).data;
+        context.drawImage(resource as CanvasImageSource, x, y, w, h, 0, 0, w, h);
+        return context.getImageData(0, 0, w, h).data;
       }
     }
     if (typeof document !== 'undefined' && resource) {
       const canvas = document.createElement('canvas');
-      canvas.width = px;
-      canvas.height = px;
+      canvas.width = w;
+      canvas.height = h;
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (context) {
-        context.drawImage(resource as CanvasImageSource, 0, sourceRow * px, px, px, 0, 0, px, px);
-        return context.getImageData(0, 0, px, px).data;
+        context.drawImage(resource as CanvasImageSource, x, y, w, h, 0, 0, w, h);
+        return context.getImageData(0, 0, w, h).data;
       }
     }
   } catch {
@@ -556,6 +566,7 @@ export function setWalkSheetSampling(mode: 'nearest' | 'linear'): void {
     // Pixi 8.19: the scaleMode setter assigns the filters WITHOUT emitting the style change, so the GPU sampler
     // would keep the old state — push the update explicitly (review finding 09-05).
     asset.sheet.style.update();
+    if (asset.halfSheet && !asset.halfSheet.destroyed) { asset.halfSheet.scaleMode = mode; asset.halfSheet.style.update(); }
   }
 }
 export function walkSheetSampling(): 'nearest' | 'linear' { return sheetSampling; }
@@ -590,6 +601,7 @@ function buildFrames(root: Texture, spec: ValidatedWalkSheetSpec): Texture[][] {
 function destroyFrameHandles(asset: WalkerAsset): void {
   for (const row of asset.frames) for (const frame of row) if (!frame.destroyed) frame.destroy(false);
   for (const row of asset.displayFrames ?? []) for (const frame of row) if (!frame.destroyed) frame.destroy(false);
+  if (asset.halfSheet && !asset.halfSheet.destroyed) asset.halfSheet.destroy();
 }
 
 function urlStillOwned(url: string): boolean {
@@ -1368,6 +1380,27 @@ export function placeWalkerDecor(token: Container, child: Container, x: number, 
   child.scale.set(scale * f);
 }
 
+/** Review r2 (marking status line): register a child that was laid out in DECOR-1 units (raw, exactly as a token's
+ *  build lays out its decorations before the first applyDecorScale) AFTER the token was built - a marking group
+ *  replaced on a preserved moving walker. Its decor-1 placement is captured as-is (the build-time capture at decor
+ *  scale 1), then the current decor scale is applied, so it matches a freshly built token's child and every later
+ *  zoom / tick rescales it the same way. Returns false for a non-walker token (nothing to do). */
+export function adoptWalkerDecor(token: Container, child: Container): boolean {
+  const record = walkerTokens.get(token);
+  if (!record || child.parent !== token) return false;
+  const base = record.decorBase ?? (record.decorBase = new WeakMap());
+  const py = record.decorPivotY ?? WALKER_FEET_Y_PX;
+  // w is only read for the skill-badge row cap; measuring text bounds needs a canvas, so it is skipped otherwise
+  const w = child.label === 'skillBadges' ? child.getLocalBounds().width : 0;
+  const b = { x: child.position.x, y: child.position.y, sx: child.scale.x, sy: child.scale.y, w };
+  base.set(child, b);
+  const f = record.decorScale ?? record.sprite.scale.x;
+  const fs = decorChildScale(child, b, f);
+  child.scale.set(b.sx * fs, b.sy * fs);
+  child.position.set(b.x * f, py + (b.y - py) * f);
+  return true;
+}
+
 /** Owner 09-08: token-local y (px) of a decor-1 unit y at the walker's CURRENT decor scale — exactly where
  *  placeWalkerDecor / applyDecorScale put a child laid out at that y. World-space overlays (the block dice preview)
  *  read the live chest row from here so they can clear it on every zoom rung. Null for a non-walker token. */
@@ -1399,7 +1432,74 @@ const SNAP_MAX_LOG_ERROR = 0.2;
  *  now draws true size like 4.5; growing snaps keep the wider 20% window (crispness is worth a slightly bigger figure,
  *  never a smaller one). */
 const SNAP_MAX_SHRINK_LOG_ERROR = 0.08;
-function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boolean, exempt = false): void {
+
+/** Half sheets built per tickWalkers call: the read-back and average cost a few ms per sheet, so the first step onto
+ *  the 1.5 rung spreads them over frames (a walker waiting for its sheet draws the master at the same size). */
+const HALF_SHEET_BUILDS_PER_TICK = 1;
+let halfSheetBuildsLeft = HALF_SHEET_BUILDS_PER_TICK;
+/** A sheet wanted its average this tick but the budget was spent: the owner stays dirty so idle walkers still get
+ *  theirs on the following frames (nothing else would tick them). */
+let halfSheetWaiting = false;
+/** Owner 11-11: build the master's exact 2x2 box average (premultiplied, half the pixels, source.resolution unit/2)
+ *  as `displayFrames`, once per asset. The frames keep the master's 64-unit rectangles, so a sprite swaps sheets
+ *  without changing size. False (and never retried) when the master is not an even multiple or cannot be read. */
+function ensureHalfFrames(asset: WalkerAsset): boolean {
+  if (asset.displayFrames) return true;
+  if (asset.halfSheetUnavailable) return false;
+  if (halfSheetBuildsLeft <= 0) { halfSheetWaiting = true; return false; }
+  halfSheetBuildsLeft--;
+  const source = asset.sheet;
+  const unit = source.resolution || 1;
+  const w = source.pixelWidth;
+  const h = source.pixelHeight;
+  const pixels = Number.isInteger(unit) && unit % 2 === 0 && w % 2 === 0 && h % 2 === 0 ? sourceRegionPixels(source, 0, 0, w, h) : null;
+  if (!pixels || pixels.length < w * h * 4) { asset.halfSheetUnavailable = true; return false; }
+  const hw = w / 2;
+  const hh = h / 2;
+  const out = new Uint8Array(hw * hh * 4);
+  for (let y = 0; y < hh; y++) {
+    for (let x = 0; x < hw; x++) {
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const i = ((2 * y + dy) * w + 2 * x + dx) * 4;
+          const alpha = pixels[i + 3]!;
+          r += pixels[i]! * alpha; g += pixels[i + 1]! * alpha; b += pixels[i + 2]! * alpha; a += alpha;
+        }
+      }
+      const o = (y * hw + x) * 4;
+      out[o] = Math.round(r / 1020); out[o + 1] = Math.round(g / 1020); out[o + 2] = Math.round(b / 1020); out[o + 3] = Math.round(a / 4);
+    }
+  }
+  const half = new BufferImageSource({
+    resource: out, width: hw, height: hh, resolution: unit / 2, format: 'rgba8unorm',
+    alphaMode: 'premultiplied-alpha', scaleMode: sheetSampling, autoGenerateMipmaps: false,
+  });
+  asset.halfSheet = half;
+  asset.displayFrames = asset.frames.map((row) => row.map((frame) => new Texture({ source: half, frame: frame.frame.clone() })));
+  return true;
+}
+
+/** Move the sprite (and its cast shadow) to the same frame on the other sheet. */
+function swapWalkerSheet(record: WalkerTokenRecord, half: boolean): void {
+  const from = framesOf(record.asset, !half);
+  const to = framesOf(record.asset, half);
+  for (let row = 0; row < from.length; row++) {
+    const column = from[row]!.indexOf(record.sprite.texture);
+    if (column >= 0) {
+      const texture = to[row]?.[column];
+      if (texture && record.sprite.texture !== texture) record.sprite.texture = texture;
+      break;
+    }
+  }
+  syncCastShadow(record);
+}
+
+/** `physicalSnap` > 0 (owner 11-11, the 1.5 zoom rung): the canvas backing pixels per PHYSICAL pixel. The clean
+ *  ratio is then chosen in physical pixels, so the render resolution never changes the figure size there, and a
+ *  figure on the 1/2 physical ratio draws the exact 2x2 box-average sheet (an integer magnification of it under
+ *  supersampling). 0 = the decision in backing pixels, as on every other rung. */
+function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boolean, exempt = false, physicalSnap = 0): void {
   const base = record.baseSpriteScale;
   if (!base || record.sprite.destroyed || !Number.isFinite(deviceScale) || deviceScale <= 0) return;
   // Owner 09-05 (round 9): ONE art set, no sheet swap (it jumped sizes while zooming). While the zoom is moving the
@@ -1413,14 +1513,22 @@ function snapWalker(record: WalkerTokenRecord, deviceScale: number, settled: boo
   // Owner 09-16: walker tokens keep scale 1 (the sheets carry one fixed 0.585 normaliser; the row depth is never
   // folded into a walker), so k IS the zoom-rung ratio and the decision is made on it directly. Ties round UP so
   // walkers never shrink while zooming in.
-  const nearest = CLEAN_ART_RATIOS.reduce((best, v) => (Math.abs(v - k) < Math.abs(best - k) - 1e-9 || (Math.abs(Math.abs(v - k) - Math.abs(best - k)) < 1e-9 && v > best) ? v : best), CLEAN_ART_RATIOS[0]!);
+  const s = physicalSnap > 0 ? physicalSnap : 1;
+  const kp = k / s; // device px per art px in the space the snap is decided in
+  const nearest = CLEAN_ART_RATIOS.reduce((best, v) => (Math.abs(v - kp) < Math.abs(best - kp) - 1e-9 || (Math.abs(Math.abs(v - kp) - Math.abs(best - kp)) < 1e-9 && v > best) ? v : best), CLEAN_ART_RATIOS[0]!);
   // Owner 09-16 (r2): a whole ratio is only worth its crispness when it is CLOSE to the true size. On a 150%
   // display the physical rungs land at 0.88 / 1.32 / 1.76 / 2.63 device px per art px, so rungs 2 and 3 both
   // snapped to 1:1 — the board grew by half while the figures stayed put ("3 looks small"). Past
   // SNAP_MAX_LOG_ERROR the figure draws at its TRUE size instead; at 100% scaling every rung stays snapped.
-  const logError = Math.log(nearest / k);
+  const logError = Math.log(nearest / kp);
   const snapped = Math.abs(logError) <= (logError < 0 ? SNAP_MAX_SHRINK_LOG_ERROR : SNAP_MAX_LOG_ERROR);
-  const r = exempt || !snapped ? k : nearest;
+  const r = exempt || !snapped ? k : nearest * s;
+  const half = physicalSnap > 0 && !exempt && snapped && nearest === 1 / 2 && ensureHalfFrames(record.asset);
+  if (half !== !!record.useHalfSheet) {
+    if (half) record.useHalfSheet = true;
+    else delete record.useHalfSheet;
+    swapWalkerSheet(record, half);
+  }
   const target = base * (r / k);
   if (Math.abs(record.sprite.scale.x - target) > 1e-4) {
     record.sprite.scale.set(target);
@@ -1474,8 +1582,11 @@ export function tickWalkers(
   deviceScale = 0,
   zoomSettled = true,
   snapExempt = false,
+  physicalSnap = 0,
 ): void {
   let anyAnimating = false;
+  halfSheetBuildsLeft = HALF_SHEET_BUILDS_PER_TICK;
+  halfSheetWaiting = false;
   for (const [token, record] of [...liveWalkers]) {
     if (record.ownerId !== ownerId) continue;
     if (token.destroyed) {
@@ -1522,7 +1633,7 @@ export function tickWalkers(
       moved = true;
     }
     record.lastPos = { x, y };
-    if (deviceScale > 0) snapWalker(record, deviceScale, zoomSettled, snapExempt);
+    if (deviceScale > 0) snapWalker(record, deviceScale, zoomSettled, snapExempt, physicalSnap);
     const tween = moveTweens.get(record.playerId);
     if (record.settledTween && tween !== record.settledTween) record.settledTween = null; // a fresh move lifts the hold
     // Owner 09-05: a finished tween can linger in the map until its presentation step is consumed (e.g. while
@@ -1569,7 +1680,7 @@ export function tickWalkers(
     setWalkerFrame(record, 1 + Math.floor(elapsed / (1000 / fps)) % (record.asset.spec.columns - 1));
     anyAnimating = true;
   }
-  if (anyAnimating) dirtyOwners.add(ownerId);
+  if (anyAnimating || halfSheetWaiting) dirtyOwners.add(ownerId);
   else dirtyOwners.delete(ownerId);
 }
 

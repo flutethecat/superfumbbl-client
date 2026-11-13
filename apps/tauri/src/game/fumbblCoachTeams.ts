@@ -66,8 +66,11 @@ export function parseFumbblCoachTeams(payload: unknown): FumbblCoachTeamsResult 
 export async function fetchFumbblCoachTeams(
   coachName: string,
   fetcher: FetchLike = fetch,
+  /** owner 11-12 (coach stats sync): optional request init, e.g. an abort signal; omitted = the call as before */
+  init?: RequestInit,
 ): Promise<FumbblCoachTeamsResult> {
-  const response = await fetcher(`${FUMBBL_SITE}/api/coach/teams/${encodeURIComponent(coachName)}`);
+  const url = `${FUMBBL_SITE}/api/coach/teams/${encodeURIComponent(coachName)}`;
+  const response = await (init ? fetcher(url, init) : fetcher(url));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return parseFumbblCoachTeams(await response.json());
 }

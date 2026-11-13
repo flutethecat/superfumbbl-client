@@ -11,7 +11,7 @@
 
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
-import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, type CoachAction } from './availableActions';
+import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 import { t } from '../../i18n';
 
@@ -588,6 +588,9 @@ export type Interaction =
   | { kind: 'targetPending'; playerAction: string }
   /** Read-only opponent inspection during a movement activation. The view keeps the actor and plan authoritative. */
   | { kind: 'inspect'; playerId: string }
+  /** P0 g1963245: an adjacent Blitz target whose block is NOT available because no square is left to spend on it
+   *  (BlockLogicExtension.java:189). Nothing is sent; the view says why (the unavailable-action toast). */
+  | { kind: 'blitzBlockUnavailable'; defenderId: string; reason: 'noMoveLeft' }
   /** Nothing to do (with an optional reason for the dev log / a rejection toast). */
   | { kind: 'ignore'; reason?: string };
 
@@ -1430,6 +1433,11 @@ export function onPlayerClick(
   const starBlockKind = STAR_BLOCK_KIND[state];
   if (starBlockKind) {
     if (!isMine(clickedPlayerId)) {
+      // mixed/PutridRegurgitationBlitzLogicModule.java:39-40: the rush prompt opens the acting player's menu, no send.
+      const actingNow = actingPlayerId(game);
+      if (state === 'PUTRID_REGURGITATION_BLITZ' && actingNow && rushPromptBeforeAttack(game)) {
+        return { kind: 'openActionMenu', playerId: actingNow, actions: availableActions(game, ctx, actingNow) };
+      }
       if (blockTargetDecorated(game, clickedPlayerId)) return { kind: 'block', defenderId: clickedPlayerId, blockKind: starBlockKind };
       return { kind: 'ignore', reason: `not a decorated ${starBlockKind}-block target` };
     }
@@ -1461,6 +1469,11 @@ export function onPlayerClick(
       // Upstream BlitzLogicModule.playerInteraction offers the block only while !actingPlayer.hasBlocked(): after
       // the blitz block (BB2025 lets the blitzer keep moving) an adjacent opponent is just another opponent.
       if (acting && !actingHasBlocked(game) && adjacentStandingEnemyIds(game, acting).includes(clickedPlayerId)) {
+        // P0 g1963245: BlockLogicExtension.java:189 - a Blitz block needs a square left to spend (or a pinned blitzer).
+        const verdict = blitzBlockMoveVerdict(game, acting);
+        // BlitzLogicModule.java:50-51: the next square is a Rush the server has not flagged - the acting player's menu opens.
+        if (verdict === 'rushPrompt') return { kind: 'openActionMenu', playerId: acting, actions: availableActions(game, ctx, acting) };
+        if (verdict === 'noMoveLeft') return { kind: 'blitzBlockUnavailable', defenderId: clickedPlayerId, reason: 'noMoveLeft' };
         return { kind: 'block', defenderId: clickedPlayerId };
       }
       return { kind: 'inspect', playerId: clickedPlayerId };

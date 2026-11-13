@@ -10,6 +10,8 @@ import { PitchRenderer } from '@fumbbl40k/ffb-pitch';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import { FUMBBL_SITE, settings } from '../game/settings';
+import { measuredRefreshHz, resolveFpsCap } from '../game/displayRefreshRate';
+import { uiZoomState } from '../game/uiZoomShell';
 import { gameStore } from '../game/store';
 import { fumbblLobbyGames } from '../game/jnlpRouting';
 import WaitingVsBanner from '../components/WaitingVsBanner.vue';
@@ -56,6 +58,7 @@ onMounted(async () => {
   active = true;
   const mounted = new PitchRenderer();
   renderer = mounted;
+  mounted.antialias = !settings.lowPerformanceMode; // owner 11-12: Low performance mode drops edge smoothing
   try {
     void mounted.setBackdrop(settings.backdrop, settings.backdropColor); // owner 10-12: before init, so init loads the chosen one
     if (!await initPitchRendererMount(mounted, host.value, () => active && renderer === mounted)) return;
@@ -63,11 +66,33 @@ onMounted(async () => {
     mounted.setUserPitchFlip(settings.pitchFlipped); // owner 10-12: the backdrop matches the coach's flipped view
     mounted.setTurf(settings.turf);
     mounted.stadiumEnabled = settings.showStadium;
+    if (lowPerformanceSeen) applyLowPerformance(); // also after a switch-off during init: the restored values apply
     paint();
   } catch (error) {
     console.warn('[waiting-board] renderer failed to start', error);
   }
 });
+// Owner 11-12: Low performance mode reaches the waiting board too (frame cap, resolution, flat pitch, stadium). Only a
+// coach who has the mode on, or switched it during this wait, takes this path; everyone else keeps the board as it was.
+let lowPerformanceSeen = settings.lowPerformanceMode;
+function applyLowPerformance(): void {
+  if (!renderer) return;
+  try {
+    renderer.setVideoOptions({ renderScale: settings.renderScale, fpsCap: resolveFpsCap(settings.fpsCap, measuredRefreshHz.value) });
+    renderer.setFlatMode(settings.flatRender);
+    renderer.stadiumEnabled = settings.showStadium;
+  } catch (error) { console.warn('[waiting-board] low performance options failed to apply', error); }
+}
+watch(
+  // UI zoom and the measured display rate feed the resolution and the frame cap, as in SpectateView.
+  () => [settings.lowPerformanceMode, settings.renderScale, settings.fpsCap, settings.flatRender, settings.showStadium, uiZoomState.applied, measuredRefreshHz.value] as const,
+  () => {
+    if (settings.lowPerformanceMode) lowPerformanceSeen = true;
+    if (!lowPerformanceSeen) return;
+    applyLowPerformance();
+    paint();
+  },
+);
 watch(() => gameStore.state.waitingForMatch, paint, { deep: true });
 watch(() => [settings.backdrop, settings.backdropColor] as const, ([kind, color]) => { void renderer?.setBackdrop(kind, color); }); // owner 10-12
 

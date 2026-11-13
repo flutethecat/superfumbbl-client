@@ -247,6 +247,12 @@ const vFillRange = {
       </label>
     </div>
     <p class="hint">{{ $t('settings.skillMarkings.skillMarkings.allGlyphsForA') }}</p>
+    <!-- Owner 11-11 (opt-in): stat changes + niggling injuries on a line of their own above the skill marks -->
+    <label class="mk-status-line" data-testid="markings-status-line">
+      <input v-model="settings.markingStatusLine" type="checkbox" />
+      <span>{{ $t('settings.skillMarkings.skillMarkings.statusLine') }}</span>
+    </label>
+    <p class="hint">{{ $t('settings.skillMarkings.skillMarkings.statusLineHint') }}</p>
 
     <!-- SOURCE: the fumbbl.com import, a compact sub-row of this same box -->
     <div class="mk-source" role="group" :aria-label="$t('settings.skillMarkings.skillMarkings.whereTheMarkingsCome')">
@@ -384,6 +390,7 @@ const vFillRange = {
 /* Settings labels are primary text (white, primary floor); only annotations stay grey at the small floor (owner 07-14). */
 .mk-appearance .mk-field { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-text); }
 .mk-appearance .mk-input { font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); }
+.mk-status-line { display: flex; align-items: center; gap: 0.45rem; font-size: max(var(--ui-min-primary-text-size, 16px), 0.8rem); color: var(--ui-text); cursor: pointer; }
 .mk-source { display: grid; gap: 0.35rem; padding-top: 0.5rem; border-top: 1px solid var(--ui-border); }
 .mk-origin { margin: 0; color: var(--ui-text); font-size: max(var(--ui-min-text-size, 12px), 0.8rem); }
 .mk-origin b { color: var(--ui-accent); }

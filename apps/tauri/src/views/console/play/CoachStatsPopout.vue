@@ -65,7 +65,7 @@ const padOptions = computed(() => ({
 <template>
   <Teleport to="body">
     <div class="cs-overlay csp-overlay" :class="lmClass" :data-motion="reduced ? 'reduced' : 'full'" @click.self="close">
-      <section ref="root" v-pad-focus="padOptions" class="csp-panel" :class="{ 'lm-panel': modern }" role="dialog" aria-modal="true"
+      <section ref="root" v-pad-focus="padOptions" data-no-window-x class="csp-panel" :class="{ 'lm-panel': modern }" role="dialog" aria-modal="true"
         :aria-labelledby="titleId" :data-testid="testid" @keydown="onKeydown">
         <header class="csp-head" :class="{ 'hm-band': modern }">
           <h2 :id="titleId">{{ title }}</h2>

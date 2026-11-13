@@ -13,7 +13,7 @@ import { uiZoomState } from './uiZoomShell';
 /** Display / performance / presentation settings copied into `context.settings.prefs`. Order = report order. */
 export const BUG_REPORT_SETTINGS_KEYS = [
   // rendering / performance
-  'renderScale', 'fpsCap', 'flatRender', 'castShadows', 'showStadium', 'stadiumStands', 'backdrop', 'turf', 'brightness',
+  'lowPerformanceMode', 'renderScale', 'fpsCap', 'flatRender', 'castShadows', 'showStadium', 'stadiumStands', 'backdrop', 'turf', 'brightness',
   // figures / animation
   'spriteSet', 'walkAnimation', 'walkFps', 'walkFaceCamera', 'uniformFigures', 'uniformFiguresEw', 'oneSpritePerPosition',
   'moveStyle', 'moveSpeedMs', 'blockTumbleMs', 'bloodSplatters', 'actionDecorations', 'cinematicMode', 'casualtySplash',

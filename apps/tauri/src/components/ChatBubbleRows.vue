@@ -59,7 +59,7 @@ defineProps<{
 }
 .chat-bubble-name {
   overflow-wrap: anywhere;
-  font-family: var(--font-display);
+  font-family: var(--ui-font-user, var(--font-display)); /* the user's UI font pick (App.vue) when off Nuffle */
   font-size: 0.9em;
   font-weight: 900;
   letter-spacing: 0.045em;

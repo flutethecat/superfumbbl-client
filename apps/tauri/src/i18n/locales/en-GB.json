@@ -1,5 +1,6 @@
 {
   "app.text.theAcknowledgementCouldNot": "The acknowledgement could not be saved: {p0}",
+  "coachStats.sync.cancelled": "Sync cancelled. Games added: {n}",
   "fieldManual.fmPanel.nuffleDemandsTheatreFan": "Nuffle demands theatre. Fan factor, weather, the coin toss and inducements each get their beat before the boot hits the ball — and the big moments land as centre-pitch banners (yes, the Halfling Master Chef announces his thefts in gold).",
   "fieldManual.fmPanel.theActionMenuShows": " The action menu shows only what's legal right now — nothing is greyed out, it's present or absent.",
   "fieldManual.fmPanel.theGoldHaloMarks": " the gold halo marks the player being activated; the ring under each player is white until they act, then grey. Skill icons ride over heads (or as text markers at the feet) — tune them in Settings → Display → Skill display config.",

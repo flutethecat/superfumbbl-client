@@ -283,7 +283,7 @@ function onKeydown(event: KeyboardEvent): void {
   else if (!event.shiftKey && (at === last || !root.value.contains(at))) { event.preventDefault(); first.focus(); }
 }
 
-const padOptions = computed(() => ({ cancel: close, priority: PAD_FOCUS_PRIORITY.confirmation }));
+const padOptions = computed(() => ({ cancel: close, priority: PAD_FOCUS_PRIORITY.confirmation, close: 'dismiss' as const }));
 
 /** Focus goes back to whatever opened the step (Send challenge, the settings button) when it closes. */
 let opener: HTMLElement | null = null;

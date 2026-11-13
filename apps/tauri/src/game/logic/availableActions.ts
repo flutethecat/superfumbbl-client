@@ -1491,17 +1491,239 @@ export function hasAdjacentProneOrStunned(game: GameJson, playerId: string): boo
  *  returns the valid 2-away jump squares on the `leaping:true` re-send (JC-6, [[server-derived-law]]). */
 export function jumpAvailable(game: GameJson, playerId: string): boolean {
   if (!jumpCapabilityAvailable(game, playerId)) return false;
-  const acting = game.actingPlayer as { playerId?: string; currentMove?: number; heldInPlace?: boolean; goingForIt?: boolean } | undefined;
+  const acting = game.actingPlayer as { playerId?: string } | undefined;
   if (acting?.playerId !== playerId) return false;   // isNextMovePossible reads the acting player — only it jumps
-  if (acting.heldInPlace) return false;              // !isHeldInPlace() — a held player has no next move
-  if (playerPinned(game, playerId)) return false;    // hasMoveLeft: PlayerState.isAbleToMove() excludes isPinned (owner 11-03: Take Root)
-  const ma = playerMovement(game, playerId);
-  if (!Number.isFinite(ma)) return false;
-  const used = Math.max(0, Number(acting.currentMove) || 0);
+  return nextMovePossible(game, { jumping: false }); // P0 1963245: the ONE port of UtilPlayer.isNextMovePossible
+}
+
+// ─── P0 (FUMBBL g1963245, a third Rush in one Blitz): the ONE client port of upstream's "is a move left" rule ───
+// Ported line by line from upstream/Live ffb-common/.../util/UtilPlayer.java:571-625 (isNextMoveGoingForIt,
+// isNextMovePossible, hasMoveLeft). Every client gate that asks "may the acting player still spend a point of
+// movement" (the jump offer, the Blitz block) reads THESE functions; no caller re-derives the budget.
+// Server-derived inputs only: actingPlayer.{playerId,currentMove,goingForIt,heldInPlace,standingUp,usedSkills},
+// the acting player's playerState bits, its roster skills / usedSkills / MA with modifiers, game.turnMode.
+// Missing data answers FALSE (no move left): callers that SEND a movement-costing command then refuse it.
+
+/** Grantors of `NamedProperties.canMakeAnExtraGfi` (Sprint: skill/common/Sprint.java:23). Grep the property bare
+ *  to extend: git grep -n "canMakeAnExtraGfi" upstream/Live -- '*.java'. */
+const CAN_MAKE_AN_EXTRA_GFI_SKILLS = ['Sprint'];
+/** Grantors of `NamedProperties.canMakeAnExtraGfiOnce` (Burst of Speed, ONCE_PER_GAME: skill/bb2020/special/
+ *  BurstOfSpeed.java:23). Same grep instrument as above. */
+const CAN_MAKE_AN_EXTRA_GFI_ONCE_SKILLS = ['Burst of Speed'];
+
+/** OWNER DECISION PENDING (review of 1a98974d8, finding 4): what a Blitz block does when the blitzer's MA is unknown
+ *  (no roster record, or no finite `movement` field). The reviewers found no legitimate server snapshot that omits it.
+ *  'refuse' (default, as committed): the block is treated as having no move left - never sent.
+ *  'allow': the block goes through exactly as before the P0 fix (the server decides). Flip this one line. */
+export const UNKNOWN_MA_BLITZ_BLOCK_POLICY: 'refuse' | 'allow' = 'refuse';
+
+/** The MA the move-left rule reads (getMovementWithModifiers), or NaN when it is UNKNOWN: no roster record, or a record
+ *  with no finite `movement` field. effectiveStat turns an absent field into 0 for its other callers; this rule does not
+ *  guess, so both kinds of "unknown" are one answer here. */
+function ruleMovement(game: GameJson, playerId: string): number {
+  const player = findRosterPlayer(game, playerId);
+  const raw = (player as { movement?: unknown } | undefined)?.movement;
+  if (!player || raw == null || !Number.isFinite(Number(raw))) return Number.NaN;
+  return effectiveMovement(player);
+}
+
+/** The acting player's MA is unknown (see ruleMovement). */
+export function actingMovementUnknown(game: GameJson | null | undefined, playerId: string): boolean {
+  return !game || !Number.isFinite(ruleMovement(game, playerId));
+}
+
+type ActingMoveJson = {
+  playerId?: string | null; currentMove?: number; goingForIt?: boolean; heldInPlace?: boolean;
+  standingUp?: boolean; jumping?: boolean; leaping?: boolean; usedSkills?: string[];
+  hasMoved?: boolean; hasFouled?: boolean; hasBlocked?: boolean; hasPassed?: boolean; hasTriggeredEffect?: boolean;
+};
+
+function actingMove(game: GameJson | null | undefined): ActingMoveJson | null {
+  const acting = game?.actingPlayer as ActingMoveJson | undefined;
+  return acting && acting.playerId ? acting : null;
+}
+
+/** UtilPlayer.java:577 / :604 — the two turn modes with a fixed 3-square cap (KICKOFF_RETURN, PASS_BLOCK).
+ *  `dumpOffPassBlock` is kept from the jump gate (fork 43a845f6c, TurnMode.isPassBlock); upstream/Live never sends it. */
+function cappedMoveTurnMode(game: GameJson): boolean {
   const tm = String((game as { turnMode?: string }).turnMode ?? '');
-  if (tm === 'kickoffReturn' || tm === 'passBlock' || tm === 'dumpOffPassBlock') return used < 3; // KICKOFF_RETURN/PASS_BLOCK cap (non-jumping; TurnMode.isPassBlock covers DUMP_OFF_PASS_BLOCK, 43a845f6c UtilPlayer)
-  const extraMove = acting.goingForIt ? (hasSkill(game, playerId, 'sprint') ? 3 : 2) : 0; // GFI rushes, once in GFI territory
-  return used < (ma + extraMove); // hasMoveLeft(false): a normal step or a rush remains
+  return tm === 'kickoffReturn' || tm === 'passBlock' || tm === 'dumpOffPassBlock';
+}
+
+/** PlayerState.isAbleToMove() (PlayerState.java:243-245): (STANDING || MOVING || PRONE) && isActive() && !isPinned(). */
+function playerStateAbleToMove(playerState: number): boolean {
+  const base = playerState & 0xff;
+  return (base === BASE_STANDING || base === BASE_MOVING || base === BASE_PRONE)
+    && (playerState & FLAG_ACTIVE) !== 0
+    && (playerState & (FLAG_ROOTED | FLAG_CHOMPED)) === 0;
+}
+
+/** UtilCards.hasUnusedSkillWithProperty(actingPlayer, …) (UtilCards.java:129-136): the skill is held and NOT
+ *  ActingPlayer.isSkillUsed (ActingPlayer.java:218-220 = used this activation OR player.isUsed). Fails toward USED. */
+function actingHasUnusedGrantor(game: GameJson, acting: ActingMoveJson, skills: readonly string[]): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+  const usedThisActivation = new Set((acting.usedSkills ?? []).map(norm));
+  return skills.some((s) => !usedThisActivation.has(norm(s)) && hasUnusedGrantor(game, String(acting.playerId), [s]));
+}
+
+/** ActingPlayer.hasActed() (ActingPlayer.java:464-467) over an acting-player record. */
+function actingRecordHasActed(acting: ActingMoveJson & { forgone?: boolean }): boolean {
+  return !!(acting.hasMoved || acting.hasFouled || acting.hasBlocked || acting.hasPassed || acting.hasTriggeredEffect
+    || acting.forgone || (acting.usedSkills?.length ?? 0) > 0);
+}
+
+/** UtilPlayer.isNextMoveGoingForIt (UtilPlayer.java:571-590): would the acting player's NEXT square be a Rush? */
+export function nextMoveIsRush(game: GameJson | null | undefined): boolean {
+  const acting = actingMove(game);
+  if (!game || !acting) return false;                                          // :574 player == null -> false
+  if (cappedMoveTurnMode(game)) return false;                                   // :576-577
+  const id = String(acting.playerId);
+  const ma = ruleMovement(game, id);
+  if (!Number.isFinite(ma)) return false;
+  const currentMove = Math.max(0, Number(acting.currentMove) || 0);
+  if (acting.standingUp && !actingRecordHasActed(acting) && !canStandUpForFree(game, id)) {
+    return 3 >= ma;                                                            // :578-580 standing up costs 3
+  }
+  if (acting.jumping || acting.leaping) return (currentMove + 1) >= ma;        // :582-583
+  return currentMove >= ma;                                                     // :585
+}
+
+/** UtilPlayer.hasMoveLeft (UtilPlayer.java:601-625). `goingForIt` defaults to the server's actingPlayer.goingForIt. */
+export function hasMoveLeft(game: GameJson | null | undefined, opts: { jumping: boolean; goingForIt?: boolean }): boolean {
+  const acting = actingMove(game);
+  if (!game || !acting) return false;
+  const id = String(acting.playerId);
+  const data = findPlayer(game, id);
+  if (!data || !playerStateAbleToMove(Number(data.playerState ?? 0))) return false; // :605 playerState.isAbleToMove()
+  const currentMove = Math.max(0, Number(acting.currentMove) || 0);
+  if (cappedMoveTurnMode(game)) return opts.jumping ? currentMove < 2 : currentMove < 3; // :606-607
+  const ma = ruleMovement(game, id);                                            // getMovementWithModifiers()
+  if (!Number.isFinite(ma)) return false;
+  let extraMove = 0;                                                            // :609
+  if (opts.goingForIt ?? acting.goingForIt === true) {                          // :610
+    extraMove = 2;                                                              // :611
+    if (CAN_MAKE_AN_EXTRA_GFI_SKILLS.some((s) => hasSkill(game, id, s))) extraMove++;           // :612-614
+    if (actingHasUnusedGrantor(game, acting, CAN_MAKE_AN_EXTRA_GFI_ONCE_SKILLS)) extraMove++;  // :615-617
+    if (opts.jumping) extraMove--;                                              // :618-620
+  }
+  return currentMove < ma + extraMove;                                          // :621-622
+}
+
+/** UtilPlayer.isNextMovePossible (UtilPlayer.java:592-598) = !actingPlayer.isHeldInPlace() && hasMoveLeft(jumping). */
+export function nextMovePossible(game: GameJson | null | undefined, opts: { jumping: boolean; goingForIt?: boolean }): boolean {
+  const acting = actingMove(game);
+  if (!acting || acting.heldInPlace) return false;
+  return hasMoveLeft(game, opts);
+}
+
+/** The acting-player actions whose block goes through the BLITZ block window: upstream BlitzLogicModule
+ *  (ClientStateId.BLITZ, PlayerAction.BLITZ_MOVE) calls BlockLogicExtension.playerInteraction(player, pDoBlitz=TRUE)
+ *  (BlitzLogicModule.java:53); the server turns BLITZ_MOVE into BLITZ on the block (bb2025 StepInitBlocking:236-238)
+ *  and StepGoForIt:145-148 charges it a square (+ a Rush roll past MA) with NO cap. `blitz` is the action a failed
+ *  Take Root leaves (StepTakeRoot:82): pinned, so the rooted exception below lets it through. Every block
+ *  ALTERNATIVE (Stab, Chainsaw, Projectile Vomit, Breathe Fire, Chomp) and Gored by the Bull is offered only inside
+ *  the same gated branch (BlockLogicExtension.java:189-196), so they share this gate.
+ *  NOT here, by upstream: kickEmBlitz (mixed/KickEmBlitzLogicModule:37-45 sends with no move check; it is a foul-like
+ *  chainsaw on a DOWNED player), putridRegurgitationBlitz (mixed/PutridRegurgitationBlitzLogicModule:39-46 sends with no
+ *  move check), maximumCarnage (server-gated: bb2025 StepEndBlocking:413/432 blitzWithMoveLeft), the Frenzy second
+ *  block (server-forced: bb2025 StepEndBlocking:273 hasMoveLeft). */
+const BLITZ_BLOCK_WINDOW_ACTIONS = new Set(['blitzMove', 'blitz']);
+
+export type BlitzBlockMoveVerdict = 'notBlitz' | 'allowed' | 'rushPrompt' | 'noMoveLeft';
+
+/** Upstream's "go for it first" prompt, shared by BlitzLogicModule.java:50-51, mixed/KickEmBlitzLogicModule.java:37-38,
+ *  mixed/PutridRegurgitationBlitzLogicModule.java:39-40 and the Foul modules: a click on another player while
+ *  `UtilPlayer.isNextMoveGoingForIt(game) && !actingPlayer.isGoingForIt()` opens the acting player's action context
+ *  instead - nothing is sent to that player. The server keeps goingForIt in step (StepMove:127, bb2025
+ *  StepInitSelecting:530-532 on a stand-up, StepEndBlocking:301), so with a live model this is rare. */
+export function rushPromptBeforeAttack(game: GameJson | null | undefined): boolean {
+  const acting = actingMove(game);
+  return !!acting && nextMoveIsRush(game) && acting.goingForIt !== true;
+}
+
+/** The ACTING player's Blitz block on `attackerId`'s behalf, in upstream's order:
+ *    BlitzLogicModule.java:50-51  isNextMoveGoingForIt && !goingForIt          -> 'rushPrompt' (action context, no send)
+ *    BlockLogicExtension.java:189 !pDoBlitz || playerCanNotMove || isNextMovePossible(game, false)
+ *  - 'notBlitz': not a Blitz block (a Block action from a standing start costs no movement) - this gate is silent.
+ *  - 'allowed': a move remains, or the player is pinned (bb2025 BlockLogicExtensionPlugin:44-46 playerCanNotMove =
+ *    isPinned; "rooted players can not move but still spend movement", BlockLogicExtension.java:187).
+ *  - 'rushPrompt': upstream opens the acting player's action context instead; nothing is sent.
+ *  - 'noMoveLeft': no square left to spend on the block - never offered, never sent. */
+export function blitzBlockMoveVerdict(game: GameJson | null | undefined, attackerId: string): BlitzBlockMoveVerdict {
+  const acting = actingMove(game);
+  if (!game || !acting || String(acting.playerId) !== attackerId) return 'notBlitz';
+  const action = String((game.actingPlayer as { playerAction?: string | null }).playerAction ?? '');
+  if (!BLITZ_BLOCK_WINDOW_ACTIONS.has(action)) return 'notBlitz';
+  if (rushPromptBeforeAttack(game)) return 'rushPrompt';                         // BlitzLogicModule.java:50-51 (false when MA unknown)
+  if (playerPinned(game, attackerId)) return 'allowed';                          // playerCanNotMove (rooted / chomped)
+  if (actingMovementUnknown(game, attackerId)) return UNKNOWN_MA_BLITZ_BLOCK_POLICY === 'refuse' ? 'noMoveLeft' : 'allowed';
+  return nextMovePossible(game, { jumping: false }) ? 'allowed' : 'noMoveLeft';  // isNextMovePossible(game, false)
+}
+
+/** Convenience: true unless this is a Blitz block upstream would not send (no move left, or the rush prompt). */
+export function blitzBlockMoveAvailable(game: GameJson | null | undefined, attackerId: string): boolean {
+  const verdict = blitzBlockMoveVerdict(game, attackerId);
+  return verdict === 'notBlitz' || verdict === 'allowed';
+}
+
+/** Planner companion (P0 g1963245): after walking `steps` more squares on a Blitz, would the block at the end still
+ *  have a square to spend? The SAME rule as blitzBlockMoveVerdict, asked of the model the server will hold after the
+ *  walk: currentMove + steps (a not-yet-paid stand-up first costs min(3, MA), MoveLogicModule.java:316-321 /
+ *  UtilPlayer.java:578-580), goingForIt as the server sets it after each square (StepMove:127 isNextMoveGoingForIt).
+ *  Works before the Blitz is declared (the left-click preview): an attacker that is not yet acting starts from
+ *  currentMove 0. A pinned attacker cannot walk: only `steps === 0` fits (the rooted block). Missing data = false. */
+export function blitzBlockFitsAfterSteps(game: GameJson | null | undefined, attackerId: string, steps: number): boolean {
+  if (!game || !Number.isFinite(steps) || steps < 0) return false;
+  const data = findPlayer(game, attackerId);
+  if (!data) return false;
+  if (playerPinned(game, attackerId)) return steps === 0;
+  const ma = ruleMovement(game, attackerId);
+  if (!Number.isFinite(ma)) return UNKNOWN_MA_BLITZ_BLOCK_POLICY === 'allow';
+  const live = actingMove(game);
+  const mine = !!live && String(live.playerId) === attackerId;
+  const freshStandUp = !mine && baseState(Number(data.playerState ?? 0)) === BASE_PRONE;
+  const base: ActingMoveJson = mine ? { ...live! } : {
+    playerId: attackerId, currentMove: 0, goingForIt: false, heldInPlace: false, usedSkills: [], standingUp: freshStandUp,
+  };
+  if (freshStandUp && !canStandUpForFree(game, attackerId)) {
+    // What the declare will do (bb2025 StepInitSelecting.prepareStandingUp:527-533): currentMove = min(3, MA) and
+    // goingForIt = isNextMoveGoingForIt (the stand-up branch: 3 >= MA).
+    base.currentMove = Math.min(3, ma);
+    base.goingForIt = 3 >= ma;
+  }
+  let currentMove = Math.max(0, Number(base.currentMove) || 0);
+  let standingUp = !!base.standingUp;
+  if (steps > 0 && standingUp && !actingRecordHasActed(base) && !canStandUpForFree(game, attackerId)) {
+    currentMove = Math.max(currentMove, Math.min(3, ma)); // the stand-up is paid before the first square
+  }
+  if (steps > 0) standingUp = false; // the first square ends the stand-up (hasMoved)
+  currentMove += steps;
+  const ps = Number(data.playerState ?? 0);
+  // After a walk the player stands (MOVING) and is still active; without one the live state is kept as it is.
+  const playerState = steps > 0 ? ((ps & ~0xff) | BASE_MOVING) : ps;
+  const sim = {
+    ...game,
+    actingPlayer: {
+      ...(game.actingPlayer as object), ...base, playerId: attackerId, playerAction: 'blitzMove', currentMove, standingUp,
+      goingForIt: steps > 0 ? currentMove >= ma : base.goingForIt === true,
+      hasMoved: base.hasMoved || steps > 0,
+    },
+    fieldModel: {
+      ...game.fieldModel,
+      playerDataArray: (game.fieldModel?.playerDataArray ?? []).map((d) => (d.playerId === attackerId ? { ...d, playerState } : d)),
+    },
+  } as unknown as GameJson;
+  return blitzBlockMoveVerdict(sim, attackerId) === 'allowed';
+}
+
+/** The most squares a Blitz approach may take and still leave the block its square (−1 = not even a block from
+ *  here). Diagnostics and tests only: the pather reserves the square inside its own search (reserveForBlock). The
+ *  scan does not stop at the first refusal: the per-step verdict is not monotonic (a step count can land on the rush
+ *  prompt while a longer walk, in rush territory, is allowed). */
+export function blitzMaxApproachSteps(game: GameJson | null | undefined, attackerId: string): number {
+  let n = -1;
+  for (let steps = 0; steps <= 40; steps++) if (blitzBlockFitsAfterSteps(game, attackerId, steps)) n = steps;
+  return n;
 }
 
 /** Upstream PlayerState.isPinned (rooted by a failed Take Root, or chomped): the player cannot leave its square. */
@@ -1833,24 +2055,31 @@ function canLeap(game: GameJson, playerId: string): boolean {
  *  reaching adjacency to an enemy at chebyshev D costs ≥ D−1 steps, so the gate is `D − 1 ≤ budget`. This is a
  *  PERMISSIVE lower bound (ignores blockers/dodges) so it never HIDES a legal blitz — it only drops the obviously
  *  out-of-range declare (⚖ same reach-geometry allowance as the movement planner; the server still validates). */
-function blitzableEnemyExists(game: GameJson, playerId: string, p: PlayerDataLike): boolean {
+function blitzableEnemyExists(game: GameJson, playerId: string, p: PlayerDataLike, reserveForBlock = true): boolean {
   const myPos = normSquare(p.playerCoordinate);
   const iAmHome = playerSideIsHome(game, playerId);
   if (!myPos || iAmHome === null) return false;
   let ma = playerMovement(game, playerId);
-  ma = Number.isFinite(ma) && ma >= 0 ? Math.min(ma, 9) : 6; // NaN-proof, matches renderer safeMovement
+  ma = Number.isFinite(ma) && ma >= 0 ? ma : 6; // NaN-proof, matches renderer safeMovement (P0 round 2: no MA-9 cap)
   const acting = game.actingPlayer as { playerId?: string; currentMove?: number } | undefined;
   const used = acting?.playerId === playerId ? Math.max(0, Number(acting.currentMove) || 0) : 0;
   ma = Math.max(0, ma - used);
   // Owner 10-09: a player who stands up for free (Jump Up) keeps their whole movement: no 3 off the reach.
   if (baseState(p.playerState) === BASE_PRONE && !canStandUpForFree(game, playerId)) ma = Math.max(0, ma - 3); // stand-up costs 3
-  const budget = ma + (hasSkill(game, playerId, 'sprint') ? 3 : 2);
+  // P0 g1963245 (owner: "the planner must be able to reach target adjacency by MA+1"): the rush allowance is the ported
+  // rule's (UtilPlayer.hasMoveLeft:611-617: 2, +1 Sprint, +1 an unused Burst of Speed), and ONE square is held back for
+  // the block - the walk to adjacency may use at most budget - 1. An adjacent enemy (zero steps) stays offerable.
+  const rushes = 2 + (CAN_MAKE_AN_EXTRA_GFI_SKILLS.some((s) => hasSkill(game, playerId, s)) ? 1 : 0)
+    + (hasUnusedGrantor(game, playerId, CAN_MAKE_AN_EXTRA_GFI_ONCE_SKILLS) ? 1 : 0);
+  // The reserve is the BLITZ block's square. Hypnotic Gaze shares this reach check but its gaze costs no movement, so
+  // it passes reserveForBlock = false and keeps the whole range (Astra, P0 g1963245).
+  const walkBudget = ma + rushes - (reserveForBlock ? 1 : 0);
   for (const q of (game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]) {
     if (q.playerId === playerId || baseState(q.playerState) !== BASE_STANDING) continue;
     const side = playerSideIsHome(game, q.playerId);
     if (side === null || side === iAmHome) continue; // standing enemy only
     const pos = normSquare(q.playerCoordinate);
-    if (pos && chebyshev(myPos, pos) - 1 <= budget) return true;
+    if (pos && chebyshev(myPos, pos) - 1 <= Math.max(0, walkBudget)) return true;
   }
   return false;
 }
@@ -2954,7 +3183,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // MoveLogicModule, so it WALKS like a move, then a click on an ADJACENT enemy fires the gaze → CONFUSED on the
     // server roll). Offered for a standing gazer with a standing enemy within move distance (same gate as Blitz).
     if (chargeRestrictedSpecialActionAllowed(game)
-        && hasSkill(game, playerId, 'hypnoticGaze') && blitzableEnemyExists(game, playerId, p)) {
+        && hasSkill(game, playerId, 'hypnoticGaze') && blitzableEnemyExists(game, playerId, p, false)) {
       out.push({ action: 'gazeMove', get label() { return t('hud.actions.text.hypnoticGaze'); }, kind: 'declare', enabled: true });
     }
     // FOUL (owner o66j #8 + o66r #6/#12): a standing player may Foul once per turn (foulUsed) whenever a DOWN

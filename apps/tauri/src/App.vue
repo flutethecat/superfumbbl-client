@@ -81,6 +81,7 @@ import PadOverlay from './components/PadOverlay.vue';
 import { browserHapticPads, hapticForSound } from './game/haptics';
 import { STICK_DEADZONE_MAX, STICK_DEADZONE_MIN, type PadEvent } from './game/gamepad';
 import { applyServerTarget, noteForkUrlEdited, onServerTargetSwitch, realignServerConnection, rebaseSettingsSnapshotConnection, serverSwitchGenerationNow, serverTargets, botConfigBaseUrl, controlBindingConflict, flushSettingsFile, secondClientEnabled, secondClientEnabledElsewhere, setAllowSecondClient, hotkeyConflict, keyLabel, settings, type RebindableKey, resolveJoinCreds, prepareSelectedSpectateConnection, turfCatalog, TURF_LABELS, BACKDROP_OPTIONS, GALAXY_BACKDROP_CREDIT, GALAXY_BACKDROP_URL, iconBehaviourDefault, MARKER_BEHAVIOUR_DEFAULT, type SkillBehaviour, type SkillRenderPosition } from './game/settings';
+import { setLowPerformanceMode } from './game/lowPerformanceMode';
 import { clearPlayerCardOverride, clearPlayerCardOverrideOnSavedChange, playerCardOverride } from './game/playerCards'; // owner 11-07: Settings overrides a temporary middle-click flip
 import { playerSkillCategory } from './game/skillCategory';
 import { INJURY_CONFIG_KEYS } from './game/skillDisplay';
@@ -666,6 +667,9 @@ import { LOG_FONT_STACKS, SETTING_PREVIEWS } from './components/settings/setting
 import ForkConnectionRows from './components/settings/ForkConnectionRows.vue';
 import { uiZoomState } from './game/uiZoom';
 import { EDGE_PAN_SPEED, UI_ZOOM } from './game/settings';
+import { TOUCH_BUTTON_PX, TOUCH_HOLD_MS, settingGroupShown } from './game/touchMode';
+import { answerTouchModeChoice, startTouchModeRuntime, touchModeActive, touchModeChoiceOwed } from './game/touchModeRuntime';
+import { installTouchTooltips } from './game/touchTooltips';
 import { fumbblKeyConflict } from './game/settings';
 import { RIGHT_CLICK_BEHAVIOURS, type ControlLayer, type RightClickBehaviour } from './game/controlLayer';
 import { controlLayerSwitchNotice, effectiveControlLayer, installControlLayerWatch, pendingControlLayerSwitch } from './game/controlLayerSwitch';
@@ -1592,6 +1596,12 @@ function resetSkillConfig() {
 // UI_FONTS lives in game/uiFonts.ts (shared with the setup wizard's Font step).
 watchEffect(() => {
   document.documentElement.style.setProperty('--ui-font', UI_FONTS[settings.uiFont] ?? UI_FONTS.nuffle);
+  // A user's explicit pick (anything but the Nuffle default) is also published as --ui-font-user: surfaces that
+  // otherwise draw in a fixed display face (Modern's in-game sans, the Log/Chat tab stencils, chat names) read it
+  // first, so turning the Blood Bowl face off reaches the game view too. At the default it is absent and those
+  // surfaces keep their own faces.
+  if (settings.uiFont !== 'nuffle' && UI_FONTS[settings.uiFont]) document.documentElement.style.setProperty('--ui-font-user', UI_FONTS[settings.uiFont]);
+  else document.documentElement.style.removeProperty('--ui-font-user');
   document.documentElement.style.setProperty('--ui-min-text-size', `${settings.uiTextSize}px`);
   // Two-tier floor (owner 08-27): PRIMARY text never drops below 16px; sub-headers/annotations
   // keep the slider floor (12px default). The slider still raises both once it passes 16.
@@ -2505,8 +2515,12 @@ function captureBindingMouse(event: MouseEvent): void {
 }
 let offShellActions: (() => void) | null = null;
 let stopControllerGate: (() => void) | null = null;
+let stopTouchModeRuntime: (() => void) | null = null;
+let stopTouchTooltips: (() => void) | null = null;
 onMounted(() => {
   offShellActions = registerActionHandler(runShellAction);
+  stopTouchModeRuntime = startTouchModeRuntime();
+  stopTouchTooltips = installTouchTooltips({ active: () => touchModeActive.value }); // touch mode: press-and-hold shows a control's tooltip
   window.addEventListener('keydown', onShellActionKey);
   stopControllerGate = watch(() => settings.controllerSupportEnabled, (on) => {
     if (on) controllerRuntime.start(); else controllerRuntime.stop();
@@ -2514,6 +2528,10 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   offShellActions?.();
+  stopTouchModeRuntime?.();
+  stopTouchModeRuntime = null;
+  stopTouchTooltips?.();
+  stopTouchTooltips = null;
   window.removeEventListener('keydown', onShellActionKey);
   stopControllerGate?.();
   stopControllerGate = null;
@@ -3055,6 +3073,44 @@ onBeforeUnmount(() => {
              Owner 11-03: the Control layer, Right click and FUMBBL keyboard sections arrive with FUMBBL Controls
              (spec-fumbbl-controls-2026-11-03.md), which builds into this tab. -->
         <section v-if="settingsTab === 'controls'" data-testid="settings-controls">
+          <!-- Touch mode (spec-touch-mode-2026-11-12 section 3): the mode, the End Turn hold and the button size. -->
+          <fieldset class="settings-group" data-testid="touch-controls-settings">
+            <legend>{{ $t('settings.touch.legend') }}</legend>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.touch.mode') }}</span>
+                <span class="row-ctl">
+                  <select v-model="settings.touchMode" data-testid="touch-mode">
+                    <option value="auto">{{ $t('settings.touch.modeAuto') }}</option>
+                    <option value="on">{{ $t('settings.touch.modeOn') }}</option>
+                    <option value="off">{{ $t('settings.touch.modeOff') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.touch.modeInfo')" :def="$t('settings.touch.modeAuto')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.touch.holdDuration') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.touchEndTurnHoldMs" v-fill-range type="range" :min="TOUCH_HOLD_MS.min" :max="TOUCH_HOLD_MS.max" :step="TOUCH_HOLD_MS.step" data-testid="touch-hold-ms" />
+                  <span>{{ (settings.touchEndTurnHoldMs / 1000).toFixed(1) }} s</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.touch.holdDurationInfo')" :def="$t('settings.touch.holdDurationDefault')" />
+            </div>
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.touch.buttonSize') }}</span>
+                <span class="row-ctl">
+                  <input v-model.number="settings.touchButtonSize" v-fill-range type="range" :min="TOUCH_BUTTON_PX.min" :max="TOUCH_BUTTON_PX.max" :step="TOUCH_BUTTON_PX.step" data-testid="touch-button-size" />
+                  <span>{{ settings.touchButtonSize }} px</span>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.touch.buttonSizeInfo')" :def="$t('settings.touch.buttonSizeDefault')" />
+            </div>
+          </fieldset>
+
           <!-- FUMBBL Controls (owner 11-03): the control layer changes INPUT only; Super FUMBBL Controls is the default. -->
           <fieldset class="settings-group" data-testid="control-layer-settings">
             <legend>{{ $t('settings.controlLayer.legend') }}</legend>
@@ -3127,7 +3183,7 @@ onBeforeUnmount(() => {
           </fieldset>
 
           <!-- FUMBBL Controls §3: Right Click, stored per control layer. -->
-          <fieldset class="settings-group" data-testid="right-click-settings">
+          <fieldset v-if="settingGroupShown('right-click-settings', touchModeActive)" class="settings-group" data-testid="right-click-settings">
             <legend>{{ $t('settings.rightClick.legend') }}</legend>
             <div class="row row-wide-ctl">
               <label class="row-main">
@@ -3155,7 +3211,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.wasdPan')" :def="$t('settings.info.wasdPanDefault')" />
             </div>
             <!-- Owner 11-03 (lane C): edge-of-screen panning, off by default; its speed shows only while it is on. -->
-            <div class="row">
+            <div v-if="settingGroupShown('edge-pan', touchModeActive)" class="row" data-testid="edge-pan-row">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.edgePan.label') }}</span>
                 <span class="row-ctl">
@@ -3164,7 +3220,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.edgePan.description')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div v-if="settings.edgePan" class="row">
+            <div v-if="settings.edgePan && settingGroupShown('edge-pan', touchModeActive)" class="row">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.edgePanSpeed.label') }}</span>
                 <span class="row-ctl">
@@ -3202,7 +3258,7 @@ onBeforeUnmount(() => {
           </fieldset>
 
           <!-- FUMBBL Controls §5: FUMBBL keyboard shortcuts, either control layer. On = WASD camera pan off. -->
-          <fieldset class="settings-group" data-testid="fumbbl-shortcuts">
+          <fieldset v-if="settingGroupShown('fumbbl-shortcuts', touchModeActive)" class="settings-group" data-testid="fumbbl-shortcuts">
             <legend>{{ $t('settings.fumbblKeys.legend') }}</legend>
             <div class="row">
               <label class="row-main">
@@ -3239,7 +3295,7 @@ onBeforeUnmount(() => {
             </template>
           </fieldset>
 
-          <fieldset class="settings-group" data-testid="edit-bindings">
+          <fieldset v-if="settingGroupShown('edit-bindings', touchModeActive)" class="settings-group" data-testid="edit-bindings">
             <legend>{{ $t('settings.controls.keyboard.keyboard') }}</legend>
             <!-- Owner 10-02 + controller support P1: every binding in one table (action | keyboard | controller).
                  Owner 10-10: the controller columns (and the pad-only actions) show only while controller support is on. -->
@@ -4788,6 +4844,17 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'video'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.video.video') }}</legend>
+            <!-- Owner 11-12: one switch for weak machines; it sets the video options below together (game/lowPerformanceMode.ts). -->
+            <div class="row">
+              <label class="row-main">
+                <span>{{ $t('settings.display.video.lowPerformanceMode') }}</span>
+                <span class="row-ctl">
+                  <input :checked="settings.lowPerformanceMode" type="checkbox" data-testid="low-performance-mode"
+                    @change="setLowPerformanceMode(settings, ($event.target as HTMLInputElement).checked)" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.lowPerformanceMode')" :def="$t('settings.info.valueOff')" />
+            </div>
             <div class="row">
               <label class="row-main">
                 <span>{{ $t('settings.display.video.autoDirectorCameraFollows') }}</span>
@@ -5287,6 +5354,18 @@ onBeforeUnmount(() => {
         <div class="save-prompt-actions">
           <button ref="controllerNoticeOk" class="primary" type="button" data-testid="controller-support-notice-ok"
             @click="controllerOptIn.acknowledge()">{{ CONTROLLER_SUPPORT_NOTICE_BUTTON }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Touch mode (spec section 3): a finger-primary device with a mouse too asks once; the answer is remembered. -->
+    <div v-if="touchModeChoiceOwed" class="modal-backdrop save-prompt-backdrop controller-notice-backdrop" data-testid="touch-mode-choice">
+      <div class="save-prompt touch-mode-choice" role="alertdialog" aria-modal="true" aria-labelledby="touch-mode-choice-title" aria-describedby="touch-mode-choice-text">
+        <h3 id="touch-mode-choice-title">{{ $t('settings.touch.choiceTitle') }}</h3>
+        <p id="touch-mode-choice-text" class="hint">{{ $t('settings.touch.choiceText') }}</p>
+        <div class="save-prompt-actions">
+          <button class="primary" type="button" data-testid="touch-mode-choice-touch" @click="answerTouchModeChoice('touch')">{{ $t('settings.touch.choiceTouch') }}</button>
+          <button type="button" data-testid="touch-mode-choice-mouse" @click="answerTouchModeChoice('mouse')">{{ $t('settings.touch.choiceMouse') }}</button>
         </div>
       </div>
     </div>
