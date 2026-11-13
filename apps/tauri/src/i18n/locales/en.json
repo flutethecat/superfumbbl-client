@@ -2755,6 +2755,7 @@
   "settings.display.pitch.pitchOrientation": "Pitch orientation",
   "settings.display.pitch.spectatorAndReplayView": "Spectator and replay view",
   "settings.display.pitch.stadium": "Stadium",
+  "settings.display.pitch.stadium3d": "3D stadium",
   "settings.display.pitch.tilesetTurf": "Tileset (turf)",
   "settings.display.playerSprites.animatePlayerWalkCycles": "Animate player walk cycles",
   "settings.display.playerSprites.arialHelvetica": "Arial / Helvetica",

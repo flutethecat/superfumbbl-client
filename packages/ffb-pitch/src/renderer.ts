@@ -146,6 +146,7 @@ function nudgeMapSignature(map: ReadonlyMap<string, Offset>): string {
 }
 import { bundledWalkEntriesForRaces, bundledWalkManifest, isBundledStarRole } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
+import type { StadiumBakeCorners, StadiumBakeRequest, StadiumBakeResult } from './stadiumBake/bake';
 import {
   DEFAULT_D6_FACE_VARIANT,
   D6_FACE_VALUES,
@@ -170,7 +171,16 @@ import { FONT_DISPLAY_FAMILY } from './fontStacks'; // owner 10-23: Cyrillic/CJK
 
 
 /** O4/O5: declared-action modes gating what clicks do for the selected player. */
-export type StadiumStandStyle = 'crowd' | 'classic';
+/** Owner 11-09: 'stadium3d' = the Modern 3D stadium baked once into a backdrop (stadiumBake/bake.ts); the classic
+ *  stands show until (or unless) that bake succeeds. */
+export type StadiumStandStyle = 'crowd' | 'classic' | 'stadium3d';
+/** The '3D stadium' bake: the longest image side (64 MB of RGBA at most) and the texel density it aims for (the
+ *  closest wheel rung, 4.5 world px per world px, at up to 2 device px per CSS px; the side cap wins in practice). */
+const STADIUM_BAKE_MAX_SIDE = 4096;
+const STADIUM_BAKE_MAX_ZOOM = 4.5;
+/** Review r1 #3: a bake that has not finished in this long (a stalled request) is abandoned; the classic stands stay. */
+const STADIUM_BAKE_TIMEOUT_MS = 30_000;
+interface StadiumBakeEntry { texture: Texture; corners: StadiumBakeCorners; fans: StadiumBakeResult['fans'] }
 /** Owner 10-12: what sits behind the stadium. 'skybox' is the default (unchanged); 'color' is a plain fill. */
 export type BackdropKind = 'skybox' | 'space' | 'galaxy' | 'parking' | 'color';
 type BackdropImageKind = Exclude<BackdropKind, 'color'>;
@@ -2627,6 +2637,18 @@ export class PitchRenderer {
    *  in place of the procedural stands while present. */
   private stadiumModel: RenderedStadium | null = null;
   private stadiumModelGeneration = 0;
+  /** Owner 11-09: the '3D stadium' backdrops baked so far, keyed by the view they were baked for (stadiumBakeKey: the
+   *  ground direction that runs up the screen). Two at most: the current view and the one before it, so the
+   *  spectator drive-north flip swaps back without a second bake. */
+  private stadiumBakes = new Map<string, StadiumBakeEntry>();
+  /** Review r1 #3/#4: the ONE bake in flight (a newer request aborts it), identified by object so a completing run only
+   *  ever clears its own state; its controller cancels the loads and its timer bounds a stalled request. */
+  private stadiumBakeRun: { key: string; controller: AbortController; timer: ReturnType<typeof setTimeout> | null } | null = null;
+  /** A failed bake (no WebGL2, lost context, pack or art missing, too large for this GPU, a throw) keeps the 2D stands
+   *  for this renderer. */
+  private stadiumBakeFailed = false;
+  /** Test seam: runs one bake. Default = the three.js bake, imported only when the style is first chosen. */
+  stadiumBaker: (request: StadiumBakeRequest, signal: AbortSignal) => Promise<StadiumBakeResult> = async (request, signal) => (await import('./stadiumBake/bake')).bakeStadium(request, undefined, signal);
   /** P3 (perf 09-14): the input key of the last SUCCESSFUL drawStadium(), or null when the stadium must be redrawn.
    *  Only setGame consults it (drawStadiumIfChanged) — every explicit drawStadium() caller redraws unconditionally
    *  and refreshes the key. Cleared by clearEffects (the pregame sign text lives in effectsLayer, so an unchanged key
@@ -3023,7 +3045,10 @@ export class PitchRenderer {
     if (style === this.standStyle) return;
     this.standStyle = style;
     this.stadiumAssetRevision++;
+    // Leaving the 3D stadium frees its baked images (redrawn first, so no mesh still holds a destroyed texture).
+    const released = style === 'stadium3d' ? [] : this.takeStadiumBakes();
     if (this.app) this.drawStadium();
+    for (const texture of released) texture.destroy(true);
   }
   /** Corner pennants + bunting (owner 2026-07-02 arena dressing). */
   private dressingTextures = new Map<string, Texture>();
@@ -6405,6 +6430,11 @@ export class PitchRenderer {
     this.blockFaceStaticSprites.clear();
     this.pitchDrawRequestGeneration++;
     this.sweetSpotLogoRequestGeneration++;
+    const bakedStadium = this.takeStadiumBakes(); // a bake still running is discarded on arrival
+    if (bakedStadium.length) {
+      for (const child of this.stadiumLayer.removeChildren()) child.destroy({ children: true });
+      for (const texture of bakedStadium) texture.destroy(true);
+    }
     this.absorbQueuedProjectionRefresh();
     this.absorbQueuedOverlayRedraw();
     this.resetAutoDirectorCamera(true);
@@ -18987,6 +19017,7 @@ export class PitchRenderer {
   setStadiumEnabled(on: boolean): void {
     if (this.stadiumEnabled === on) return;
     this.stadiumEnabled = on;
+    if (!on) this.cancelStadiumBakeRun(); // review r1 #5: a bake started while visible never lands after "Off"
     if (!this.app) return;
     this.drawStadium();
     if (this.stadiumModel?.dugoutsProvided) this.redrawDugoutsWithArrows();
@@ -18997,9 +19028,259 @@ export class PitchRenderer {
     this.stadiumDrawKey = null; // committed only after a complete draw (a throw leaves the stadium marked dirty)
     this.drawStadiumBody();
     this.stadiumDrawKey = this.stadiumInputKey();
+    this.ensureStadiumBake();
+  }
+
+  // --- '3D stadium' baked backdrop (owner 11-09) ---
+
+  /** The ground direction (game x, game y) that runs UP the screen in the active projection: the bake's camera looks
+   *  along it. Orientation and the field flip decide it; the flat / uniform-figure tapers do not change the picture. */
+  private stadiumBakeFarDir(): [number, number] {
+    const c = extPoint(13, 7.5), ax = extPoint(14, 7.5), ay = extPoint(13, 8.5);
+    const upX = c.y - ax.y, upY = c.y - ay.y; // > 0: a step along +axis goes up the screen
+    return Math.abs(upX) >= Math.abs(upY) ? [Math.sign(upX), 0] : [0, Math.sign(upY)];
+  }
+  /** Owner 2026-07-02 fan attendance, per side: each team's Dedicated Fans (finite and positive, else 3) over 7, capped
+   *  at 1; the end stands take the mean of the two counts. The classic stands' crowd and the '3D stadium' bake's crowd
+   *  both read it. */
+  private stadiumFanDensities(): { home: number; away: number; ends: number } {
+    const fans = (team?: { dedicatedFans?: unknown }) => {
+      const value = Number(team?.dedicatedFans);
+      return Number.isFinite(value) && value > 0 ? value : 3;
+    };
+    const home = fans(this.game?.teamHome as { dedicatedFans?: unknown } | undefined);
+    const away = fans(this.game?.teamAway as { dedicatedFans?: unknown } | undefined);
+    return { home: Math.min(1, home / 7), away: Math.min(1, away / 7), ends: Math.min(1, (home + away) / 2 / 7) };
+  }
+  /** Everything that changes the baked picture: the view direction and the crowd per side (owner 11-12). */
+  private stadiumBakeKey(): string {
+    return this.stadiumBakeKeyFor(this.stadiumBakeFarDir(), this.stadiumFanDensities());
+  }
+  /** Chairs per stand, learnt from the first bake (the model is fixed). With them the key carries the number of fans
+   *  each stand SEATS (stadiumBake/crowd.ts seatedCount: round(attendance x chairs), clamped), so fan factors that seat
+   *  the same fans never re-bake; before the first bake it carries the attendances themselves. */
+  private stadiumChairCounts: { home: number; away: number; nearEnd: number; farEnd: number } | null = null;
+  private stadiumBakeKeyFor(far: readonly [number, number], d: { home: number; away: number; ends: number }): string {
+    const c = this.stadiumChairCounts;
+    const seated = (attendance: number, chairs: number) => Math.max(0, Math.min(chairs, Math.round(attendance * chairs)));
+    const crowd = c ? `n${seated(d.home, c.home)}|${seated(d.away, c.away)}|${seated(d.ends, c.nearEnd)}|${seated(d.ends, c.farEnd)}`
+      : `${d.home}|${d.away}|${d.ends}`;
+    return `${far[0]},${far[1]}|${crowd}`;
+  }
+  /** The bake for the current view, while the '3D stadium' style is chosen; null = draw the 2D stands. While a new crowd
+   *  is being baked, the previous bake of the SAME view stays up (registration depends only on the view). */
+  private activeStadiumBake(): StadiumBakeEntry | null {
+    if (this.standStyle !== 'stadium3d' || this.stadiumBakeFailed) return null; // review r2 #1: failed = classic
+    const key = this.stadiumBakeKey();
+    const exact = this.stadiumBakes.get(key);
+    if (exact) return exact;
+    const view = key.slice(0, key.indexOf('|') + 1);
+    let fallback: StadiumBakeEntry | null = null;
+    for (const [other, bake] of this.stadiumBakes) if (other.startsWith(view)) fallback = bake; // the newest of that view
+    return fallback;
+  }
+  /** Abort the bake in flight, if any (its result, should it still arrive, is dropped: it is no longer the run). */
+  private cancelStadiumBakeRun(): void {
+    const run = this.stadiumBakeRun;
+    if (!run) return;
+    this.stadiumBakeRun = null;
+    if (run.timer !== null) clearTimeout(run.timer);
+    run.controller.abort(new Error('stadium bake cancelled'));
+  }
+  /** Forget every bake (a running one is aborted) and hand back their textures to destroy. */
+  private takeStadiumBakes(): Texture[] {
+    this.cancelStadiumBakeRun();
+    const textures = [...this.stadiumBakes.values()].map((bake) => bake.texture);
+    if (textures.length) this.stadiumAssetRevision++;
+    this.stadiumBakes.clear();
+    return textures;
+  }
+  /** The largest texture side the 2D renderer's GPU accepts (WebGL MAX_TEXTURE_SIZE / WebGPU maxTextureDimension2D);
+   *  null when it cannot be read. */
+  private pixiMaxTextureSize(): number | null {
+    const r = (this.app as { renderer?: unknown } | null)?.renderer as {
+      gl?: { MAX_TEXTURE_SIZE: number; getParameter(n: number): unknown };
+      gpu?: { device?: { limits?: { maxTextureDimension2D?: number } } };
+    } | undefined;
+    try {
+      const fromGl = r?.gl ? r.gl.getParameter(r.gl.MAX_TEXTURE_SIZE) : undefined;
+      const value = typeof fromGl === 'number' ? fromGl : r?.gpu?.device?.limits?.maxTextureDimension2D;
+      return typeof value === 'number' && value > 0 ? value : null;
+    } catch { return null; }
+  }
+  /** Review r1 #1: upload the baked texture NOW (not lazily at the next frame) and report whether the GPU took it, so a
+   *  refused upload keeps the classic stands instead of leaving a blank layer. True when the renderer cannot be
+   *  checked (tests, or a renderer without the WebGL texture system); the size has been capped already then. */
+  private uploadStadiumBakeTexture(texture: Texture): boolean {
+    const max = this.pixiMaxTextureSize();
+    if (max !== null && (texture.source.pixelWidth > max || texture.source.pixelHeight > max)) return false;
+    const r = (this.app as { renderer?: unknown } | null)?.renderer as {
+      gl?: { NO_ERROR: number; getError(): number; isContextLost?(): boolean };
+      texture?: { initSource?(source: unknown): void };
+    } | undefined;
+    if (!r?.gl || !r.texture?.initSource) return true;
+    const gl = r.gl;
+    for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* drain errors from earlier work */ }
+    try { r.texture.initSource(texture.source); } catch { return false; }
+    return gl.getError() === gl.NO_ERROR && !gl.isContextLost?.();
+  }
+  /**
+   * Start a bake when the '3D stadium' style is on screen for a view that has none. Never blocks the caller: the 2D
+   * stands are drawn meanwhile and the backdrop swaps in when the bake resolves. A bake that lands after the renderer
+   * was destroyed, the style changed or the view changed is dropped (generation / key check). A failure logs one line
+   * and keeps the 2D stands for the rest of this renderer's life.
+   */
+  private ensureStadiumBake(): void {
+    if (this.standStyle !== 'stadium3d' || !this.stadiumEnabled || !this.app || this.destroyed || this.stadiumBakeFailed) {
+      this.cancelStadiumBakeRun(); // review r1 #5: hidden, another style or gone: nothing in flight may land later
+      return;
+    }
+    const key = this.stadiumBakeKey();
+    if (this.stadiumBakes.has(key)) {
+      // Review r1 #4: back on a cached view, a run for another view is abandoned (it could only be discarded).
+      if (this.stadiumBakeRun && this.stadiumBakeRun.key !== key) this.cancelStadiumBakeRun();
+      return;
+    }
+    if (this.stadiumBakeRun?.key === key) return;
+    this.cancelStadiumBakeRun(); // one bake at a time: the newest request wins
+    const dpr = Math.min(2, Math.max(1, globalThis.devicePixelRatio || 1));
+    const request: StadiumBakeRequest = {
+      farDir: this.stadiumBakeFarDir(),
+      elevation: Math.asin(TILE_H / TILE_W), // the 2D square's own foreshortening (38 / 44): ~59.7 degrees
+      pixelsPerSquare: STADIUM_BAKE_MAX_ZOOM * TILE_W * dpr,
+      maxSidePx: Math.min(STADIUM_BAKE_MAX_SIDE, this.pixiMaxTextureSize() ?? STADIUM_BAKE_MAX_SIDE), // review r1 #1
+      crowd: this.stadiumFanDensities(),
+    };
+    const run = { key, controller: new AbortController(), timer: null as ReturnType<typeof setTimeout> | null };
+    this.stadiumBakeRun = run;
+    /** Clears THIS run's state only (review r1 #4): a newer run stays protected. */
+    const finish = (): boolean => {
+      if (this.stadiumBakeRun !== run) return false;
+      this.stadiumBakeRun = null;
+      if (run.timer !== null) clearTimeout(run.timer);
+      return true;
+    };
+    /** Review r2 #1: a failure drops EVERY baked image (an older crowd must not stay up through the same-view fallback)
+     *  and redraws the classic stands, so the log line is true. */
+    const failed = (error: unknown) => {
+      if (!finish()) return; // cancelled or superseded: not a failure of the style
+      this.stadiumBakeFailed = true;
+      const released = this.takeStadiumBakes();
+      if (this.app && !this.destroyed) this.drawStadium();
+      for (const texture of released) texture.destroy(true);
+      console.warn(`ffb-pitch: 3D stadium bake failed, showing the classic 2D stands (${error instanceof Error ? error.message : String(error)})`);
+    };
+    // Review r2 #2: the timeout settles the run by itself (a stalled step, e.g. the module import, may never look at the
+    // signal): the run is cleared and failed now, loading is aborted, and a late completion is no longer the run.
+    run.timer = setTimeout(() => {
+      run.timer = null;
+      const error = new Error('stadium bake timed out');
+      run.controller.abort(error);
+      failed(error);
+    }, STADIUM_BAKE_TIMEOUT_MS);
+    let promise: Promise<StadiumBakeResult>;
+    try { promise = this.stadiumBaker(request, run.controller.signal); } catch (error) { promise = Promise.reject(error); }
+    promise.then((result) => {
+      const release = () => { result.canvas.width = 0; result.canvas.height = 0; }; // never uploaded: free the pixels
+      const current = this.stadiumBakeRun === run;
+      // Owner 11-12: once the chair counts are known the key is in seated counts; the result is current when the fans it
+      // seats are the fans the inputs now ask for.
+      if (result.stats.chairsByStand && !this.stadiumChairCounts) this.stadiumChairCounts = { ...result.stats.chairsByStand };
+      const asked = this.stadiumBakeKeyFor(request.farDir, request.crowd), now = this.stadiumBakeKey();
+      // Review r1 #5: visibility is part of the acceptance test, alongside the run, the style and the inputs.
+      if (!current || this.destroyed || this.standStyle !== 'stadium3d' || !this.stadiumEnabled || asked !== now) {
+        finish(); release();
+        return;
+      }
+      let texture: Texture;
+      try { texture = Texture.from(result.canvas); } catch (error) { release(); failed(error); return; }
+      // Mipmapped when the bowl is zoomed out; past the bake's density (closer than about the 2x default) the texels
+      // magnify as crisp pixels like the rest of the pitch art instead of a linear blur.
+      texture.source.autoGenerateMipmaps = true;
+      texture.source.magFilter = 'nearest';
+      texture.source.minFilter = 'linear';
+      texture.source.mipmapFilter = 'linear';
+      if (!this.uploadStadiumBakeTexture(texture)) {
+        texture.destroy(true); release();
+        failed(new Error(`the ${result.width}x${result.height} image did not upload to this GPU`));
+        return;
+      }
+      finish();
+      const released: Texture[] = [];
+      for (const [other, bake] of this.stadiumBakes) {
+        if (this.stadiumBakes.size < 2) break;
+        this.stadiumBakes.delete(other); released.push(bake.texture);
+      }
+      this.stadiumBakes.set(now, { texture, corners: result.corners, fans: result.fans ?? [] });
+      this.stadiumAssetRevision++;
+      if (this.app) this.drawStadium();
+      for (const old of released) old.destroy(true);
+    }, failed);
+  }
+  /** Review r1 #6: the logical crowd of the backdrop, where its fans actually sit. A baked point (x, height, z) shows where
+   *  the ground point `height / tan(elevation)` further along the far direction shows, so feet and head land on screen
+   *  through extPoint like everything else; the entries mirror the classic crowdMembers (head point, height, stand). */
+  private bakedCrowdMembers(bake: StadiumBakeEntry): { x: number; y: number; h: number; stand: 'home' | 'away' | 'end' }[] {
+    const [fx, fz] = this.stadiumBakeFarDir(), lean = 1 / Math.tan(Math.asin(TILE_H / TILE_W)); // the bake elevation
+    const screen = (x: number, y: number, z: number) => extPoint(x + fx * y * lean, z + fz * y * lean);
+    return bake.fans.map((fan) => {
+      const feet = screen(fan.x, fan.y, fan.z), head = screen(fan.x, fan.y + fan.height, fan.z);
+      return { x: head.x, y: head.y, h: feet.y - head.y, stand: fan.stand }; // review r2 #3: the head point, both coordinates
+    });
+  }
+  /** The baked stadium image around the pitch: a one-square vertex grid over the image, each vertex at extPoint() of the
+   *  ground point its texel shows (the bake's corners are whole squares, so every vertex row and column lies on a
+   *  square boundary and the per-row taper of the 2D projection is reproduced exactly). */
+  private drawStadiumBaked(bake: StadiumBakeEntry): void {
+    const c = bake.corners;
+    const cols = Math.max(1, Math.round(Math.hypot(c.tr.u - c.tl.u, c.tr.v - c.tl.v)));
+    const rows = Math.max(1, Math.round(Math.hypot(c.bl.u - c.tl.u, c.bl.v - c.tl.v)));
+    const stride = cols + 1;
+    const positions = new Float32Array(stride * (rows + 1) * 2);
+    const uvs = new Float32Array(stride * (rows + 1) * 2);
+    let n = 0;
+    for (let j = 0; j <= rows; j++) {
+      const t = j / rows;
+      for (let i = 0; i <= cols; i++) {
+        const s = i / cols;
+        const p = extPoint(c.tl.u + (c.tr.u - c.tl.u) * s + (c.bl.u - c.tl.u) * t, c.tl.v + (c.tr.v - c.tl.v) * s + (c.bl.v - c.tl.v) * t);
+        positions[n * 2] = p.x; positions[n * 2 + 1] = p.y;
+        uvs[n * 2] = s; uvs[n * 2 + 1] = t;
+        n++;
+      }
+    }
+    const indices = new Uint32Array(cols * rows * 6);
+    let k = 0;
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const a = j * stride + i, b = a + 1, d = a + stride, e = d + 1;
+        indices[k++] = a; indices[k++] = b; indices[k++] = d; indices[k++] = b; indices[k++] = e; indices[k++] = d;
+      }
+    }
+    const mesh = new Mesh({ geometry: new MeshGeometry({ positions, uvs, indices }), texture: bake.texture });
+    mesh.label = 'stadiumBaked';
+    mesh.eventMode = 'none';
+    // Review r1 #2: scenery only. The camera's content bounds, pan limits and HUD fit come from the classic stands drawn
+    // (unrendered) underneath, never from this mesh's own extent.
+    mesh.measurable = false;
+    this.stadiumLayer.addChild(mesh);
   }
 
   private drawStadiumBody(): void {
+    this.drawStadiumClassic();
+    // Review r1 #2/#6: with the '3D stadium' backdrop up, the classic stands are still BUILT (so the camera bounds, the
+    // pan limits and the HUD fit are exactly the classic ones) but not rendered, and the backdrop is drawn over them;
+    // the logical crowd moves to the baked fans so rocks, quips and cheers start from a real baked spectator.
+    const baked = this.stadiumEnabled && !this.stadiumModel ? this.activeStadiumBake() : null;
+    if (!baked) return;
+    for (const layer of [this.stadiumLayer, this.dressingLayer]) for (const child of layer.children) child.renderable = false;
+    this.drawStadiumBaked(baked);
+    this.crowdMembers = this.bakedCrowdMembers(baked);
+    this.signFanSlots = []; // the bake has no sign holders: no placard text over the backdrop
+    this.renderPregameSigns();
+  }
+
+  private drawStadiumClassic(): void {
     for (const child of this.stadiumLayer.removeChildren()) child.destroy({ children: true });
     for (const child of this.dressingLayer.removeChildren()) child.destroy({ children: true });
     this.crowdMembers = [];
@@ -19069,15 +19350,10 @@ export class PitchRenderer {
 
     // Fan attendance (owner 2026-07-02): stand occupancy is proportional to
     // each team's Dedicated Fans — 7 fans fills that team's side completely.
+    // Owner 11-12: the same values feed the '3D stadium' bake's crowd (stadiumFanDensities).
     const fanDensity = (side: 'home' | 'away' | 'mixed'): number => {
-      const fans = (team?: { dedicatedFans?: unknown }) => {
-        const value = Number(team?.dedicatedFans);
-        return Number.isFinite(value) && value > 0 ? value : 3;
-      };
-      const home = fans(this.game?.teamHome as { dedicatedFans?: unknown } | undefined);
-      const away = fans(this.game?.teamAway as { dedicatedFans?: unknown } | undefined);
-      const value = side === 'home' ? home : side === 'away' ? away : (home + away) / 2;
-      return Math.min(1, value / 7);
+      const { home, away, ends } = this.stadiumFanDensities();
+      return side === 'home' ? home : side === 'away' ? away : ends;
     };
 
     // Stands are ELEVATED (owner 2026-07-02, queue item 8): each seating ring

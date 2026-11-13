@@ -2,12 +2,12 @@
   "source": "BSData bloodbowl-third-season Simplified Chinese translations (user-supplied key/value export; community data, used with the contributor's permission)",
   "supplement": "apps/tauri/src/i18n/sources/zh-Hans.terms.supplement.json",
   "totalPairs": 1192,
-  "kept": 980,
+  "kept": 982,
   "added": {
     "direct": 708,
     "listItems": 18,
     "baseForms": 11,
-    "supplement": 243
+    "supplement": 245
   },
   "dropped": {
     "long": 269,

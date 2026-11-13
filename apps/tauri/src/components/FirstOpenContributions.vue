@@ -69,6 +69,7 @@ const SUPER_FUMBBL: ReadonlyArray<{ name: string; role: string }> = [
           <h2>{{ $t('contributions.translations.title') }}</h2>
           <ul>
             <li><strong>GHY</strong><span>{{ $t('contributions.translations.zhHansContributor') }}</span></li>
+            <li><strong>R-RKO</strong><span>{{ $t('contributions.translations.zhHansContributor') }}</span></li>
             <li><strong>BSData</strong><span>{{ $t('contributions.translations.bsdata') }}</span></li>
           </ul>
         </section>

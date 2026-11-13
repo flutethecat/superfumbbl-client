@@ -4645,6 +4645,7 @@ onBeforeUnmount(() => {
                     <option value="off">{{ $t('settings.art.pitchAndStadium.noStadium') }}</option>
                     <option value="classic">{{ $t('settings.display.pitch.classicSeatsFans') }}</option>
                     <option value="crowd">{{ $t('settings.display.pitch.bakedCrowdTiles') }}</option>
+                    <option value="stadium3d">{{ $t('settings.display.pitch.stadium3d') }}</option>
                   </select>
                 </span>
               </label>

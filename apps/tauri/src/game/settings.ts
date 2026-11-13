@@ -345,8 +345,9 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   /** The coach's own values of the preset keys from before Low performance mode was switched on; null = none held.
    *  Turning the mode off restores each one whose setting still holds the preset's low value. */
   lowPerformanceRestore: LowPerformanceRestore | null;
-  /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles, 'classic' = seat atlas + fan sprites (default again, owner 10-05). */
-  stadiumStands: 'crowd' | 'classic';
+  /** Owner 09-25: stand art — 'crowd' = baked-crowd tiles, 'classic' = seat atlas + fan sprites (default again, owner 10-05).
+   *  Owner 11-09: 'stadium3d' = the Modern 3D stadium baked once into a backdrop (classic until the bake lands, or if it fails). */
+  stadiumStands: 'crowd' | 'classic' | 'stadium3d';
   /** Owner 10-12: what sits behind the stadium. 'skybox' = the fantasy skybox (default, unchanged), 'space', 'parking'
    *  = the old night parking lot, 'galaxy' = ESA/Hubble's Whirlpool Galaxy (credited in Settings), 'color' = a plain fill in `backdropColor`. */
   backdrop: BackdropSetting;
@@ -1413,7 +1414,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     // fail-closed: a non-boolean/corrupted stored value resolves to the default (chat enabled).
     merged.chatDisabled = raw.chatDisabled === true;
     merged.logDiceAsNumbers = raw.logDiceAsNumbers === true;
-    merged.stadiumStands = raw.stadiumStands === 'crowd' ? 'crowd' : 'classic'; // owner 10-05: classic is the default again
+    merged.stadiumStands = raw.stadiumStands === 'crowd' || raw.stadiumStands === 'stadium3d' ? raw.stadiumStands : 'classic'; // owner 10-05: classic is the default again
     merged.backdrop = normalizeBackdrop(raw.backdrop); // owner 10-12: missing or unknown -> the skybox
     merged.backdropColor = normalizeBackdropColor(raw.backdropColor);
     merged.logTimestamps = raw.logTimestamps === true; // owner 09-23: off unless the user turned it on

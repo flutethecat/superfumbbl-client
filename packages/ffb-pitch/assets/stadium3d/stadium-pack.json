@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 2,
+  "id": "free3d-stadium-low-poly",
+  "name": "Stadium Low-Poly (Free3D purchase)",
+  "version": "1.0.0",
+  "provenance": {
+    "source": "Purchased by the owner on Free3D, 2026-08-29: 'Stadium Low-Poly' (https://free3d.com/3d-model/stadium-low-poly-2026.html), USD 5; Blender 2.79 source files Stadium1.*",
+    "author": "Free3D seller of 'Stadium Low-Poly' (name to confirm from the receipt)",
+    "license": "Free3D Royalty Free License (purchase invoice #F3D0203894, 2026-08-29)",
+    "redistribution": "Public builds cleared by the owner 2026-11-06 (3D) and 2026-11-09 (baked 2D backdrop, ship the .glb); see docs/licenses/stadium.md",
+    "notes": "Registered to the 26 x 15 pitch 2026-08-29; schema-2 fit and hidden meshes from the Modern 3D pack (L4)."
+  },
+  "model": {
+    "path": "stadium1.registered-26x15.glb",
+    "sha256": "06fed89e8e35d69186be17f11cc4eeed3f299497787e51adc1e068d84f9d014d",
+    "mime": "model/gltf-binary"
+  },
+  "pitchRegistration": {
+    "logicalSize": [
+      26,
+      15
+    ],
+    "northWest": [
+      -13,
+      0,
+      -7.5
+    ],
+    "northEast": [
+      13,
+      0,
+      -7.5
+    ],
+    "southEast": [
+      13,
+      0,
+      7.5
+    ],
+    "southWest": [
+      -13,
+      0,
+      7.5
+    ],
+    "overlayElevation": 0.02
+  },
+  "scene3d": {
+    "horizontalFit": {
+      "scale": [
+        1.24,
+        1.8
+      ],
+      "offset": [
+        0,
+        0
+      ]
+    },
+    "hiddenMeshes": [
+      "Plane001_Plane005",
+      "Plane002_Plane004",
+      "Cube009_Cube007",
+      "Cube008_Cube005"
+    ]
+  }
+}
