@@ -1151,8 +1151,13 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-dice-grid[data-view='both'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: max-content max-content; overflow-y: auto; } /* Sol r4: one scrolling stack, so the distributions are always reachable below Likelihood on a small window */
 .pg-dice-grid[data-view='both'] > .pg-dice-left, .pg-dice-grid[data-view='both'] > .pg-dice-right, .pg-dice-grid[data-view='both'] .pg-dice-right-top { overflow: visible; min-height: auto; }
 .pg-dice-grid[data-view='both'] > .pg-dice-right { order: -1; display: block; }
-.pg-dice-grid[data-view='both'] .pg-dice-col[data-side='home'] { background: color-mix(in srgb, #3d7cff 9%, transparent); }
-.pg-dice-grid[data-view='both'] .pg-dice-col[data-side='away'] { background: color-mix(in srgb, #f2363c 9%, transparent); }
+/* Owner 11-12: the Both view's team colouring on every dice panel in every view - each team's panels carry its tint,
+   and the distributions column opens with the same 3px team rule as Likelihood (it replaces the first chart's grey divider). */
+.pg-dice-grid .pg-dice-col[data-side='home'] { background: color-mix(in srgb, #3d7cff 9%, transparent); }
+.pg-dice-grid .pg-dice-col[data-side='away'] { background: color-mix(in srgb, #f2363c 9%, transparent); }
+.pg-dice-cols-charts[data-cols='1'] > .pg-dice-col:first-child, .pg-dice-cols-charts[data-cols='2'] > .pg-dice-col:nth-child(-n+2) { border-top: 3px solid #3d7cff; }
+.pg-dice-cols-charts[data-cols='1'] > .pg-dice-col[data-side='away']:first-child, .pg-dice-cols-charts[data-cols='2'] > .pg-dice-col[data-side='away']:nth-child(-n+2) { border-top-color: #f2363c; }
+.pg-dice-cols-charts[data-cols='1'] > .pg-dice-col:first-child > .pg-dice-block:first-child, .pg-dice-cols-charts[data-cols='2'] > .pg-dice-col:nth-child(-n+2) > .pg-dice-block:first-child { border-top: 0; }
 .pg-dice-grid[data-view='both'] .pg-dice-gauge { height: clamp(36px, 4.6vh, 80px); }
 .pg-dice-grid[data-view='both'] .pg-dice-gauge-label { font-size: 1.05em; white-space: normal; overflow-wrap: anywhere; }
 .pg-dice-grid[data-view='both'] .pg-dice-col-single .pg-dice-gauge-value b { font-size: clamp(0.85em, 1.1vw, 1.15em); } /* small windows: the half-width columns need smaller words */

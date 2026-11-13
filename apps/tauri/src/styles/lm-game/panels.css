@@ -406,8 +406,10 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .pg-dice-gauge-row:nth-child(even) { background: color-mix(in srgb, var(--ui-text) 5%, transparent); }
 .sf-lm.lm-game .pg-dice-area { fill: var(--sf-seat-home); }
 .sf-lm.lm-game .pg-dice-col[data-side='away'] .pg-dice-area { fill: var(--sf-seat-away); }
-.sf-lm.lm-game .pg-dice-grid[data-view='both'] .pg-dice-col[data-side='home'] { background: color-mix(in srgb, var(--sf-seat-home) 9%, transparent); }
-.sf-lm.lm-game .pg-dice-grid[data-view='both'] .pg-dice-col[data-side='away'] { background: color-mix(in srgb, var(--sf-seat-away) 9%, transparent); }
+.sf-lm.lm-game .pg-dice-grid .pg-dice-col[data-side='home'] { background: color-mix(in srgb, var(--sf-seat-home) 9%, transparent); }
+.sf-lm.lm-game .pg-dice-grid .pg-dice-col[data-side='away'] { background: color-mix(in srgb, var(--sf-seat-away) 9%, transparent); }
+.sf-lm.lm-game .pg-dice-cols-charts[data-cols='1'] > .pg-dice-col:first-child, .sf-lm.lm-game .pg-dice-cols-charts[data-cols='2'] > .pg-dice-col:nth-child(-n+2) { border-top-color: var(--sf-seat-home); }
+.sf-lm.lm-game .pg-dice-cols-charts[data-cols='1'] > .pg-dice-col[data-side='away']:first-child, .sf-lm.lm-game .pg-dice-cols-charts[data-cols='2'] > .pg-dice-col[data-side='away']:nth-child(-n+2) { border-top-color: var(--sf-seat-away); }
 .sf-lm.lm-game .pg-dice-gauge-value[data-band='luckerDog'] b, .sf-lm.lm-game .pg-dice-gauge-value[data-band='comedyMegaDicing'] b { color: var(--ui-heading); }
 /* the dodge chart's outside counts: the same meanings (passed / after reroll / failed), inks that read on the light panel */
 :root[data-ui-color-scheme="light"] .sf-lm.lm-game .pg-dodge-seg-first { fill: var(--ui-success); }
