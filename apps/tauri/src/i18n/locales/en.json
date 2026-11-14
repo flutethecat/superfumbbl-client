@@ -1620,7 +1620,7 @@
   "hud.text.cancelHandOff": "Cancel Hand-off",
   "hud.text.cancelPass": "Cancel Pass",
   "hud.text.cancelPunt": "Cancel Punt",
-  "hud.text.cancelYourBlitzThis": "Cancel your blitz? This player has not moved or blocked yet, so your Blitz action will be refunded for this turn.",
+  "hud.text.cancelYourBlitzThis": "Cancel your blitz? The blitz will be refunded.",
   "hud.text.cancelYourFoulThis": "Cancel your foul? This player has not moved yet.",
   "hud.text.cancelYourHandOff": "Cancel your hand-off? This player has not moved yet.",
   "hud.text.cancelYourPassThis": "Cancel your pass? This player has not moved yet.",

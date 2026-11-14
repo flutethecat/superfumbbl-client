@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Canslo’r trosglwyddo",
   "hud.text.cancelPass": "Canslo’r pas",
   "hud.text.cancelPunt": "Canslo’r punt",
-  "hud.text.cancelYourBlitzThis": "Canslo dy flitz? Dydy’r chwaraewr hwn ddim wedi symud na blocio eto, felly bydd dy weithred Blitz yn cael ei hadfer ar gyfer y tro hwn.",
+  "hud.text.cancelYourBlitzThis": "Canslo dy flitz? Bydd y blitz yn cael ei adfer.",
   "hud.text.cancelYourFoulThis": "Canslo dy drosedd? Dydy’r chwaraewr hwn ddim wedi symud eto.",
   "hud.text.cancelYourHandOff": "Canslo dy drosglwyddo? Dydy’r chwaraewr hwn ddim wedi symud eto.",
   "hud.text.cancelYourPassThis": "Canslo dy bas? Dydy’r chwaraewr hwn ddim wedi symud eto.",

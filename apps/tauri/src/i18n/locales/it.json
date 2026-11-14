@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Annulla consegna",
   "hud.text.cancelPass": "Annulla passaggio",
   "hud.text.cancelPunt": "Annulla rinvio",
-  "hud.text.cancelYourBlitzThis": "Annullare il blitz? Questo giocatore non si è ancora mosso né ha bloccato, quindi l’azione di Blitz ti verrà restituita per questo turno.",
+  "hud.text.cancelYourBlitzThis": "Annullare il blitz? Il blitz ti verrà restituito.",
   "hud.text.cancelYourFoulThis": "Annullare il fallo? Questo giocatore non si è ancora mosso.",
   "hud.text.cancelYourHandOff": "Annullare la consegna? Questo giocatore non si è ancora mosso.",
   "hud.text.cancelYourPassThis": "Annullare il passaggio? Questo giocatore non si è ancora mosso.",

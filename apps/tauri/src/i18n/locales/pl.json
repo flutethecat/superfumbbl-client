@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Anuluj podanie z ręki",
   "hud.text.cancelPass": "Anuluj podanie",
   "hud.text.cancelPunt": "Anuluj wykop",
-  "hud.text.cancelYourBlitzThis": "Anulować blitz? Ten gracz jeszcze się nie ruszył ani nie blokował, więc akcja Blitz zostanie zwrócona na tę turę.",
+  "hud.text.cancelYourBlitzThis": "Anulować blitz? Blitz zostanie zwrócony.",
   "hud.text.cancelYourFoulThis": "Anulować faul? Ten gracz jeszcze się nie ruszył.",
   "hud.text.cancelYourHandOff": "Anulować podanie z ręki? Ten gracz jeszcze się nie ruszył.",
   "hud.text.cancelYourPassThis": "Anulować podanie? Ten gracz jeszcze się nie ruszył.",

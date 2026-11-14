@@ -11,7 +11,7 @@
 
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
-import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, type CoachAction } from './availableActions';
+import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, handOffCatcherAllowed, animosityAllowsCatcher, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 import { t } from '../../i18n';
 
@@ -895,6 +895,62 @@ export function swoopCoordinateSquares(
  * stand-up and nothing else) is refundable upstream; any movement/action/skill/effect consumption ends the
  * activation without auto-declaring the clicked player. Action-specific friendly targets are excluded by the
  * explicit state set above, so this never steals a Pass, Hand-off, or Throw Team-Mate click. */
+/** Upstream `ActingPlayer.hasOnlyStandingUpMove` (ActingPlayer.java:497-499): the acting player is standing up and its
+ *  currentMove is exactly Constant.MINIMUM_MOVE_TO_STAND_UP (3) - the stand-up the declaration charged
+ *  (bb2025 StepInitSelecting.prepareStandingUp:527-533 sets currentMove = min(3, MA)). A player with MA 1 or 2 is charged
+ *  less and is NOT covered, exactly as on the server. */
+export function standUpOnlyMove(acting: { standingUp?: boolean | null; currentMove?: number | null } | null | undefined): boolean {
+  return !!acting && acting.standingUp === true && Number(acting.currentMove ?? 0) === 3;
+}
+
+type UntouchedActing = {
+  currentMove?: number; standingUp?: boolean; hasMoved?: boolean; hasBlocked?: boolean; hasFouled?: boolean; hasPassed?: boolean;
+  hasTriggeredEffect?: boolean; forgone?: boolean; usedSkills?: string[];
+};
+/** Skills whose use the server rolls back on such an end, so they do not count as acting: Incorporeal
+ *  (canAvoidDodging - StepInitSelecting:173-177, :187-196 markSkillUnused) and I'll Carry You (canCarryPartner -
+ *  UtilServerGame.undoPickUpPartner on every end branch, :179-181, :190-192, :197-199). */
+const END_ROLLBACK_SKILLS = new Set(['incorporeal', 'illcarryyou']);
+
+/** Upstream ActingPlayer.hasActed (ActingPlayer.java:464-467) minus the skills the end rolls back. */
+function actedBeyondRollback(ap: UntouchedActing): boolean {
+  const norm = (n: string) => n.toLowerCase().replace(/[^a-z]/g, '');
+  return !!(ap.hasMoved || ap.hasFouled || ap.hasBlocked || ap.hasPassed || ap.hasTriggeredEffect || ap.forgone
+    || (ap.usedSkills ?? []).some((skill) => !END_ROLLBACK_SKILLS.has(norm(String(skill)))));
+}
+
+/** Ending now backs the activation out without spending it (Pass / Hand-off / Foul / Punt / Move, and a Blitz before its
+ *  target is chosen): the actor has not acted - ActingPlayer.hasActed (ActingPlayer.java:464-467), rollback skills aside.
+ *  No movement test (review round 2): the plain end (bb2025 StepInitSelecting:186-202) and the no-target Blitz end
+ *  (bb2025 StepSelectBlitzTarget:232-242) check only hasActed; UtilActingPlayer.changeActingPlayer:36-46 then puts a
+ *  stood-up player back PRONE and leaves it ACTIVE - whatever the stand-up charged (an MA 1-2 player is charged 1-2). */
+export function activationUntouched(game: GameJson | null | undefined): boolean {
+  const ap = game?.actingPlayer as UntouchedActing | null | undefined;
+  return !!ap && !actedBeyondRollback(ap);
+}
+
+/** Ending a declared Blitz now refunds it (the copy may say "The blitz will be refunded."), in the server's two phases:
+ *  - Target chosen (`fieldModel.targetSelectionState` present): bb2025 StepInitSelecting:149-157, 161-184 - the block
+ *    unused (`!hasBlocked`), `currentMove == 0 || hasOnlyStandingUpMove()`, and the selection NOT committed (a committed
+ *    one raises the server's own confirmEndAction, :158-160). `hasMoved` is not asked: the target selection's stand-up
+ *    (bb2025 SelectBlitzTarget:20-23 -> StepStandUp:137-138) sets it while the charge stays 3. Then blitzUsed(false),
+ *    the old state restored as PRONE.
+ *  - No target yet: the activation must be untouched (activationUntouched) - a Blitz that has acted (e.g. Baleful Hex
+ *    before the target, which spends the skill and the Blitz, bb2025 StepBalefulHex:136, 176, 193-198) is not refunded
+ *    (StepSelectBlitzTarget:232-242 asks its own confirmation; UtilActingPlayer:40-46 leaves the player standing and
+ *    inactive). */
+export function blitzEndRefunds(game: GameJson | null | undefined): boolean {
+  const ap = game?.actingPlayer as UntouchedActing | null | undefined;
+  if (!game || !ap) return false;
+  const tss = (game.fieldModel as { targetSelectionState?: { targetSelectionStatusIsCommitted?: unknown } | null } | undefined)?.targetSelectionState;
+  if (tss) {
+    // The movement condition lives HERE only (StepInitSelecting:155-157): `currentMove == 0 || hasOnlyStandingUpMove()`.
+    const movement = Number(ap.currentMove ?? 0) === 0 || standUpOnlyMove(ap);
+    return !ap.hasBlocked && movement && tss.targetSelectionStatusIsCommitted !== true;
+  }
+  return activationUntouched(game);
+}
+
 export function friendlyActivationSwitchDisposition(
   game: GameJson | null | undefined,
   ctx: ClientStateContext,
@@ -920,7 +976,7 @@ export function friendlyActivationSwitchDisposition(
       || (playerState & 0xff) !== PLAYER_BASE_STANDING
       || (playerState & PLAYER_FLAG_ACTIVE) === 0) return null;
   const currentMove = Number(acting.currentMove ?? 0);
-  const standUpOnly = acting.standingUp === true && currentMove === 3;
+  const standUpOnly = standUpOnlyMove(acting); // the server's hasOnlyStandingUpMove (shared with blitzEndRefunds)
   const consumed = (currentMove !== 0 && !standUpOnly)
     || !!acting.hasMoved || !!acting.hasFouled || !!acting.hasBlocked || !!acting.hasPassed || !!acting.hasFed
     || !!acting.hasJumped || !!acting.hasTriggeredEffect || !!acting.forgone
@@ -1517,7 +1573,11 @@ export function onPlayerClick(
   if (state === 'FOUL') {
     if (!isMine(clickedPlayerId)) {
       const acting = actingPlayerId(game);
-      if (acting && adjacentDownEnemyIds(game, acting).includes(clickedPlayerId)) return { kind: 'foulTarget', defenderId: clickedPlayerId };
+      if (acting && adjacentDownEnemyIds(game, acting).includes(clickedPlayerId)) {
+        // bb2025 FoulLogicModule.java:43-44: the next square is a Rush the server has not flagged - the acting menu opens.
+        if (rushPromptBeforeAttack(game)) return { kind: 'openActionMenu', playerId: acting, actions: availableActions(game, ctx, acting) };
+        return { kind: 'foulTarget', defenderId: clickedPlayerId };
+      }
       return { kind: 'inspect', playerId: clickedPlayerId };
     }
     // own player → shared switch/menu/end handling below
@@ -1528,7 +1588,8 @@ export function onPlayerClick(
   // own-player click is terminal here so it cannot open the generic WALK_STATES action menu.
   if (state === 'HAND_OVER' && isMine(clickedPlayerId)) {
     const acting = actingPlayerId(game);
-    if (clickedPlayerId !== acting && acting && adjacentOwnTeammateIds(game, acting).includes(clickedPlayerId)) {
+    // Audit 11-12: upstream canPlayerGetHandOver (tackle zones + the Animosity race check, not only adjacency).
+    if (clickedPlayerId !== acting && acting && handOffCatcherAllowed(game, acting, clickedPlayerId)) {
       return { kind: 'handOverTarget', catcherId: clickedPlayerId };
     }
     if (clickedPlayerId !== acting) {
@@ -1547,6 +1608,12 @@ export function onPlayerClick(
     if (!sq) return { kind: 'ignore', reason: 'pass target has no square' };
     // PC-1 (Meero SR-211): only route the throw when the receiver's square is in the pass-range template — an
     // out-of-range send dies here (only-surface-what-the-server-offers), never reaching sendPassTarget.
+    // Audit 11-12: after a failed Animosity roll, a passMove click on a team-mate of another race is ignored (upstream
+    // bb2025 PassLogicModule.canPlayerGetPass).
+    if (isMine(clickedPlayerId) && String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'passMove'
+        && !animosityAllowsCatcher(game, acting, clickedPlayerId)) {
+      return { kind: 'ignore', reason: 'a failed Animosity roll allows a pass only to a player of the same race' };
+    }
     if (!passTargetInTemplate(game, acting, sq)) {
       return isMine(clickedPlayerId)
         ? { kind: 'ignore', reason: 'pass target out of range template' }

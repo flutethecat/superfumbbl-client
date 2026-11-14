@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Annuler la remise",
   "hud.text.cancelPass": "Annuler la passe",
   "hud.text.cancelPunt": "Annuler dégagement",
-  "hud.text.cancelYourBlitzThis": "Annuler ton blitz ? Ce joueur n’a pas encore bougé ni bloqué, ton action de blitz te sera donc rendue pour ce tour.",
+  "hud.text.cancelYourBlitzThis": "Annuler ton blitz ? Le blitz te sera rendu.",
   "hud.text.cancelYourFoulThis": "Annuler ta faute ? Ce joueur n’a pas encore bougé.",
   "hud.text.cancelYourHandOff": "Annuler ta remise ? Ce joueur n’a pas encore bougé.",
   "hud.text.cancelYourPassThis": "Annuler ta passe ? Ce joueur n’a pas encore bougé.",

@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Скасувати передачу",
   "hud.text.cancelPass": "Скасувати пас",
   "hud.text.cancelPunt": "Скасувати удар",
-  "hud.text.cancelYourBlitzThis": "Скасувати бліц? Цей гравець ще не рухався й не блокував, тож твою дію бліцу цього ходу буде повернуто.",
+  "hud.text.cancelYourBlitzThis": "Скасувати бліц? Бліц буде повернено.",
   "hud.text.cancelYourFoulThis": "Скасувати фол? Цей гравець ще не рухався.",
   "hud.text.cancelYourHandOff": "Скасувати передачу з рук у руки? Цей гравець ще не рухався.",
   "hud.text.cancelYourPassThis": "Скасувати пас? Цей гравець ще не рухався.",

@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Откажи предаването",
   "hud.text.cancelPass": "Откажи паса",
   "hud.text.cancelPunt": "Откажи пунта",
-  "hud.text.cancelYourBlitzThis": "Да откажеш ли блица? Този играч още не се е движил и не е блокирал, така че действието ти Блиц ще бъде възстановено за този ход.",
+  "hud.text.cancelYourBlitzThis": "Да откажеш ли блица? Блицът ще бъде възстановен.",
   "hud.text.cancelYourFoulThis": "Да откажеш ли фаула? Този играч още не се е движил.",
   "hud.text.cancelYourHandOff": "Да откажеш ли предаването? Този играч още не се е движил.",
   "hud.text.cancelYourPassThis": "Да откажеш ли паса? Този играч още не се е движил.",

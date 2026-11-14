@@ -121,7 +121,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, playerPinned, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, playerPinned, adjacentDownEnemyIds, handOffCatcherAllowed, animosityAllowsCatcher, throwMateCanPickUp, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -17454,7 +17454,8 @@ function plannerFireAct() {
     if (!p.terminalSent) return;
   }
   else if ((p.actKind === 'throwTeamMate' || p.actKind === 'kickTeamMate') && p.targetPlayerId) {
-    gameStore.sendThrowMatePickup(p.targetPlayerId, p.actKind === 'kickTeamMate');
+    // Audit review 11-12: a refused pick-up sends nothing; the plan retires below and nothing is recorded as held.
+    p.terminalSent = gameStore.sendThrowMatePickup(p.targetPlayerId, p.actKind === 'kickTeamMate');
   }
   else if (p.actKind === 'block' && p.targetPlayerId) {
     p.terminalSent = gameStore.sendBlock(p.playerId, p.targetPlayerId, blockFlagsFromKind(p.blockKind));
@@ -33788,7 +33789,8 @@ export const gameStore = {
     if (path.length > 0 && from) {
       sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: throwerId, coordinateFrom: from, coordinatesTo: path });
     }
-    scheduleGameTimeout(() => sendCommand(throwMateCommand(throwerId, { thrownPlayerId: thrownId }, kicked)), path.length > 0 ? 350 : 60);
+    // Audit review 11-12: no live caller; if one appears, its pick-up still goes through the checked sender.
+    scheduleGameTimeout(() => { gameStore.sendThrowMatePickup(thrownId, kicked); }, path.length > 0 ? 350 : 60);
     log('system', `play: ${kicked ? 'KICK' : 'THROW'} TEAM-MATE ${playerName(game.value, throwerId)} picks up ${playerName(game.value, thrownId)} (walk ${path.length} sq)`);
   },
   /**
@@ -33832,6 +33834,12 @@ export const gameStore = {
     if (deriveClientState(game.value, ctx) !== 'FOUL') return false;
     const acting = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!acting) { log('system', 'ignored: no acting player for foul'); return false; }
+    // Audit 11-12 (rules hole): the server's foul takes ANY defender id (bb2025 StepInitFouling:138-140 checks only
+    // hasFouled and preventBeingFouled), so this send is the gate. Upstream UtilPlayer.isFoulable:537-551 - a prone or
+    // stunned opponent, adjacent - and bb2025 FoulLogicModule:43-44: while the next square is a Rush the server has
+    // not flagged, the action context opens instead and nothing is sent.
+    if (!adjacentDownEnemyIds(game.value, acting).includes(defenderId)) { log('system', 'ignored: foul target is not an adjacent prone/stunned opponent'); return false; }
+    if (rushPromptBeforeAttack(game.value)) { log('system', 'ignored: the next square is a Rush the server has not flagged yet - open the player menu first'); return false; }
     // `foulUsed` is the server's declaration reservation. Upstream sets it on the first accepted foulMove
     // coordinate, before CLIENT_FOUL names the victim (captured g931 commandNr 557). Re-checking it here
     // strands every move-then-foul activation. The authoritative FOUL state above is the terminal offer;
@@ -33886,6 +33894,9 @@ export const gameStore = {
     if (deriveClientState(game.value, ctx) !== 'HAND_OVER') return false;
     const acting = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     if (!acting) { log('system', 'ignored: no acting player for hand-off'); return false; }
+    // Audit 11-12: upstream bb2025 HandOverLogicModule.canPlayerGetHandOver (adjacent, tackle zones, the Animosity race
+    // check, a team-mate or anyone during HAND_OVER). The server checks only adjacency (bb2025 StepHandOver:23).
+    if (!handOffCatcherAllowed(game.value, acting, catcherId)) { log('system', 'ignored: that player cannot take the hand-off'); return false; }
     // Like Foul/Pass, `handOverUsed` may already be true because the server accepted the declared movement.
     // HAND_OVER is the authoritative live terminal offer; never reinterpret its reservation flag as completion.
     // Catcher identity is part of the live offer: changing the target is not a duplicate answer.
@@ -33913,6 +33924,15 @@ export const gameStore = {
       log('system', lt('store.gameStore.passBlockedThePasser'));
       state.actionNotice = { text: $t('store.gameStore.canTPassThe'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
+    }
+    // Audit 11-12: after a failed Animosity roll, a passMove throw at a team-mate of another race is not sent (upstream
+    // bb2025 PassLogicModule.canPlayerGetPass:154-165 at the player click; the server would roll Animosity again).
+    if (String(actingPlayer?.playerAction ?? '') === 'passMove') {
+      const catcher = game.value.fieldModel.playerDataArray.find((d) => d.playerCoordinate?.[0] === targetCoordinate[0] && d.playerCoordinate?.[1] === targetCoordinate[1]);
+      if (catcher && catcher.playerId !== acting && !animosityAllowsCatcher(game.value, acting, catcher.playerId)) {
+        log('system', 'ignored: a failed Animosity roll allows a pass only to a player of the same race');
+        return false;
+      }
     }
     const from = game.value.fieldModel.playerDataArray.find((data) => data.playerId === acting)?.playerCoordinate;
     // Destination identity is part of the live offer; changing aim is not a duplicate pass.
@@ -34031,13 +34051,17 @@ export const gameStore = {
     log('system', `play: HYPNOTIC GAZE ${playerName(game.value, acting)} → ${playerName(game.value, victimId)} (server rolls confuse)`);
   },
   /** TTM/KTM pickup sends CLIENT_THROW_TEAM_MATE after declaration/adjacency; landing remains a separate click. */
-  sendThrowMatePickup(thrownId: string, kicked = false) {
-    if (!play.active || !game.value) return;
-    if (!isMyTurn(game.value)) { log('system', 'ignored: not your turn'); return; }
+  sendThrowMatePickup(thrownId: string, kicked = false): boolean {
+    if (!play.active || !game.value) return false;
+    if (!isMyTurn(game.value)) { log('system', 'ignored: not your turn'); return false; }
     const acting = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-    if (!acting) { log('system', 'ignored: no acting player for throw team-mate'); return; }
-    sendCommand(throwMateCommand(acting, { thrownPlayerId: thrownId }, kicked));
-    log('system', `play: ${kicked ? 'KICK' : 'THROW'} TEAM-MATE ${playerName(game.value, acting)} picks up ${playerName(game.value, thrownId)} (server resolves)`);
+    if (!acting) { log('system', 'ignored: no acting player for throw team-mate'); return false; }
+    // Audit 11-12 (rules hole): the server takes any thrownPlayerId (bb2025 StepInitThrowTeamMate:76-96). Upstream
+    // ThrowTeamMateLogicModule.canBeThrown:90-100: an adjacent, unpinned Right Stuff team-mate.
+    if (!throwMateCanPickUp(game.value, acting, thrownId)) { log('system', 'ignored: that team-mate cannot be picked up from here'); return false; }
+    const sent = sendCommand(throwMateCommand(acting, { thrownPlayerId: thrownId }, kicked));
+    if (sent) log('system', `play: ${kicked ? 'KICK' : 'THROW'} TEAM-MATE ${playerName(game.value, acting)} picks up ${playerName(game.value, thrownId)} (server resolves)`);
+    return sent;
   },
 
   /** Beer Barrel Bash sends CLIENT_THROW_KEG with only the target playerId; the server already knows the thrower. */
@@ -34215,7 +34239,8 @@ export const gameStore = {
       whenActingPlayerAcked(playerId, action, (acked) => {
         if (!acked) watchActivationTook(playerId, 'FOUL'); // blind-fire → feedback if the server never took it
         if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-        scheduleGameTimeout(() => sendCommand({ netCommandId: NetCommandId.CLIENT_FOUL, actingPlayerId: playerId, defenderId, usingChainsaw }), moving ? 350 : 90);
+        // Audit review 11-12: the trailing boot goes through the checked sender, against the server state after the walk.
+        scheduleGameTimeout(() => { gameStore.sendFoulTarget(defenderId, usingChainsaw); }, moving ? 350 : 90);
       });
     });
     log('system', `play: FOUL ${playerName(game.value, playerId)} → ${playerName(game.value, defenderId)}${usingChainsaw ? ' (CHAINSAW)' : ''} (server resolves)`);
@@ -34236,7 +34261,8 @@ export const gameStore = {
     whenActingPlayerAcked(playerId, action, (acked) => {
       if (!acked) watchActivationTook(playerId, 'HAND-OFF'); // review batch: feedback on a blind-fire drop
       if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-      scheduleGameTimeout(() => sendCommand({ netCommandId: NetCommandId.CLIENT_HAND_OVER, actingPlayerId: playerId, catcherId }), moving ? 350 : 90);
+      // Audit review 11-12: the trailing hand-off goes through the checked sender (possession, catcher), after the walk.
+      scheduleGameTimeout(() => { gameStore.sendHandOverTarget(catcherId); }, moving ? 350 : 90);
     });
     log('system', `play: HAND-OFF ${playerName(game.value, playerId)} → ${playerName(game.value, catcherId)} (server resolves)`);
   },
@@ -34285,7 +34311,8 @@ export const gameStore = {
     whenActingPlayerAcked(playerId, action, (acked) => {
       if (!acked) watchActivationTook(playerId, 'PASS'); // review batch: feedback on a blind-fire drop
       if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-      scheduleGameTimeout(() => sendCommand({ netCommandId: NetCommandId.CLIENT_PASS, actingPlayerId: playerId, targetCoordinate }), moving ? 350 : 90);
+      // Audit review 11-12: the trailing throw goes through the checked sender (possession, Animosity), after the walk.
+      scheduleGameTimeout(() => { gameStore.sendPassTarget(targetCoordinate); }, moving ? 350 : 90);
     });
     log('system', `play: PASS ${playerName(game.value, playerId)} → [${targetCoordinate[0]},${targetCoordinate[1]}] (server resolves)`);
   },

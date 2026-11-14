@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Cealaigh Tabhairt Láimhe",
   "hud.text.cancelPass": "Cealaigh an Pas",
   "hud.text.cancelPunt": "Cealaigh Cic Láimhe",
-  "hud.text.cancelYourBlitzThis": "An gcealóidh tú do ruathar? Níor bhog ná níor bhlocáil an t-imreoir seo go fóill, mar sin aisíocfar do ghníomh Ruathair don chasadh seo.",
+  "hud.text.cancelYourBlitzThis": "An gcealóidh tú do ruathar? Aisíocfar an ruathar.",
   "hud.text.cancelYourFoulThis": "An gcealóidh tú do chluiche salach? Níor bhog an t-imreoir seo go fóill.",
   "hud.text.cancelYourHandOff": "An gcealóidh tú do thabhairt láimhe? Níor bhog an t-imreoir seo go fóill.",
   "hud.text.cancelYourPassThis": "An gcealóidh tú do phas? Níor bhog an t-imreoir seo go fóill.",

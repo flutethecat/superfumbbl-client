@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Hand-off annuleren",
   "hud.text.cancelPass": "Pass annuleren",
   "hud.text.cancelPunt": "Punt annuleren",
-  "hud.text.cancelYourBlitzThis": "Je blitz annuleren? Deze speler heeft nog niet bewogen of geblockt, dus je Blitz-actie wordt deze beurt teruggegeven.",
+  "hud.text.cancelYourBlitzThis": "Je blitz annuleren? De blitz wordt teruggegeven.",
   "hud.text.cancelYourFoulThis": "Je foul annuleren? Deze speler heeft nog niet bewogen.",
   "hud.text.cancelYourHandOff": "Je hand-off annuleren? Deze speler heeft nog niet bewogen.",
   "hud.text.cancelYourPassThis": "Je pass annuleren? Deze speler heeft nog niet bewogen.",

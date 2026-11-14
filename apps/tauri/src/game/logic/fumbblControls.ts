@@ -236,8 +236,9 @@ export type FumbblGatedSite = (typeof FUMBBL_GATED_SITES)[number];
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** FFB ClientAction for one of our menu rows (null = a row FFB lacks). */
-export function ffbClientAction(a: Pick<CoachAction, 'action' | 'kind' | 'blockKind' | 'ruleId'>): string | null {
+export function ffbClientAction(a: Pick<CoachAction, 'action' | 'kind' | 'blockKind' | 'ruleId'> & { ffbAction?: string }): string | null {
   if (a.kind === 'endMove') return 'END_MOVE';
+  if (a.ffbAction) return a.ffbAction; // audit round 2: an explicit presentation identity (the return-to-walk rows are MOVE)
   if (ffbLacksRow(a)) return null;
   switch (a.action) {
     case 'block':

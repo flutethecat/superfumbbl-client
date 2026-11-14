@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Cancelar entrega",
   "hud.text.cancelPass": "Cancelar pase",
   "hud.text.cancelPunt": "Cancelar despeje",
-  "hud.text.cancelYourBlitzThis": "¿Cancelar tu blitz? Este jugador aún no se ha movido ni ha bloqueado, así que se te devolverá la acción de Blitz de este turno.",
+  "hud.text.cancelYourBlitzThis": "¿Cancelar tu blitz? Se te devolverá el blitz.",
   "hud.text.cancelYourFoulThis": "¿Cancelar tu falta? Este jugador aún no se ha movido.",
   "hud.text.cancelYourHandOff": "¿Cancelar tu entrega? Este jugador aún no se ha movido.",
   "hud.text.cancelYourPassThis": "¿Cancelar tu pase? Este jugador aún no se ha movido.",

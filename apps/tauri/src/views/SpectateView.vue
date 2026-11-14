@@ -217,7 +217,7 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, refusedEndRearmsSurface, confirmationOutlivedPhase, hitAndRunInstructionVisible, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge, bombPlayerClickRoute, bombTileClickRoute } from '../game/logic/order66Interaction';
-import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold } from '../game/logic/order66Interaction';
+import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold, activationUntouched, blitzEndRefunds } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
@@ -230,7 +230,7 @@ import { isBreatheFireReRollAction } from '../game/breatheFireOutcome';
 import { nominateBlitzTarget } from '../game/logic/blitzTargetNomination';
 import { blitzTargetCostText, blitzTargetCostShortText, blitzTargetRollTraits, actingTeamBlitzUsed } from '../game/logic/blitzConsumedCopy';
 import { kickEmCancelDecision } from '../game/logic/kickEmBlitzCancel';
-import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps } from '../game/logic/availableActions';
+import { allowsFumblerooskieAction, bigGuyRollEndLabel, endActivationRowLabel, playerPinned, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, throwMateCanPickUp } from '../game/logic/availableActions';
 import { rootedBlitzEndServerConfirmed, rootedBlitzReadyArm, rootedBlitzReadyReconcile, rootedBlitzReadyStageLive } from '../game/logic/rootedBlitzReady';
 import { deriveClientState, type ClientStateContext, type ClientStateId } from '../game/logic/clientStateMachine';
 import { localMoverId, selectPlayerLeftClick, commitLocalWalk, proneTeammateSwitchMenu } from '../game/logic/localSelection';
@@ -13306,15 +13306,21 @@ onMounted(async () => {
               if (fumbblControls() && !ttmMateAdjacent(playerSquareById(ttmActing), msq)) return; // fumbbl-gate:ttm-walk
               // ORDER 66 (#6.4): walk-to-contact→pickup via the planner queue (no blind timer; pickup fires from
               // the arrival square). Already declared throwTeamMateMove (menu) → the queue skips the re-declare.
-              // The LANDING stays a separate user click (o66ThrowMateLand); o66ThrownMate arms it as before.
+              // The LANDING stays a separate user click (o66ThrowMateLand).
+              // Audit review 11-12 (P1): a nomination is not possession. Upstream ignores an ineligible pick-up
+              // (ThrowTeamMateLogicModule.java:36-38, 90-100) and enters the landing branch only once the SERVER holds the
+              // mate (:40-44). So nothing is armed here: o66ThrownMate / the landing surface follow the server's
+              // PICKED_UP mate (serverHeldThrowMateId watcher). A mate that cannot be picked up from where the thrower
+              // stands (adjacent but Chomped / pinned / not Right Stuff, or out of reach) does nothing.
+              const mateAdjacent = ttmMateAdjacent(playerSquareById(ttmActing), msq);
+              if (mateAdjacent ? !throwMateCanPickUp(g, ttmActing, playerId) : path.length === 0) return;
               const ttmPickup = () => {
+                if (gameStore.isPlanActive()) return; // one pick-up at a time; the held mate arms from the server
                 gameStore.startPlan({ playerId: ttmActing, actKind: tst === 'KICK_TEAM_MATE' ? 'kickTeamMate' : 'throwTeamMate', route: path, targetPlayerId: playerId });
-                o66ThrownMate.value = playerId;
-                o66PendingThrowKind.value = 'throwTeamMate';
               };
               if (touchStageTap({ kind: 'ttmPickup', target: playerId, label: $t('hud.confirm'),
                 route: path, // round 5: the plan draws exactly this walk, and Confirm sends it
-                revalidate: () => { const g2 = gameStore.game.value; return !!g2 && deriveClientState(g2, o66Ctx()) === tst && !o66ThrownMate.value && gameStore.iControl(playerId); },
+                revalidate: () => { const g2 = gameStore.game.value; return !!g2 && deriveClientState(g2, o66Ctx()) === tst && !o66ThrownMate.value && !gameStore.isPlanActive() && gameStore.iControl(playerId); },
                 commit: ttmPickup })) return;
               ttmPickup();
               return;
@@ -16020,6 +16026,8 @@ function askEndActivation(kind: EndActivationConfirmKind, origin: EndActivationO
   // Owner 09-15: a blitz that has NOT started (no move, no block) is CANCELLED, not ended — the server refunds the
   // Blitz action for the turn — so the prompt says so. Copy only; the wire is the same endActivation.
   if (kind === 'blitz' && blitzUntouched(gameStore.game.value)) {
+    // Owner 11-12: one short refund line ("Cancel your blitz? The blitz will be refunded."), shown only when the server
+    // will refund (blitzUntouched -> blitzEndRefunds).
     endActConfirm.value = {
       kind,
       get text() { return $t('hud.text.cancelYourBlitzThis'); },
@@ -16096,7 +16104,7 @@ function padDeselectInput(): PadDeselectInput {
     selectedId: renderer?.getSelectedPlayerId() ?? null,
     actingId,
     hasPlan: o66HasPlan(),
-    untouched: blitzUntouched(g),
+    untouched: padDeselectUntouched(g), // send behaviour unchanged by 11-12 (see padDeselectUntouched)
     endNeedsConfirm: requiresBlitzEndConfirmation(st) || st === 'PUNT' || !!declaredActionEndConfirmKind(st) || !!gameStore.state.gazeIntent,
     cardOpen: crosshairGateInput().cardOpen || padFocusOwnsInput.value, // P2b: any card that owns the pad answers first
   };
@@ -16128,7 +16136,16 @@ function askInsteadOfRouteCancel(): boolean {
   askEndActivation(kind);
   return true;
 }
+/** Owner 11-12: PRESENTATION ONLY (prompt copy, cancel cue) - would ending now back the activation out, as the server
+ *  does it: a Blitz by its refund test (blitzEndRefunds, both phases), any other action by activationUntouched. Nothing
+ *  that SENDS reads this (the pad's B keeps padDeselectUntouched). */
 function blitzUntouched(g: GameJson | null | undefined): boolean {
+  const action = String((g?.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  return /^blitz/i.test(action) ? blitzEndRefunds(g) : activationUntouched(g);
+}
+/** The controller's B deselect keeps the pre-11-12 test (no square, no block, currentMove 0): sharing the broader
+ *  presentation test would have let B send an end it never sent before (review of 173ed5af9). */
+function padDeselectUntouched(g: GameJson | null | undefined): boolean {
   const ap = g?.actingPlayer as { currentMove?: number; hasMoved?: boolean; hasBlocked?: boolean } | null | undefined;
   return !!ap && !(ap.hasMoved ?? false) && !(ap.hasBlocked ?? false) && Number(ap.currentMove ?? 0) === 0;
 }

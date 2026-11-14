@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Откажи предају",
   "hud.text.cancelPass": "Откажи додавање",
   "hud.text.cancelPunt": "Откажи шут",
-  "hud.text.cancelYourBlitzThis": "Отказати блиц? Овај играч се још није померио нити блокирао, па ће ти се акција блица вратити за овај потез.",
+  "hud.text.cancelYourBlitzThis": "Отказати блиц? Блиц ће ти бити враћен.",
   "hud.text.cancelYourFoulThis": "Отказати фаул? Овај играч се још није померио.",
   "hud.text.cancelYourHandOff": "Отказати предају? Овај играч се још није померио.",
   "hud.text.cancelYourPassThis": "Отказати додавање? Овај играч се још није померио.",

@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Отменить передачу",
   "hud.text.cancelPass": "Отменить пас",
   "hud.text.cancelPunt": "Отменить удар",
-  "hud.text.cancelYourBlitzThis": "Отменить блиц? Игрок ещё не двигался и не блокировал, поэтому действие «Блиц» в этом ходу вернётся.",
+  "hud.text.cancelYourBlitzThis": "Отменить блиц? Блиц будет возвращён.",
   "hud.text.cancelYourFoulThis": "Отменить нарушение? Игрок ещё не двигался.",
   "hud.text.cancelYourHandOff": "Отменить передачу из рук в руки? Игрок ещё не двигался.",
   "hud.text.cancelYourPassThis": "Отменить пас? Игрок ещё не двигался.",

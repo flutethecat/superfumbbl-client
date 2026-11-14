@@ -1620,7 +1620,7 @@
   "hud.text.cancelHandOff": "取消手递手传球",
   "hud.text.cancelPass": "取消传球",
   "hud.text.cancelPunt": "取消碰踢",
-  "hud.text.cancelYourBlitzThis": "取消你的突袭？该球员尚未移动或阻挡，因此本回合的突袭行动将被退还。",
+  "hud.text.cancelYourBlitzThis": "取消你的突袭？突袭将被退还。",
   "hud.text.cancelYourFoulThis": "取消你的犯规？该球员尚未移动。",
   "hud.text.cancelYourHandOff": "取消你的手递手传球？该球员尚未移动。",
   "hud.text.cancelYourPassThis": "取消你的传球？该球员尚未移动。",

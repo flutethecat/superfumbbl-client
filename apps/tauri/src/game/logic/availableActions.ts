@@ -63,6 +63,9 @@ export interface CoachAction {
   icon?: string;
   /** Star S4: for a `starUseSkill` row, the STAR_RULE_REGISTRY ruleId the generic store sender commits. */
   ruleId?: string;
+  /** Audit round 2: the row's FFB ClientAction identity when it differs from what its wire `action` maps to - the
+   *  return-to-walk rows send passMove / puntMove but ARE upstream's ClientAction.MOVE (keyboard letter, menu order). */
+  ffbAction?: string;
 }
 
 // PlayerState low byte = base state (ffb-common PlayerState.java; drivePregame isProne: `& 0xff === 3`).
@@ -1285,7 +1288,26 @@ export function blastinSecondBeatTargetIds(game: GameJson, actingId: string, rep
  *  `canUseChainsawOnDownedOpponents` + target `isProneOrStunned()` + adjacency. The commit is a plain
  *  CLIENT_BLOCK carrying `usingChainsaw:true` (extension.block(…, false, TRUE, false, false, false)). */
 export function kickEmCommitAllowed(game: GameJson, actingId: string, defenderId: string): boolean {
-  return kickEmTargetIds(game, actingId, true).includes(defenderId);
+  // Audit 11-12 (move-then-act family): exactly upstream's commit condition (mixed/KickEmBlitzLogicModule.java:40-42,
+  // mixed/KickEmBlockLogicModule.java:28-30): the acting player's canUseChainsawOnDownedOpponents unused, the target
+  // prone/stunned and adjacent. The Chainsaw skill and the ACTIVE bit are the DECLARATION's requirements
+  // (LogicModule.isKickEmAvailable:521-527), not the commit's, so the commit no longer re-asks them.
+  // ⚖ Differs on purpose: OPPONENTS only. Upstream's click has no team check (its own playerPeek, UtilPlayer.isKickable,
+  // does: getTeamAway().hasPlayer) and the server checks neither (bb2025 StepInitBlocking:203-212): matching the click
+  // would let this client chainsaw its own downed player, which the rule ("a downed opponent") forbids.
+  const acting = game.actingPlayer as { playerId?: string | null; usedSkills?: string[] } | undefined;
+  if (String(acting?.playerId ?? '') !== actingId) return false;
+  const norm = (n: string) => n.toLowerCase().replace(/[^a-z]/g, '');
+  const usedThisActivation = new Set((acting?.usedSkills ?? []).map(norm));
+  if (!KICK_EM_SKILLS.some((s) => !usedThisActivation.has(norm(s))) || !hasUnusedGrantor(game, actingId, KICK_EM_SKILLS)) return false;
+  const actorSquare = kickEmOnPitchSquare(findPlayer(game, actingId)?.playerCoordinate);
+  const target = findPlayer(game, defenderId);
+  const targetSquare = kickEmOnPitchSquare(target?.playerCoordinate);
+  const side = playerSideIsHome(game, actingId);
+  const targetSide = playerSideIsHome(game, defenderId);
+  if (!actorSquare || !targetSquare || side === null || targetSide === null || targetSide === side) return false;
+  const base = baseState(target?.playerState);
+  return (base === BASE_PRONE || base === BASE_STUNNED) && chebyshev(actorSquare, targetSquare) === 1;
 }
 
 /** #236: FUMBLEROOSKI mid-move offer — exact port of upstream `LogicModule.java:579-586`:
@@ -1850,6 +1872,93 @@ export function adjacentOwnTeammateIds(game: GameJson, playerId: string, from?: 
   return out;
 }
 
+/** Audit 11-12: the player's race, as upstream Player.getRace() (RosterPlayer.java:409 = its roster position's race). */
+function playerRace(game: GameJson, playerId: string): string | null {
+  for (const team of [game.teamHome, game.teamAway] as { playerArray?: { playerId: string; positionId?: string | number }[]; roster?: { positionArray?: { positionId?: string | number; race?: string }[] } }[]) {
+    const player = (team?.playerArray ?? []).find((p) => p.playerId === playerId);
+    if (!player) continue;
+    const position = (team.roster?.positionArray ?? []).find((pos) => String(pos.positionId) === String(player.positionId));
+    return position?.race != null ? String(position.race) : null;
+  }
+  return null;
+}
+
+/** Audit 11-12: a thrower who failed Animosity (actingPlayer.sufferingAnimosity) may only pass / hand off to a player of
+ *  the same race (upstream bb2025 HandOverLogicModule.canPlayerGetHandOver, PassLogicModule.canPlayerGetPass:
+ *  `!actingPlayer.isSufferingAnimosity() || actingPlayer.getRace().equals(catcher.getRace())`). The server does NOT
+ *  refuse another race: its next pass sequence just rolls Animosity again (bb2025 AnimosityBehaviour:48-79,
+ *  StepEndPassing:196-201) - a second roll the rules do not give. Unknown race = refused (fail closed for a send). */
+export function animosityAllowsCatcher(game: GameJson, throwerId: string, catcherId: string): boolean {
+  const acting = game.actingPlayer as { playerId?: string | null; sufferingAnimosity?: boolean } | undefined;
+  if (String(acting?.playerId ?? '') !== throwerId || acting?.sufferingAnimosity !== true) return true;
+  const mine = playerRace(game, throwerId);
+  return mine != null && mine === playerRace(game, catcherId);
+}
+
+/** Audit 11-12: upstream bb2025 HandOverLogicModule.canPlayerGetHandOver (+ handOver: UtilPlayer.hasBall is the
+ *  state's own gate): the catcher is adjacent, has tackle zones, passes the Animosity race check, and is a team-mate -
+ *  or anyone during the HAND_OVER action itself (`|| playerAction == HAND_OVER`). The server checks only adjacency
+ *  (bb2025 StepHandOver:23). The send backstop for every hand-off path. */
+export function handOffCatcherAllowed(game: GameJson, throwerId: string, catcherId: string): boolean {
+  if (throwerId === catcherId) return false;
+  // Audit review 11-12 (P1): HandOverLogicModule.handOver:78-85 sends only while UtilPlayer.hasBall(thrower) - in play,
+  // not moving, on the thrower's square. The server moves the ball to an adjacent catcher without checking possession
+  // (bb2025 StepHandOver:76-88). Declaring Hand-off before the pick-up stays legal (the declaration does not read this).
+  if (!isBallCarrier(game, throwerId)) return false;
+  const thrower = normSquare(findPlayer(game, throwerId)?.playerCoordinate);
+  const catcher = findPlayer(game, catcherId);
+  const at = normSquare(catcher?.playerCoordinate);
+  if (!thrower || !at || chebyshev(thrower, at) !== 1 || !stateHasTacklezones(catcher?.playerState)) return false;
+  if (!animosityAllowsCatcher(game, throwerId, catcherId)) return false;
+  const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  const sameSide = playerSideIsHome(game, throwerId) === playerSideIsHome(game, catcherId);
+  return sameSide || action === 'handOver';
+}
+
+/** Grantors of NamedProperties.canBeThrown in BB2025 (skill/bb2025/RightStuff.java:22; Player.canBeThrown:435-438). */
+const CAN_BE_THROWN_SKILLS = ['Right Stuff'];
+
+/** Audit round 2: the game's rules version (gameOptions `rulesVersion`, as coachGameHistory / kickoffMiniPhases read it),
+ *  upper-cased; '' when absent. The audit's ruleset-specific restrictions apply only to the version upstream applies
+ *  them in; an absent / unknown version keeps the pre-audit behaviour (no restriction added). */
+function rulesVersionOf(game: GameJson): string {
+  const value = (game.gameOptions?.gameOptionArray ?? []).find((option) => option?.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  return typeof value === 'string' ? value.toUpperCase() : '';
+}
+
+/** Audit round 2: the per-ruleset half of `TtmMechanic.canBeThrown` / `canBeKicked` for a team-mate who carries Right
+ *  Stuff (the team and on-pitch halves are shared):
+ *   BB2025 (`mechanics/bb2025/TtmMechanic.java:38-51`): not pinned (Rooted or Chomped).
+ *   BB2020 (`mechanics/bb2020/TtmMechanic.java:39-53`): not Rooted; Right Stuff is `canBeThrownIfStrengthIs3orLess`
+ *     (`skill/bb2020/RightStuff.java:32`, `Player.canBeThrown:435-438`); to be KICKED also STANDING.
+ *   anything else (BB2016, absent): no added condition (pre-audit behaviour; BB2016's shape differs - follow-up F0-1). */
+function throwMateRulesetAllows(game: GameJson, mateId: string, kicked: boolean): boolean {
+  const version = rulesVersionOf(game);
+  const ps = Number(findPlayer(game, mateId)?.playerState ?? 0);
+  if (version === 'BB2025') return !playerPinned(game, mateId);
+  if (version === 'BB2020') {
+    const roster = findRosterPlayer(game, mateId);
+    if ((ps & FLAG_ROOTED) !== 0 || !roster || effectiveStat(roster, 'ST') > 3) return false;
+    return !kicked || baseState(ps) === BASE_STANDING;
+  }
+  return true;
+}
+
+/** Audit 11-12: upstream ThrowTeamMateLogicModule.canBeThrown:90-100 (TTM, and the bb2020 KTM-like-throw module's
+ *  twin): the thrown player canBeThrown (Right Stuff), is not pinned, is on the acting team (bb2025
+ *  TtmMechanic.canBeThrown:38-43 / canBeKicked:46-51), and is ADJACENT to the thrower. The server checks none of it
+ *  (bb2025 StepInitThrowTeamMate:76-96 takes any thrownPlayerId) - the send backstop for every pick-up path. */
+export function throwMateCanPickUp(game: GameJson, throwerId: string, mateId: string): boolean {
+  if (throwerId === mateId) return false;
+  const thrower = normSquare(findPlayer(game, throwerId)?.playerCoordinate);
+  const mate = normSquare(findPlayer(game, mateId)?.playerCoordinate);
+  if (!thrower || !mate || chebyshev(thrower, mate) !== 1) return false;
+  const side = playerSideIsHome(game, throwerId);
+  if (side === null || playerSideIsHome(game, mateId) !== side) return false;
+  const kicked = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '').startsWith('kickTeamMate');
+  return CAN_BE_THROWN_SKILLS.some((s) => hasSkill(game, mateId, s)) && throwMateRulesetAllows(game, mateId, kicked);
+}
+
 /** Owner 10-15 (hand-off at destination): the teammates a walk-then-hand-off may target from `from` (default: the
  *  player's square) - adjacent, standing, and still exerting tackle zones (not Confused / Hypnotized), the same
  *  eligibility the destination Hand-off card arms on. Arming and the arrival re-check share it. */
@@ -2095,6 +2204,23 @@ function hasThrowableTeammate(game: GameJson, playerId: string): boolean {
     const pos = normSquare(p.playerCoordinate);
     if (!pos || pos[0] < 0 || pos[0] > 25 || pos[1] < 0 || pos[1] > 14) return false; // on-pitch
     if (playerSideIsHome(game, p.playerId) !== iAmHome) return false; // my side
+    if (!throwMateRulesetAllows(game, p.playerId, false)) return false; // TtmMechanic.canBeThrown, per ruleset (audit round 2)
+    return findSkillArray(game, p.playerId).some((s) => s.toLowerCase().replace(/[^a-z]/g, '') === 'rightstuff');
+  });
+}
+
+/** Audit 11-12: an ADJACENT throwable team-mate (bb2025 TtmMechanic.findThrowableTeamMates:25-35 for TTM; for KTM,
+ *  LogicModule.isKickTeamMateActionAvailable:449-457 also asks the mate's tackle zones). Upstream offers TTM / KTM to a
+ *  player who cannot move only when such a mate is already beside it (`isAbleToMove() || rightStuffAdjacent`). */
+function hasAdjacentThrowableTeammate(game: GameJson, playerId: string, needsTacklezones: boolean): boolean {
+  const iAmHome = playerSideIsHome(game, playerId);
+  const me = normSquare(findPlayer(game, playerId)?.playerCoordinate);
+  if (iAmHome === null || !me) return false;
+  return ((game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[]).some((p) => {
+    if (p.playerId === playerId || playerSideIsHome(game, p.playerId) !== iAmHome) return false;
+    const pos = normSquare(p.playerCoordinate);
+    if (!pos || chebyshev(me, pos) !== 1 || !throwMateRulesetAllows(game, p.playerId, needsTacklezones)) return false;
+    if (needsTacklezones && !stateHasTacklezones(p.playerState)) return false;
     return findSkillArray(game, p.playerId).some((s) => s.toLowerCase().replace(/[^a-z]/g, '') === 'rightstuff');
   });
 }
@@ -3020,8 +3146,9 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
   // Only a surface that can hold the intent and roll on End says so by carrying the `bigGuyActivateRollPlayerId` key in
   // its context (SpectateView always does, null when no intent is live; `undefined` counts as absent). Classic's context omits it and cannot honour
   // the row, so it gets no Activate row; its ordinary Move row is unchanged.
+  const pinnedNow = !!(ps & (FLAG_ROOTED | FLAG_CHOMPED)); // PlayerState.isPinned
   if (ctx.bigGuyActivateRollPlayerId !== undefined
-      && standing && !negativeState && isBigGuy(game, playerId) && hasBigGuyActivationNegatrait(game, playerId)) {
+      && standing && !pinnedNow && !negativeState && isBigGuy(game, playerId) && hasBigGuyActivationNegatrait(game, playerId)) {
     out.push({
       action: 'move', get label() { return t('hud.actions.text.activate'); }, kind: 'declare', enabled: true, ruleId: BIG_GUY_ACTIVATE_RULE_ID,
       reason: 'Roll on the first step, or when you end the activation without moving',
@@ -3064,7 +3191,10 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // Owner ruling 08-17 (supersedes 2026-08-05 label-prefix): a prone free-stand (Jump Up) no longer prefixes
     // row text — it renders the skill icon inline, MOVE ROW ONLY. Other rows below are plain labels again.
     const jumpUpFreeStand = prone && canStandUpForFree(game, playerId);
-    out.push({ action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, icon: jumpUpFreeStand ? 'Jump Up' : undefined });
+    // Audit review 11-12 (P3): bb2025 SelectLogicModule.isMoveActionAvailable:384-388 = PlayerState.isAbleToMove, which
+    // excludes a pinned (Rooted / Chomped) player (PlayerState.java:243-245, 268-270). A pinned player keeps Block,
+    // Blitz (LogicModule.isBlitzActionAvailable: `isAbleToMove || playerCanNotMove`), Foul and the rest below.
+    if (!pinnedNow) out.push({ action: 'move', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, icon: jumpUpFreeStand ? 'Jump Up' : undefined });
     // Owner 08-24: Pogo/Leap are first-class activation choices, not acting-player-only UI decorations. Selecting
     // this row sends Move with leaping=true; ordinary Jump appears here only when a down adjacent player enables it.
     const jump = jumpActionOffer(game, playerId, 'activation');
@@ -3182,7 +3312,11 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // (SelectLogicModule bb2025: `case GAZE → sendActingPlayer(GAZE_MOVE)`; GazeMoveLogicModule extends
     // MoveLogicModule, so it WALKS like a move, then a click on an ADJACENT enemy fires the gaze → CONFUSED on the
     // server roll). Offered for a standing gazer with a standing enemy within move distance (same gate as Blitz).
+    // Audit 11-12: bb2025 GameMechanic.isGazeActionAllowed:73-77 - not PRONE unless ALLOW_SPECIAL_ACTIONS_FROM_PRONE
+    // (the server accepts any declaration). BB2025 only (audit round 2): bb2020 GameMechanic.isGazeActionAllowed:71-73
+    // has no stance limb; another / absent version keeps the pre-audit behaviour. The reach bound stays (owner o66al).
     if (chargeRestrictedSpecialActionAllowed(game)
+        && (!prone || rulesVersionOf(game) !== 'BB2025' || gameOptionEnabled(game, 'allowSpecialActionsFromProne'))
         && hasSkill(game, playerId, 'hypnoticGaze') && blitzableEnemyExists(game, playerId, p, false)) {
       out.push({ action: 'gazeMove', get label() { return t('hud.actions.text.hypnoticGaze'); }, kind: 'declare', enabled: true });
     }
@@ -3223,7 +3357,12 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     const treacherous = treacherousAvailable(game, playerId);
     const treacherousSuffix = treacherous ? ' (Treacherous)' : '';
     const ballAvailable = ballAvailableTo(game, playerId) || treacherous;
-    if (ballAvailable) {
+    // PlayerState.isAbleToMove (PlayerState.java:243-245): standing / moving / prone, active, not pinned.
+    const ableToMove = (standing || prone) && !!(ps & FLAG_ACTIVE) && !(ps & FLAG_ROOTED) && !(ps & FLAG_CHOMPED);
+    // Audit 11-12: LogicModule.isPassActionAvailable:375-383 / isHandOverActionAvailable:397-405 also require
+    // `isAbleToMove() || hasBall || treacherousAvailable` - a pinned player away from the ball has nothing to pass.
+    const ballActionStance = ableToMove || isBallCarrier(game, playerId) || treacherous;
+    if (ballAvailable && ballActionStance) {
       const regularPassAvailable = !teamTurnFlag(game, side, 'passUsed') && !preventsRegularPassOrHandOver(game, playerId);
       if (regularPassAvailable) {
         out.push({ action: 'passMove', get label() { return t('hud.actions.text.passTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
@@ -3243,7 +3382,6 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // ball available (the HMP twin likewise has no local Treacherous mirror); non-null state; able-to-move OR
     // carrying; prone only with allowSpecialActionsFromProne; and no sole preventer "No Ball"
     // (`skill/bb2025/NoBall.java:18-29`). Declare id is `puntMove` (`PlayerAction.java:34`).
-    const ableToMove = (standing || prone) && !!(ps & FLAG_ACTIVE) && !(ps & FLAG_ROOTED) && !(ps & FLAG_CHOMPED);
     if (!teamTurnFlag(game, side, 'puntUsed')
         && canPunt(game, playerId)
         && ballAvailable
@@ -3253,7 +3391,7 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
         && !preventsPuntAction(game, playerId)) {
       out.push({ action: 'puntMove', get label() { return t('hud.actions.text.puntTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
     }
-    if (ballAvailable
+    if (ballAvailable && ballActionStance
         && !teamTurnFlag(game, side, 'handOverUsed')
         && !preventsRegularPassOrHandOver(game, playerId)) {
       out.push({ action: 'handOverMove', get label() { return t('hud.actions.text.handOffTreacheroussuffix', { treacherousSuffix }); }, kind: 'declare', enabled: true });
@@ -3292,14 +3430,30 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // predicate was the only missing link. Live-verified game 866: commandNr 574 (21:55:57) sent
     // `{"modelChangeId":"turnDataSetTtmUsed","modelChangeKey":"home"/"away",...}` for BOTH sides. KTM already had
     // its `ktmUsed` gate (below, pre-existing) — TTM was the sole gap in the once-per-turn class.
-    if (!teamTurnFlag(game, side, 'ttmUsed') && hasSkill(game, playerId, 'throwTeamMate') && hasThrowableTeammate(game, playerId)) {
+    // Audit 11-12: LogicModule.isThrowTeamMateActionAvailable:407-433 - TtmMechanic.canThrow (bb2025:79-84: not PRONE
+    // unless ALLOW_SPECIAL_ACTIONS_FROM_PRONE), an unpinned Right Stuff team-mate on the pitch, and
+    // `isAbleToMove() || rightStuffAdjacent`. The server accepts any declaration (bb2025 StepInitSelecting:110-146).
+    // Audit round 2: canThrow per ruleset - BB2025 (bb2025/TtmMechanic:79-84) the prone option; BB2020
+    // (bb2020/TtmMechanic:81-83) the property and ST 5+, no stance limb; another / absent version as before the audit.
+    const ttmVersion = rulesVersionOf(game);
+    const ttmStanceOk = ttmVersion !== 'BB2025' || !prone || gameOptionEnabled(game, 'allowSpecialActionsFromProne');
+    const ttmStrengthOk = ttmVersion !== 'BB2020' || (() => {
+      const roster = findRosterPlayer(game, playerId);
+      return !!roster && effectiveStat(roster, 'ST') >= 5;
+    })();
+    if (!teamTurnFlag(game, side, 'ttmUsed') && hasSkill(game, playerId, 'throwTeamMate') && hasThrowableTeammate(game, playerId)
+        && ttmStanceOk && ttmStrengthOk
+        && (ableToMove || hasAdjacentThrowableTeammate(game, playerId, false))) {
       out.push({ action: 'throwTeamMateMove', get label() { return t('hud.actions.text.throwTeamMate'); }, kind: 'declare', enabled: true });
     }
     // BB2025 LogicModule.java:472-475 + TtmMechanic.java:74-75: KTM needs its skill, a kickable
     // Right Stuff team-mate, and the acting team's `ktmUsed` flag clear (TurnData.java:460).
+    // Audit 11-12: LogicModule.isKickTeamMateActionAvailable:435-468 - an unpinned kickable mate on the pitch and
+    // `isAbleToMove() || an adjacent kickable mate with tackle zones` (no stance rule for the kicker).
     if (!teamTurnFlag(game, side, 'ktmUsed')
         && hasSkill(game, playerId, 'kickTeamMate')
-        && hasThrowableTeammate(game, playerId)) {
+        && hasThrowableTeammate(game, playerId)
+        && (ableToMove || hasAdjacentThrowableTeammate(game, playerId, true))) {
       out.push({ action: 'kickTeamMateMove', get label() { return t('hud.actions.text.kickTeamMate'); }, kind: 'declare', enabled: true });
     }
     // SECURE THE BALL (owner o66j fix; #8 order = last): grab a LOOSE, MOVING ball (in play + moving + not used
@@ -3645,6 +3799,13 @@ function availableActionsRaw(
     }
     // #236: upstream MoveLogicModule.java:427-428 offers FUMBLEROOSKIE in the mid-activation context alongside
     // END_MOVE; BlitzLogicModule.java:86 includes the same action. It is a no-payload use command, not a declare.
+    // Audit 11-12: back from a declared Pass / Hail Mary Pass to the walk - bb2025 PassLogicModule.actionContext offers
+    // MOVE while `!hasPassed && !isSufferingAnimosity() && action PASS / HAIL_MARY_PASS`, and MoveLogicModule's MOVE
+    // case sends acting(PASS_MOVE, jumping) (MoveLogicModule.java:114-116).
+    if (state === 'PASS' && (actingAction === 'pass' || actingAction === 'hailMaryPass') && acting?.hasPassed !== true
+        && (game.actingPlayer as { sufferingAnimosity?: boolean } | undefined)?.sufferingAnimosity !== true) {
+      out.push({ action: 'passMove', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, ffbAction: 'MOVE' }); // PassLogicModule:209 MOVE
+    }
     if (fumblerooskiStates.has(state) && fumblerooskieAvailable(game, actingId)) {
       out.push({ action: 'fumblerooskie', get label() { return t('hud.actions.text.fumblerooskiDropBall'); }, kind: 'declare', enabled: true });
     }
@@ -3768,6 +3929,13 @@ function availableActionsRaw(
     // matching `PuntLogicModule.java:100-107`, and sends the exact `punt` id (`PlayerAction.java:34`).
     if (state === 'PUNT' && actingAction === 'puntMove' && isBallCarrier(game, actingId)) {
       out.push({ action: 'punt', get label() { return t('hud.actions.text.punt'); }, kind: 'declare', enabled: true });
+    }
+    // Audit 11-12: back from the kick to the walk - bb2025 PuntLogicModule.actionContext:120-122 offers MOVE while the
+    // action is PUNT and UtilPlayer.hasMoveLeft(game, jumping); its plugin sends acting(PUNT_MOVE, jumping)
+    // (plugin/bb2025/MoveLogicPlugin:45-48). The shared rule answers hasMoveLeft.
+    if (state === 'PUNT' && actingAction === 'punt'
+        && hasMoveLeft(game, { jumping: (game.actingPlayer as { jumping?: boolean } | undefined)?.jumping === true })) {
+      out.push({ action: 'puntMove', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, ffbAction: 'MOVE' }); // PuntLogicModule:120-122 MOVE
     }
     // Spec S15B #3: the store holds a live activate intent for this unmoved mover, so the End row rolls the negatrait.
     const rollsOnEnd = state === 'MOVE' && !!actingId && ctx.bigGuyActivateRollPlayerId === actingId

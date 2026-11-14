@@ -1526,7 +1526,7 @@
   "hud.text.cancelHandOff": "Übergabe abbrechen",
   "hud.text.cancelPass": "Pass abbrechen",
   "hud.text.cancelPunt": "Punt abbrechen",
-  "hud.text.cancelYourBlitzThis": "Deinen Blitz abbrechen? Dieser Spieler hat sich noch nicht bewegt oder geblockt, daher wird deine Blitz-Aktion für diesen Zug erstattet.",
+  "hud.text.cancelYourBlitzThis": "Deinen Blitz abbrechen? Der Blitz wird zurückerstattet.",
   "hud.text.cancelYourFoulThis": "Dein Foul abbrechen? Dieser Spieler hat sich noch nicht bewegt.",
   "hud.text.cancelYourHandOff": "Deine Übergabe abbrechen? Dieser Spieler hat sich noch nicht bewegt.",
   "hud.text.cancelYourPassThis": "Deinen Pass abbrechen? Dieser Spieler hat sich noch nicht bewegt.",
