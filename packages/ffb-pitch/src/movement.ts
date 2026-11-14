@@ -8,14 +8,17 @@ import { PITCH_COLS, PITCH_ROWS } from './geometry';
 
 export type Square = [number, number];
 
-/** Owner 2026-07-08 (queue 9): hard ceiling on any movement budget — Blood Bowl MA
- *  caps at 9 and Sprint adds 3, so no legal activation exceeds 12 squares. A
- *  non-finite budget (a player whose `movement` arrived undefined → NaN) made the
- *  BFS bound `currentCost >= maxSteps` ALWAYS false, flooding the ENTIRE pitch —
- *  the "planner distance wildly off" bug. Every entry point now sanitizes. */
-const MAX_REACH_STEPS = 12;
+/** Input guard, NOT a rule. A player's movement limit is the budget its caller passes: MA + that player's rush
+ *  allowance from the game state (renderer o66MovementBudgetAt / selectionInfo, rushAllowanceFor), so a roster above
+ *  the usual MA cap plans its full walk (owner 11-13: a fixed rules ceiling here cut the legal 13th square). The guard
+ *  exists because a NaN budget (a player whose `movement` arrived undefined, 2026-07-08 queue 9) made the BFS bound
+ *  `currentCost >= maxSteps` always false and flooded the whole pitch: NaN / ±Infinity / negatives answer 0, and a
+ *  finite value is floored and clamped to the pitch's diameter. 25 = max(PITCH_COLS, PITCH_ROWS) - 1, the most steps
+ *  between two squares of an open pitch (8-way moves: the end-to-end walk across 26 columns); a bigger budget reaches
+ *  nothing more on an open pitch and only bounds the per-level planner (planPath runs one level per budget step). */
+export const BUDGET_SANITY_BOUND = Math.max(PITCH_COLS, PITCH_ROWS) - 1;
 function sanitizeBudget(steps: number): number {
-  return Number.isFinite(steps) ? Math.min(Math.max(0, Math.floor(steps)), MAX_REACH_STEPS) : 0;
+  return Number.isFinite(steps) ? Math.min(Math.max(0, Math.floor(steps)), BUDGET_SANITY_BOUND) : 0;
 }
 
 export function squareKey(x: number, y: number): string {
@@ -104,8 +107,11 @@ export function reachableSquares(occupied: ReadonlySet<string>, from: Square, ma
  * destination, skills) are not weighed.
  * Returns the best path (lowest roll cost, then fewest steps) or null.
  */
-/** More than any possible number of rushes in one activation (MAX_REACH_STEPS), so no count of rushes outweighs a dodge. */
-export const DODGE_ROLL_COST = MAX_REACH_STEPS + 1;
+/** Invariant: more than the roll cost of any dodge-free route, i.e. more than the rushes one route can hold. planPath
+ *  never runs past the sanitized budget (at most BUDGET_SANITY_BOUND steps, each at most one rush), so bound + 1 makes
+ *  the sum order routes by (dodges, rushes) exactly - no count of rushes outweighs a dodge. Only that order matters:
+ *  the raw sum (pathRollCost) is only compared between routes or tested against 0, never shown or stored. */
+export const DODGE_ROLL_COST = BUDGET_SANITY_BOUND + 1;
 export function planPath(
   occupied: ReadonlySet<string>,
   /** squares marked by ≥1 opposition tackle zone (dodge to leave them) */
@@ -123,7 +129,17 @@ export function planPath(
   const fromKey = squareKey(from[0], from[1]);
   const toKey = squareKey(to[0], to[1]);
   if (remaining <= 0 || toKey === fromKey || occupied.has(toKey)) return null;
+  // Review 11-13 (hover lag on large budgets): three cuts, each output-identical. Pinned by test/movement-13-steps
+  // (planner golden) and test/contact-golden (walk-to-contact stance + route), both recorded before the change.
+  // (1) neighbors() only yields pitch squares, so an off-pitch target (a stance beyond the edge) never arrives: null.
+  if (to[0] < 0 || to[0] >= PITCH_COLS || to[1] < 0 || to[1] >= PITCH_ROWS) return null;
   const toTarget = ([ax, ay]: Square) => (ax - to[0]) ** 2 + (ay - to[1]) ** 2;
+  const stepsToTarget = (x: number, y: number) => Math.max(Math.abs(x - to[0]), Math.abs(y - to[1]));
+  // Cut (2) counts steps as whole-square distances, which holds on the grid only: off-grid input (Square accepts any
+  // number; float error, e.g. 2.2 - 1.2 > 1) runs the search unpruned, exactly as before the cuts. Every caller passes
+  // grid squares (server coordinates, worldToSquare's floored indices); this keeps the old answer for anything else.
+  const prune = Number.isInteger(from[0]) && Number.isInteger(from[1]) && Number.isInteger(to[0]) && Number.isInteger(to[1]);
+  const stepRollsAt = (key: string, level: number) => (marked.has(key) ? DODGE_ROLL_COST : 0) + (stepsUsed + level > normal ? 1 : 0);
 
   interface Entry {
     rolls: number;
@@ -141,8 +157,13 @@ export function planPath(
     );
     for (const [key, entry] of expansion) {
       const [cx, cy] = key.split(',').map(Number) as Square;
-      const stepRolls = (marked.has(key) ? DODGE_ROLL_COST : 0) + (stepsUsed + level > normal ? 1 : 0);
+      const stepRolls = stepRollsAt(key, level);
       for (const [nx, ny] of neighbors(cx, cy).sort((a, b) => toTarget(a) - toTarget(b))) {
+        // (2) a square more steps from the target than the levels left can never lie on an arrival, nor can any square
+        // reached from it (a neighbour is at most one step nearer). Every square that CAN is only ever entered from
+        // squares that can too, so the kept entries get the same rolls, parents and insertion order (the stable sort
+        // keeps their relative order) as without the cut: the target's chain and every tie break are unchanged.
+        if (prune && stepsToTarget(nx, ny) > remaining - level) continue;
         const nk = squareKey(nx, ny);
         if (occupied.has(nk)) continue;
         const rolls = entry.rolls + stepRolls;
@@ -154,6 +175,16 @@ export function planPath(
     const arrival = current.get(toKey);
     if (arrival && (!best || arrival.rolls < best.rolls)) best = { level, rolls: arrival.rolls };
     if (best && best.rolls === 0) break; // can't beat a roll-free path
+    if (current.size === 0) break; // nothing left that can still arrive
+    // (3) proven minimum: each entry holds the least rolls of any `level`-step walk to it, and every later step adds
+    // >= 0, so an arrival after this level costs at least min(rolls + the next step's rolls). A later arrival only
+    // replaces `best` when strictly cheaper, so once best.rolls is at or under that bound the answer is final. This is
+    // the zero-cost exit above generalised: it also ends a search whose first step is an unavoidable dodge.
+    if (best) {
+      let next = Number.POSITIVE_INFINITY;
+      for (const [key, entry] of current) next = Math.min(next, entry.rolls + stepRollsAt(key, level + 1));
+      if (best.rolls <= next) break;
+    }
   }
   if (!best) return null;
 

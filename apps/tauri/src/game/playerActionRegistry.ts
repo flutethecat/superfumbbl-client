@@ -90,7 +90,9 @@ export const PLAYER_ACTION_REGISTRY = {
   stab: a('locked', 'BLOCK', 'server-driven'),
   projectileVomit: a('locked', 'BLOCK', 'server-driven'),
   autoGazeZoat: a('locked', null, 'server-driven'), // Star S4 — see lookIntoMyEyes note
-  forgo: a('locked', null, 'server-driven'),
+  // F2-1: bb2025 SelectLogicModule:237-239 client-declares FORGO (wire "forgo"); no client state of its own
+  // (ClientStateFactory has no FORGO case) - the server ends the activation at once (StepEndSelecting:464-467).
+  forgo: a('selectable', null, 'client-declare'),
   incorporeal: a('locked', null, 'unhandled'),
   chomp: a('locked', 'BLOCK', 'server-driven'),
   // availableActions.ts:1557-1567,1690-1695 offers both through declareAction.

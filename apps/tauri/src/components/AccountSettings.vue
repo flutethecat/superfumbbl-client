@@ -150,7 +150,7 @@ onBeforeUnmount(() => discordAbort?.abort());
 </script>
 
 <template>
-  <fieldset class="settings-group account-card">
+  <fieldset class="settings-group account-card" data-setting-id="account.superFumbblAccount">
     <legend>{{ $t('settings.account.superFumbblAccount') }}</legend>
     <template v-if="!account">
       <label>{{ $t('settings.account.accountCard.account.superFumbblCoach') }} <input v-model="settings.coach40k" autocomplete="username" /></label>

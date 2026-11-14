@@ -21,6 +21,7 @@ import { SpectatorIngress, type SpectatorReceipt } from './replay/spectatorIngre
 import { LiveSpectateHistory, BACKFILL_NEEDLE_LENGTH, classifySpectatorPacket, estimatedSpectatorBytes } from './replay/liveSpectateHistory';
 import { passDestinationFromGame, chargeWaitingFromGame, touchbackWaitingFromGame, kickoffWaitingFromGame, solidDefenceWaitingFromGame, swarmingWaitingFromGame, quickSnapWaitingFromGame, usablePlayerCount, pickMeUpWaitingFromGame, keywordWaitingFromGame, pushWaitingFromGame, reRollWaitingFromGame, useInducementWaitingFromGame, penaltyShootoutPresentation, interactivePrayerDialog, isPrayerPlayerChoiceMode, isIntensiveTrainingMode, concedeNoticeFromGame, interceptionWaitFromGame } from './passiveSpectatorProjection';
 export { passDestinationFromGame } from './passiveSpectatorProjection';
+import { armInterceptionTagFlight, interceptionTagFlightMatches, interceptionTagHiddenAt, reduceInterceptionTag, retireInterceptionTag, showInterceptionTag, type InterceptionTag } from './interceptionTag';
 import { claimDiceStats, clearDisplayedDiceRows, diceStats, displayedDiceRows, emptyTally, ingestDiceReports, noteActivation, noteTurnEnd } from './diceStats';
 import { refreshPostGameDice } from './postGameCache';
 import { appendCoachGame, coachGameRecord } from './coachGameHistory';
@@ -121,7 +122,7 @@ import { friendlySpectateError, spectateServerStatusError } from './spectateErro
 import { deriveReaction } from './logic/order66Reactions';
 import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blastinShotWideText, isBlastinSecondBeat, nextBlastinBeatFact, turnSideIsHome, type BlastinBeatFact } from './blastinSecondBeat';
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
-import { availableActions, actingHasActed, movesRandomly, playerPinned, adjacentDownEnemyIds, handOffCatcherAllowed, animosityAllowsCatcher, throwMateCanPickUp, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
+import { availableActions, actingHasActed, movesRandomly, playerPinned, adjacentDownEnemyIds, handOffCatcherAllowed, isBallCarrier, passTargetAllowed, passAnySquareAvailable, PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE, throwMateCanPickUp, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
 import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
@@ -280,6 +281,8 @@ import { wisdomSetupGate } from './wisdomSetup';
 import {
   HIGH_KICK_TURN_MODE,
   decideHighKickNomination,
+  highKickAnswerOpen,
+  HIGH_KICK_ANSWER_DEADLINE_MS,
   highKickConfirmWire,
   highKickLanding,
   pruneHighKickStaging,
@@ -1349,6 +1352,9 @@ const legacyState = reactive({
     nomineeIds: string[];
     landing: [number, number] | null;
     pendingId: string | null;
+    /** Owner 11-13: true while the ball has not landed yet (kick-off presentation still ahead of the step): no
+     *  nomination, Confirm, decline or End Turn is accepted. Fails open (highKickAnswerOpen); never re-arms once open. */
+    answerHeld: boolean;
     seq: number;
   } | null,
   swarmingPhase: null as {
@@ -1887,6 +1893,110 @@ function clearAllGameTimeouts(preserveConnection = false): void {
 }
 function scheduleConnectionTimeout(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
   return scheduleGameTimeout(callback, delayMs, 'connection');
+}
+/** Owner 11-12 (g1963248): the interceptor tag (interceptionTag.ts). Fed by every applied frame and every published
+ *  spectator position; a reset / snapshot / seek drops it. Additive drawing only - it never holds a frame or a dialog.
+ *  Review 11-12: a new tag is PENDING decoration bound to its pass occurrence (`occurrence`, unique for the session). It
+ *  is shown when THAT pass's own flight (interceptionTagFlightMatches) has been presented and has landed, at once while
+ *  catching up, or when the server ends the pass with no flight seen. Unrelated frames keep it pending; a new pass /
+ *  turn / actor boundary discards it unshown (interceptionTag.ts hardBoundary). Every callback (flight landing, the
+ *  lost-flight cap) carries the occurrence and is inert for any other. The release floor and the cap are DECORATION
+ *  deadlines on plain timers, outside the cancellable presentation registry, so a pause or a collapsed replay step cannot
+ *  strand a shown tag; each is identity-checked and dropped with the tag. */
+const interceptionTagRef = shallowRef<InterceptionTag | null>(null);
+let interceptionTagTimer: ReturnType<typeof setTimeout> | null = null;
+let interceptionTagOccurrenceSeq = 0;
+/** The armed flight of occurrence `occurrence`: throwAnim `seq` (null: the next cue that is not `baseline`). */
+type InterceptionTagStage = { occurrence: number; seq: number | null; baseline: number | null };
+let interceptionTagStage: InterceptionTagStage | null = null;
+let interceptionTagStageCap: ReturnType<typeof setTimeout> | null = null;
+const INTERCEPTION_TAG_FLIGHT_CAP_MS = 4000;
+function clearInterceptionTagStage(): void {
+  interceptionTagStage = null;
+  if (interceptionTagStageCap) { globalThis.clearTimeout(interceptionTagStageCap); interceptionTagStageCap = null; }
+}
+function setInterceptionTag(next: InterceptionTag | null): void {
+  if (interceptionTagTimer) { globalThis.clearTimeout(interceptionTagTimer); interceptionTagTimer = null; }
+  if (!next || next.shownAt !== null || next.occurrence !== interceptionTagStage?.occurrence) clearInterceptionTagStage();
+  const hiddenAt = interceptionTagHiddenAt(next);
+  if (next && hiddenAt !== null) {
+    const wait = hiddenAt - Date.now();
+    // the server already released it: only the read floor is left (none while catching up)
+    if (wait <= 0 || playback.catchingUp) next = null;
+    else {
+      const shown = next;
+      interceptionTagTimer = globalThis.setTimeout(() => {
+        interceptionTagTimer = null;
+        if (interceptionTagRef.value === shown) interceptionTagRef.value = null;
+      }, wait);
+    }
+  }
+  if (interceptionTagRef.value !== next) interceptionTagRef.value = next;
+}
+/** Show the pending tag of `occurrence` (a stale callback for any other occurrence does nothing). */
+function showPendingInterceptionTag(occurrence: number): void {
+  const tag = interceptionTagRef.value;
+  if (!tag || tag.occurrence !== occurrence || tag.shownAt !== null) return;
+  clearInterceptionTagStage();
+  setInterceptionTag(showInterceptionTag(tag, Date.now()));
+}
+/** Review round 4: while a server frame is being applied its throw cue may be REPLACED by the next pass's flight before
+ *  the tag reducer has seen that frame's new-pass boundary; the landing check waits for the reducer (applyFrame calls
+ *  noteInterceptionTagFrame, which runs the check last), so a new pass discards the old unshown tag instead. */
+let interceptionTagChecksDeferred = 0;
+/** The armed flight: picked up when its throw cue starts, landed when that cue is gone or replaced. */
+function checkInterceptionTagFlight(): void {
+  if (interceptionTagChecksDeferred > 0) return;
+  const stage = interceptionTagStage;
+  if (!stage) return;
+  const current = state.throwAnim?.seq ?? null;
+  if (stage.seq === null) {
+    if (current !== null && current !== stage.baseline) stage.seq = current;
+    return;
+  }
+  if (current !== stage.seq) showPendingInterceptionTag(stage.occurrence);
+}
+watch(() => state.throwAnim?.seq ?? null, checkInterceptionTagFlight, { flush: 'sync' });
+function armInterceptionTagStage(occurrence: number, throwSeqBefore: number | null): void {
+  clearInterceptionTagStage();
+  const current = state.throwAnim?.seq ?? null;
+  interceptionTagStage = current !== null && current !== throwSeqBefore
+    ? { occurrence, seq: current, baseline: throwSeqBefore }
+    : { occurrence, seq: null, baseline: current };
+  // a lost flight cue (no renderer, a dropped callback): its own result still shows, never another pass's
+  interceptionTagStageCap = globalThis.setTimeout(() => { interceptionTagStageCap = null; showPendingInterceptionTag(occurrence); },
+    presentationMs(INTERCEPTION_TAG_FLIGHT_CAP_MS));
+}
+/** A cancelled spectator presentation (pause / seek / go live) settles the armed flight now: the published position
+ *  already holds that flight's result. A seek / new position then drops the tag through its snapshot publication. */
+function settleInterceptionTagOnCancel(): void {
+  const tag = interceptionTagRef.value;
+  if (tag && tag.shownAt === null && tag.flight === 'armed') showPendingInterceptionTag(tag.occurrence);
+}
+/** One server frame (or published event): `animation` is that frame's wire animation, `throwSeqBefore` the throw cue
+ *  standing before the frame was applied (the applied frame may already have started its flight). */
+function noteInterceptionTagFrame(
+  model: GameJson | null,
+  reports: readonly Record<string, unknown>[],
+  snapshot: boolean,
+  animation: unknown = null,
+  throwSeqBefore: number | null = state.throwAnim?.seq ?? null,
+): void {
+  if (!model) { setInterceptionTag(null); return; }
+  let next = reduceInterceptionTag(interceptionTagRef.value, { game: model, reports, now: Date.now(), snapshot });
+  if (next && next.occurrence === 0) next = { ...next, occurrence: ++interceptionTagOccurrenceSeq };
+  if (next && next.shownAt === null) {
+    const kind = throwPresentationKind((animation as { animationType?: unknown } | null)?.animationType, reports);
+    if (playback.catchingUp) next = showInterceptionTag(next, Date.now());
+    else if (next.flight === 'awaiting' && interceptionTagFlightMatches(next, model, kind, animation)) {
+      next = armInterceptionTagFlight(next);
+      armInterceptionTagStage(next.occurrence, throwSeqBefore);
+    } else if (next.flight === 'awaiting' && next.releasedAt !== null) {
+      next = showInterceptionTag(next, Date.now()); // the server ended this pass with no flight: nothing left to wait for
+    }
+  }
+  setInterceptionTag(next);
+  checkInterceptionTagFlight();
 }
 
 // How long each pre-game overlay stays up; also used as the queue's per-step hold so the next cinematic doesn't start until this one clears.
@@ -3549,7 +3659,7 @@ let kickoffTimer: ReturnType<typeof setTimeout> | null = null;
 function showKickoff(result: string, roll: number[], img: string | null, outcome: KickoffOutcome | null = null) {
   state.kickoffCine = { result, roll, img, outcome };
   if (kickoffTimer) cancelGameTimeout(kickoffTimer);
-  kickoffTimer = settings.clickDismissCinematics ? null : scheduleGameTimeout(() => (state.kickoffCine = null), presentationMs(KICKOFF_CINE_MS));
+  kickoffTimer = settings.clickDismissCinematics ? null : scheduleGameTimeout(() => { state.kickoffCine = null; retireShownPregameKickoffCard(); }, presentationMs(KICKOFF_CINE_MS));
 }
 
 /** B8-2/B8-3: demo-only staggered pre-game cinematic sequence timers. */
@@ -3858,6 +3968,7 @@ function pumpPregameCine() {
       step?.fire();
     }
     if (!pregameCineQueue.length && !isQueuedCineShowing()) { flushPendingPregameWait(); runPregameDrainedCallbacks(); } // #170 + Slice 2
+    if (step) refreshHighKickAnswerGate(); // owner 11-13: inert unless a held human High Kick waits behind this step
     return;
   }
   const wait = pregameCineBusyUntil - Date.now();
@@ -3874,6 +3985,7 @@ function pumpPregameCine() {
     pregameCineTimer = null;
     pumpPregameCine();
   }, step.holdMs + presentationMs(PREGAME_CINE_GAP_MS));
+  refreshHighKickAnswerGate(); // owner 11-13: inert unless a held human High Kick waits behind this step
 }
 
 /** Defer the kick/receive wait behind the pregame cine queue that owns its display window. */
@@ -3984,6 +4096,7 @@ function dismissShownCine() {
   state.weatherCine = null;
   state.fanFactorCine = null;
   state.kickoffCine = null;
+  retireShownPregameKickoffCard(); // owner 11-13: this card's own dismissal, before the pump shows its successor
   state.swarmingSplash = null;
   pregameCineBusyUntil = 0;
   pumpPregameCine();
@@ -4104,6 +4217,8 @@ function clearPregameCine() {
   for (const e of pregameDrainedCallbacks) { cancelGameTimeout(e.cap); try { e.onCancel?.(); } catch (err) { log('system', `pregame-drain cancel failed: ${String(err)}`); } }
   pregameDrainedCallbacks = [];
   pregameCineQueue.length = 0;
+  pregameKickoffCards.clear(); shownPregameKickoffCard = null; // owner 11-13: nothing of a torn-down pregame card is pending
+  highKickCardTrackedThisKickoff = [...fifoKickoffCards.values()].some((card) => card.highKick);
   pregameCineBusyUntil = 0;
   if (pregameCineTimer) cancelGameTimeout(pregameCineTimer);
   pregameCineTimer = null;
@@ -4303,6 +4418,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       // New occurrence: do not let a prior drive's interactive event leak an
       // apex dwell into this kick while its own result is still unresolved.
       state.kickoffArcNeedsDecisionDwell = false;
+      resetKickoffCardTracking(); // owner 11-13: no earlier drive's card may hold this kick-off's High Kick
     } else if (id === 'kickoffResult') {
       kickoff = {
         name: String(report.kickoffResult ?? ''),
@@ -4445,9 +4561,15 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       // sets state.kickoffCine (unchanged apex-hold trigger: SpectateView watcher) and clears it on completion; no
       // pregame kickoffTimer. holdPlayback is a no-op in play, so it is dropped here. Spectate/replay/demo keep the
       // pregameCineQueue path below (the #67 FIFO is play-mode only, mirroring Slice 1's guard).
-      enqueueFifoCine('kickoff', () => { state.kickoffCine = { result: kName, roll: kRoll, img, outcome: kOutcome }; }, () => { state.kickoffCine = null; }, presentationMs(KICKOFF_CINE_MS));
+      enqueueFifoCine('kickoff', () => { state.kickoffCine = { result: kName, roll: kRoll, img, outcome: kOutcome }; }, () => { state.kickoffCine = null; }, presentationMs(KICKOFF_CINE_MS), { highKick: isHighKickResult(kName) });
     } else {
-      enqueuePregameCine(() => showKickoff(kName, kRoll, img, kOutcome), presentationMs(KICKOFF_CINE_MS), 'kickoff');
+      const kickoffCard = trackKickoffCard(pregameKickoffCards, isHighKickResult(kName)); // owner 11-13: see highKickKickoffPresentationAhead
+      enqueuePregameCine(() => {
+        retireShownPregameKickoffCard(); // a predecessor still on the display is done once this one takes it
+        showKickoff(kName, kRoll, img, kOutcome);
+        shownPregameKickoffCard = kickoffCard;
+        markKickoffCardShown(pregameKickoffCards, kickoffCard);
+      }, presentationMs(KICKOFF_CINE_MS), 'kickoff');
       // Owner 07-06 (pacing 2): hold the spectator drain so the KICK-OFF EVENT reads before the ball-down/bounce/catch frames apply.
       holdPlayback(presentationMs(KICKOFF_CINE_MS));
     }
@@ -6703,6 +6825,21 @@ async function pauseSpectatorView(): Promise<void> {
         }
         notePublishedSkillCard(passiveCard, shownCard, played);
       }
+      // Owner 11-12: the interceptor tag follows the published position (the played event's reports and animation). A
+      // re-publish of the SAME position (live / playback pause restoring the retained position with snap) keeps the tag
+      // and its remaining floor (review P2); a seek, a reconnect snapshot or a multi-step jump has no report history, so
+      // it shows none.
+      {
+        const sameIdentity = !!previous && sameSpectatorIdentity(previous.cursor, position.cursor);
+        if (!sameIdentity || previous!.cursor.sequence !== position.cursor.sequence) {
+          // review 11-12: only a PLAYED step (never a snap - LiveSpectateReview.seek publishes with snap) feeds reports
+          const event = !snap && sameIdentity ? history.eventAfter(previous!.cursor) : null;
+          const stepped = !!event && event.cursor.sequence === position.cursor.sequence && sameSpectatorIdentity(event.cursor, position.cursor);
+          noteInterceptionTagFrame(position.model,
+            stepped ? (event.command.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [] : [],
+            !stepped, stepped ? (event.command as { animation?: unknown }).animation ?? null : null);
+        }
+      }
       spectatorPublication.publish(position, snap);
       // Beefee 10-26 (g1956976, "No ball marker shown on Quick Snap event"): a played kickoffScatter reveals its landing
       // marker HERE, in the synchronous publication boundary, as applyFrame does on the live path. present() runs a
@@ -8530,9 +8667,11 @@ async function pumpPresentation(): Promise<void> {
       const ev = presentation.queue.shift();
       if (!ev) break;
       await presentEvent(ev);
+      refreshHighKickAnswerGate(); // owner 11-13: a retired kick-off card / flight may be what the High Kick waits on
     }
   } finally {
     onPresentationDrainIdle();
+    refreshHighKickAnswerGate();
   }
 }
 
@@ -8897,10 +9036,61 @@ function kickoffTransactionActive(): boolean {
 /** Slice 2: enqueue a kickoff-transaction CINE (event card / Weather-Change child) onto the #67 FIFO. `show`/`clear`
  *  set/null the reactive cine field; the event owns its dwell (auto) or waits for dismissCine (click). Deduped by
  *  label so a re-sent frame refreshes nothing (the card is a single reveal). o66-play only; spectate keeps pregameCineQueue. */
-function enqueueFifoCine(label: string, show: () => void, clear: () => void, dwellMs: number): void {
+/** Owner 11-13: every kick-off event card from enqueue to finish, so the High Kick answer gate never reads a hand-off
+ *  gap (taken off the FIFO but still waiting on the pregame drain, armed but not yet painted, queued in the pregame
+ *  pump) as "the card is gone". A card leaves only through its own clear (finish / cancel / U8 resolve) or a teardown. */
+/** token -> when it went on screen (null = still waiting: queued, or behind the pregame drain), and whether it is the
+ *  High Kick result's own card. Scoped to the current kick-off: a new kickoffScatter clears it. */
+type KickoffCardTrack = { shownAt: number | null; highKick: boolean };
+const fifoKickoffCards = new Map<number, KickoffCardTrack>();
+const pregameKickoffCards = new Map<number, KickoffCardTrack>();
+let shownPregameKickoffCard: number | null = null;
+let kickoffCardSeq = 0;
+let highKickCardTrackedThisKickoff = false;
+function trackKickoffCard(cards: Map<number, KickoffCardTrack>, highKick: boolean): number {
+  const token = ++kickoffCardSeq;
+  // One High Kick result card per kick-off occurrence: a re-sent / duplicate result is not tracked again (the token
+  // stays outside the maps, so marking and finishing it are no-ops). The presentation itself is left as it was.
+  if (highKick && highKickCardTrackedThisKickoff) return token;
+  if (highKick) highKickCardTrackedThisKickoff = true;
+  cards.set(token, { shownAt: null, highKick });
+  return token;
+}
+function markKickoffCardShown(cards: Map<number, KickoffCardTrack>, token: number): void {
+  const card = cards.get(token);
+  if (!card) return;
+  card.shownAt = Date.now();
+  refreshHighKickAnswerGate();
+}
+function finishKickoffCard(cards: Map<number, KickoffCardTrack>, token: number): void {
+  if (cards.delete(token)) refreshHighKickAnswerGate();
+}
+/** The pregame-pump card on screen is done: retired through its own end (its auto timer, a skip click, or a successor
+ *  taking the display) - never inferred from a batched watcher on the shared kickoffCine field. */
+function retireShownPregameKickoffCard(): void {
+  const token = shownPregameKickoffCard;
+  shownPregameKickoffCard = null;
+  if (token !== null) finishKickoffCard(pregameKickoffCards, token);
+}
+/** A new kick-off occurrence: nothing tracked for an earlier drive may hold a later High Kick step. */
+function resetKickoffCardTracking(): void {
+  fifoKickoffCards.clear();
+  pregameKickoffCards.clear();
+  shownPregameKickoffCard = null;
+  highKickCardTrackedThisKickoff = false;
+}
+const isHighKickResult = (name: string): boolean => name.toLowerCase().replace(/[^a-z0-9]/g, '') === 'highkick';
+function enqueueFifoCine(label: string, show: () => void, clear: () => void, dwellMs: number, kickoffCard?: { highKick: boolean }): void {
   const presenting = presentation.presenting?.kind === 'cine' && presentation.presenting.id === label;
   const queued = presentation.queue.some((e) => e.kind === 'cine' && e.label === label);
   if (presenting || queued) return;
+  if (kickoffCard) {
+    // Owner 11-13: tracked from enqueue (the pump may take it off the queue synchronously below) to its own clear.
+    const token = trackKickoffCard(fifoKickoffCards, kickoffCard.highKick);
+    const clearCard = clear, showCard = show;
+    show = () => { try { showCard(); } finally { markKickoffCardShown(fifoKickoffCards, token); } };
+    clear = () => { try { clearCard(); } finally { finishKickoffCard(fifoKickoffCards, token); } };
+  }
   presentation.queue.push({ kind: 'cine', label, show, clear, dwellMs });
   void pumpPresentation();
 }
@@ -9215,6 +9405,8 @@ function teardownPassiveSurfacesOnTransportClose(): void {
   swarmingAmountByTeam.clear(); clearPlayerCountLatches(); // Sol r1 P2-2: a latched Swarming amount (or pick count) never outlives the socket
 }
 function resetPresentation(): void {
+  fifoKickoffCards.clear(); // owner 11-13: queued kick-off cards are dropped below without their clear()
+  highKickCardTrackedThisKickoff = [...pregameKickoffCards.values()].some((card) => card.highKick);
   dropDeferredPassiveSkillCard(); // owner 11-01
   clearPassiveSkillCardLinger();
   dropPublishedSkillCardPresentation();
@@ -10447,17 +10639,27 @@ function applyFrame(frame: QueuedFrame) {
       commitSpectatorDisplayedFrame(frame);
       return;
     }
+    const throwSeqBeforeFrame = state.throwAnim?.seq ?? null; // owner 11-12: the interceptor tag waits for this frame's flight
+    interceptionTagChecksDeferred++; // review round 4: no tag landing check until this frame's boundaries are reduced
     frameApplyDepth++;
     try { applyFrameContents(frame); } finally {
       frameApplyDepth--;
-      if (frameApplyDepth === 0) {
-        flushFrameEndTicks(); // owner 10-20: pills that let their own frame finish first
-        if (!playback.catchingUp) settleLingeringPill(); // owner 10-20: a pill persisted for an election this frame closed goes now
+      try {
+        if (frameApplyDepth === 0) {
+          flushFrameEndTicks(); // owner 10-20: pills that let their own frame finish first
+          if (!playback.catchingUp) settleLingeringPill(); // owner 10-20: a pill persisted for an election this frame closed goes now
+        }
+      } finally {
+        interceptionTagChecksDeferred = Math.max(0, interceptionTagChecksDeferred - 1); // review round 5: a throwing frame-end callback never leaves the deferral stuck
       }
     }
     // g1104 / Sol r1-r2: the turn mode each Dwarfen Wisdom offer object opened in (see staleDialog.ts truth table).
     // Only a frame that SET the dialog is evidence; a snapshot (or any other first sighting) records `unknown`.
     noteDwarfenWisdomOfferFrame(game.value, frameSetsDialogParameter(frame.cmd));
+    if (frame.cmd.netCommandId === NetCommandId.SERVER_MODEL_SYNC || frame.cmd.netCommandId === NetCommandId.SERVER_GAME_STATE) {
+      noteInterceptionTagFrame(game.value, (frame.cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [],
+        frame.cmd.netCommandId === NetCommandId.SERVER_GAME_STATE, frame.cmd.animation ?? null, throwSeqBeforeFrame);
+    } else checkInterceptionTagFlight(); // the deferred landing check of a frame that carries no tag data
     commitSpectatorDisplayedFrame(frame);
   });
 }
@@ -11906,8 +12108,12 @@ function applyFrameContents(frame: QueuedFrame) {
       // Owner 10-13: a landing bounce is the scatter hop armed above, not a second flight (Modern).
       if (a && kind && Array.isArray(a.startCoordinate) && Array.isArray(a.endCoordinate) && !(kind === 'throwTeamMate' && ttmBounceThisFrame)) {
         const from = a.startCoordinate as [number, number];
-        // A picked-off pass terminates at the interceptor; every other throw ends at endCoordinate.
-        const end = (kind === 'pass' && Array.isArray(a.interceptorCoordinate) ? a.interceptorCoordinate : a.endCoordinate) as [number, number];
+        // A picked-off pass or bomb terminates at the interceptor; every other throw ends at endCoordinate. The server
+        // fills interceptorCoordinate only for a SUCCESSFUL interception (StepResolvePass.interceptorCoordinate, which also
+        // moves the ball / bomb there), and upstream AnimationSequenceThrowing stops any throw there. Owner 11-12
+        // (g1963248, "i thought it was caught at the destination"): the bomb flew on to the target while it was held at [9,11].
+        const end = ((kind === 'pass' || kind === 'throwBomb') && Array.isArray(a.interceptorCoordinate)
+          ? a.interceptorCoordinate : a.endCoordinate) as [number, number];
         const on = (s: [number, number]) => s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
         if (on(from) && on(end)) {
           const thrownId = a.thrownPlayerId != null ? String(a.thrownPlayerId) : undefined;
@@ -13888,6 +14094,8 @@ function trackTimeoutEnforced() {
  *  on to the next frame. */
 let queuedFrameFaultForTests: ((frame: QueuedFrame) => boolean) | null = null;
 /** @internal test seam for applyQueuedFrame: make the application of matching queued frames throw. Returns its dispose. */
+/** @internal Review round 5: queue a frame-end callback (run by the next applied frame's cleanup) - fault injection. */
+export function queueFrameEndTickForTests(tick: () => void): void { frameEndTicks.push(tick); }
 export function installQueuedFrameFaultTestHook(shouldThrow: (cmd: Record<string, unknown>) => boolean): () => void {
   queuedFrameFaultForTests = (frame) => shouldThrow(frame.cmd);
   return () => { queuedFrameFaultForTests = null; };
@@ -14960,6 +15168,8 @@ function resetPlayback() {
   // Owner 10-13 (Astra): the block reroll re-tumble state never crosses a reset (disconnect, reconnect, a fresh game or
   // seat: SERVER_GAME_STATE resets here), so a die chosen before it cannot steer a later observed reroll.
   ownBlockRerollIndices = null;
+  setInterceptionTag(null); // owner 11-12: no interceptor tag across a reset / reconnect / seek
+  interceptionTagChecksDeferred = 0; // review round 5: fail open - a reset never inherits a stuck landing-check deferral
   pendingBlockReroll = null;
   lastSurfacedBlockDice = null;
   lastMultiBlockDialog = null;
@@ -15288,6 +15498,7 @@ function cancelSpectatorPresentation(): void {
   stopPresentationSounds();
   spectatorRendererCancellation?.cancel();
   clearSpectatorTransientState();
+  settleInterceptionTagOnCancel(); // review 11-12: a cancelled flight never leaves a callback that reveals it later
 }
 /** Internal seam for verifying timer ownership before Pause activation. */
 export function installSpectatorCancellationTestHarness() {
@@ -17316,6 +17527,15 @@ function plannerStart(input: {
       return false;
     }
   }
+  // Review 11-13 (minor 4): a walk cannot start under a non-moving action. HAND_OVER, PASS and HAIL_MARY_PASS are not
+  // PlayerAction.isMoving (PlayerAction.java:68-72), so the server offers no move square (UtilServerPlayerMove
+  // .updateMoveSquares:78-86) and the plan would only wait for the abort watchdog. Refuse it here; nothing is sent.
+  if (moving && (declare === 'handOver' || declare === 'pass' || declare === 'hailMaryPass')) {
+    const text = lt('store.text.planNeedsWalkAction', { p0: playerName(game.value, playerId) });
+    log('system', text);
+    state.actionNotice = { text: shownText(text), seq: (state.actionNotice?.seq ?? 0) + 1 };
+    return false;
+  }
   // Precompute server-published rolls per route square and wait for each successful result before advancing.
   const squareResolutions: Set<PlanResolution>[] = route.map((sq) => plannerSquareResolutions(game.value!, sq));
   plannerSet({
@@ -17388,6 +17608,9 @@ function plannedPassRefusal(p: NonNullable<typeof plannerPlan>): string | null {
     if (!rc || rc[0] !== target[0] || rc[1] !== target[1]) return 'the receiver moved';
   }
   if (!passTargetInTemplate(g, p.playerId, target)) return 'the target is out of range from the new square';
+  // Task 3 (owner 11-13, pass parity): the arrival throw is still one upstream would send (a passMove plan only at a
+  // team-mate who can catch); sendPassTarget would refuse it anyway, this names why.
+  if (!passTargetAllowed(g, p.playerId, target)) return $t('store.text.passRefusalNoLongerTarget');
   return null;
 }
 
@@ -21041,6 +21264,8 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
     commandNr?: number,
     receipt?: SpectatorReceipt,
   ): void;
+  /** A whole serverModelSync command (its animation included) through the production applyFrame path. */
+  applyCommand(command: Record<string, unknown>): void;
   turnStart(): typeof state.turnStart;
   turnToast(): typeof state.turnToast;
   turnover(): typeof state.turnover;
@@ -21103,6 +21328,11 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
           reportList: { reports },
         },
       });
+    },
+    applyCommand(command) {
+      nr = Number(command.commandNr ?? nr + 1);
+      applyFrame({ receivedAt: Date.now(), cmd: { netCommandId: NetCommandId.SERVER_MODEL_SYNC, commandNr: nr,
+        modelChangeList: { modelChangeArray: [] }, reportList: { reports: [] }, ...structuredClone(command) } });
     },
     turnStart: () => state.turnStart,
     turnToast: () => state.turnToast,
@@ -21721,6 +21951,124 @@ export function installSwarmingSplashTestHarness(
       playback.catchingUp = priorCatchingUp;
       state.swarmingSplash = priorSplash; state.swarmingWaiting = priorWaiting;
       offerTransportAlive = priorTransportAlive;
+    },
+  };
+}
+
+/** @internal Owner 11-13 High Kick answer gate seam: the seated receiving coach over production applyFrame, the #67
+ *  FIFO, the store's High Kick projection and every High Kick sender (Confirm, decline, End Turn, the raw send path). */
+export function installHighKickAnswerGateTestHarness(
+  fixture: GameJson,
+  seat: 'home' | 'away',
+  send: (command: Record<string, unknown>) => void,
+  options: { clickDismiss?: boolean; order66?: boolean } = {},
+): {
+  apply(command: Record<string, unknown>): void;
+  phase(): typeof state.highKickPhase;
+  /** The coach's click-to-skip on the card on screen. */
+  dismiss(): void;
+  masterChef(): typeof state.masterChefSplash;
+  notice(): string | null;
+  presenting(): string | null;
+  kickoffCine(): typeof state.kickoffCine;
+  nominate(playerId: string): boolean;
+  confirm(): boolean;
+  decline(): boolean;
+  endTurn(): void;
+  rawSend(command: Record<string, unknown>): boolean;
+  setCatchingUp(value: boolean): void;
+  /** A rejoin into the open step: the SERVER_GAME_STATE reset + snapshot adoption, then the frame-end projection. */
+  rejoin(model: GameJson): void;
+  /** Hand the seat to automation (the driver's declaration) and run the headless pre-game path. */
+  automate(): void;
+  drivePregame(): void;
+  /** No transport: every send is refused (the latch must stay retryable). */
+  setTransport(alive: boolean): void;
+  dispose(): void;
+} {
+  const priorGame = game.value;
+  const priorSession = session;
+  const priorAutoPregame = play.autoPregame;
+  const priorPlay = { ...play };
+  const priorOrder66 = settings.order66;
+  const priorClickDismiss = settings.clickDismissCinematics;
+  const priorInteractiveSetup = interactiveSetup;
+  const priorSeatAutomation = seatAutomation;
+  const priorCatchingUp = playback.catchingUp;
+  const priorLastReportSig = lastReportSig;
+  const priorLastReportCommandNr = lastReportCommandNr;
+  const reset = () => {
+    resetPresentation(); clearPregameCine();
+    kickoffPresentationOccurrence = null; unboundKickCommandNr = null;
+    acceptedAuthoritativeKicks.clear(); acceptedKickoffScatterReveals.clear();
+    lastReportSig = null; lastReportCommandNr = null;
+    state.kickScatterPreview = null; state.kickTargetReveal = null; state.kickAim = null; state.kickDescend = null;
+    state.kickoffCine = null; state.kickoffArcNeedsDecisionDwell = false;
+    state.highKickPhase = null; retireHighKickAnswerGate();
+    state.actionNotice = null;
+    endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null;
+  };
+  reset();
+  pregameHandled.clear();
+  game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
+  play.active = true;
+  play.coach = String((seat === 'home' ? fixture.teamHome : fixture.teamAway).coach ?? `${seat}-coach`);
+  settings.order66 = options.order66 ?? true;
+  settings.clickDismissCinematics = options.clickDismiss ?? false;
+  interactiveSetup = true;
+  seatAutomation = false;
+  pendingMasterChef = null; blockingSplashCine.value = null; state.masterChefSplash = null;
+  playback.catchingUp = false;
+  session = { send } as unknown as GameSession;
+  return {
+    apply(command) {
+      applyFrame({
+        receivedAt: Date.now(),
+        cmd: {
+          netCommandId: NetCommandId.SERVER_MODEL_SYNC,
+          modelChangeList: { modelChangeArray: [] },
+          reportList: { reports: [] },
+          ...command,
+          commandNr: command.commandNr ?? ++isolatedPresentationTestCommandNr,
+        },
+      });
+    },
+    phase: () => state.highKickPhase,
+    dismiss: () => gameStore.dismissCine(),
+    masterChef: () => state.masterChefSplash,
+    notice: () => { const text = state.actionNotice?.text; return text == null ? null : String(text); },
+    presenting: () => presentation.presenting?.kind ?? null,
+    kickoffCine: () => state.kickoffCine,
+    nominate: (playerId) => gameStore.highKickNominate(playerId),
+    confirm: () => gameStore.highKickConfirm(),
+    decline: () => gameStore.highKickDecline(),
+    endTurn: () => gameStore.playerEndTurn(),
+    rawSend: (command) => sendCommand(command),
+    setCatchingUp(value) { playback.catchingUp = value; },
+    rejoin(model) {
+      resetPlayback();
+      game.value = structuredClone(model);
+      computeHighKickPhase(game.value);
+    },
+    automate() { gameStore.setSeatAutomation(true); },
+    drivePregame() { play.autoPregame = true; drivePregameStep(); },
+    setTransport(alive) { session = alive ? ({ send } as unknown as GameSession) : null; },
+    dispose() {
+      reset();
+      pendingMasterChef = null; blockingSplashCine.value = null; state.masterChefSplash = null; legacyMasterChefShowing = false;
+      play.autoPregame = priorAutoPregame;
+      resetPlayback();
+      clearAllGameTimeouts();
+      pregameHandled.clear();
+      lastReportSig = priorLastReportSig; lastReportCommandNr = priorLastReportCommandNr;
+      session = priorSession;
+      game.value = priorGame;
+      play.active = priorPlay.active; play.coach = priorPlay.coach;
+      settings.order66 = priorOrder66;
+      settings.clickDismissCinematics = priorClickDismiss;
+      interactiveSetup = priorInteractiveSetup;
+      seatAutomation = priorSeatAutomation;
+      playback.catchingUp = priorCatchingUp;
     },
   };
 }
@@ -22908,6 +23256,14 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
       : 'play: nothing declared - no cancel sent');
     return false;
   }
+  // Owner 11-13: the backstop for every caller (End Turn, Confirm, force-advance, an unknown-prompt attempt...): no
+  // High Kick decline leaves before the ball has landed and a player can be picked. Fails open (highKickAnswerOpen).
+  if (cmd.netCommandId === NetCommandId.CLIENT_END_TURN && String(cmd.turnMode ?? '') === HIGH_KICK_TURN_MODE
+      && game.value && highKickAnswerHeldNow(game.value)) {
+    observeOutgoingShadow(cmd, 'dropped');
+    log('system', 'play: High Kick End Turn not sent - the ball has not landed yet');
+    return false;
+  }
   // #173: no ACTIONS while an opponent choice is pending (or during the opponent's turn/setup). Answers to my own live dialog and Call Time-Out still go out — see commandActionClass + actionSurfaceLock.
   if (!commandPermittedByLock(cmd)) {
     observeOutgoingShadow(cmd, 'dropped');
@@ -23244,6 +23600,7 @@ function declareSeatAutomation(): void {
       + 'If a human is meant to play this seat, stop the driver that declared it (setInteractiveSetup(false) / setInteractiveReRolls(false) / setSeatAutomation(true)) and call setSeatAutomation(false).');
   }
   seatAutomation = true;
+  retireHumanHighKickGate(); // owner 11-13: a human High Kick gate never outlives the hand-over
   // the store's own raise was made for a human coach: take it back, so the driver finds the flag where it had it
   if (connectRaisedReRolls) { connectRaisedReRolls = false; interactiveReRolls = false; }
 }
@@ -27167,15 +27524,158 @@ function highKickSurfaceIsServerArmed(g: GameJson): boolean {
 /** (Re)build state.highKickPhase from the received model. Staging is LOCAL and survives model frames, but a
  *  nominee the server stops offering is pruned. Self-nulls outside my highKick turn. */
 function computeHighKickPhase(g: GameJson) {
-  if (!highKickSurfaceIsServerArmed(g)) { if (state.highKickPhase) state.highKickPhase = null; return; }
+  if (!highKickSurfaceIsServerArmed(g)) {
+    if (state.highKickPhase) state.highKickPhase = null;
+    retireHighKickAnswerGate();
+    return;
+  }
+  if (!state.highKickPhase) armHighKickAnswerGate();
   const nomineeIds = highKickNomineeIds(g);
   const landing = highKickLanding(
     state.kickAim?.square as [number, number] | undefined,
     g.fieldModel?.ballCoordinate as [number, number] | undefined,
   );
   const pendingId = pruneHighKickStaging(state.highKickPhase?.pendingId ?? null, nomineeIds);
-  state.highKickPhase = { nomineeIds, landing, pendingId, seq: (state.highKickPhase?.seq ?? 0) + 1 };
+  const answerHeld = !highKickAnswerOpenNow(nomineeIds, landing);
+  state.highKickPhase = { nomineeIds, landing, pendingId, answerHeld, seq: (state.highKickPhase?.seq ?? 0) + 1 };
+  if (answerHeld) refreshHighKickAnswerGate(); // skips the cards ahead of the High Kick card, then re-reads the gate
 }
+
+// Owner 11-13 ("can't catch high kick", reporter: clientEndTurn{highKick} 1.65 s after the step opened, nobody
+// nominated, with the High Kick card still up): no decline / End Turn / nomination for the High Kick until the ball
+// has landed and a player can be picked. BB2025 opens the step (StepApplyKickoffResult.handleHighKick) BEFORE the
+// KICK flight, right behind the kick-off event card on the #67 FIFO, so "landed" on this seat = the server landing
+// square is known AND no kick-off presentation (event card, a flight / kickArc barrier / bounce) is left ahead of the
+// step. The gate LATCHES OPEN for the rest of the step on that positive signal, on "no nominee at all" (declining is
+// then the only legal answer) or on a wall-clock watchdog (elapsed Date.now(), never frames or a single timer: a
+// hidden tab stops frames and throttles timers). It never sends anything by itself and never replays a held press.
+let highKickStepArmedAt: number | null = null;
+let highKickStepWatchdogMs = 0;
+let highKickAnswerReleased = false;
+let highKickAnswerWatchdog: ReturnType<typeof setTimeout> | null = null;
+function armHighKickAnswerGate(): void {
+  retireHighKickAnswerGate();
+  highKickStepArmedAt = Date.now();
+  highKickStepWatchdogMs = HIGH_KICK_ANSWER_DEADLINE_MS;
+  scheduleHighKickWatchdogRefresh();
+}
+/** The ABSOLUTE deadline: wall-clock time since this step opened on this seat. Nothing extends it. */
+function highKickWatchdogTiming(): { elapsedMs: number | null; watchdogMs: number } {
+  return { elapsedMs: highKickStepArmedAt === null ? null : Date.now() - highKickStepArmedAt, watchdogMs: highKickStepWatchdogMs };
+}
+/** Only the reactive (disabled-look) refresh rides this timer; the press-time check reads the clock itself. */
+function scheduleHighKickWatchdogRefresh(): void {
+  if (highKickAnswerWatchdog) { globalThis.clearTimeout(highKickAnswerWatchdog); highKickAnswerWatchdog = null; }
+  if (highKickStepArmedAt === null || highKickAnswerReleased) return;
+  const { elapsedMs, watchdogMs } = highKickWatchdogTiming();
+  highKickAnswerWatchdog = globalThis.setTimeout(() => {
+    highKickAnswerWatchdog = null;
+    refreshHighKickAnswerGate();
+    if (!highKickAnswerReleased) scheduleHighKickWatchdogRefresh();
+  }, Math.max(0, watchdogMs - (elapsedMs ?? watchdogMs)) + 50);
+}
+function retireHighKickAnswerGate(): void {
+  if (highKickAnswerWatchdog) { globalThis.clearTimeout(highKickAnswerWatchdog); highKickAnswerWatchdog = null; }
+  highKickStepArmedAt = null;
+  highKickAnswerReleased = false;
+}
+/** The kick-off presentation still in front of the High Kick step on this seat: the event card (FIFO or the
+ *  spectate-style pregame queue) or a kick flight / its barrier / bounce. */
+function highKickKickoffPresentationAhead(): boolean {
+  // The card: tracked over its whole life (fifoKickoffCards / pregameKickoffCards), never a "showing right now" snapshot.
+  // Belt and braces, the surfaces themselves too. The flight / barrier / bounce / ball-out: any of them queued,
+  // presenting, or the kick pair still armed (presentEvent arms kickDescend synchronously when it dequeues the KICK).
+  return fifoKickoffCards.size > 0 || pregameKickoffCards.size > 0
+    || !!state.kickoffCine || pregameCineQueue.some((step) => step.kind === 'kickoff')
+    || [...inFlightFifoCines.keys()].some((ev) => ev.label === 'kickoff')
+    || presentation.presenting?.kind === 'kickDescend' || !!state.kickDescend
+    || presentation.queue.some((e) => (e.kind === 'cine' && e.label === 'kickoff') || e.kind === 'authoritativeKick' || e.kind === 'kickArc' || e.kind === 'kickoffBounce' || e.kind === 'ballOut')
+    || (presentation.presenting?.kind === 'beat' && (presentation.presenting.id === 'kickoffBounce' || presentation.presenting.id === 'ballOut'));
+}
+function highKickAnswerOpenNow(nomineeIds: readonly string[], landing: readonly [number, number] | null): boolean {
+  const open = highKickAnswerOpen({
+    released: highKickAnswerReleased,
+    nomineeIds,
+    landing,
+    presentationAhead: highKickKickoffPresentationAhead(),
+    ...highKickWatchdogTiming(),
+  });
+  if (open && !highKickAnswerReleased) {
+    highKickAnswerReleased = true;
+    if (highKickAnswerWatchdog) { globalThis.clearTimeout(highKickAnswerWatchdog); highKickAnswerWatchdog = null; }
+  }
+  return open;
+}
+/** Owner 11-13 (review r2): when MY High Kick step opens while its own result card has not reached the screen yet,
+ *  the cards queued ahead of it (an earlier kick-off result, Master Chef, a late coin / weather / fan reveal ...) are
+ *  skipped with the existing click-to-skip path (dismissShownCine - exactly what a coach click does), so the High Kick
+ *  card shows promptly inside the 6 s answer budget. It touches only cine surfaces (never the kick flight or bounce),
+ *  never the High Kick card itself, and does nothing unless a human-owned High Kick step is held. Prayer banners have
+ *  no skip affordance and are left to the deadline. */
+let compressingAheadOfHighKick = false;
+function highKickCardWaitingOffScreen(): boolean {
+  for (const cards of [fifoKickoffCards, pregameKickoffCards]) for (const card of cards.values()) if (card.highKick && card.shownAt === null) return true;
+  return false;
+}
+function compressKickoffCardsAheadOfHighKick(): void {
+  if (compressingAheadOfHighKick || !state.highKickPhase?.answerHeld || highKickAnswerReleased) return;
+  // Never skip a High Kick card that is on screen (an original or a duplicate): only the coach dismisses that.
+  if (state.kickoffCine && isHighKickResult(state.kickoffCine.result)) return;
+  compressingAheadOfHighKick = true;
+  try {
+    for (let i = 0; i < 32 && highKickCardWaitingOffScreen(); i++) {
+      if (state.kickoffCine && isHighKickResult(state.kickoffCine.result)) break;
+      // The High Kick card is not on screen, so any cine showing now is AHEAD of it.
+      const ahead = presentation.presenting?.kind === 'cine' || isDismissibleCineShowing();
+      if (!ahead) break;
+      const before = `${presentation.presenting?.kind ?? ''}:${presentation.presenting?.id ?? ''}|${!!state.coinToss}${!!state.weatherCine}${!!state.fanFactorCine}${!!state.kickoffCine}${!!state.swarmingSplash}${blockingSplashCine.value ?? ''}|${pregameCineQueue.length}`;
+      dismissShownCine();
+      const after = `${presentation.presenting?.kind ?? ''}:${presentation.presenting?.id ?? ''}|${!!state.coinToss}${!!state.weatherCine}${!!state.fanFactorCine}${!!state.kickoffCine}${!!state.swarmingSplash}${blockingSplashCine.value ?? ''}|${pregameCineQueue.length}`;
+      if (before === after) break; // no skip affordance moved anything: leave it to the deadline
+    }
+  } finally {
+    compressingAheadOfHighKick = false;
+  }
+}
+/** Re-read the gate after a presentation edge (FIFO advance / drain, card cleared) or the watchdog. Sends nothing. */
+function refreshHighKickAnswerGate(): void {
+  const phase = state.highKickPhase;
+  if (!phase?.answerHeld) return;
+  compressKickoffCardsAheadOfHighKick();
+  if (!state.highKickPhase?.answerHeld) return;
+  if (!highKickAnswerOpenNow(phase.nomineeIds, phase.landing)) { scheduleHighKickWatchdogRefresh(); return; }
+  state.highKickPhase = { ...phase, answerHeld: false, seq: phase.seq + 1 };
+}
+/** True while MY live High Kick step must not be answered yet (press-time check, re-reads the clock). No projection
+ *  (headless seat, pre-projection frame) = no opinion: fail open. */
+function highKickAnswerHeldNow(g: GameJson): boolean {
+  // An automated seat is never gated: the human projection is retired the moment the seat is handed over.
+  if (!humanSetupSurface()) { retireHumanHighKickGate(); return false; }
+  const phase = state.highKickPhase;
+  if (!phase || (g.turnMode ?? '') !== HIGH_KICK_TURN_MODE || !highKickSurfaceIsServerArmed(g)) return false;
+  if (!phase.answerHeld && highKickAnswerReleased) return false;
+  if (highKickAnswerOpenNow(phase.nomineeIds, phase.landing)) {
+    if (phase.answerHeld) state.highKickPhase = { ...phase, answerHeld: false, seq: phase.seq + 1 };
+    return false;
+  }
+  if (!phase.answerHeld) state.highKickPhase = { ...phase, answerHeld: true, seq: phase.seq + 1 };
+  return true;
+}
+/** The seat stopped being a human's (automation declared / setup surface handed back): drop the human High Kick
+ *  projection and its gate so nothing of it can hold an automated answer. */
+function retireHumanHighKickGate(): void {
+  if (state.highKickPhase) state.highKickPhase = null;
+  retireHighKickAnswerGate();
+}
+function noticeHighKickWaitingForLanding(): void {
+  state.actionNotice = { text: $t('store.gameStore.highKickWaitingForLanding'), seq: (state.actionNotice?.seq ?? 0) + 1 };
+}
+watch(() => state.kickoffCine, (cine) => {
+  // The pregame-path card (spectate-style pump) has no clear hook of its own: it is done when its field clears.
+  // Belt only (a path that nulls the field without the card's own end): per-card retirement happens at its source.
+  if (!cine) retireShownPregameKickoffCard();
+  refreshHighKickAnswerGate();
+});
 
 /** BB2025 ClientStateSwarming.java:10-27 stays setup-shaped through both local-only rejection dialogs. */
 function swarmingSurfaceIsServerArmed(g: GameJson): boolean {
@@ -28792,8 +29292,10 @@ function drivePregameStep() {
     if (humanSetupSurface()) return;
     // Check the lock before latching a headless mini-turn skip.
     if (!commandPermittedByLock({ netCommandId: NetCommandId.CLIENT_END_TURN })) return;
-    if (once(`skip:${g.turnMode}`))
-      sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} });
+    // Owner 11-13: the latch is consumed only by an ACCEPTED send, so a refused skip stays retryable.
+    const skipKey = `skip:${g.turnMode}`;
+    if (!pregameHandled.has(skipKey)
+        && sendCommand({ netCommandId: NetCommandId.CLIENT_END_TURN, turnMode: wireTurnMode(g), playersAtCoordinates: {} })) pregameHandled.add(skipKey);
   }
 }
 
@@ -28915,6 +29417,9 @@ function handleGameShutdown(code: number) {
   state.gameShutdown = { reason, code };
   retireKickoffForTerminalState(); // S47: the frozen board keeps no landing marker / masked ball
   state.hmpScatterMarks = null; // S16: no scatter marks on the frozen board under the shutdown overlay
+  // Review round 3: retire the interceptor tag BEFORE the throw cues go (a cleared cue must not reveal a pending one):
+  // a pending tag (and its flight cap) is discarded, a shown one released through its read floor.
+  setInterceptionTag(retireInterceptionTag(interceptionTagRef.value, Date.now()));
   clearCinematics(); // B12/D1/D5: drop the previous game's queued splashes/animations/assets
   log('system', `match shut down by server: ${reason}`);
 }
@@ -29418,6 +29923,8 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
           }
         });
         clearCollapsedReplayPresentation();
+        // Review 11-12 (P2): the silent prefix rebuilt report-derived tags; a seek shows none (as a snapshot does).
+        setInterceptionTag(null);
         playback.lastReceivedAt = 0;
         if (!game.value || replayStateFingerprint(game.value) !== replayStateFingerprint(expectedState)) {
           log('system', `replay: seek projection corrected at cursor ${commands.length}`);
@@ -29550,6 +30057,8 @@ export const gameStore = {
    *  as blocking — consumed ONLY by the Kick 'em right-click gate; every other caller keeps the default above. */
   interactiveDecisionSurfaceOpenExceptKickEmPicker: () => plannerPromptPending({ ignoreKickEmPicker: true }),
   interceptWait,
+  /** Owner 11-12: the server-reported interceptor of the current pass / bomb (interceptionTag.ts), null when none. */
+  interceptionTag: computed(() => interceptionTagRef.value),
   replay,
   isReplay: computed(() => replay.active),
   /** Owner 10-21: live connection quality for the quick bar's POOR CONNECTION pill (connectionQuality.ts rules). */
@@ -30061,6 +30570,7 @@ export const gameStore = {
   /** Owner 2026-07-04: turn hand-placement setup on/off (off = auto-formation). */
   setInteractiveSetup(on: boolean) {
     interactiveSetup = on;
+    if (!on) retireHumanHighKickGate(); // owner 11-13: the human High Kick gate goes with the human setup surface
     // Owner 10-08 / Astra P2: `false` on a connected seat is how a driver declares the seat automated (see
     // `seatAutomation`) - sticky, and the store's own raise of the reroll flag is taken back so that seat keeps
     // answering by itself. Classic's teardown says `false` too, with its surfaces still registered: not a declaration.
@@ -30216,11 +30726,11 @@ export const gameStore = {
       playerId,
     });
     if (decision.kind === 'refuse') {
-      if (decision.reason === 'no-landing') {
-        state.actionNotice = { text: 'waiting for the ball to land', seq: (state.actionNotice?.seq ?? 0) + 1 };
-      }
+      if (decision.reason === 'no-landing') noticeHighKickWaitingForLanding();
       return false;
     }
+    // Owner 11-13: nothing is staged before the ball has landed (un-staging always works, so nobody is trapped).
+    if (decision.kind === 'stage' && highKickAnswerHeldNow(g)) { noticeHighKickWaitingForLanding(); return false; }
     state.highKickPhase = {
       ...state.highKickPhase,
       pendingId: decision.kind === 'stage' ? decision.playerId : null,
@@ -30233,6 +30743,13 @@ export const gameStore = {
   highKickConfirm() {
     const g = game.value;
     if (!g) return false;
+    // Owner 11-13: before the ball has landed Confirm sends NOTHING (no setup player, no decline) and is not queued -
+    // the coach presses again once the nomination is on offer. Handled (true) so no caller falls through to a decline.
+    if (highKickAnswerHeldNow(g)) {
+      log('system', 'High Kick: Confirm held - the ball has not landed yet');
+      noticeHighKickWaitingForLanding();
+      return true;
+    }
     const phase = state.highKickPhase;
     const steps = highKickConfirmWire({
       armed: highKickSurfaceIsServerArmed(g),
@@ -30885,6 +31402,12 @@ export const gameStore = {
   playerEndTurn() {
     const g = game.value;
     if (!g || !play.active) return;
+    // Owner 11-13: no End Turn (= High Kick decline) before the ball has landed and a player can be picked. Not queued.
+    if (highKickAnswerHeldNow(g)) {
+      log('system', 'High Kick: End Turn held - the ball has not landed yet');
+      noticeHighKickWaitingForLanding();
+      return;
+    }
     // Sol r1 P1 (g1960010): in hitAndRun CLIENT_END_TURN only cancels the move-away. It goes through the one Cancel Hit
     // and Run latch - never the End Turn latch, which would outlive the server resuming the Blitz.
     if (String(g.turnMode ?? '') === 'hitAndRun') { gameStore.cancelHitAndRun(); return; }
@@ -32200,7 +32723,8 @@ export const gameStore = {
     // Match SelectLogicModule's literal `leaping=false` declarations; others preserve the jumping flag.
     // BB2025 SelectLogicModule sends SECURE_THE_BALL with a literal false as well. Never let a stale
     // actingPlayer.leaping echo turn this independent action into a jump-shaped declaration.
-    const FORCED_FLAT_DECLARES = new Set(['throwKey', 'allYouCanEat', 'kickEmBlock', 'kickEmBlitz', 'furiousOutburst', 'thenIStartedBlastin', 'theFlashingBlade', 'secureTheBall', 'removeConfusion']);
+    // F2-1: bb2025 SelectLogicModule:237-239 sends FORGO with a literal false too.
+    const FORCED_FLAT_DECLARES = new Set(['throwKey', 'allYouCanEat', 'kickEmBlock', 'kickEmBlitz', 'furiousOutburst', 'thenIStartedBlastin', 'theFlashingBlade', 'secureTheBall', 'removeConfusion', 'forgo']);
     // A newly selected ordinary mover starts with the same literal false as SelectLogicModule's MOVE declaration;
     // never leak the former mover's jump toggle across the server-owned player replacement.
     const leaping = playerAction === 'move' && leapingOverride !== undefined
@@ -33079,6 +33603,22 @@ export const gameStore = {
     log('system', `play: HAIL MARY PASS ${nextAction === 'hailMaryPass' ? 'ON' : 'OFF'} (server confirms)`);
   },
 
+  /** F1-1: the "Hand-off to Any Player" toggle. Upstream MoveLogicModule.performAvailableAction HAND_OVER (:87-95): with
+   *  the ball in hand (UtilPlayer.hasBall) it sends acting(HAND_OVER, jumping) from HAND_OVER_MOVE and
+   *  acting(HAND_OVER_MOVE, jumping) from HAND_OVER, on the already-acting player. The server renames the action
+   *  (bb2025 StepInitMoving CLIENT_ACTING_PLAYER -> UtilServerSteps.changePlayerAction:76-83); the echo is the state. */
+  toggleHandOverAnyone() {
+    if (!play.active || !game.value) return;
+    const acting = game.value.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+    const actingId = String(acting?.playerId ?? '');
+    if (!actingId || !iControlPlayer(actingId)) { log('system', 'ignored: not your acting player'); return; }
+    const currentAction = String(acting?.playerAction ?? '');
+    if ((currentAction !== 'handOverMove' && currentAction !== 'handOver') || !isBallCarrier(game.value, actingId)) return;
+    const nextAction = currentAction === 'handOverMove' ? 'handOver' : 'handOverMove';
+    sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: actingId, playerAction: nextAction, leaping: isJumping() });
+    log('system', lt(nextAction === 'handOver' ? 'store.text.handOffAnyPlayerOn' : 'store.text.handOffAnyPlayerOff'));
+  },
+
   /** Toggle Jump by resending the same acting action with leaping inverted; the server echo is state. */
   toggleJump() {
     if (!play.active || !game.value) return;
@@ -33916,23 +34456,25 @@ export const gameStore = {
     } | undefined;
     const acting = String(actingPlayer?.playerId ?? '');
     if (!acting) { log('system', 'ignored: no acting player for pass'); return false; }
-    // `passUsed` (and, on some forks, `hasPassed`) is reserved when passMove begins. Captured g929 commandNr
-    // 299 sets passUsed on the first accepted coordinate, before CLIENT_PASS. PASS is the authoritative live
-    // terminal offer; later reroll/Blast It dialogs use separate rails and cannot reach this sender.
+    // `passUsed` is reserved when passMove begins (bb2025 StepInitMoving:383-385; captured g929 commandNr
+    // 299 sets passUsed on the first accepted coordinate, before CLIENT_PASS), so the team flag never gates the throw.
+    // The ACTOR's hasPassed does (passTargetAllowed below, review 11-13 major 2): the server sets it only once the throw
+    // is taken (mixed StepInitPassing:239-246), and upstream refuses a target then (PassLogicModule.playerInteraction:47).
+    // Later reroll / Blast It dialogs use separate rails and cannot reach this sender.
     // At send time, require the passer to hold the live, settled ball; declaration may precede pickup.
     if (!holdsBall(game.value.fieldModel as unknown as HoldsBallFieldModel, acting)) {
       log('system', lt('store.gameStore.passBlockedThePasser'));
       state.actionNotice = { text: $t('store.gameStore.canTPassThe'), seq: (state.actionNotice?.seq ?? 0) + 1 };
       return false;
     }
-    // Audit 11-12: after a failed Animosity roll, a passMove throw at a team-mate of another race is not sent (upstream
-    // bb2025 PassLogicModule.canPlayerGetPass:154-165 at the player click; the server would roll Animosity again).
-    if (String(actingPlayer?.playerAction ?? '') === 'passMove') {
-      const catcher = game.value.fieldModel.playerDataArray.find((d) => d.playerCoordinate?.[0] === targetCoordinate[0] && d.playerCoordinate?.[1] === targetCoordinate[1]);
-      if (catcher && catcher.playerId !== acting && !animosityAllowsCatcher(game.value, acting, catcher.playerId)) {
-        log('system', 'ignored: a failed Animosity roll allows a pass only to a player of the same race');
-        return false;
-      }
+    // Task 3 (owner 11-13, pass parity; supersedes the audit 11-12 Animosity-only check): send only what upstream's
+    // PassLogicModule would (playerInteraction:40-61 / fieldInteraction:63-81): in range; in passMove only at a team-mate
+    // who can catch (tackle zones, Animosity race); in pass any square; Hail Mary any square. The server checks only the
+    // range (StepInitMoving CLIENT_PASS under PASS_MOVE, StepInitPassing:142). passTargetAllowed is the shared rule (and
+    // the kept square-throw variant behind PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE).
+    if (!passTargetAllowed(game.value, acting, targetCoordinate)) {
+      log('system', lt('store.text.passTargetRefused'));
+      return false;
     }
     const from = game.value.fieldModel.playerDataArray.find((data) => data.playerId === acting)?.playerCoordinate;
     // Destination identity is part of the live offer; changing aim is not a duplicate pass.
@@ -33971,7 +34513,23 @@ export const gameStore = {
     const g = game.value;
     const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
     if (!canFreeSelectPass(g, ctx)) { log('system', 'ignored: free-select pass only inside a live pass activation'); return; }
+    // Task 3 (owner 11-13, pass parity): free-select ("Throw Pass" at any square from passMove) belongs to the kept
+    // square-throw variant; upstream reaches any square through the PASS action instead (declarePassAnySquare).
+    if (!PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE) { log('system', lt('store.text.freeSelectPassOff')); return; }
     state.freeSelectPass = true;
+  },
+  /** Task 3 (owner 11-13, pass parity): "Pass Ball (any square)". Upstream MoveLogicModule.performAvailableAction PASS
+   *  (:96-100): from PASS_MOVE with the ball in hand, acting(PASS, jumping); offered by PassLogicModule.actionContext
+   *  :186-188 (isPassAnySquareAvailable && !hasPassed). The server renames the action (StepInitMoving
+   *  CLIENT_ACTING_PLAYER -> changePlayerAction); PASS is not a moving action, so the walk squares go. */
+  declarePassAnySquare() {
+    if (!play.active || !game.value) return;
+    const acting = game.value.actingPlayer as { playerId?: string | null } | undefined;
+    const actingId = String(acting?.playerId ?? '');
+    if (!actingId || !iControlPlayer(actingId)) { log('system', 'ignored: not your acting player'); return; }
+    if (!passAnySquareAvailable(game.value, actingId)) return;
+    sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId: actingId, playerAction: 'pass', leaping: isJumping() });
+    log('system', lt('store.text.passBallAnySquareDeclared'));
   },
   /** spec-252 R-1: DISARM (view escape / cancel). Auto-clear (freeSelectPassOnModelApplied) covers activation-end;
    *  this is the explicit user-cancel path. Kept as a distinct action (not a toggle) so arm and disarm read as the

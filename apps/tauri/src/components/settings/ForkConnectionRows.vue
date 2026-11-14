@@ -12,7 +12,7 @@ import SettingInfo from './SettingInfo.vue';
 
 <template>
   <template v-if="launchedWithForkServer()">
-    <div class="row">
+    <div class="row" data-setting-id="general.serverTarget">
       <label class="row-main">
         <span>{{ $t('settings.general.connection.serverTarget') }}</span>
         <span class="row-ctl">
@@ -25,7 +25,7 @@ import SettingInfo from './SettingInfo.vue';
       <SettingInfo :text="$t('settings.info.serverTarget')" />
     </div>
     <template v-if="FORK_EDITION">
-      <div class="row">
+      <div class="row" data-setting-id="general.server">
         <label class="row-main">
           <span>{{ $t('settings.general.connection.server') }}</span>
           <span class="row-ctl">
@@ -34,7 +34,7 @@ import SettingInfo from './SettingInfo.vue';
         </label>
         <SettingInfo :text="$t('settings.info.serverUrl')" />
       </div>
-      <div class="row">
+      <div class="row" data-setting-id="general.tournamentBotUrl">
         <label class="row-main">
           <span>{{ $t('settings.general.connection.tournamentBotUrl') }}</span>
           <span class="row-ctl">
@@ -45,7 +45,7 @@ import SettingInfo from './SettingInfo.vue';
       </div>
     </template>
     <template v-else>
-      <div class="row">
+      <div class="row" data-setting-id="general.server">
         <label class="row-main">
           <span>{{ $t('settings.general.connection.server') }}</span>
           <span class="row-ctl">
@@ -54,7 +54,7 @@ import SettingInfo from './SettingInfo.vue';
         </label>
         <SettingInfo :text="$t('settings.info.serverUrl')" />
       </div>
-      <div class="row">
+      <div class="row" data-setting-id="general.tournamentBotUrl">
         <label class="row-main">
           <span>{{ $t('settings.general.connection.tournamentBotUrl') }}</span>
           <span class="row-ctl">

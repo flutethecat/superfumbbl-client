@@ -26,12 +26,15 @@ const props = withDefaults(defineProps<{
   canCancel?: boolean;
   endTurnLabel: string;
   endTurnEnabled?: boolean;
+  /** Owner 11-13: reads unavailable (High Kick before the ball has landed) but the hold still runs, so the store's
+   *  press-time check - and its wall-clock watchdog - decides; a truly disabled control could never fail open. */
+  endTurnHeld?: boolean;
   /** The turn / phase the bar belongs to (game, half, turns, turn mode, setup). A hold is tied to the key it started
    *  on: a change cancels it, and the emitted key lets the view check it is still the turn (review finding 8). */
   turnKey?: string;
   holdMs?: number;
   buttonPx?: number;
-}>(), { override: null, showBack: false, confirmLabel: null, canCancel: false, endTurnEnabled: true, turnKey: '', holdMs: 800, buttonPx: 48 });
+}>(), { override: null, showBack: false, confirmLabel: null, canCancel: false, endTurnEnabled: true, endTurnHeld: false, turnKey: '', holdMs: 800, buttonPx: 48 });
 
 const emit = defineEmits<{
   run: [row: ActionCenterRow];
@@ -157,8 +160,8 @@ const sizeStyle = computed(() => ({ '--ac-btn': `${Math.max(48, props.buttonPx)}
       </div>
     </div>
     <div v-if="mode !== 'inspect' && mode !== 'respond'" class="ac-right">
-      <button type="button" class="ac-btn ac-end" data-testid="action-center-end-turn" :class="{ holding, disabled: !endTurnEnabled }"
-        :aria-disabled="!endTurnEnabled" @pointerdown="endDown" @pointerup="endUp" @pointercancel="endCancel" @pointerleave="endCancel"
+      <button type="button" class="ac-btn ac-end" data-testid="action-center-end-turn" :class="{ holding, disabled: !endTurnEnabled || endTurnHeld }"
+        :aria-disabled="!endTurnEnabled || endTurnHeld" @pointerdown="endDown" @pointerup="endUp" @pointercancel="endCancel" @pointerleave="endCancel"
         @keydown.enter.prevent @keydown.space.prevent>
         <svg class="ac-ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="ac-ring-track" cx="18" cy="18" r="16" /><circle class="ac-ring-fill" cx="18" cy="18" r="16" pathLength="100" /></svg>
         <span>{{ endTurnLabel }}</span>

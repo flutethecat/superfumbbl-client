@@ -296,3 +296,117 @@
   .settings-pane .sinfo-tip::after { right: auto; left: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { .settings-pane .settings-nav button, .settings-pane .sinfo-btn, .settings-pane .sinfo-tip { transition: none; animation: none; } }
+
+/* ---- Owner 11-12: the Settings search (components/settings/SettingsSearch.vue). Always at the top of the content
+   pane; the results open as a panel over the tab underneath (the tab itself is untouched). */
+.settings-pane .settings-search {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px calc(16px + 2.4rem) 0 16px; /* clear of the absolute top-right close button */
+  padding: 0 10px;
+  min-height: 38px;
+  background: var(--ui-surface-2);
+  border: 2px solid var(--sr-line);
+  border-left: 4px solid var(--ui-heading);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi);
+}
+.settings-pane .settings-search:focus-within { border-color: var(--ui-heading); }
+.settings-pane .settings-search-glyph { flex: none; color: var(--ui-muted); font: 700 1.2rem/1 var(--sr-bold); }
+.settings-pane .settings-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 0;
+  font: 700 max(var(--ui-min-primary-text-size, 16px), 0.92rem)/1.3 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-text);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+.settings-pane .settings-search-input::placeholder { color: var(--ui-muted); font-weight: 400; opacity: 1; }
+.settings-pane .settings-search-key {
+  flex: none;
+  padding: 2px 6px;
+  font: 700 max(var(--ui-min-text-size, 12px), 0.7rem)/1.2 var(--sr-bold);
+  letter-spacing: 0.06em;
+  color: var(--ui-muted);
+  border: 1px solid var(--sr-line);
+  border-radius: 2px;
+}
+.settings-pane .settings-search-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: -4px;
+  right: -2px;
+  max-height: min(440px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--sr-panel);
+  border: 2px solid var(--sr-line);
+  border-left: 4px solid var(--ui-heading);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 var(--sr-hi), 0 4px 0 var(--sr-drop), 0 10px 24px rgb(0 0 0 / 0.35);
+}
+.settings-pane .settings-search-list { list-style: none; margin: 0; padding: 4px 0; }
+.settings-pane .settings-search-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name where" "excerpt excerpt";
+  gap: 2px 12px;
+  align-items: baseline;
+  padding: 7px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--sr-line) 60%, transparent);
+}
+.settings-pane .settings-search-option:last-child { border-bottom: none; }
+.settings-pane .settings-search-option[data-active='true'] { background: color-mix(in srgb, var(--ui-primary) 22%, transparent); box-shadow: inset 3px 0 0 var(--ui-primary); }
+.settings-pane .settings-search-name {
+  grid-area: name;
+  min-width: 0;
+  font: 700 max(var(--ui-min-primary-text-size, 16px), 0.9rem)/1.3 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-text);
+}
+.settings-pane .settings-search-where {
+  grid-area: where;
+  font: 700 max(var(--ui-min-text-size, 12px), 0.7rem)/1.3 var(--sr-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ui-muted);
+  text-align: right;
+}
+.settings-pane .settings-search-excerpt {
+  grid-area: excerpt;
+  font: 400 max(var(--ui-min-text-size, 12px), 0.8rem)/1.4 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-muted);
+}
+.settings-pane .settings-search-excerpt mark { color: var(--ui-text); background: color-mix(in srgb, var(--ui-heading) 30%, transparent); border-radius: 2px; }
+.settings-pane .settings-search-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font: 400 max(var(--ui-min-primary-text-size, 16px), 0.88rem)/1.4 var(--font-body, Arial, Helvetica, sans-serif);
+  color: var(--ui-muted);
+}
+/* The row a result led to: a brief flash (static under reduced motion). */
+.settings-pane [data-setting-id].settings-search-hit {
+  outline: 2px solid var(--ui-heading);
+  outline-offset: 2px;
+  border-radius: 2px;
+  animation: settings-search-hit 1.8s ease-out both;
+}
+@keyframes settings-search-hit {
+  0%, 35% { background-color: color-mix(in srgb, var(--ui-heading) 28%, transparent); }
+  100% { background-color: transparent; }
+}
+@media (max-width: 640px), (max-height: 500px) {
+  .settings-pane .settings-search { margin: 10px calc(10px + 2.4rem) 0 10px; }
+  .settings-pane .settings-search-key { display: none; }
+  .settings-pane .settings-search-option { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "where" "excerpt"; }
+  .settings-pane .settings-search-where { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-pane [data-setting-id].settings-search-hit { animation: none; background-color: color-mix(in srgb, var(--ui-heading) 18%, transparent); } }
+html.sf-reduce-motion .settings-pane [data-setting-id].settings-search-hit { animation: none; background-color: color-mix(in srgb, var(--ui-heading) 18%, transparent); }

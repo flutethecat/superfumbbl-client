@@ -223,7 +223,7 @@ const vFillRange = {
 </script>
 
 <template>
-  <fieldset class="settings-group skill-markings" data-testid="skill-markings" :aria-busy="busy">
+  <fieldset class="settings-group skill-markings" data-testid="skill-markings" data-setting-id="skills.skillMarkings" :aria-busy="busy">
     <legend>{{ $t('settings.skillMarkings.skillMarkings.skillMarkings') }}</legend>
 
     <!-- APPEARANCE (owner 10-13: was its own "Skill marking appearance" box) -->

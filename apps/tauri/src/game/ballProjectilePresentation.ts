@@ -246,7 +246,8 @@ export function ballProjectilePresentation(
   );
 
   const from = pitchCoordinate(animation?.startCoordinate);
-  const ordinaryEnd = animationType === 'pass' && pitchCoordinate(animation?.interceptorCoordinate)
+  // A successful interception (the only time the server fills interceptorCoordinate) ends a pass or a bomb there.
+  const ordinaryEnd = (animationType === 'pass' || animationType === 'throwBomb') && pitchCoordinate(animation?.interceptorCoordinate)
     ? animation!.interceptorCoordinate : animation?.endCoordinate;
   const to = pitchCoordinate(ordinaryEnd);
   const kind = throwPresentationKind(animationType, reports, game.actingPlayer?.playerAction);

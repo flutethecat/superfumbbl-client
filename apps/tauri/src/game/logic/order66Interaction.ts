@@ -11,7 +11,7 @@
 
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
-import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, handOffCatcherAllowed, animosityAllowsCatcher, type CoachAction } from './availableActions';
+import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, handOffCatcherAllowed, passTargetAllowed, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 import { t } from '../../i18n';
 
@@ -98,6 +98,47 @@ export function hitAndRunInstructionVisible(game: GameJson | null | undefined, c
   const actingId = String((game.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (!actingId || !input.controlsActing(actingId)) return false;
   return deriveClientState(game, ctx) === 'HIT_AND_RUN' && serverMoveSquares(game).length > 0;
+}
+/** Review round 2 (11-13): a pitch TILE pick in the pass / hand-off states, decided before any movement-only handling
+ *  (Jump landing, Ball and Chain aim, the walk planner). Upstream's AWT client turns a click on an occupied square into
+ *  a PLAYER click (ClientStateAwt: clickOnPlayer when a player stands there), so `playerClick` = hand the tile to the
+ *  player-click route (onPlayerClick: PassLogicModule.playerInteraction:40-61 / HandOverLogicModule.playerInteraction
+ *  :37-46, neither reading the jumping flag). An empty square in PASS / HAIL_MARY_PASS is the stationary throw
+ *  (`throw` when passTargetAllowed, else `ignore`: fieldInteraction:70-79). Everything else (`continue`) is movement:
+ *  PASS_MOVE / HAND_OVER_MOVE delegate an empty square to Move (fieldInteraction:63-69), where Jump applies. */
+export function passFamilyTileRoute(
+  game: GameJson | null | undefined,
+  ctx: ClientStateContext,
+  square: [number, number],
+): { kind: 'playerClick'; playerId: string } | { kind: 'throw'; square: [number, number] } | { kind: 'ignore' } | { kind: 'continue' } {
+  if (!game) return { kind: 'continue' };
+  const state = deriveClientState(game, ctx);
+  if (state !== 'PASS' && state !== 'HAND_OVER') return { kind: 'continue' };
+  const acting = actingPlayerId(game);
+  if (!acting) return { kind: 'continue' };
+  const occupant = (game.fieldModel?.playerDataArray ?? [])
+    .find((d) => sameSquare((d as { playerCoordinate?: unknown }).playerCoordinate, square)) as { playerId?: string } | undefined;
+  const occupantId = String(occupant?.playerId ?? '');
+  if (occupantId && occupantId !== acting) return { kind: 'playerClick', playerId: occupantId };
+  if (state === 'PASS') {
+    const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+    if (action === 'pass' || action === 'hailMaryPass') {
+      return passTargetAllowed(game, acting, square) ? { kind: 'throw', square: [square[0], square[1]] } : { kind: 'ignore' };
+    }
+  }
+  return { kind: 'continue' };
+}
+/** F1-1: the "Hand-off to Any Player" state is on screen while my acting ball carrier is in the HAND_OVER action (not
+ *  the ordinary HAND_OVER_MOVE), the one state in which an opponent may take the hand-off (upstream
+ *  HandOverLogicModule.actionContext:98-103, HANDS_OVER_TO_ANYONE). Pure received state; sends nothing. */
+export function handOffToAnyPlayerActive(game: GameJson | null | undefined, ctx: ClientStateContext, input: {
+  playing: boolean; myTurn: boolean; controlsActing: (playerId: string) => boolean;
+}): boolean {
+  if (!game || !input.playing || !input.myTurn) return false;
+  const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
+  const actingId = String(acting?.playerId ?? '');
+  if (!actingId || !input.controlsActing(actingId) || String(acting?.playerAction ?? '') !== 'handOver') return false;
+  return deriveClientState(game, ctx) === 'HAND_OVER' && isBallCarrier(game, actingId);
 }
 /** Astra 10-04 / 10-07 (P3): a client confirmation (End Activation prompt, End Turn warning) belongs to the activation
  *  it opened in. It is retired, sending nothing, once the turn is no longer mine or the acting player changed. */
@@ -1596,27 +1637,34 @@ export function onPlayerClick(
       return { kind: 'ignore', reason: 'own player not adjacent during hand-off' };
     }
   }
+  // F1-1: an OPPONENT takes the hand-off only in the HAND_OVER action (the coach's "Hand-off to Any Player" toggle),
+  // never in the ordinary HAND_OVER_MOVE: bb2025 / mixed HandOverLogicModule.playerInteraction:37-46 sends handOver for
+  // any non-acting player that passes canPlayerGetHandOver:62-76 (`|| playerAction == HAND_OVER`) with the ball in
+  // hand (:78-85). handOffCatcherAllowed is that check. Any other opponent click stays an inspection.
+  if (state === 'HAND_OVER' && !isMine(clickedPlayerId)) {
+    const acting = actingPlayerId(game);
+    const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+    if (acting && action === 'handOver' && handOffCatcherAllowed(game, acting, clickedPlayerId)) {
+      return { kind: 'handOverTarget', catcherId: clickedPlayerId };
+    }
+  }
 
-  // A.5 (o66j #8) PASS: the target is a SQUARE — a click on ANY non-acting player throws to their square (the
-  // common case is an own receiver; the server validates range + resolves interception). A self-click must fall
-  // through to the shared WALK menu below: PassLogicModule.actionContext (bb2025:190-195) can add the in-action
-  // HAIL_MARY_PASS choice there, alongside the activation actions from availableActions.
+  // PASS: a click on a non-acting player throws at their square only where upstream's would (Task 3 below; the A.5
+  // "any player's square" variant is kept behind PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE, off). A self-click must fall
+  // through to the shared WALK menu below: PassLogicModule.actionContext (bb2025:186-195) adds the in-action
+  // Pass Ball (any square) / HAIL_MARY_PASS choices there, alongside the activation actions from availableActions.
   if (state === 'PASS' && clickedPlayerId !== actingPlayerId(game)) {
     const acting = actingPlayerId(game);
     const tp = (game.fieldModel?.playerDataArray ?? []).find((d) => (d as { playerId?: string }).playerId === clickedPlayerId) as { playerCoordinate?: unknown } | undefined;
     const sq = normSquare(tp?.playerCoordinate);
     if (!sq) return { kind: 'ignore', reason: 'pass target has no square' };
-    // PC-1 (Meero SR-211): only route the throw when the receiver's square is in the pass-range template — an
-    // out-of-range send dies here (only-surface-what-the-server-offers), never reaching sendPassTarget.
-    // Audit 11-12: after a failed Animosity roll, a passMove click on a team-mate of another race is ignored (upstream
-    // bb2025 PassLogicModule.canPlayerGetPass).
-    if (isMine(clickedPlayerId) && String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'passMove'
-        && !animosityAllowsCatcher(game, acting, clickedPlayerId)) {
-      return { kind: 'ignore', reason: 'a failed Animosity roll allows a pass only to a player of the same race' };
-    }
-    if (!passTargetInTemplate(game, acting, sq)) {
+    // Task 3 (owner 11-13, pass parity): upstream PassLogicModule.playerInteraction:40-61 - nothing once passed; a Hail
+    // Mary Pass throws at any player; otherwise in range and, in PASS_MOVE, only at a team-mate who can catch
+    // (canPlayerGetPass: tackle zones + the Animosity race check); in PASS at any player. passTargetAllowed owns it (and
+    // the kept square-throw variant behind PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE). A refused opponent stays an inspection.
+    if (!passTargetAllowed(game, acting, sq)) {
       return isMine(clickedPlayerId)
-        ? { kind: 'ignore', reason: 'pass target out of range template' }
+        ? { kind: 'ignore', reason: 'not a pass target (in a Pass Move only a team-mate who can catch, in range)' }
         : { kind: 'inspect', playerId: clickedPlayerId };
     }
     return { kind: 'passTarget', square: sq };
@@ -1703,12 +1751,13 @@ export function onSquareClick(
       armStepEcho(square);
       return { kind: 'step', toSquare: square };
     }
-    // A.5 (o66j #8) PASS: a click on OPEN ground that is NOT a walk square is the throw target (the server
-    // validates range + resolves scatter/interception). Other WALK states have no open-square target.
-    // PC-1 (Meero SR-211): gate the open-ground throw on the pass-range template too — out-of-range dies at source.
+    // PASS open ground (not a walk square); other WALK states have no open-square target. PC-1 (Meero SR-211): the
+    // range template still gates it (inside passTargetAllowed). Task 3 (owner 11-13, pass parity): PassLogicModule.fieldInteraction:63-81 - in PASS_MOVE a square click walks
+    // (delegates to Move: only a server move square, handled above), it never throws; in PASS / HAIL_MARY_PASS it
+    // throws at a square in range. The kept square-throw variant (switch on) throws from passMove too.
     if (state === 'PASS') {
-      if (passTargetInTemplate(game, actingPlayerId(game), square)) return { kind: 'passTarget', square };
-      return { kind: 'ignore', reason: 'pass target out of range template' };
+      if (passTargetAllowed(game, actingPlayerId(game), square)) return { kind: 'passTarget', square };
+      return { kind: 'ignore', reason: 'not a pass target (a Pass Move square click walks; or out of range)' };
     }
     return { kind: 'ignore', reason: 'square not in server moveSquareArray' };
   }

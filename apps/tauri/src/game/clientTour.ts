@@ -30,8 +30,6 @@ export type ClientStepId =
   | 'hud-bar-telestrator'
   | 'hud-bar-menu'
   | 'hud-bar-tackle'
-  | 'hud-bar-sprites'
-  | 'hud-bar-skills'
   | 'hud-bar-director'
   | 'hud-bar-roster'
   | 'hud-roster'
@@ -68,8 +66,6 @@ export const CLIENT_STEPS: readonly ClientStepId[] = [
   'hud-bar-telestrator',
   'hud-bar-menu',
   'hud-bar-tackle',
-  'hud-bar-sprites',
-  'hud-bar-skills',
   'hud-bar-director',
   'hud-bar-roster',
   'hud-roster',
@@ -141,8 +137,6 @@ const BAR: Record<string, { anchor: string; label: string; body: string }> = {
   'hud-bar-telestrator': { anchor: 'hud-telestrator', get label() { return $t('tour.bar.telestrator'); }, get body() { return $t('tour.bar.telestratorDrawOnThe'); } },
   'hud-bar-menu': { anchor: 'hud-menu', get label() { return $t('tour.bar.gameMenu'); }, get body() { return $t('tour.bar.opensTheEscMenu'); } },
   'hud-bar-tackle': { anchor: 'hud-tackle', get label() { return $t('tour.bar.tackleZones'); }, get body() { return $t('tour.bar.togglesTackleZoneShading'); } },
-  'hud-bar-sprites': { anchor: 'hud-sprites', get label() { return $t('tour.bar.sprites'); }, get body() { return $t('tour.bar.cyclesThePlayerArtwork'); } },
-  'hud-bar-skills': { anchor: 'hud-skills', get label() { return $t('tour.bar.skillDisplay'); }, get body() { return $t('tour.bar.switchesBetweenSkillIcons'); } },
   'hud-bar-director': { anchor: 'hud-director', get label() { return $t('tour.bar.autoDirector'); }, get body() { return $t('tour.bar.followsTheActionOn'); } },
   'hud-bar-roster': { anchor: 'hud-roster-btn', get label() { return $t('tour.bar.roster'); }, get body() { return $t('tour.bar.opensTheRosterPane'); } },
   'hud-bar-report': { anchor: 'hud-report', get label() { return $t('tour.bar.report'); }, get body() { return $t('tour.bar.sendsMeABug'); } },

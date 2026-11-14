@@ -75,3 +75,35 @@ export function highKickConfirmWire(input: {
 export function pruneHighKickStaging(pendingId: string | null, nomineeIds: readonly string[]): string | null {
   return pendingId && nomineeIds.includes(pendingId) ? pendingId : null;
 }
+
+/**
+ * Owner 11-13 ("can't catch high kick"): no decline and no End Turn for the High Kick until the ball has landed and
+ * a player can be picked. The step opens while the kick-off presentation that announced it (the High Kick card, any
+ * kick flight still in the air) is on screen, and a press in that window used to decline with nobody nominated.
+ *
+ * The answer opens on the POSITIVE signal (the landing square is known and nothing of the kick-off presentation is
+ * left ahead of the step), or as soon as declining is the only legal answer (no nominee at all), or on the wall-clock
+ * watchdog. LATCHES FAIL OPEN: the watchdog is measured in elapsed wall-clock time (a hidden tab stops frames and
+ * throttles timers, never Date.now()), so a lost signal can never wedge the step. Once open it stays open for the step.
+ */
+export function highKickAnswerOpen(input: {
+  /** Already released once for this step. */
+  released: boolean;
+  nomineeIds: readonly string[];
+  landing: readonly [number, number] | null;
+  /** The kick-off presentation (event card, kick flight) is still presenting or queued ahead of the step. */
+  presentationAhead: boolean;
+  /** Wall-clock ms since this step was first armed on this seat; null = unknown (treated as expired). */
+  elapsedMs: number | null;
+  watchdogMs: number;
+}): boolean {
+  if (input.released) return true;
+  if (input.nomineeIds.length === 0) return true;
+  if (input.elapsedMs === null || !Number.isFinite(input.elapsedMs) || input.elapsedMs >= input.watchdogMs) return true;
+  return !!input.landing && !input.presentationAhead;
+}
+
+/** The absolute answer deadline: measured from the High Kick step opening on this seat and extended by nothing (no
+ *  card appearance, no frame, no later card). The kick-off card (1800 ms) normally clears well inside it; cards queued
+ *  ahead of it are skipped when the step opens, so the coach is not answering blind inside this budget. */
+export const HIGH_KICK_ANSWER_DEADLINE_MS = 6000;

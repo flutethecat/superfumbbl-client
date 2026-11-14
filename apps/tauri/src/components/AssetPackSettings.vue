@@ -459,7 +459,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
 </script>
 
 <template>
-  <fieldset v-if="!props.builderMode" class="settings-group asset-pack-settings">
+  <fieldset v-if="!props.builderMode" class="settings-group asset-pack-settings" data-setting-id="modpacks.assetPacks">
     <legend>{{ $t('settings.assetPacks.assetPacks.assetPacks') }}</legend>
     <p class="hint">{{ $t('settings.assetPacks.assetPacks.eachCategoryCanUse') }}</p>
     <p class="hint asset-pack-immediate">{{ $t('settings.assetPacks.assetPacks.activePackChoicesFollow') }}</p>
@@ -507,7 +507,7 @@ onMounted(() => { void run(() => reloadDrafts()); });
 
   <ConfiguredAssetsBrowser v-if="!props.builderMode" :target-catalog="targetCatalog" />
 
-  <fieldset class="settings-group asset-creator">
+  <fieldset class="settings-group asset-creator" data-setting-id="modpacks.assetPackCreator">
     <legend>{{ $t('settings.assetPacks.assetPackCreator.assetPackCreator') }}</legend>
     <p class="hint">{{ $t('settings.assetPacks.assetPackCreator.buildOnePortablePack') }}</p>
     <div class="draft-toolbar">

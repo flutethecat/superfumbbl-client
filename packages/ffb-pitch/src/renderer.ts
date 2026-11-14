@@ -3338,6 +3338,30 @@ export class PitchRenderer {
     this.interceptCandidates = list ? list.map((c) => ({ ...c, square: [c.square[0], c.square[1]] })) : null;
     this.redrawOverlays();
   }
+  /** Owner 11-12 (g1963248): while the server's Kaboom! skillUse dialog stands, the bomb's square and the eight around
+   *  it (the host passes them clipped to the pitch, from server data only). null / [] clears. Overlay only, no input. */
+  private blastAreaSquares: Square[] | null = null;
+  setBlastArea(squares: readonly Square[] | null): void {
+    const next = squares && squares.length > 0 ? squares.map((s) => [s[0], s[1]] as Square) : null;
+    const prev = this.blastAreaSquares;
+    if ((prev?.length ?? 0) === (next?.length ?? 0) && (next ?? []).every((s, i) => prev?.[i]?.[0] === s[0] && prev?.[i]?.[1] === s[1])) return;
+    this.blastAreaSquares = next;
+    this.redrawOverlays();
+  }
+  /** The keg-throw range box's look (a flat tile fill per square), in the explosion's orange, with an outline. */
+  private drawBlastArea(): void {
+    if (!this.blastAreaSquares) return;
+    const area = new Graphics();
+    area.label = 'kaboom-blast-area';
+    area.eventMode = 'none';
+    for (const [sx, sy] of this.blastAreaSquares) {
+      if (!isOnPitch([sx, sy])) continue;
+      const pts = squareQuad(sx, sy).points.flat();
+      area.poly(pts).fill({ color: 0xff6a1a, alpha: 0.26 });
+      area.poly(pts).stroke({ color: 0xff8a3a, alpha: 0.7, width: 1.5 });
+    }
+    this.overlayLayer.addChild(area);
+  }
   /** Client-declared Gaze target; cleared before CLIENT_GAZE is sent. */
   private gazeTarget: string | null = null;
   setGazeTarget(playerId: string | null): void {
@@ -5290,6 +5314,30 @@ export class PitchRenderer {
     this.updateOverlayScales();
     this.clampCamera();
   }
+  /** Bug 11-12 (JLeav, sideways): screen px at the BOTTOM of the canvas that the host's quick bar covers. E-W only,
+   *  the mirror of topHudClearance: the pan may bring the bottom sideline band's lower edge up to this line, so
+   *  scrolled to the very bottom its boxes sit above the bar instead of under it. Pan range only: the fit, the
+   *  default view and N-S are unchanged. With the stadium on, the stands below the band normally give this room
+   *  already and nothing is added; where they do not (a compact view), the same clearance applies. */
+  private bottomHudClearance = 0;
+
+  setBottomHudClearance(pixels: number): void {
+    const next = Number.isFinite(pixels) ? Math.max(0, Math.round(pixels)) : 0;
+    if (next === this.bottomHudClearance) return;
+    // Setting the clearance NEVER moves the camera: it only changes how far the next pan may travel. Re-clamping here
+    // was tried three ways and each could shift a camera the coach had not touched (the reset view is not always
+    // inside the clamp's own resting range: 4K, flat pitch, with the top clearance set). A view left scrolled beyond a
+    // limit that just shrank is brought back by the ordinary clamp on the coach's next pan or zoom.
+    this.bottomHudClearance = next;
+  }
+  /** Extra travel toward the bottom edge that clears the bottom HUD in E-W: the clearance less whatever content (the
+   *  stands, with the stadium on) already lies below the bottom band at this scale. 0 in N-S. */
+  private bottomHudPanExtension(scale: number): number {
+    if (getOrientation() !== 'ew' || this.bottomHudClearance <= 0 || !this.contentBounds) return 0;
+    const bandBottom = Math.max(...this.sidelineBandWorldRects().map((r) => r.y1));
+    const below = Math.max(0, this.contentBounds.y + this.contentBounds.height - bandBottom) * scale;
+    return Math.max(0, this.bottomHudClearance - below);
+  }
   /** The top gutter the E-W pan keeps clear (0 in N-S). */
   private topHudReserve(): number {
     return getOrientation() === 'ew' ? this.topHudClearance : 0;
@@ -5315,6 +5363,14 @@ export class PitchRenderer {
         x1: Math.max(...pts.map((p) => p.x)), y1: Math.max(...pts.map((p) => p.y)),
       };
     });
+  }
+  /** The canvas in client px plus its own pixel height (`screenHeight`): host chrome measured in client px converts to
+   *  canvas px with it, also when the canvas is offset from its host or CSS-scaled. Null before the stage exists. */
+  canvasClientBox(): { top: number; bottom: number; height: number; screenHeight: number } | null {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined;
+    if (!canvas || !this.app) return null;
+    const rect = canvas.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, height: rect.height, screenHeight: this.app.screen.height };
   }
   /** Viewport y of the canvas's top edge (host chrome measured in client px converts to canvas px with it). */
   canvasClientTop(): number | null {
@@ -8637,7 +8693,7 @@ export class PitchRenderer {
     data: PlayerDataJson;
     /** squares movable without a Rush (stand-up cost already deducted, C6) */
     normal: number;
-    /** additional Rush squares (2, or 3 with Sprint) */
+    /** additional Rush squares left (rushAllowanceFor: 2, +1 Sprint, +1 an unused Burst of Speed) */
     rushes: number;
     /** squares already stepped this activation */
     used: number;
@@ -9638,6 +9694,7 @@ export class PitchRenderer {
     this.drawPassRuler();
     // #151: pass rolls-required cues (throw over passer / catch over target) — server-fed, cleared with the layer.
     this.drawPassRollCues();
+    this.drawBlastArea(); // owner 11-12: the Kaboom! blast squares, while the server's dialog stands
     // Owner o66 automove PREVIEW: draw the pending route (a trail through the square centres + a dot per step,
     // a brighter ring on the destination) BEFORE the legacy planner gate — plannerEnabled is off in o66. The
     // host passes [from, ...route]; the start square gets no dot. Minimal by design (owner tunes on return).
@@ -18852,7 +18909,8 @@ export class PitchRenderer {
         yMin,
         ySize,
         this.app.screen.height,
-        this.southernPanExtension,
+        // Bug 11-12: in E-W the bottom band can always come up above the bottom quick bar.
+        Math.max(this.southernPanExtension, this.bottomHudPanExtension(scale)),
         reserve > 0 ? reserve - bandTop * scale : -Infinity,
       );
     }

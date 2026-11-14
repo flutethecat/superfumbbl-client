@@ -92,7 +92,7 @@ function sideLabel(side: SpriteSide): string { return side === 'any' ? t('ui.con
 </script>
 
 <template>
-  <fieldset class="settings-group configured-assets" data-testid="configured-assets">
+  <fieldset class="settings-group configured-assets" data-testid="configured-assets" data-setting-id="modpacks.configuredAssets">
     <legend>{{ $t('settings.assetPacks.configuredAssets.configuredAssets') }}</legend>
     <p class="hint">{{ $t('settings.assetPacks.configuredAssets.seeTheActiveSource') }}</p>
 

@@ -417,9 +417,6 @@
   letter-spacing: .06em;
   color: var(--ui-heading);
 }
-/* skill display: the Markings / Icons short label in band capitals (the Icons emoji keeps its own face) */
-.sf-lm.lm-game .pitch-host .config-bar.ui-panel button.skill-mode-btn:not([data-skill-mode='icons']) { font-family: var(--sf-band-font); }
-.sf-lm.lm-game .pitch-host .config-bar.ui-panel button.skill-mode-btn[data-active='false'] { color: var(--ui-heading); }
 /* spectator pause / GO TO LIVE */
 .sf-lm.lm-game .pitch-host .config-bar.ui-panel .quick-spectator-pause.go-live-action:not(:disabled) {
   font-family: var(--sf-band-font);

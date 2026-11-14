@@ -7,7 +7,7 @@
 //
 // Zero game-wire impact: the send is HTTP to config-web, never the game websocket.
 // Credentials: `passwordMd5` only (see bugReport.ts). The clear text never leaves this process.
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { FORK_EDITION } from '../game/edition';
 import { bugReportBaseUrl, resolveJoinCreds, serializeSettingsForFile, settings } from '../game/settings';
@@ -24,6 +24,7 @@ import {
 import { captureClientWindowInBrowser, reportCaptureUnsettled, screenshotAttachment, type ReportCaptureResult } from '../game/bugReportScreenshot';
 import type { BugReportHost } from '../game/bugReportHost';
 import { bugReportSettingsSnapshot, collectBugReportEnv } from '../game/bugReportSettings';
+import { bugReportOsDisplayLabel, bugReportOsNow, loadBugReportOs, type BugReportOs, type BugReportOsPhrases } from '../game/bugReportOs';
 import { focusReportDialogIn, onReportModalKeydown } from '../game/reportModalKeys';
 import BugReportScreenshotPanel from './BugReportScreenshotPanel.vue';
 import { rememberBugReport } from '../game/bugReportUpdates';
@@ -69,6 +70,8 @@ const reportAttachments = computed(() => {
       ? t('bugReport.reportAttachments.gameService', { service: gameServiceLabel(reportGameService.value), gameId: reportGameId.value })
       : t('bugReport.reportAttachments.gameNone'),
     t('bugReport.reportAttachments.buildAppVersion', { APP_VERSION }),
+    // Owner 11-13: the operating system rides with every report (context.os); the coach sees the reading.
+    t('bugReport.reportAttachments.operatingSystem', { os: bugReportOsDisplayLabel(reportOs.value ?? bugReportOsNow(), OS_PHRASES) }),
     t('bugReport.reportAttachments.coachP0', { p0: settings.coach40k || settings.coach || '(not set)' }),
   ];
   const wireLogName = wireLogBasename(reportWireLogPath.value);
@@ -86,6 +89,19 @@ const reportAttachments = computed(() => {
 // DOM has been read, so the dialog is never in the picture. The rest (encoding) finishes behind the open dialog.
 // Only this entry captures; nothing runs in the background. The capture is dropped when the dialog closes.
 const reportShot = ref<ReportCaptureResult | null>(null);
+/** Owner 11-13: the OS reading (game/bugReportOs.ts). The user agent reading at once; userAgentData when it answers. */
+const reportOs = shallowRef<BugReportOs | null>(null); // shallow: the reading's label parts are keyed by the raw object
+/** This dialog's OS collection, started on open and reused by Send (never a second wait). A failed enrichment is
+ *  retried only when the next report dialog opens. */
+let reportOsPending: Promise<BugReportOs> | null = null;
+/** The reading's few non-proper-noun words in the coach's language (the payload keeps the English label). */
+const OS_PHRASES: BugReportOsPhrases = {
+  unknown: () => t('bugReport.os.unknown'),
+  windows10or11: () => t('bugReport.os.windows10or11'),
+  windowsBefore10: () => t('bugReport.os.windowsBefore10'),
+  versionNotReported: (os) => t('bugReport.os.versionNotReported', { os }),
+  onChromeOs: (os) => t('bugReport.os.onChromeOs', { os }),
+};
 const reportShotInclude = ref(true);
 /** Astra (10-13): Send waits for the capture to settle, so nothing is attached the coach has not seen. */
 const reportSendBlocked = computed(() => reportCaptureUnsettled(reportShot.value));
@@ -118,6 +134,11 @@ function openReport(prefill?: string) {
   reportNotice.value = '';
   reportShot.value = null;
   reportShotInclude.value = true;
+  // Warm the OS reading now, so Send finds it ready (it never rejects and gives up after a short timeout).
+  reportOs.value = bugReportOsNow();
+  const osPending = loadBugReportOs().catch(() => bugReportOsNow());
+  reportOsPending = osPending;
+  void osPending.then((os) => { if (reportOsPending === osPending) reportOs.value = os; });
   const generation = ++reportCaptureGeneration;
   reportCaptureBusyGeneration = generation;
   const releaseBusy = () => { if (reportCaptureBusyGeneration === generation) reportCaptureBusyGeneration = 0; };
@@ -192,7 +213,12 @@ async function submitReport() {
   reportError.value = '';
   reportNotice.value = '';
   try {
-    const wireLog = await readWireLogForReport();
+    // The OS reading was warmed on open; it resolves within its short timeout and a failure falls back to the
+    // user agent reading, so it can neither stop nor noticeably delay the report.
+    const [wireLog, os] = await Promise.all([
+      readWireLogForReport(),
+      reportOsPending ?? loadBugReportOs().catch(() => bugReportOsNow()),
+    ]);
     if (!wireLog && wireLogBasename(reportWireLogPath.value)) props.host.onWireLogUnreadable?.();
     // Fork account = the config-web credential (mirrors forkChallenge's forkCreds). When the tester
     // has no fork coach set we fall back to whatever the active target resolves, so an anonymous
@@ -216,7 +242,8 @@ async function submitReport() {
       // Owner 10-13: the picture taken when Report was opened, only while the coach left it ticked (frozen above).
       screenshot,
       // Owner 10-21: allow-listed display / performance settings + machine facts, so performance reports are diagnosable.
-      context: { ...props.host.context(), settings: bugReportSettingsSnapshot(settings, collectBugReportEnv(props.host.pitch()?.element)) },
+      // Owner 11-13: context.os, the operating system and device model (next to the host's userAgent).
+      context: { ...props.host.context(), os, settings: bugReportSettingsSnapshot(settings, collectBugReportEnv(props.host.pitch()?.element)) },
     });
     // Owner ruling 11-01: public reports go to the baked default host's config-web, flag or no flag (bugReportBaseUrl).
     const { screenshotDropped, response } = await sendBugReportWithScreenshotFallback(payload, tauriFetch, bugReportBaseUrl());

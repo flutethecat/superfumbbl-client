@@ -32,7 +32,7 @@ import ReplayLauncherView from './views/ReplayLauncherView.vue';
 import AssetPackSettings from './components/AssetPackSettings.vue';
 import AccountSettings from './components/AccountSettings.vue';
 import { FORK_EDITION } from './game/edition';
-import { applyLaunchForkFlag, forkFeaturesEnabled, launchFlagsSettled, markLaunchFlagsSettled } from './game/forkAccess';
+import { applyLaunchForkFlag, forkFeaturesEnabled, launchFlagsSettled, launchedWithForkServer, markLaunchFlagsSettled } from './game/forkAccess';
 import { createJnlpIntakeHold } from './game/jnlpIntakeHold';
 import { requestForkRegistration } from './game/forkRegistration';
 import { isOnboardingRequired } from './game/configWebErrors';
@@ -55,6 +55,9 @@ import DisplayCaps from './components/DisplayCaps.vue';
 import GameMenuStats from './components/GameMenuStats.vue';
 import BetaLaunchSplash from './components/BetaLaunchSplash.vue';
 import SettingsCategoryNav from './components/SettingsCategoryNav.vue';
+import SettingsSearch from './components/settings/SettingsSearch.vue';
+import { isSettingsSearchShortcut, revealSettingRow, type SettingsSearchGates } from './game/settingsSearch';
+import type { SettingsSearchEntry } from './game/settingsSearchIndex';
 import FieldManual from './components/FieldManual.vue';
 import BugReportModal from './components/BugReportModal.vue';
 import BugUpdateNotice from './components/BugUpdateNotice.vue';
@@ -1675,6 +1678,104 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onFullscreenHotkey, 
 const settingsDialog = ref<HTMLElement | null>(null);
 let settingsOpener: HTMLElement | null = null;
 
+// Owner 11-12: Settings search (components/settings/SettingsSearch.vue, game/settingsSearch.ts). Each key is a `v-if`
+// expression of the Settings template, verbatim (game/settingsSearchIndex.ts `when`); a row is offered only while its
+// expressions hold, i.e. while its tab would show it. test/settingsSearchIndex.test.ts checks every expression has a
+// gate here.
+const settingsSearch = ref<InstanceType<typeof SettingsSearch> | null>(null);
+const settingsSearchGates: SettingsSearchGates = {
+  'homeBladeEnabled': () => homeBladeEnabled,
+  'launchedWithForkServer()': () => launchedWithForkServer(),
+  'jnlpAssocSupported': () => jnlpAssocSupported.value,
+  "settings.controlLayer === 'fumbbl'": () => settings.controlLayer === 'fumbbl',
+  "settingGroupShown('right-click-settings', touchModeActive)": () => settingGroupShown('right-click-settings', touchModeActive.value),
+  "settingGroupShown('edge-pan', touchModeActive)": () => settingGroupShown('edge-pan', touchModeActive.value),
+  "settings.edgePan && settingGroupShown('edge-pan', touchModeActive)": () => settings.edgePan && settingGroupShown('edge-pan', touchModeActive.value),
+  "settingGroupShown('fumbbl-shortcuts', touchModeActive)": () => settingGroupShown('fumbbl-shortcuts', touchModeActive.value),
+  'settings.fumbblShortcuts': () => settings.fumbblShortcuts,
+  "settingGroupShown('edit-bindings', touchModeActive)": () => settingGroupShown('edit-bindings', touchModeActive.value),
+  'settings.controllerSupportEnabled': () => settings.controllerSupportEnabled,
+  "settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'": () => settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail',
+  "settings.skillDisplay === 'markings'": () => settings.skillDisplay === 'markings',
+  "settings.logStyle === 'graphical'": () => settings.logStyle === 'graphical',
+  '!settings.chatDisabled': () => !settings.chatDisabled,
+  '!settings.chatDisabled && settings.chatToastsEnabled': () => !settings.chatDisabled && settings.chatToastsEnabled,
+  "settings.spriteSet === 'checkers'": () => settings.spriteSet === 'checkers',
+  "settings.backdrop === 'color'": () => settings.backdrop === 'color',
+  'uiZoomAvailable': () => uiZoomAvailable.value,
+  'forkFeaturesEnabled()': () => forkFeaturesEnabled(),
+  'FORK_EDITION': () => FORK_EDITION,
+  'settings.devMode': () => settings.devMode,
+  "settings.devMode && settings.coachBrain === 'fly-chaos'": () => settings.devMode && settings.coachBrain === 'fly-chaos',
+  'appPatchStatus': () => !!appPatchStatus.value,
+};
+/**
+ * Owner 11-12 (review r2): every overlay App.vue's template can draw ABOVE the Settings dialog (.modal-backdrop,
+ * z-index 100). `key` is the overlay's template v-if, verbatim (the component tag when it has none);
+ * test/settingsKeyboardOwners.test.ts walks the template and fails on an overlay missing here (or listed there as
+ * never above Settings, with the reason).
+ *
+ *   overlay                                   z-index            shown while
+ *   BugReportModal (shell Report)             120                shellReportOpen
+ *   .jnlp choice (.launch-splash)             200                ambiguousJnlpEntry
+ *   spectate connection error                 200                no game + spectateConnectError
+ *   RejoinProgressModal                       200                its .rejoin-progress-backdrop is drawn
+ *   update prompt                             200 (270 gated)    updatePrompt
+ *   server version stop                       200                serverVersionBlockShown && serverVersionBlock
+ *   ClientVersionBlockModal                   270                clientVersionBlockShown && clientVersionBlock
+ *   control-layer switch notice               13050              controlLayerSwitchNotice
+ *   leave-the-game prompt                     200                leaveGamePrompt
+ *   FirstLaunchSetup (rerun)                  9000               ui.setupWizardRerunOpen
+ *   ClientOnboardingDialog                    215                clientOnboarding.open
+ *   Reset UI confirmation                     260                resetUiConfirmOpen
+ *   controller-support notice                 260                controllerOptIn.noticeOpen
+ *   touch-mode choice                         260                touchModeChoiceOwed
+ *   login credentials                         110                credsMenuOpen
+ *   registration                              110                registerModalOpen && forkFeaturesEnabled()
+ *   welcome splash (.launch-splash)           200                splashOpen
+ *   FieldManual                               4000               guideOpen
+ *
+ * RejoinProgressModal's state is read from the DOM: a static import of game/rejoinFlow changes the shell's start-up.
+ */
+const SETTINGS_OVERLAYS: readonly { key: string; shown: () => boolean }[] = [
+  { key: 'BugReportModal', shown: () => shellReportOpen.value },
+  { key: 'ambiguousJnlpEntry', shown: () => !!ambiguousJnlpEntry.value },
+  { key: '!gameStore.game.value && gameStore.state.spectateConnectError', shown: () => !gameStore.game.value && !!gameStore.state.spectateConnectError },
+  { key: 'RejoinProgressModal', shown: () => !!document.querySelector('.rejoin-progress-backdrop') },
+  { key: 'updatePrompt', shown: () => !!updatePrompt.value },
+  { key: 'serverVersionBlockShown && serverVersionBlock', shown: () => serverVersionBlockShown.value && !!serverVersionBlock.value },
+  { key: 'clientVersionBlockShown && clientVersionBlock', shown: () => clientVersionBlockShown.value && !!clientVersionBlock.value },
+  { key: 'controlLayerSwitchNotice', shown: () => !!controlLayerSwitchNotice.value },
+  { key: 'leaveGamePrompt', shown: () => leaveGamePrompt.value },
+  { key: 'ui.setupWizardRerunOpen', shown: () => ui.setupWizardRerunOpen },
+  { key: 'clientOnboarding.open', shown: () => clientOnboarding.open },
+  { key: 'resetUiConfirmOpen', shown: () => resetUiConfirmOpen.value },
+  { key: 'controllerOptIn.noticeOpen.value', shown: () => controllerOptIn.noticeOpen.value },
+  { key: 'touchModeChoiceOwed', shown: () => touchModeChoiceOwed.value },
+  { key: 'credsMenuOpen', shown: () => credsMenuOpen.value },
+  { key: 'registerModalOpen && forkFeaturesEnabled()', shown: () => registerModalOpen.value && forkFeaturesEnabled() },
+  { key: 'splashOpen', shown: () => splashOpen.value },
+  { key: 'guideOpen', shown: () => guideOpen.value },
+];
+/** Settings itself has the keyboard: it is open, no overlay above sits on it (SETTINGS_OVERLAYS), no key or button is
+ *  being captured, and focus has not moved to a surface outside Settings (a child view's own card or dialog that took
+ *  it, e.g. a bug-report list or an in-game notice). The Settings search's Ctrl+F and its Escape step answer only
+ *  then. */
+function settingsOwnsKeyboard(): boolean {
+  if (!ui.settingsOpen) return false;
+  if (SETTINGS_OVERLAYS.some((overlay) => overlay.shown())) return false;
+  if (capturingKey.value || capturingBinding.value || capturingFumbblKey.value) return false;
+  const active = document.activeElement;
+  const backdrop = settingsDialog.value?.parentElement ?? null;
+  return !active || active === document.body || !!backdrop?.contains(active)
+    || !!active.closest('.client-tour-card[data-docked="true"]');
+}
+/** A search result was picked: show its tab, then scroll to, flash and focus its row. */
+function goToSetting(entry: SettingsSearchEntry): void {
+  selectSettingsTab(entry.tab);
+  void nextTick(() => { revealSettingRow(settingsDialog.value, entry.id); });
+}
+
 function appMenuFocusFallback(): HTMLElement | null {
   return document.querySelector<HTMLElement>('.blade[data-active="true"], .lm-blade[data-active="true"]')
     ?? document.querySelector<HTMLElement>('.icon-button[title="Settings"]')
@@ -1759,7 +1860,17 @@ watchEffect(() => {
 });
 
 function escSettings(e: KeyboardEvent) {
+  // Owner 11-12 (review r2): a key that belongs to an IME composition (Escape cancels the composition) is not ours.
+  if (e.isComposing || e.keyCode === 229) return;
   if (versionGateOwnsScreen.value) return; // owner 10-26 (Sol r2/r7): the client version modal, or the update prompt it opened, is above
+  // Owner 11-12: Ctrl+F (Cmd+F) focuses the Settings search - not while a key / button is being captured or a dialog
+  // sits over Settings.
+  if (isSettingsSearchShortcut(e) && settingsSearch.value && settingsOwnsKeyboard()) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    settingsSearch.value.focus();
+    return;
+  }
   if (e.code !== 'Escape') return;
   if (!settingsEscape()) return;
   e.preventDefault();
@@ -1795,6 +1906,8 @@ function settingsEscape(): boolean {
   // Owner 11-03 settings reflow (lane B; Sol final r4): nested modals and key capture above go first; an open Settings
   // "i" (tooltip or preview panel) closes right before Settings itself would, focus back on it.
   if (closeOpenSettingInfo()) return true;
+  // Owner 11-12: Escape clears the Settings search first; the next Escape closes Settings.
+  if (settingsOwnsKeyboard() && settingsSearch.value?.clear()) return true;
   void cancelSettingsChanges();
   return true;
 }
@@ -2895,6 +3008,7 @@ onBeforeUnmount(() => {
         <SettingsCategoryNav v-model="settingsTab" />
 
         <div class="settings-main">
+          <SettingsSearch ref="settingsSearch" :gates="settingsSearchGates" @select="goToSetting" />
           <SettingsCategoryNav v-model="settingsTab" compact @content-focus="selectSettingsTab(settingsTab, true)" />
         <div :id="`settings-panel-${settingsTab}`" class="settings-content" role="tabpanel"
           :aria-labelledby="`settings-tab-${settingsTab}`">
@@ -2910,7 +3024,7 @@ onBeforeUnmount(() => {
           <!-- Owner 10-23: client language; each option is labelled in its own language, and the switch applies live. -->
           <fieldset class="settings-group" data-testid="language-settings">
             <legend>{{ $t('settings.language.label') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.languageRow">
               <label class="row-main">
                 <span>{{ $t('settings.language.languageRow') }}</span>
                 <span class="row-ctl">
@@ -2927,7 +3041,7 @@ onBeforeUnmount(() => {
           <!-- Owner 11-03: "Hide welcome" + "Hide tutorial" merged into one select (game/settingsMerges.ts). -->
           <fieldset class="settings-group" data-testid="launch-settings">
             <legend>{{ $t('settings.general.launch.launch') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.onLaunchShow">
               <label class="row-main">
                 <span>{{ $t('settings.general.launch.onLaunchShow') }}</span>
                 <span class="row-ctl">
@@ -2945,21 +3059,21 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="walkthrough-settings">
             <legend>{{ $t('settings.general.walkthroughs.walkthroughs') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.runFirstLaunchSetup">
               <span class="row-label">{{ $t('settings.general.launchScreens.runFirstLaunchSetup') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runFirstLaunchSetup')" @click="rerunSetupWizard()">{{ $t('settings.info.runButton') }}</button>
               </span>
               <SettingInfo :text="$t('settings.info.walkSetup')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="general.runTheClientWalkthrough">
               <span class="row-label">{{ $t('settings.general.launchScreens.runTheClientWalkthrough') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runTheClientWalkthrough')" @click="rerunClientTour()">{{ $t('settings.info.runButton') }}</button>
               </span>
               <SettingInfo :text="$t('settings.info.walkClientTour')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="general.replayTheIntroScreens">
               <span class="row-label">{{ $t('settings.general.launchScreens.replayTheIntroScreens') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.replayTheIntroScreens')" @click="replayIntro()">{{ $t('settings.info.replayButton') }}</button>
@@ -2967,7 +3081,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.walkIntro')" />
             </div>
             <!-- Owner 10-06: the FUMBBL.COM walkthrough (game/homeTour.ts). -->
-            <div class="row" v-if="homeBladeEnabled">
+            <div class="row" v-if="homeBladeEnabled" data-setting-id="general.runTheFumbblCom">
               <span class="row-label">{{ $t('settings.general.launchScreens.runTheFumbblCom') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.general.launchScreens.runTheFumbblCom')" @click="rerunHomeTour()">{{ $t('settings.info.runButton') }}</button>
@@ -2978,7 +3092,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.discord.discord') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.discordRichPresenceShow">
               <label class="row-main">
                 <span>{{ $t('settings.general.discord.discordRichPresenceShow') }}</span>
                 <span class="row-ctl">
@@ -2987,7 +3101,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.discordPresence')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="general.letFriendsJoinAs">
               <label class="row-main">
                 <span>{{ $t('settings.general.discord.letFriendsJoinAs') }}</span>
                 <span class="row-ctl">
@@ -3000,7 +3114,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.connection.connection') }}</legend>
-            <div class="row creds-status-row">
+            <div class="row creds-status-row" data-setting-id="general.serverStatus">
               <span class="row-label">{{ $t('settings.general.connection.serverStatus') }}</span>
               <div class="row-ctl">
                 <p class="creds-status">
@@ -3036,7 +3150,7 @@ onBeforeUnmount(() => {
                a new client that joins on its own (cold-start argv path) - the last sentence of the hint. -->
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.clientWindows.clientWindows') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.allowASecondClient">
               <label class="row-main">
                 <span>{{ $t('settings.general.clientWindows.allowASecondClient') }}</span>
                 <span class="row-ctl">
@@ -3051,7 +3165,7 @@ onBeforeUnmount(() => {
 
           <fieldset v-if="jnlpAssocSupported" class="settings-group">
             <legend>{{ $t('settings.general.fumbblJoinFiles.fumbblJoinFilesJnlp') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="general.jnlpLabel">
               <span class="row-label">{{ $t('settings.info.jnlpLabel') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :disabled="jnlpAssocBusy" @click="toggleJnlpAssociation()">
@@ -3076,7 +3190,7 @@ onBeforeUnmount(() => {
           <!-- Touch mode (spec-touch-mode-2026-11-12 section 3): the mode, the End Turn hold and the button size. -->
           <fieldset class="settings-group" data-testid="touch-controls-settings">
             <legend>{{ $t('settings.touch.legend') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="controls.touchMode">
               <label class="row-main">
                 <span>{{ $t('settings.touch.mode') }}</span>
                 <span class="row-ctl">
@@ -3089,7 +3203,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.touch.modeInfo')" :def="$t('settings.touch.modeAuto')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="controls.holdDuration">
               <label class="row-main">
                 <span>{{ $t('settings.touch.holdDuration') }}</span>
                 <span class="row-ctl">
@@ -3099,7 +3213,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.touch.holdDurationInfo')" :def="$t('settings.touch.holdDurationDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="controls.buttonSize">
               <label class="row-main">
                 <span>{{ $t('settings.touch.buttonSize') }}</span>
                 <span class="row-ctl">
@@ -3114,7 +3228,7 @@ onBeforeUnmount(() => {
           <!-- FUMBBL Controls (owner 11-03): the control layer changes INPUT only; Super FUMBBL Controls is the default. -->
           <fieldset class="settings-group" data-testid="control-layer-settings">
             <legend>{{ $t('settings.controlLayer.legend') }}</legend>
-            <div class="row row-wide-ctl" data-testid="control-layer-row">
+            <div class="row row-wide-ctl" data-testid="control-layer-row" data-setting-id="controls.controlLayer">
               <label class="row-main">
                 <span>{{ $t('settings.controlLayer.label') }}</span>
                 <span class="row-ctl">
@@ -3128,7 +3242,7 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="pendingControlLayerSwitch" class="hint" role="status" data-testid="control-layer-pending">
               {{ $t('settings.controlLayer.pending', { layer: controlLayerName(pendingControlLayerSwitch.to), player: pendingControlLayerSwitch.playerName }) }}</p>
-            <div v-if="settings.controlLayer === 'fumbbl'" class="row" data-testid="automove-row">
+            <div v-if="settings.controlLayer === 'fumbbl'" class="row" data-testid="automove-row" data-setting-id="controls.automove">
               <label class="row-main">
                 <span>{{ $t('settings.controlLayer.automove') }}</span>
                 <span class="row-ctl">
@@ -3141,7 +3255,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="mouse-settings">
             <legend>{{ $t('settings.general.mouse.mouse') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="controls.leftClickSwitchesFriendly">
               <label class="row-main">
                 <span>{{ $t('settings.general.mouse.leftClickSwitchesFriendly') }}</span>
                 <span class="row-ctl">
@@ -3150,7 +3264,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.friendlySwitch')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row" data-testid="defer-friendly-switch-end">
+            <div class="row" data-testid="defer-friendly-switch-end" data-setting-id="controls.holdThePreviousPlayer">
               <label class="row-main">
                 <span>{{ $t('settings.general.mouse.holdThePreviousPlayer') }}</span>
                 <span class="row-ctl">
@@ -3159,7 +3273,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.deferSwitch')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="controls.leftClickOpensContext">
               <label class="row-main">
                 <span>{{ $t('settings.general.mouse.leftClickOpensContext') }}</span>
                 <span class="row-ctl">
@@ -3168,7 +3282,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.leftClickMenu')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="controls.declareBlitz">
               <label class="row-main">
                 <span>{{ $t('settings.general.movementPlanner.declareBlitz') }}</span>
                 <span class="row-ctl">
@@ -3185,7 +3299,7 @@ onBeforeUnmount(() => {
           <!-- FUMBBL Controls §3: Right Click, stored per control layer. -->
           <fieldset v-if="settingGroupShown('right-click-settings', touchModeActive)" class="settings-group" data-testid="right-click-settings">
             <legend>{{ $t('settings.rightClick.legend') }}</legend>
-            <div class="row row-wide-ctl">
+            <div class="row row-wide-ctl" data-setting-id="controls.rightClick">
               <label class="row-main">
                 <span>{{ $t('settings.rightClick.label', { layer: controlLayerName(settings.controlLayer) }) }}</span>
                 <span class="row-ctl">
@@ -3200,7 +3314,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="camera-settings">
             <legend>{{ $t('settings.controls.camera.camera') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="controls.wasdPanSpeed">
               <label class="row-main">
                 <span>{{ $t('settings.controls.camera.wasdPanSpeed') }}</span>
                 <span class="row-ctl">
@@ -3211,7 +3325,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.wasdPan')" :def="$t('settings.info.wasdPanDefault')" />
             </div>
             <!-- Owner 11-03 (lane C): edge-of-screen panning, off by default; its speed shows only while it is on. -->
-            <div v-if="settingGroupShown('edge-pan', touchModeActive)" class="row" data-testid="edge-pan-row">
+            <div v-if="settingGroupShown('edge-pan', touchModeActive)" class="row" data-testid="edge-pan-row" data-setting-id="controls.edgePan">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.edgePan.label') }}</span>
                 <span class="row-ctl">
@@ -3220,7 +3334,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.edgePan.description')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div v-if="settings.edgePan && settingGroupShown('edge-pan', touchModeActive)" class="row">
+            <div v-if="settings.edgePan && settingGroupShown('edge-pan', touchModeActive)" class="row" data-setting-id="controls.edgePanSpeed">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.edgePanSpeed.label') }}</span>
                 <span class="row-ctl">
@@ -3230,7 +3344,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.edgePanSpeed.description')" :def="$t('settings.info.edgePanSpeedDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="controls.mouseCameraLabel">
               <span class="row-label">{{ $t('settings.info.mouseCameraLabel') }}</span>
               <span class="row-ctl">
                 <span class="row-note">{{ $t('settings.controls.camera.mouseCamera') }}</span>
@@ -3245,7 +3359,7 @@ onBeforeUnmount(() => {
             <p class="hint">{{ $t('settings.general.confirmations.eachPromptBelowAsks') }}</p>
             <p v-if="settings.controlLayer === 'fumbbl' || pendingControlLayerSwitch" class="hint" data-testid="confirmations-layer">{{ $t('settings.controlLayer.confirmationsFor', { layer: confirmationsLayerName }) }}</p>
             <template v-for="row in CONFIRMATION_SETTING_ROWS" :key="row.key">
-              <div class="row">
+              <div class="row" :data-setting-id="`controls.confirm.${row.key}`">
                 <label class="row-main">
                   <span>{{ row.label }}</span>
                   <span class="row-ctl">
@@ -3260,7 +3374,7 @@ onBeforeUnmount(() => {
           <!-- FUMBBL Controls §5: FUMBBL keyboard shortcuts, either control layer. On = WASD camera pan off. -->
           <fieldset v-if="settingGroupShown('fumbbl-shortcuts', touchModeActive)" class="settings-group" data-testid="fumbbl-shortcuts">
             <legend>{{ $t('settings.fumbblKeys.legend') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="controls.fumbblKeysToggle">
               <label class="row-main">
                 <span>{{ $t('settings.fumbblKeys.toggle') }}</span>
                 <span class="row-ctl">
@@ -3273,7 +3387,7 @@ onBeforeUnmount(() => {
               <table class="keybind-table bindings-table sf-table" data-testid="fumbbl-key-table">
                 <thead><tr><th scope="col">{{ $t('settings.controls.editBindings.action') }}</th><th scope="col">{{ $t('settings.controls.editBindings.keyboardMouse') }}</th></tr></thead>
                 <tbody>
-                  <tr v-for="a in FUMBBL_KEY_ACTIONS" :key="a.id" :data-fumbbl-key="a.id">
+                  <tr v-for="a in FUMBBL_KEY_ACTIONS" :key="a.id" :data-fumbbl-key="a.id" :data-setting-id="`controls.fumbblKey.${a.id}`">
                     <td>{{ a.label }}</td>
                     <td>
                       <button type="button" class="keybind binding-cell" :data-capturing="capturingFumbblKey === a.id"
@@ -3285,7 +3399,7 @@ onBeforeUnmount(() => {
               <p v-if="fumbblKeyRefusal" class="hint keybind-refusal" role="status" data-testid="fumbbl-key-refusal">{{ fumbblKeyRefusal }}</p>
               <p v-for="c in fumbblKeyClashes" :key="c.id" class="hint keybind-refusal" role="status" data-testid="fumbbl-key-clash">
                 {{ $t('settings.fumbblKeys.clash', { key: fumbblKeyCellText(c.id), action: c.holder }) }}</p>
-              <div class="row">
+              <div class="row" data-setting-id="controls.resetLabel">
                 <span class="row-label">{{ $t('settings.fumbblKeys.resetLabel') }}</span>
                 <span class="row-ctl">
                   <button type="button" class="sf-btn small" data-testid="reset-fumbbl-keys" @click="resetFumbblKeys()">{{ $t('settings.fumbblKeys.reset') }}</button>
@@ -3304,7 +3418,7 @@ onBeforeUnmount(() => {
             <table class="keybind-table bindings-table sf-table">
               <thead><tr><th scope="col">{{ $t('settings.controls.editBindings.action') }}</th><th scope="col" colspan="2">{{ $t('settings.controls.editBindings.keyboardMouse') }}</th><th v-if="settings.controllerSupportEnabled" scope="col" colspan="2">{{ $t('settings.controls.editBindings.controller') }}</th></tr></thead>
               <tbody>
-                <tr v-for="action in shownControlActions" :key="action.id" :data-action="action.id">
+                <tr v-for="action in shownControlActions" :key="action.id" :data-action="action.id" :data-setting-id="`controls.binding.${action.id}`">
                   <td>{{ action.label }}</td>
                   <template v-for="method in bindingMethods" :key="method">
                     <td v-if="bindingFixedLabel(action.id, method)" colspan="2"><span class="keybind static">{{ bindingFixedLabel(action.id, method) }}</span></td>
@@ -3328,7 +3442,7 @@ onBeforeUnmount(() => {
             </ul>
             <p v-for="conflict in bindingConflicts" :key="`${conflict.method}:${conflict.input}`" class="hint keybind-refusal" role="status" data-testid="binding-conflict">
               {{ $t('settings.controls.editBindings.p0IsBoundTo', { p0: conflict.method === 'keyboard' ? keyLabel(conflict.input) : controllerInputLabel(conflict.input), p1: conflict.actions.map((id) => controlAction(id).label).join(', ') }) }}</p>
-            <div class="row">
+            <div class="row" data-setting-id="controls.resetBindingsLabel">
               <span class="row-label">{{ $t('settings.info.resetBindingsLabel') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" data-testid="reset-bindings" @click="resetBindings()">{{ $t('settings.controls.editBindings.resetToDefaults') }}</button>
@@ -3341,7 +3455,7 @@ onBeforeUnmount(() => {
                window); it turns on when the coach presses OK. While off nothing here reads a gamepad. -->
           <fieldset class="settings-group" data-testid="controller-support">
             <legend>{{ $t('settings.controls.controller.controller') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="controls.enableControllerSupport">
               <label class="row-main">
                 <span>{{ $t('settings.controls.controller.enableControllerSupport') }}</span>
                 <span class="row-ctl">
@@ -3352,7 +3466,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.controllerSupport')" :def="$t('settings.info.valueOff')" />
             </div>
             <div v-if="settings.controllerSupportEnabled" class="settings-subgroup" data-testid="input-method-group">
-              <div class="row">
+              <div class="row" data-setting-id="controls.inputMethod">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.inputMethod.inputMethod') }}</span>
                   <span class="row-ctl">
@@ -3365,7 +3479,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.inputMethod')" :def="$t('settings.info.inputMethodDefault')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="controls.showInputSwitchNotice">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.inputMethod.showInputSwitchNotice') }}</span>
                   <span class="row-ctl">
@@ -3374,7 +3488,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.inputSwitchNotice')" :def="$t('settings.info.valueOn')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="controls.rumbleDiceTurnoversCasualties">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.inputMethod.rumbleDiceTurnoversCasualties') }}</span>
                   <span class="row-ctl">
@@ -3385,7 +3499,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-if="settings.controllerSupportEnabled" class="settings-subgroup" data-testid="stick-deadzones">
-              <div class="row">
+              <div class="row" data-setting-id="controls.leftStickDeadzone">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.stickDeadzones.leftStickDeadzone') }}</span>
                   <span class="row-ctl">
@@ -3395,7 +3509,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.deadzoneLeft')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="controls.rightStickDeadzone">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.stickDeadzones.rightStickDeadzone') }}</span>
                   <span class="row-ctl">
@@ -3405,7 +3519,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.deadzoneRight')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="controls.crosshairSpeed">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.stickDeadzones.crosshairSpeed') }}</span>
                   <span class="row-ctl">
@@ -3415,7 +3529,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.crosshairSpeed')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="controls.crosshairAcceleration">
                 <label class="row-main">
                   <span>{{ $t('settings.controls.stickDeadzones.crosshairAcceleration') }}</span>
                   <span class="row-ctl">
@@ -3444,7 +3558,7 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'pitch'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.pitch.view.view') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.pitchOrientation">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.pitchOrientation') }}</span>
                 <span class="row-ctl">
@@ -3456,7 +3570,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.pitchOrientation')" :def="$t('settings.info.pitchOrientationDefault')" :previews="SETTING_PREVIEWS.pitchOrientation" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.flipThePitchView">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.flipThePitchView') }}</span>
                 <span class="row-ctl">
@@ -3465,7 +3579,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.pitchFlipped')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.spectatorAndReplayView">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.spectatorAndReplayView') }}</span>
                 <span class="row-ctl">
@@ -3479,7 +3593,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.spectatorView')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.flatNonIsometricPitch">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.flatNonIsometricPitch') }}</span>
                 <span class="row-ctl">
@@ -3492,7 +3606,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.pitch.gameplayHelpers.gameplayHelpers') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.tackleZonesShown">
               <label class="row-main">
                 <span>{{ $t('settings.general.gameplayAssistance.tackleZonesShown') }}</span>
                 <span class="row-ctl">
@@ -3505,7 +3619,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.tackleZones')" :def="$t('settings.info.tackleZonesDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.disturbingPresence">
               <label class="row-main">
                 <span>{{ $t('settings.general.auras.disturbingPresence') }} <em class="aura-swatch dp-friendly" />/<em class="aura-swatch dp-opp" /></span>
                 <span class="row-ctl">
@@ -3518,7 +3632,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.auraDisturbingPresence')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.pickMeUp">
               <label class="row-main">
                 <span>{{ $t('settings.general.auras.pickMeUp') }} <em class="aura-swatch pmu-friendly" />/<em class="aura-swatch pmu-opp" /></span>
                 <span class="row-ctl">
@@ -3531,7 +3645,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.auraPickMeUp')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showBlockDiceOn">
               <label class="row-main">
                 <span>{{ $t('settings.ui.hudLayout.showBlockDiceOn') }}</span>
                 <span class="row-ctl">
@@ -3540,7 +3654,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.preClickBlockDice')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.skipArmourRollsIf">
               <label class="row-main">
                 <span>{{ $t('settings.ui.hudLayout.skipArmourRollsIf') }}</span>
                 <span class="row-ctl">
@@ -3553,7 +3667,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.movementAnimation.movementAnimation') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.movementAnimation">
               <label class="row-main">
                 <span>{{ $t('settings.display.movementAnimation.movementAnimation') }}</span>
                 <span class="row-ctl">
@@ -3568,7 +3682,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.moveStyle')" :def="$t('settings.info.moveStyleDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.movementSpeed">
               <label class="row-main">
                 <span>{{ $t('settings.display.movementAnimation.movementSpeed') }}</span>
                 <span class="row-ctl">
@@ -3584,7 +3698,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.moveSpeed')" :def="$t('settings.info.moveSpeedDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.animatePlayerWalkCycles">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.animatePlayerWalkCycles') }}</span>
                 <span class="row-ctl">
@@ -3593,7 +3707,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.walkAnimation')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
+            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'" data-setting-id="pitch.pathTrailColour">
               <label class="row-main">
                 <span>{{ $t('settings.display.movementAnimation.pathTrailColour') }}</span>
                 <span class="row-ctl">
@@ -3607,7 +3721,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.trailColor')" :def="$t('settings.info.trailColorDefault')" />
             </div>
-            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'">
+            <div class="row" v-if="settings.moveStyle === 'trail' || settings.moveStyle === 'hoptrail'" data-setting-id="pitch.pathTrailMarks">
               <label class="row-main">
                 <span>{{ $t('settings.display.movementAnimation.pathTrailMarks') }}</span>
                 <span class="row-ctl">
@@ -3624,7 +3738,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group" data-testid="planner-settings">
             <legend>{{ $t('settings.pitch.planner.planner') }}</legend>
             <!-- Owner 09-16: planner colours — Primary = the route line; Secondary = steps that owe a roll. -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.primaryColor">
               <label class="row-main">
                 <span>{{ $t('settings.general.movementPlanner.primaryColor') }}</span>
                 <span class="row-ctl">
@@ -3633,7 +3747,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.plannerPrimary')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.secondaryColor">
               <label class="row-main">
                 <span>{{ $t('settings.general.movementPlanner.secondaryColor') }}</span>
                 <span class="row-ctl">
@@ -3642,7 +3756,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.plannerSecondary')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.plannerRollTags">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.plannerRollTags') }}</span>
                 <span class="row-ctl">
@@ -3655,7 +3769,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.plannerTags')" />
             </div>
             <!-- Owner 10-22: the route chips can wear the mover's Home / Away die (default: the neutral grey die). -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.teamColouredRouteDice">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.teamColouredRouteDice') }}</span>
                 <span class="row-ctl">
@@ -3664,7 +3778,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.mods.dice.routeAndReachRoll')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.blitzTargetMarker">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.blitzTargetMarker') }}</span>
                 <span class="row-ctl">
@@ -3681,7 +3795,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group">
             <legend>{{ $t('settings.pitch.playerFigures.playerFigures') }}</legend>
             <!-- Owner 11-03: the North-South and East-West rows merged into one select (game/settingsMerges.ts). -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.playersStayOneSize">
               <label class="row-main">
                 <span>{{ $t('settings.pitch.playerFigures.playersStayOneSize') }}</span>
                 <span class="row-ctl">
@@ -3695,7 +3809,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.uniformFigures')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.idlePlayersFaceThe">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.idlePlayersFaceThe') }}</span>
                 <span class="row-ctl">
@@ -3704,7 +3818,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.walkFaceCamera')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.castShadowsOnPlayers">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.castShadowsOnPlayers') }}</span>
                 <span class="row-ctl">
@@ -3714,7 +3828,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.castShadows')" :def="$t('settings.info.valueOn')" />
             </div>
             <!-- Owner 10-03: casualty blood splatters on the pitch can be turned off. -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.bloodSplattersWherePlayers">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.bloodSplattersWherePlayers') }}</span>
                 <span class="row-ctl">
@@ -3724,7 +3838,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.bloodSplatters')" :def="$t('settings.info.valueOn')" />
             </div>
             <!-- Owner 10-21: the movement-left badge at the acting player's feet can be turned off. -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.movementLeftBadge">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.movementLeftBadge') }}</span>
                 <span class="row-ctl">
@@ -3737,7 +3851,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.onFieldMarkings.onFieldMarkings') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showRowNumberMarkers">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.showRowNumberMarkers') }}</span>
                 <span class="row-ctl">
@@ -3746,7 +3860,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.rowMarkers')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showSweetSpotMarkers">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.showSweetSpotMarkers') }}</span>
                 <span class="row-ctl">
@@ -3755,7 +3869,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.sweetSpot')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showOnFieldTeam">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.showOnFieldTeam') }}</span>
                 <span class="row-ctl">
@@ -3764,7 +3878,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.fieldLogos')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.playerCountsOnDugout">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.playerCountsOnDugout') }}</span>
                 <span class="row-ctl">
@@ -3773,7 +3887,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.dugoutCounts')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.hideRerollChipsAt">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.hideRerollChipsAt') }}</span>
                 <span class="row-ctl">
@@ -3783,7 +3897,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.hideZeroRerolls')" :def="$t('settings.info.valueOff')" />
             </div>
             <!-- owner 2026-07-08: end-zone label — team name (FUMBBL) or TOUCHDOWN -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.endZoneLabel">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.endZoneLabel') }}</span>
                 <span class="row-ctl">
@@ -3796,7 +3910,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.endZoneLabel')" :def="$t('settings.info.endZoneLabelDefault')" />
             </div>
             <!-- owner 09-05: red/blue end-zone shading (tile turf + Acasas pack) -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.redBlueEndZone">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.redBlueEndZone') }}</span>
                 <span class="row-ctl">
@@ -3806,7 +3920,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.endZoneTint')" :def="$t('settings.info.valueOn')" />
             </div>
             <!-- owner 2026-07-07: toggle the on-pitch turn/score/reroll tracks -->
-            <div class="row">
+            <div class="row" data-setting-id="pitch.onPitchTurnScore">
               <label class="row-main">
                 <span>{{ $t('settings.display.onFieldMarkings.onPitchTurnScore') }}</span>
                 <span class="row-ctl">
@@ -3819,7 +3933,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.positionRings.positionRings') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showPositionRingsUnder">
               <label class="row-main">
                 <span>{{ $t('settings.display.positionRings.showPositionRingsUnder') }}</span>
                 <span class="row-ctl">
@@ -3828,7 +3942,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.positionRings')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.ringDensity">
               <label class="row-main">
                 <span>{{ $t('settings.display.positionRings.ringDensity') }}</span>
                 <span class="row-ctl">
@@ -3838,7 +3952,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.ringDensity')" :def="$t('settings.info.ringDensityDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.ringColour">
               <label class="row-main">
                 <span>{{ $t('settings.display.positionRings.ringColour') }}</span>
                 <span class="row-ctl">
@@ -3858,7 +3972,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.accessibility.gridLines.gridLines') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.showPitchGridLines">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.gridLines.showPitchGridLines') }}</span>
                 <span class="row-ctl">
@@ -3867,7 +3981,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.gridLines')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.lineWidth">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.gridLines.lineWidth') }}</span>
                 <span class="row-ctl">
@@ -3877,7 +3991,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.gridWidth')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.lineColor">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.gridLines.lineColor') }}</span>
                 <span class="row-ctl">
@@ -3886,7 +4000,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.gridColor')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.lineOpacity">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.gridLines.lineOpacity') }}</span>
                 <span class="row-ctl">
@@ -3901,7 +4015,7 @@ onBeforeUnmount(() => {
           <!-- Owner 10-13: the three setup-phase aids, each separately switchable -->
           <fieldset class="settings-group">
             <legend>{{ $t('settings.pitch.setupHelpers.setupHelpers') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.setupRulesCardAt">
               <label class="row-main">
                 <span>{{ $t('settings.ui.setup.setupRulesCardAt') }}</span>
                 <span class="row-ctl">
@@ -3910,7 +4024,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.setupRulesCard')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.formationsPanelAtSetup">
               <label class="row-main">
                 <span>{{ $t('settings.ui.setup.formationsPanelAtSetup') }}</span>
                 <span class="row-ctl">
@@ -3919,7 +4033,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.setupFormations')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="pitch.zoneHelpersAtSetup">
               <label class="row-main">
                 <span>{{ $t('settings.ui.setup.zoneHelpersAtSetup') }}</span>
                 <span class="row-ctl">
@@ -3936,7 +4050,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.skillDisplay.skillDisplay') }}</legend>
             <!-- B2-17: icons and markings are mutually exclusive display modes -->
-            <div class="row">
+            <div class="row" data-setting-id="skills.skillDisplay">
               <label class="row-main">
                 <span>{{ $t('settings.display.skillDisplay.skillDisplay') }}</span>
                 <span class="row-ctl">
@@ -3948,7 +4062,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.skillDisplay')" :def="$t('settings.info.skillDisplayDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="skills.pitchIconsShowThe">
               <label class="row-main">
                 <span>{{ $t('settings.display.hatred.pitchIconsShowThe') }}</span>
                 <span class="row-ctl">
@@ -3961,7 +4075,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.skillDisplay.actionDecorations') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="skills.actionDecorations">
               <label class="row-main">
                 <span>{{ $t('settings.display.skillDisplay.actionDecorations') }}</span>
                 <span class="row-ctl">
@@ -3980,9 +4094,9 @@ onBeforeUnmount(() => {
                (home coach) / OPPOSITION (away coach) behaviour + a marker glyph. -->
           <fieldset class="settings-group" data-testid="per-skill-config">
             <legend>{{ $t('settings.skills.perSkill.perSkillIconsMarkers') }}</legend>
-            <details class="skill-config">
+            <details class="skill-config" data-setting-id="skills.skillDisplayConfigPer">
               <summary>{{ $t('settings.display.skillDisplay.skillDisplayConfigPer') }}</summary>
-              <div class="row">
+              <div class="row" data-setting-id="skills.configure">
                 <label class="row-main">
                   <span>{{ $t('settings.display.skillDisplay.configure') }}</span>
                   <span class="row-ctl">
@@ -3994,7 +4108,7 @@ onBeforeUnmount(() => {
                 </label>
                 <SettingInfo :text="$t('settings.info.skillConfigGroup')" />
               </div>
-              <div class="row">
+              <div class="row" data-setting-id="skills.renderPosition">
                 <label class="row-main">
                   <span>{{ $t('settings.display.skillDisplay.renderPosition') }}</span>
                   <span class="row-ctl">
@@ -4082,7 +4196,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </details>
-            <div class="row">
+            <div class="row" data-setting-id="skills.resetSkillConfigLabel">
               <span class="row-label">{{ $t('settings.info.resetSkillConfigLabel') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" @click="resetSkillConfig">{{ $t('settings.display.skillDisplay.resetPerSkillConfig') }}</button>
@@ -4101,7 +4215,7 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'ui'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.hudLayout.hudLayout') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="ui.modernHudStyle">
               <label class="row-main">
                 <span>{{ $t('settings.fumbbl40k.hudLayout.modernHudStyle') }}</span>
                 <span class="row-ctl">
@@ -4113,7 +4227,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.hudStyle')" :def="$t('settings.info.hudStyleDefault')" :previews="SETTING_PREVIEWS.hudStyle" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.playerPortraits">
               <label class="row-main">
                 <span>{{ $t('settings.ui.hudLayout.playerPortraits') }}</span>
                 <span class="row-ctl">
@@ -4131,7 +4245,7 @@ onBeforeUnmount(() => {
                 <button type="button" class="sf-btn small" data-testid="player-card-use-saved" @click="clearPlayerCardOverride()">{{ $t('settings.ui.hudLayout.useSavedPlayerPortraits') }}</button>
               </p>
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.rosterTabInThe">
               <label class="row-main">
                 <span>{{ $t('settings.ui.hudLayout.rosterTabInThe') }}</span>
                 <span class="row-ctl">
@@ -4140,7 +4254,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.rosterTab')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.reserveOutCountsOn">
               <label class="row-main">
                 <span>{{ $t('settings.ui.hudLayout.reserveOutCountsOn') }}</span>
                 <span class="row-ctl">
@@ -4149,7 +4263,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.coachCounts')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.hideTheConfirmBar">
               <label class="row-main">
                 <span>{{ $t('settings.ui.confirmBar.hideTheConfirmBar') }}</span>
                 <span class="row-ctl">
@@ -4161,14 +4275,14 @@ onBeforeUnmount(() => {
             <!-- Owner 10-06: Customize UI Layout is a BUTTON that closes Settings and enters the live layout mode;
                  a centred "Confirm Layout" button on the game screen exits it (SpectateView).
                  Owner 11-03: "Reset all panels now" became "Reset UI to default", behind a confirmation modal. -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.customizeUiLayout">
               <span class="row-label">{{ $t('settings.ui.hudLayout.customizeUiLayout') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.ui.hudLayout.customizeUiLayout')" @click="startUiCustomize">{{ $t('settings.info.openButton') }}</button>
               </span>
               <SettingInfo :text="$t('settings.info.customizeUi')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.resetUiToDefault">
               <span class="row-label">{{ $t('settings.ui.hudLayout.resetUiToDefault') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" :aria-label="$t('settings.ui.hudLayout.resetUiToDefault')" data-testid="reset-ui-default" @click="requestResetUi">{{ $t('settings.info.resetButton') }}</button>
@@ -4180,7 +4294,7 @@ onBeforeUnmount(() => {
           <!-- Owner 09-16 / 11-03: the log's look and the merged "Dice in the log". -->
           <fieldset class="settings-group" data-testid="log-settings">
             <legend>{{ $t('settings.display.log.log') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="ui.logStyle">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.logStyle') }}</span>
                 <span class="row-ctl">
@@ -4193,7 +4307,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.logStyle')" :def="$t('settings.info.logStyleDefault')" :previews="SETTING_PREVIEWS.logStyle" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.chatStyle">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.chatStyle') }}</span>
                 <span class="row-ctl">
@@ -4205,7 +4319,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.chatStyle')" :def="$t('settings.info.chatStyleDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.fontSize">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.fontSize') }}</span>
                 <span class="row-ctl">
@@ -4216,7 +4330,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.logFontSize')" :def="$t('settings.info.logFontSizeDefault')" />
               <p class="row-sample" data-testid="sample-logFontSize"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="logSampleStyle()">{{ $t('settings.info.logFontSizeSample') }}</span></p>
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.font">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.font') }}</span>
                 <span class="row-ctl">
@@ -4231,7 +4345,7 @@ onBeforeUnmount(() => {
               <p class="row-sample" data-testid="sample-logFont"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="logSampleStyle()">{{ $t('settings.info.logFontSample') }}</span></p>
             </div>
             <!-- Owner 11-03: "Display dice as numbers" + "Display needed as numbers" merged (game/settingsMerges.ts). -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.diceInTheLog">
               <label class="row-main">
                 <span>{{ $t('settings.ui.log.diceInTheLog') }}</span>
                 <span class="row-ctl">
@@ -4245,7 +4359,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.logDice')" :def="$t('settings.info.logDiceDefault')" :previews="SETTING_PREVIEWS.logDice" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.showTimestamps">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.showTimestamps') }}</span>
                 <span class="row-ctl">
@@ -4254,7 +4368,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.timestamps')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div v-if="settings.logStyle === 'graphical'" class="row">
+            <div v-if="settings.logStyle === 'graphical'" class="row" data-setting-id="ui.rowColourStrength">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.rowColourStrength') }}</span>
                 <span class="row-ctl">
@@ -4264,7 +4378,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.logTint')" :def="$t('settings.info.logTintDefault')" :previews="SETTING_PREVIEWS.logTint" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.showServerSequencingEvents">
               <label class="row-main">
                 <span>{{ $t('settings.general.matchLog.showServerSequencingEvents') }}</span>
                 <span class="row-ctl">
@@ -4277,7 +4391,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.chatNotifications.chatNotifications') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="ui.disableChat">
               <label class="row-main">
                 <span>{{ $t('settings.ui.chatNotifications.disableChat') }}</span>
                 <span class="row-ctl">
@@ -4286,7 +4400,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.disableChat')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row" v-if="!settings.chatDisabled">
+            <div class="row" v-if="!settings.chatDisabled" data-setting-id="ui.chatToasts">
               <label class="row-main">
                 <span>{{ $t('settings.ui.chatNotifications.chatToasts') }}</span>
                 <span class="row-ctl">
@@ -4295,7 +4409,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.chatToasts')" :def="$t('settings.info.valueOn')" :previews="SETTING_PREVIEWS.chatToasts" />
             </div>
-            <div class="row" v-if="!settings.chatDisabled && settings.chatToastsEnabled">
+            <div class="row" v-if="!settings.chatDisabled && settings.chatToastsEnabled" data-setting-id="ui.chatToastPosition">
               <label class="row-main">
                 <span>{{ $t('settings.ui.chatNotifications.chatToastPosition') }}</span>
                 <span class="row-ctl">
@@ -4310,7 +4424,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.chatToastPos')" :def="$t('settings.info.chatToastPosDefault')" :previews="SETTING_PREVIEWS.chatToastPos" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.chatToastTextSize">
               <label class="row-main">
                 <span>{{ $t('settings.ui.chatNotifications.chatToastTextSize') }}</span>
                 <span class="row-ctl">
@@ -4327,7 +4441,7 @@ onBeforeUnmount(() => {
           <!-- Owner 11-03: one Opacity group, the Log's opacity included. -->
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.opacity.opacity') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="ui.coachPanels">
               <label class="row-main">
                 <span>{{ $t('settings.ui.elementOpacity.coachPanels') }}</span>
                 <span class="row-ctl">
@@ -4337,7 +4451,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.scoreboard">
               <label class="row-main">
                 <span>{{ $t('settings.ui.elementOpacity.scoreboard') }}</span>
                 <span class="row-ctl">
@@ -4347,7 +4461,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.quickBar">
               <label class="row-main">
                 <span>{{ $t('settings.ui.elementOpacity.quickBar') }}</span>
                 <span class="row-ctl">
@@ -4357,7 +4471,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.opacity.chatToasts">
               <label class="row-main">
                 <span>{{ $t('settings.ui.elementOpacity.chatToasts') }}</span>
                 <span class="row-ctl">
@@ -4367,7 +4481,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.rosterWindow">
               <label class="row-main">
                 <span>{{ $t('settings.ui.elementOpacity.rosterWindow') }}</span>
                 <span class="row-ctl">
@@ -4377,7 +4491,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.opacity')" :previews="SETTING_PREVIEWS.opacity" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.log">
               <label class="row-main">
                 <span>{{ $t('settings.display.log.log') }}</span>
                 <span class="row-ctl">
@@ -4393,7 +4507,7 @@ onBeforeUnmount(() => {
             <legend>{{ $t('settings.ui.uiTheme.uiTheme') }}</legend>
             <!-- lm-theme: uiStyle/uiColorScheme rows -->
             <!-- Owner 11-03: Modern (League Manager look, default) or Retro (today's look); dark or light for Modern. -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.interfaceStyle">
               <label class="row-main">
                 <span>{{ $t('settings.ui.uiStyle.interfaceStyle') }}</span>
                 <span class="row-ctl">
@@ -4405,7 +4519,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.uiStyle')" :def="$t('settings.info.uiStyleDefault')" :previews="SETTING_PREVIEWS.uiStyle" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.theme">
               <label class="row-main">
                 <span>{{ $t('settings.ui.uiStyle.theme') }}</span>
                 <span class="row-ctl">
@@ -4418,7 +4532,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.uiColorScheme')" :def="$t('settings.info.uiColorSchemeDefault')" :previews="SETTING_PREVIEWS.uiColorScheme" />
             </div>
             <!-- Owner 11-03 (in-game redesign, coordinator ruling B): the in-game look, Retro by default. -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.inGameStyle">
               <label class="row-main">
                 <span>{{ $t('settings.ui.uiStyle.inGameStyle') }}</span>
                 <span class="row-ctl">
@@ -4431,7 +4545,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.uiGameStyle')" :def="$t('settings.info.uiGameStyleDefault')" />
             </div>
             <!-- /lm-theme -->
-            <div class="row theme-preset-row">
+            <div class="row theme-preset-row" data-setting-id="ui.colorPreset">
               <span class="row-label">{{ $t('settings.ui.uiTheme.colorPreset') }}</span>
               <div class="row-ctl">
                 <div class="theme-presets">
@@ -4454,7 +4568,7 @@ onBeforeUnmount(() => {
               </div>
               <SettingInfo :text="$t('settings.info.colorPreset')" :def="$t('settings.info.colorPresetDefault')" :previews="SETTING_PREVIEWS.colorPreset" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.primaryAccent">
               <label class="row-main">
                 <span>{{ $t('settings.ui.uiTheme.primaryAccent') }}</span>
                 <span class="row-ctl">
@@ -4463,7 +4577,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.primaryAccent')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.secondaryBase">
               <label class="row-main">
                 <span>{{ $t('settings.ui.uiTheme.secondaryBase') }}</span>
                 <span class="row-ctl">
@@ -4484,7 +4598,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group">
             <legend>{{ $t('settings.general.cinematics.cinematics') }}</legend>
             <!-- Owner 08-19: "Injury cinematics" retired — cinematicMode had zero consumers. -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.requireClickToDismiss">
               <label class="row-main">
                 <span>{{ $t('settings.general.cinematics.requireClickToDismiss') }}</span>
                 <span class="row-ctl">
@@ -4498,7 +4612,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.telestrator.telestrator') }}</legend>
             <!-- Owner 11-03 (lane C): on for replays only (the new default), on for all games, or off (no button, no keys). -->
-            <div class="row">
+            <div class="row" data-setting-id="ui.telestrator">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.telestrator.label') }}</span>
                 <span class="row-ctl">
@@ -4511,7 +4625,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.telestrator.description')" :def="$t('settings.info.telestratorDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.pitchMarkingColor">
               <label class="row-main">
                 <span>{{ $t('settings.ui.telestrator.pitchMarkingColor') }}</span>
                 <span class="row-ctl">
@@ -4524,7 +4638,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.cursor.cursor') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="ui.cursor">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.cursor.label') }}</span>
                 <span class="row-ctl">
@@ -4533,7 +4647,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.cursor.description')" :def="$t('settings.info.valueOn')" :previews="SETTING_PREVIEWS.fantasyCursor" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.selectionEchoOnThe">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.echos.selectionEchoOnThe') }}</span>
                 <span class="row-ctl">
@@ -4542,7 +4656,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.selectionEcho')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.cursorClickEcho">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.echos.cursorClickEcho') }}</span>
                 <span class="row-ctl">
@@ -4551,7 +4665,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.clickEcho')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.echoColour">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.echos.echoColour') }}</span>
                 <span class="row-ctl">
@@ -4560,7 +4674,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.echoColor')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="ui.echoSize">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.echos.echoSize') }}</span>
                 <span class="row-ctl">
@@ -4582,7 +4696,7 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'art'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.playerSprites.playerSprites') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="art.playerSprites">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.playerSprites') }}</span>
                 <span class="row-ctl">
@@ -4597,7 +4711,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.spriteSet')" :def="$t('settings.info.spriteSetDefault')" :previews="SETTING_PREVIEWS.spriteSet" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.oneSpritePerPosition">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.oneSpritePerPosition') }}</span>
                 <span class="row-ctl">
@@ -4607,7 +4721,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.display.playerSprites.usesTheFirstAvailable')" :def="$t('settings.info.valueOff')" />
             </div>
             <!-- Owner 09-15: the Checkers disc letter font. -->
-            <div v-if="settings.spriteSet === 'checkers'" class="row">
+            <div v-if="settings.spriteSet === 'checkers'" class="row" data-setting-id="art.checkerLetterFont">
               <label class="row-main">
                 <span>{{ $t('settings.display.playerSprites.checkerLetterFont') }}</span>
                 <span class="row-ctl">
@@ -4625,7 +4739,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.art.pitchAndStadium.pitchAndStadium') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="art.tilesetTurf">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.tilesetTurf') }}</span>
                 <span class="row-ctl">
@@ -4637,7 +4751,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.turf')" :previews="SETTING_PREVIEWS.turf" />
             </div>
             <!-- Owner 11-03: the Stadium toggle + Stadium stands merged into one select (game/settingsMerges.ts). -->
-            <div class="row">
+            <div class="row" data-setting-id="art.stadium">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.stadium') }}</span>
                 <span class="row-ctl">
@@ -4651,7 +4765,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.stadium')" :def="$t('settings.info.stadiumDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.backdrop">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.backdrop') }}</span>
                 <span class="row-ctl">
@@ -4666,7 +4780,7 @@ onBeforeUnmount(() => {
             <p v-if="settings.backdrop === 'galaxy'" class="hint" data-testid="backdrop-galaxy-credit">
               <a :href="GALAXY_BACKDROP_URL" @click.prevent="openExternal(GALAXY_BACKDROP_URL)">{{ GALAXY_BACKDROP_CREDIT }}</a>
             </p>
-            <div v-if="settings.backdrop === 'color'" class="row">
+            <div v-if="settings.backdrop === 'color'" class="row" data-setting-id="art.backdropColour">
               <label class="row-main">
                 <span>{{ $t('settings.display.pitch.backdropColour') }}</span>
                 <span class="row-ctl">
@@ -4679,7 +4793,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.mods.dice.dice') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="art.n3dDiceBlockDice">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.n3dDiceBlockDice') }}</span>
                 <span class="row-ctl">
@@ -4688,7 +4802,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.dice3d')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.d6Style">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.d6Style') }}</span>
                 <span class="row-ctl">
@@ -4701,7 +4815,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.d6Style')" :def="$t('settings.info.d6StyleDefault')" :previews="SETTING_PREVIEWS.d6Style" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.blockDieSurface">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.blockDieSurface') }}</span>
                 <span class="row-ctl">
@@ -4715,7 +4829,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.blockDieSurface')" :def="$t('settings.info.blockDieSurfaceDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.diceTumbleBlocktumblemsMs">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.diceTumbleBlocktumblemsMs', { blockTumbleMs: settings.blockTumbleMs }) }}</span>
                 <span class="row-ctl">
@@ -4724,7 +4838,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.diceTumble')" :def="$t('settings.info.diceTumbleDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="art.dieRollTagPosition">
               <label class="row-main">
                 <span>{{ $t('settings.mods.dice.dieRollTagPosition') }}</span>
                 <span class="row-ctl">
@@ -4744,7 +4858,7 @@ onBeforeUnmount(() => {
           <!-- Owner 10-20: the coach rank badges on the Play screen coach card and the game-load rank panel. -->
           <fieldset class="settings-group">
             <legend>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="art.coachRankBadges">
               <label class="row-main">
                 <span>{{ $t('settings.mods.coachRankBadges.coachRankBadges') }}</span>
                 <span class="row-ctl">
@@ -4763,7 +4877,7 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'audio'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.ui.sound.sound') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="audio.gameSound">
               <label class="row-main">
                 <span>{{ $t('settings.ui.sound.gameSound') }}</span>
                 <span class="row-ctl">
@@ -4773,7 +4887,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.gameSound')" :def="$t('settings.info.gameSoundDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="audio.footstepStyle">
               <label class="row-main">
                 <span>{{ $t('settings.ui.sound.footstepStyle') }}</span>
                 <span class="row-ctl">
@@ -4785,7 +4899,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.footsteps')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="audio.plannerWaypoint">
               <label class="row-main">
                 <span>{{ $t('settings.ui.sound.plannerWaypoint') }}</span>
                 <span class="row-ctl">
@@ -4800,7 +4914,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.audio.turnClock.turnClock') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="audio.turnClockWarning">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.turnClockWarning.label') }}</span>
                 <span class="row-ctl">
@@ -4814,7 +4928,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.turnClockWarning')" :def="$t('settings.info.turnClockWarningDefault')" />
             </div>
-            <div v-for="cue in TURN_CLOCK_CUES" :key="cue.id" class="row">
+            <div v-for="cue in TURN_CLOCK_CUES" :key="cue.id" class="row" :data-setting-id="`audio.cue.${cue.id}`">
               <label class="row-main">
                 <span>{{ cue.label }}</span>
                 <span class="row-ctl">
@@ -4828,7 +4942,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.audio.uiCues.uiCues') }}</legend>
-            <div v-for="cue in OTHER_UI_CUES" :key="cue.id" class="row">
+            <div v-for="cue in OTHER_UI_CUES" :key="cue.id" class="row" :data-setting-id="`audio.cue.${cue.id}`">
               <label class="row-main">
                 <span>{{ cue.label }}</span>
                 <span class="row-ctl">
@@ -4846,7 +4960,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.video.video') }}</legend>
             <!-- Owner 11-12: one switch for weak machines; it sets the video options below together (game/lowPerformanceMode.ts). -->
-            <div class="row">
+            <div class="row" data-setting-id="video.lowPerformanceMode">
               <label class="row-main">
                 <span>{{ $t('settings.display.video.lowPerformanceMode') }}</span>
                 <span class="row-ctl">
@@ -4856,7 +4970,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.lowPerformanceMode')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="video.autoDirectorCameraFollows">
               <label class="row-main">
                 <span>{{ $t('settings.display.video.autoDirectorCameraFollows') }}</span>
                 <span class="row-ctl">
@@ -4865,7 +4979,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.autoDirector')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="video.resolutionScale">
               <label class="row-main">
                 <span>{{ $t('settings.display.video.resolutionScale') }}</span>
                 <span class="row-ctl">
@@ -4883,7 +4997,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.renderScale')" :def="$t('settings.info.renderScaleDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="video.fpsLimit">
               <label class="row-main">
                 <span>{{ $t('settings.display.video.fpsLimit') }}</span>
                 <span class="row-ctl">
@@ -4897,7 +5011,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.fpsLimit')" :def="$t('settings.info.fpsLimitDefault')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="video.fullscreenLabel">
               <span class="row-label">{{ $t('settings.info.fullscreenLabel') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" @click="toggleFullscreen">{{ fullscreen ? $t('settings.display.video.exitNativeFullscreen') : $t('settings.display.video.nativeFullscreen') }}</button>
@@ -4913,7 +5027,7 @@ onBeforeUnmount(() => {
             <legend>{{ $t('settings.accessibility.textAndZoom.textAndZoom') }}</legend>
             <!-- Owner 11-03 (lane C): the webview's own zoom. Owner ruling 11-03: the row is HIDDEN until the shell can
                  zoom (uiZoomAvailable), never shown disabled. -->
-            <div v-if="uiZoomAvailable" class="row">
+            <div v-if="uiZoomAvailable" class="row" data-setting-id="accessibility.uiZoom">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.uiZoom.label') }}</span>
                 <span class="row-ctl">
@@ -4926,7 +5040,7 @@ onBeforeUnmount(() => {
             </div>
             <!-- Sol final r2: the shell passed the probe but refused this factor - a STATE note, visible (not the tooltip). -->
             <p v-if="uiZoomAvailable && uiZoomState.unavailable" class="hint" role="status" data-testid="ui-zoom-failed">{{ $t('settings.info.uiZoomFailed', { requested: settings.uiZoom, applied: Math.round(uiZoomState.applied * 100) }) }}</p>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.uiFont">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.textAndContrast.uiFont') }}</span>
                 <span class="row-ctl">
@@ -4940,7 +5054,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.info.uiFont')" :def="$t('settings.info.uiFontDefault')" />
               <p class="row-sample" data-testid="sample-uiFont"><span class="row-sample-cap">{{ $t('settings.info.example') }}</span> <span :style="uiFontSampleStyle()">{{ $t('settings.info.uiFontSample') }}</span></p>
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.minimumTextSize">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.textAndContrast.minimumTextSize') }}</span>
                 <span class="row-ctl">
@@ -4955,7 +5069,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group">
             <legend>{{ $t('settings.accessibility.colorAndContrast.colorAndContrast') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.colourblindMode">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.textAndContrast.colourblindMode') }}</span>
                 <span class="row-ctl">
@@ -4969,7 +5083,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.colorblind')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.highContrast">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.highContrast.label') }}</span>
                 <span class="row-ctl">
@@ -4978,7 +5092,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.highContrast.description')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.pitchBrightness">
               <label class="row-main">
                 <span>{{ $t('settings.accessibility.colorAndContrast.pitchBrightness') }}</span>
                 <span class="row-ctl">
@@ -4992,7 +5106,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="motion-settings">
             <legend>{{ $t('settings.accessibility.motion.motion') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.reduceMotion">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.reduceMotion.label') }}</span>
                 <span class="row-ctl">
@@ -5001,7 +5115,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.reflowNew.reduceMotion.description')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.reduceFlashing">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.reduceFlashing.label') }}</span>
                 <span class="row-ctl">
@@ -5014,7 +5128,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="sound-cue-settings">
             <legend>{{ $t('settings.accessibility.soundCues.soundCues') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.visualSoundCues">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.visualSoundCues.label') }}</span>
                 <span class="row-ctl">
@@ -5024,7 +5138,7 @@ onBeforeUnmount(() => {
               <SettingInfo :text="$t('settings.reflowNew.visualSoundCues.description')" :def="$t('settings.info.valueOff')" />
             </div>
             <!-- The turn-clock warning time lives in Audio; this row only links there. -->
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.accessibilityLink">
               <span class="row-label">{{ $t('settings.reflowNew.turnClockWarning.accessibilityLink') }}</span>
               <span class="row-ctl">
                 <button type="button" class="sf-btn small" data-testid="turn-clock-link" @click="selectSettingsTab('audio', true)">{{ $t('settings.accessibility.soundCues.openAudio') }}</button>
@@ -5035,7 +5149,7 @@ onBeforeUnmount(() => {
 
           <fieldset class="settings-group" data-testid="input-settings">
             <legend>{{ $t('settings.accessibility.input.input') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="accessibility.largerTargets">
               <label class="row-main">
                 <span>{{ $t('settings.reflowNew.largerTargets.label') }}</span>
                 <span class="row-ctl">
@@ -5053,7 +5167,7 @@ onBeforeUnmount(() => {
           <fieldset class="settings-group" data-testid="fumbbl-account">
             <legend>{{ $t('settings.account.fumbbl.fumbbl') }}</legend>
             <!-- owner 09-10: "Login credentials" caption cut -->
-            <div class="row creds-open-row">
+            <div class="row creds-open-row" data-setting-id="account.fumbbl">
               <span class="row-label">{{ $t('settings.general.connection.fumbbl') }} <b>{{ settings.coach.trim() || '—' }}</b></span>
               <span class="row-ctl">
                 <button type="button" class="creds-open-btn sf-btn small" @click="openCredsMenu('fumbbl')">{{ $t('settings.credsOpenRow.general.connection.manageLoginCredentials') }}</button>
@@ -5073,7 +5187,7 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'diagnostics'">
           <fieldset class="settings-group">
             <legend>{{ $t('settings.diagnostics.logging.logging') }}</legend>
-            <div class="row">
+            <div class="row" data-setting-id="diagnostics.verboseLogAllEvents">
               <label class="row-main">
                 <span>{{ $t('settings.general.diagnostics.verboseLogAllEvents') }}</span>
                 <span class="row-ctl">
@@ -5085,7 +5199,7 @@ onBeforeUnmount(() => {
             <!-- Owner 09-10: the wire-log file + dev panel toggles are fork-edition diagnostics; the public edition keeps
                  the wire log ON silently (it rides bug reports) and never shows the panel. -->
             <template v-if="FORK_EDITION">
-            <div class="row">
+            <div class="row" data-setting-id="diagnostics.verboseWireLogFile">
               <label class="row-main">
                 <span>{{ $t('settings.general.diagnostics.verboseWireLogFile') }}</span>
                 <span class="row-ctl">
@@ -5094,7 +5208,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.wireLog')" :def="$t('settings.info.valueOn')" />
             </div>
-            <div v-if="settings.wireLog" style="margin: 2px 0 4px 24px;">
+            <div v-if="settings.wireLog" data-setting-part="diagnostics.verboseWireLogFile" style="margin: 2px 0 4px 24px;">
               <template v-if="gameStore.state.wireLogFile">
                 <input type="text" readonly :value="gameStore.state.wireLogFile"
                   @focus="($event.target as HTMLInputElement).select()"
@@ -5105,7 +5219,7 @@ onBeforeUnmount(() => {
               </template>
               <span v-else class="hint">{{ $t('settings.general.diagnostics.writesOneJsonlFile') }}</span>
             </div>
-            <div class="row">
+            <div class="row" data-setting-id="diagnostics.showDeveloperLogPanel">
               <label class="row-main">
                 <span>{{ $t('settings.general.diagnostics.showDeveloperLogPanel') }}</span>
                 <span class="row-ctl">
@@ -5114,7 +5228,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.devPanel')" :def="$t('settings.info.valueOff')" />
             </div>
-            <div v-if="settings.devMode" class="row">
+            <div v-if="settings.devMode" class="row" data-setting-id="diagnostics.coachBrain">
               <label class="row-main">
                 <span>{{ $t('settings.general.diagnostics.coachBrain') }}</span>
                 <span class="row-ctl">
@@ -5127,7 +5241,7 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.coachBrain')" />
             </div>
-            <div v-if="settings.devMode && settings.coachBrain === 'fly-chaos'" class="row">
+            <div v-if="settings.devMode && settings.coachBrain === 'fly-chaos'" class="row" data-setting-id="diagnostics.flyBrainUrl">
               <label class="row-main">
                 <span>{{ $t('settings.general.diagnostics.flyBrainUrl') }}</span>
                 <span class="row-ctl">
@@ -5144,10 +5258,10 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'credits'">
           <!-- Owner 09-30 (S51): which web app runs on which shell; an app patch can be dropped for the built-in one. -->
           <template v-if="appPatchStatus">
-            <h3 class="credits-head">{{ $t('settings.credits.version') }}</h3>
+            <h3 class="credits-head" data-setting-id="credits.version">{{ $t('settings.credits.version') }}</h3>
             <p class="hint" data-testid="app-version-line">{{ versionLine(appVersion, appPatchStatus) }}</p>
             <p v-if="appPatchStatus.lastError" class="hint update-error">{{ $t('settings.credits.lastAppUpdateError', { lastError: appPatchStatus.lastError }) }}</p>
-            <button v-if="appPatchStatus.activeVersion" type="button" @click="useBuiltInAppVersion()">{{ $t('settings.credits.useTheBuiltIn', { embeddedVersion: appPatchStatus.embeddedVersion }) }}</button>
+            <button v-if="appPatchStatus.activeVersion" type="button" data-setting-part="credits.version" @click="useBuiltInAppVersion()">{{ $t('settings.credits.useTheBuiltIn', { embeddedVersion: appPatchStatus.embeddedVersion }) }}</button>
           </template>
           <h3 class="credits-head">{{ $t('settings.credits.attributions') }}</h3>
           <p class="hint">{{ $t('settings.credits.thirdPartyAssetsAnd') }}</p>

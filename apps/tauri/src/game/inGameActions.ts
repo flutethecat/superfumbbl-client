@@ -29,8 +29,6 @@ export interface InGameActionDeps {
   toggleRoster(): void;
   toggleLogExpand(): void;
   cycleTackleZones(): void;
-  cycleSprites(): void;
-  cycleSkillDisplay(): void;
   toggleAutoDirector(): void;
   /** False when chat is disabled. */
   openChat(): boolean;
@@ -114,8 +112,6 @@ export function createInGameActionRunner(deps: InGameActionDeps): (id: ControlAc
       case 'roster': deps.toggleRoster(); return true;
       case 'logExpand': deps.toggleLogExpand(); return true;
       case 'tackleZones': deps.cycleTackleZones(); return true;
-      case 'sprites': deps.cycleSprites(); return true;
-      case 'skillDisplay': deps.cycleSkillDisplay(); return true;
       case 'autoDirector': deps.toggleAutoDirector(); return true;
       case 'openChat': return deps.openChat();
       case 'telestrator': return deps.toggleTelestrator();

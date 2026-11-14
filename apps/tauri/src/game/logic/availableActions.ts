@@ -24,6 +24,7 @@ import {
 } from './wideRailPreAction';
 import { t, data } from '../../i18n';
 import { activeGameServerVersion, serverRestoresDwarfenWisdomActive } from '../serverVersionGate';
+import { PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE } from './passTargetingSwitch';
 
 /** declare = clientActingPlayer{action}; endMove = clientActingPlayer{playerId:null}. */
 export type CoachActionKind = 'declare' | 'endMove';
@@ -2074,6 +2075,30 @@ function gameOptionEnabled(game: GameJson, optionId: string): boolean {
   return value === 'true' || value === '1';
 }
 
+/** A boolean game option read as upstream's `UtilGameOption.isOptionEnabled` (`option/UtilGameOption.java:11-17`):
+ *  `getOptionWithDefault`, so an option the server did not send takes its factory default. */
+function gameOptionEnabledWithDefault(game: GameJson, optionId: string, defaultValue: boolean): boolean {
+  const value = game.gameOptions?.gameOptionArray?.find((option) => option.gameOptionId === optionId)?.gameOptionValue;
+  if (value == null || value === '') return defaultValue;
+  return value === 'true' || value === '1';
+}
+
+/** F2-1 FORGO: bb2025 `SelectLogicModule.actionContext:365-368` offers FORGO when
+ *  `UtilGameOption.isOptionEnabled(game, ENABLE_STALLING_CHECK) && !playerState.isProneOrStunned()`. The option's wire
+ *  id is `enableStallingCheck` (`option/GameOptionId.java:81`) and its default is TRUE (`GameOptionFactory.java:286-289`),
+ *  so a game that does not list it (every FUMBBL BB2025 capture in fixtures/) has it on. BB2025 only: the mixed
+ *  `SelectLogicModule` used by BB2020 / BB2016 has no FORGO, and a game without a rulesVersion is BB2016 upstream
+ *  (`model/GameOptions.java:194-196`). The caller supplies the Select menu's own gate (an active player of the acting
+ *  side, not already acting). */
+export function forgoAvailable(game: GameJson, playerId: string): boolean {
+  if (rulesVersionOf(game) !== 'BB2025') return false;
+  if (!gameOptionEnabledWithDefault(game, 'enableStallingCheck', true)) return false;
+  const p = findPlayer(game, playerId);
+  if (!p) return false;
+  const base = baseState(p.playerState ?? 0);
+  return base !== BASE_PRONE && base !== BASE_STUNNED; // PlayerState.isProneOrStunned
+}
+
 /** Law 10d: fresh declares are legal only before the acting player has activation progress. This port can call
  *  `playerDeclareSet` for an already-acting player because `deriveClientState` falls back to SELECT_PLAYER when its
  *  action is null/unmapped (`clientStateMachine.ts:144-156`; call site below). Every field read here is carried by
@@ -2486,6 +2511,53 @@ export function passRangeSquares(game: GameJson, from: [number, number]): [numbe
     }
   }
   return out;
+}
+
+/** The pass targeting switch (owner 2026-11-13; see passTargetingSwitch.ts): upstream's targeting ships, the A.5
+ *  square-throw variant is kept OFF. Re-exported so the view and store read the one constant. */
+export { PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE } from './passTargetingSwitch';
+
+/** Upstream's pass-target rule for the acting passer (bb2025 / mixed PassLogicModule, identical in both, so every
+ *  ruleset): nothing once hasPassed; HAIL_MARY_PASS any square (playerInteraction:47, fieldInteraction:70, range =
+ *  anywhere); otherwise the square must be in the passing range (isPassTargetInRange:121-125) measured from `from`
+ *  (default: the passer's square; a planned walk's destination for a plan) and, in PASS_MOVE, hold a team-mate with
+ *  tackle zones who passes the Animosity race check (canPlayerGetPass:127-138); PASS takes any square in range. The
+ *  possession half (UtilPlayer.hasBall) is checked at the send (store sendPassTarget), so a walk-then-pass plan may be
+ *  armed before the walk. `variant` = PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE (tests pass it to cover both positions). */
+export function passTargetAllowed(
+  game: GameJson,
+  actingId: string,
+  target: [number, number],
+  opts: { from?: [number, number] | null; variant?: boolean } = {},
+): boolean {
+  const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; hasPassed?: boolean } | undefined;
+  if (!acting || String(acting.playerId ?? '') !== actingId) return false;
+  // `!hasPassed` everywhere, the send included (review 11-13, major 2). The server sets hasPassed only once the throw is
+  // taken (mixed StepInitPassing:239-246 after CLIENT_PASS, and StepPassBlock:193 restoring the thrower during that
+  // throw), never before it; what the g929 capture showed early was the TEAM flag passUsed (StepInitMoving:384 on the
+  // first passMove square), which this rule does not read.
+  if (acting.hasPassed === true) return false;
+  const action = String(acting.playerAction ?? '');
+  if (action === 'hailMaryPass') return true;
+  if (action !== 'pass' && action !== 'passMove') return false;
+  const from = opts.from ?? normSquare(findPlayer(game, actingId)?.playerCoordinate);
+  if (!from || !passRangeSquares(game, from).some((s) => s[0] === target[0] && s[1] === target[1])) return false;
+  if (action === 'pass' || (opts.variant ?? PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE)) return true;
+  const catcher = ((game.fieldModel?.playerDataArray ?? []) as PlayerDataLike[])
+    .find((p) => p.playerId !== actingId && sameSquare(p.playerCoordinate, target));
+  if (!catcher) return false;
+  return playerSideIsHome(game, catcher.playerId) === playerSideIsHome(game, actingId)
+    && stateHasTacklezones(catcher.playerState) && animosityAllowsCatcher(game, actingId, catcher.playerId);
+}
+
+/** bb2025 / mixed PassLogicModule.actionContext:186-188: ClientAction.PASS ("Pass Ball (any square)") while
+ *  LogicModule.isPassAnySquareAvailable (PASS_MOVE + UtilPlayer.hasBall, :613-616) and !hasPassed. Off while the kept
+ *  square-throw variant is on (that variant throws at any square from passMove without changing the action). */
+export function passAnySquareAvailable(game: GameJson, actingId: string, variant = PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE): boolean {
+  if (variant) return false;
+  const acting = game.actingPlayer as { playerId?: string | null; playerAction?: string | null; hasPassed?: boolean } | undefined;
+  return !!acting && String(acting.playerId ?? '') === actingId && acting.playerAction === 'passMove'
+    && acting.hasPassed !== true && isBallCarrier(game, actingId);
 }
 
 /** BB2025 Throw Team-Mate range is the regular throwing template through Short Pass: every Q/S cell, no L/B. */
@@ -3465,6 +3537,16 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     if (isSecureTheBallAvailable(game, playerId)) {
       out.push({ action: 'secureTheBall', get label() { return t('hud.actions.text.secureTheBall'); }, kind: 'declare', enabled: true });
     }
+    // F2-1 FORGO (owner 11-13 "build forgo"): bb2025 SelectLogicModule.actionContext:365-368, right after
+    // SECURE_THE_BALL as upstream; picked, it sends acting(FORGO, false) (:237-239) and the server ends the activation
+    // at once (forceDispatch, PlayerAction.java:127-129; bb2025 StepEndSelecting:464-467 sets forgone, pushes the end).
+    // Upstream label "Forgo Activation" (bb2025 ClientStateSelect:311-312); a text row, no icon.
+    if (!prone && forgoAvailable(game, playerId)) {
+      out.push({
+        action: 'forgo', get label() { return t('hud.actions.text.forgoActivation'); }, kind: 'declare', enabled: true,
+        get reason() { return t('hud.actions.reason.forgoActivation'); },
+      });
+    }
     // Owner 09-28 (Spec S5, UAT #5; coordinator review 09-28 — ownership gate + ordering + real-condition fixes):
     // a star special rule the LOCAL COACH'S OWN player HAS but cannot elect right now must say so, not vanish
     // (item #2 in the ledger — Nobbla's legitimately-unavailable Kick 'em read as "the rail is broken"). Placed
@@ -3617,8 +3699,11 @@ function pristineActivationTypeTransitions(
   // block. declaresAllowed admits the stood-up player for the OTHER switches, so the Block rows are dropped here.
   const stoodUp = Number((acting as { currentMove?: number } | undefined)?.currentMove ?? 0) > 0
     && !!(acting as { standingUp?: boolean } | undefined)?.standingUp && !canStandUpForFree(game, playerId);
+  // F2-1: FORGO is a fresh-player declaration only (bb2025 SelectLogicModule; no acting-player module offers it). Sent
+  // to an acting mover it would only rename the action (StepInitMoving changePlayerAction dispatches nothing but PUNT).
   return playerDeclareSet(game, playerId, p, ctx)
-    .filter((action) => action.kind === 'declare' && action.action !== currentAction && !(stoodUp && action.action === 'block'));
+    .filter((action) => action.kind === 'declare' && action.action !== currentAction && action.action !== 'forgo'
+      && !(stoodUp && action.action === 'block'));
 }
 
 /** Owner 09-28 (Sol re-review — ORDER fix): `playerDeclareSet` already puts its OWN disabled "Not Available" rows
@@ -3785,6 +3870,12 @@ function availableActionsRaw(
     // UtilPlayer.hasBall, and !actingPlayer.hasPassed. It does NOT inspect the raw playerAction. Keep that exact
     // gate set here; the server-derived PASS state supplies the module scope and the echoed hasPassed edge owns
     // the pre-CLIENT_PASS lifetime, with no client-side prediction or latch.
+    // Task 3 (owner 11-13, pass parity): "Pass Ball (any square)" - bb2025 PassLogicModule.actionContext:186-188;
+    // MoveLogicModule.performAvailableAction PASS (:96-100) sends acting(PASS, jumping) from PASS_MOVE with the ball.
+    // In PASS a click on any square or player in range throws (playerInteraction:47-49, fieldInteraction:70-79).
+    if (state === 'PASS' && passAnySquareAvailable(game, actingId)) {
+      out.push({ action: 'passAnySquare', get label() { return t('hud.actions.text.passBallAnySquare'); }, kind: 'declare', enabled: true, ffbAction: 'PASS_ANY_SQUARE' });
+    }
     if (state === 'PASS'
         && acting?.hasPassed !== true
         && isBallCarrier(game, actingId)
@@ -3805,6 +3896,22 @@ function availableActionsRaw(
     if (state === 'PASS' && (actingAction === 'pass' || actingAction === 'hailMaryPass') && acting?.hasPassed !== true
         && (game.actingPlayer as { sufferingAnimosity?: boolean } | undefined)?.sufferingAnimosity !== true) {
       out.push({ action: 'passMove', get label() { return t('hud.actions.text.move'); }, kind: 'declare', enabled: true, ffbAction: 'MOVE' }); // PassLogicModule:209 MOVE
+    }
+    // F1-1 (owner 11-13 "If upstream allows hand off to an opponent, allow it"): the HAND_OVER <-> HAND_OVER_MOVE toggle.
+    // bb2025 (and mixed) HandOverLogicModule.actionContext:98-103 adds ClientAction.HAND_OVER while ballInHand()
+    // (UtilPlayer.hasBall); MoveLogicModule.performAvailableAction:87-95 sends acting(HAND_OVER, jumping) from
+    // HAND_OVER_MOVE and acting(HAND_OVER_MOVE, jumping) from HAND_OVER. Only in HAND_OVER may the ball go to an
+    // opponent (canPlayerGetHandOver `|| playerAction == HAND_OVER`). Labels: ClientStateHandOver itemConfigs:89
+    // "Hand Over Ball (any player)" / influencedItemConfigs:78-82 (HANDS_OVER_TO_ANYONE) "Regular Hand Over / Move".
+    if (state === 'HAND_OVER' && (actingAction === 'handOverMove' || actingAction === 'handOver')
+        && isBallCarrier(game, actingId)) {
+      const anyone = actingAction === 'handOver';
+      out.push({
+        action: 'toggleHandOverAnyone',
+        get label() { return anyone ? t('hud.actions.text.regularHandOff') : t('hud.actions.text.handOffToAnyPlayer'); },
+        kind: 'declare', enabled: true, ffbAction: 'HAND_OVER',
+        get reason() { return anyone ? t('hud.actions.reason.regularHandOff') : t('hud.actions.reason.handOffToAnyPlayer'); },
+      });
     }
     if (fumblerooskiStates.has(state) && fumblerooskieAvailable(game, actingId)) {
       out.push({ action: 'fumblerooskie', get label() { return t('hud.actions.text.fumblerooskiDropBall'); }, kind: 'declare', enabled: true });

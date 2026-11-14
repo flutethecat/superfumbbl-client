@@ -352,7 +352,7 @@ export function computeConfigMarkings(game: GameJson): Map<string, string> {
 
 /** #6 (owner ruling 08-17, refined 08-17b): decides how a CoachAction.icon (currently only 'Jump Up', Move row
  *  only — availableActions.ts) presents in the SpectateView context menu, branching on the SAME skillDisplay
- *  field the skill-marking cycle button + pitch glyphs use (see SpectateView skillMode/cycleSkillDisplay).
+ *  field Settings > Skills and the pitch glyphs use (see SpectateView skillMode).
  *  TEXT mode ('markings') has no icon glyphs to reuse, so it falls back to the pre-#6 "Jump Up Move" text
  *  prefix; icon-capable modes ('icons', either bb3/bb2 style) keep the row label plain and let the caller
  *  resolve the icon (SpectateView owns skillIconUrl/effectiveIconStyle, kept out of this pure module). */

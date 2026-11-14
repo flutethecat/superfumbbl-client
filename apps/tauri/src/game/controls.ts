@@ -91,8 +91,9 @@ export const CONTROL_ACTIONS = [
   // Flips the Settings checkbox "Flip the pitch view". `game` covers setup and kick-off as well. No pad default.
   { id: 'pitchFlip', get label() { return $t('settings.controlActions.flipThePitchView'); }, group: 'Camera', context: 'game', keyboard: pair('KeyF'), controller: pair() },
   { id: 'tackleZones', get label() { return $t('settings.controlActions.tackleZonesCycle'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadUp') },
-  { id: 'sprites', get label() { return $t('settings.controlActions.spritesCycle'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadDown') },
-  { id: 'skillDisplay', get label() { return $t('settings.controlActions.skillDisplayIconsMarkings'); }, group: 'Quick bar', context: 'game', keyboard: pair(), controller: pair('LB+DpadLeft') },
+  // Owner 11-12: the Sprites (LB + D-pad down) and Skill display (LB + D-pad left) actions left with their quick-bar
+  // buttons (Settings > Art / Skills keep both choices). A stored binding for either id is dropped on load
+  // (migrateControlBindings reads only the ids in this table); the two chords are unassigned.
   { id: 'roster', get label() { return $t('settings.controlActions.rosterPopOut'); }, group: 'Quick bar', context: 'game', keyboard: pair('KeyH'), controller: pair('LB+A'), keyboardAlias: 'rosterKey' },
   { id: 'logExpand', get label() { return $t('settings.controlActions.enlargeTheLogWindow'); }, group: 'Quick bar', context: 'game', keyboard: pair('KeyL'), controller: pair('LB+X'), keyboardAlias: 'logExpandKey' },
   { id: 'openChat', get label() { return $t('settings.controlActions.openChatChatDock'); }, group: 'Quick bar', context: 'game', keyboard: pair('Enter'), controller: pair('LB+Y'), keyboardFixed: 'Enter' },

@@ -274,12 +274,6 @@ export async function transactSkillPackChoice(input: SkillPackChoiceTransaction)
   return activated;
 }
 
-export function toggleSkillDisplay(settings: {
-  skillDisplay: 'icons' | 'markings';
-}): void {
-  settings.skillDisplay = settings.skillDisplay === 'icons' ? 'markings' : 'icons';
-}
-
 /** Vue-tracked DOM resolver; the underlying shared snapshot remains framework-free. */
 export function reactiveSkillIconUrl(skill: string, style: SkillIconStyle = 'bb3', context?: SkillIconContext): string {
   void assetMods.revision;

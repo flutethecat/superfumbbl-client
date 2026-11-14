@@ -64,7 +64,7 @@ export function confirmCardLocked(input: ConfirmCardLockInput): boolean {
  */
 export type LockedActionVerdict = 'allow' | 'escape' | 'confirm' | 'swallow';
 const LOCK_ALLOWED: ReadonlySet<ControlActionId> = new Set<ControlActionId>([
-  'roster', 'logExpand', 'tackleZones', 'sprites', 'skillDisplay', 'autoDirector', 'openChat', 'telestrator',
+  'roster', 'logExpand', 'tackleZones', 'autoDirector', 'openChat', 'telestrator',
   'playerCard', 'playerCardsToggle', 'pitchFlip', 'zoomIn', 'zoomOut', 'precisionToggle', 'cameraPan',
   'crosshairMove', 'fullscreen', 'virtualKeyboard', 'bladePrev', 'bladeNext',
 ]);

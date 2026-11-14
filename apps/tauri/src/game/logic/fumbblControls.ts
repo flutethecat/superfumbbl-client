@@ -276,6 +276,8 @@ export function ffbClientAction(a: Pick<CoachAction, 'action' | 'kind' | 'blockK
     case 'removeConfusion': return 'RECOVER';
     case 'standUp': return 'STAND_UP';
     case 'secureTheBall': return 'SECURE_THE_BALL';
+    case 'forgo': return 'FORGO'; // F2-1: IPlayerPopupMenuKeys.KEY_FORGO (F)
+    case 'toggleHandOverAnyone': return 'HAND_OVER'; // F1-1: the in-action ClientAction.HAND_OVER toggle (H)
     case 'thenIStartedBlastin': return 'THEN_I_STARTED_BLASTIN';
     case 'fumblerooskie': return 'FUMBLEROOSKIE';
     case 'illCarryYou': case 'placeCarriedPlayer': return 'ILL_CARRY_YOU';

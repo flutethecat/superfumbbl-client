@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { updateHintAfterReport } from '../game/updateSignal';
+import { interceptionPlayerName, interceptionTagSquare, isKaboomSkill, kaboomBlastShown, kaboomBombHolder, kaboomDecorationReady } from '../game/interceptionTag';
 import { actingMenuHasOptions, ffbLacksRow, ffbSafePathToPlayer, fumbblStepKeyEffect, fumbblTileIsPassTarget, ttmMateAdjacent, ffbClientAction, ffbMenuLetter, ffbOrderedRows, ffbSafePath, fumbblPlayerClick, fumbblSquareClick, isAdjacent as fumbblAdjacent, rightClickEffect, stepSquareForDirection, type FumbblRuleset, type StepDirection } from '../game/logic/fumbblControls';
 import { rightClickBehaviourFor } from '../game/controlLayer';
 import { activationProbeFrom, clearControlLayerActivationProbe, inputControlLayer, recheckPendingControlLayer, setControlLayerActivationProbe } from '../game/controlLayerSwitch';
@@ -158,7 +159,8 @@ import { starBadgeFor } from '../game/starBadge';
 import { opponentChoosingPushSquare } from '../game/opponentSideStepPick';
 import starBadgeUrl from '../assets/star-badge/star-badge.png';
 import starBadgeUsedUrl from '../assets/star-badge/star-badge-used-x.png';
-import { assetMods, beginAssetAssignmentIntent, commitAssetAssignments, packSupports } from '../game/assetMods';
+import { assetMods } from '../game/assetMods';
+import { quickBarWidthWithRetiredButtons } from '../game/quickBarLegacyWidth';
 import { resolveBlockStampArt } from '../game/blockResultStampArt';
 import { hasOffPitchCandidate, resolveRosterPickCandidates } from '../game/rosterPicker';
 import { d6LogParts, d6RequirementParts } from '../game/d6Log';
@@ -216,11 +218,11 @@ function replayDecisionSurfaces(): void {
   for (const replay of decisionSurfaceReplays) replay();
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
-import { onPlayerClick as o66PlayerClick, actionSurfaceLock, refusedEndRearmsSurface, confirmationOutlivedPhase, hitAndRunInstructionVisible, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge, bombPlayerClickRoute, bombTileClickRoute } from '../game/logic/order66Interaction';
-import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold, activationUntouched, blitzEndRefunds } from '../game/logic/order66Interaction';
+import { onPlayerClick as o66PlayerClick, actionSurfaceLock, refusedEndRearmsSurface, confirmationOutlivedPhase, hitAndRunInstructionVisible, handOffToAnyPlayerActive, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge, bombPlayerClickRoute, bombTileClickRoute } from '../game/logic/order66Interaction';
+import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, passFamilyTileRoute, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold, activationUntouched, blitzEndRefunds } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
-import { passRangeSquares, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
+import { passRangeSquares, passTargetAllowed, handOffCatcherAllowed, PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
 import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
@@ -495,14 +497,22 @@ function o66BlockFlags(k: BlockKind | null) {
 // un-stages it; picking a different eligible player replaces the staged one. confirmHighKick() below is the
 // only sender — CLIENT_SETUP_PLAYER goes out at Confirm, not at nominate-click.
 function o66NominateHighKick(playerId: string) {
-  if (!gameStore.highKickNominate(playerId) && !gameStore.state.highKickPhase?.landing) {
-    showToast('waiting for the ball to land', 200, 200, 2000);
+  if (!gameStore.highKickNominate(playerId) && (!gameStore.state.highKickPhase?.landing || highKickAnswerHeld.value)) {
+    toastHighKickWaitingForLanding();
   }
+}
+/** Owner 11-13: until the ball has landed and a player can be picked, the store accepts no High Kick nomination,
+ *  Confirm, decline or End Turn (store gate highKickAnswerHeldNow; fails open). The controls only read unavailable. */
+const highKickAnswerHeld = computed(() => !!gameStore.state.highKickPhase?.answerHeld);
+function toastHighKickWaitingForLanding() {
+  showToast($t('hud.highKickWaitingForLanding'), 200, 200, 2000);
 }
 /** Confirm the High Kick mini-turn (owner ruling, live): flush a staged nominee — CLIENT_SETUP_PLAYER, the
  *  server echo is what actually moves the token — THEN end the phase (CLIENT_END_TURN), mirroring how a
  *  plain decline (no nominee staged) already worked. Reused by the hk-confirm-bar Confirm button. */
 function confirmHighKick() {
+  // Owner 11-13: held before the ball has landed - the store sends nothing (and returns true so nothing falls through).
+  if (highKickAnswerHeld.value) toastHighKickWaitingForLanding();
   if (!gameStore.highKickConfirm()) gameStore.playerEndTurn(); // pre-projection frame: keep the plain decline
 }
 import { parseJnlp } from '../game/jnlpCompat';
@@ -542,7 +552,7 @@ import { acknowledgeBetaNotice, betaNoticeDue, BETA_NOTICE_BUTTON, BETA_NOTICE_T
 // consolidated here rather than re-converting a 4th local copy; signatures are a drop-in match.
 import { botGet, botPost } from '../game/forkChallenge';
 import { mintFumbblToken, fetchTeamName, fumbblApiConfigured, FumbblCredentialsMissing } from '../game/fumbblAuth';
-import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, toggleSkillDisplay, watchAssetModRendererRefresh } from '../game/assetModUi';
+import { reactiveSkillIconUrl, refreshAssetRendererSurfaces, watchAssetModRendererRefresh } from '../game/assetModUi';
 import { cardInjuryLines } from '../game/cardInjuryLines';
 import { playerOwnedSkillIconUrl } from '../game/playerOwnedSkillIcon';
 import { ui } from '../game/ui';
@@ -557,6 +567,7 @@ import { padRerollOrder, padRerollYSource, raiseDeadPadKey } from '../game/padCa
 import { CONTROL_PRIORITY_GAME, MOUSE_MIDDLE, actionsForInput, activeInput, resolveKeyActions, setActiveControlContext, connectedPadCount, registerActionHandler, registerAnalogHandler, registerHoldHandler, registerPointerStickHandler, setPlayerCardHook, type ControlActionId, type InputSource } from '../game/controls';
 import { anchorPanelPosition, beginScaledPanelResize, bindPointerCompletion, captureScaledPanelLayout, clampPanelPositionWithOverhang, dodgePanelObstacle, hasEdgeAnchor, persistClampedPanelPosition, rectOverhang, resizablePanelStyle, resolvePanelPosition, scaledPanelStyle, type EdgePanelPosition, type PanelOverhang } from '../game/edgePanelLayout';
 import { createHudClearanceSync, createHudDragEnds, measureHudTopDom } from '../game/hudTopClearance';
+import { hudBottomClearance } from '../game/hudBottomClearance';
 import { autoDirectorBadgeState, bindAutoDirectorManualHold } from '../game/autoDirectorBadge';
 import { appShellModalOwnsKeyboard } from '../game/settingsDialog';
 import { onReportOwnedKey } from '../game/reportModalKeys';
@@ -754,8 +765,8 @@ function toggleRosterPopout(): void {
  *  that button's tooltip with its new state. The button is found by `data-quick-tip`; once Vue has re-rendered its
  *  `title`, QuickBarPopTip shows it, or nothing when the bar is hidden / off screen (a keyboard press then pops nothing). */
 const quickBarPopTip = ref<InstanceType<typeof QuickBarPopTip> | null>(null);
-/** Astra P2: press order. Every press takes the next number; a pop whose press is no longer the latest (the Sprites
- *  pack activation finishing after a newer press) shows nothing. The tip stays off the bar and its Pause / Live row. */
+/** Astra P2: press order. Every press takes the next number; a pop whose press is no longer the latest shows
+ *  nothing. The tip stays off the bar and its Pause / Live row. */
 const quickBarPresses = createPressOrder();
 function popQuickBarTip(id: string, press = quickBarPresses.take()): void {
   void nextTick(() => {
@@ -1424,12 +1435,16 @@ onBeforeUnmount(() => {
   hudResizeObserver?.disconnect();
   hudResizeObserver = null;
   hudObserved.clear();
+  hudBottomObserved.clear();
   if (hudSyncRaf) cancelAnimationFrame(hudSyncRaf);
   hudSyncRaf = 0;
 });
 function measureHudTopNow(previous: ReadonlySet<string>): { clearance: number; included: Set<string> } | null {
   const host = pitchHost.value;
   if (!host || !renderer) return null;
+  // Bug 11-12: the bottom clearance is measured here too, so it runs exactly when the top one does - never while a HUD
+  // panel is being dragged or resized (the camera must not chase the pointer), once when the drag ends.
+  syncHudBottomClearance();
   const measured = measureHudTopDom(host, {
     playingScale: (id, _el, style) => {
       const customScale = settings.uiLayout[id]?.scale;
@@ -1450,6 +1465,36 @@ const hudClearanceSync = createHudClearanceSync({
   defer: (run) => { void nextTick(run); },
 });
 const syncHudTopClearance = hudClearanceSync.sync;
+/** Bug 11-12 (JLeav, sideways): how much of the canvas's bottom edge the quick bar and the match-controls row hanging
+ *  above it cover, reported to the renderer so a view scrolled to the very bottom keeps the bottom sideline band above
+ *  them (hudBottomClearance.ts). Called from the top sync's measure (mount, resize, HUD reflow; never mid-drag) and when
+ *  either element resizes (text size, touch mode). Measured against the CANVAS (it starts below the host's top edge and
+ *  may be CSS-scaled), in canvas px. The renderer applies it in the sideways orientation only. */
+const hudBottomObserved = new Set<Element>();
+function syncHudBottomClearance(): void {
+  const host = pitchHost.value;
+  if (!host || !renderer) return;
+  const doc = host.ownerDocument;
+  const shown = (el: HTMLElement | null): el is HTMLElement => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const bar = doc.querySelector<HTMLElement>('.config-bar');
+  const parts = shown(bar) ? [bar, doc.querySelector<HTMLElement>('.config-bar .quick-match-controls')].filter(shown) : [];
+  if (typeof ResizeObserver !== 'undefined') {
+    for (const el of [...hudBottomObserved]) {
+      if (!el.isConnected || !parts.includes(el as HTMLElement)) { hudResizeObserver?.unobserve(el); hudBottomObserved.delete(el); }
+    }
+    for (const el of parts) {
+      if (hudBottomObserved.has(el)) continue;
+      hudResizeObserver ??= new ResizeObserver(scheduleHudTopClearance);
+      hudResizeObserver.observe(el);
+      hudBottomObserved.add(el);
+    }
+  }
+  renderer.setBottomHudClearance(hudBottomClearance(renderer.canvasClientBox(), parts.map((el) => el.getBoundingClientRect())));
+}
 const holdHudClearance = hudClearanceSync.hold;
 /** Astra P2 (2nd pass): every HUD drag / resize ends exactly once (pointerup, pointercancel, lost capture, window blur
  *  or unmount), so the clearance hold can never stay open. */
@@ -1933,6 +1978,57 @@ watch(
   (w) => renderer?.setInterceptCandidates(w?.candidates ?? null),
   { deep: true },
 );
+// Owner 11-12 (g1963248): while the server's Kaboom! dialog stands, everyone sees the squares the bomb would hit (the
+// bomb coordinate, else the reported interceptor's square). Server-derived from the model; clears with the dialog. Review
+// 11-12: only once that dialog is PRESENTED (the asked coach's card or every other seat's pill) AND the bomb's flight
+// has landed (the tag's own presented flight; no bomb throw in the air) - a spectator's card can arm mid-flight.
+const kaboomDecorationShown = computed(() => isKaboomSkill(gameStore.state.skillChoice?.skill)
+  && kaboomDecorationReady(gameStore.interceptionTag.value, gameStore.state.throwAnim?.kind));
+watch(
+  () => [rendererReady.value, kaboomBlastShown(gameStore.state.skillChoice?.skill, gameStore.game.value,
+    gameStore.interceptionTag.value, gameStore.state.throwAnim?.kind)] as const,
+  ([, squares]) => renderer?.setBlastArea(squares.length > 0 ? squares : null),
+);
+// Owner 11-12: the interceptor tag ("Intercepted" / "Deflected" / "Missed") hangs over the reported player's head for as
+// long as the store keeps it (released on a server signal, read floor 450 ms). Head-tracked per frame like the stun tag.
+const interceptionTagText = computed(() => {
+  const tag = gameStore.interceptionTag.value;
+  const kind = tag && tag.shownAt !== null ? tag.kind : null; // review 11-12: pending until the flight has landed
+  if (kind === 'intercepted') return $t('hud.interceptionTag.intercepted');
+  if (kind === 'deflected') return $t('hud.interceptionTag.deflected');
+  if (kind === 'missed') return $t('hud.interceptionTag.missed');
+  return '';
+});
+const interceptionTagPos = reactive({ x: 0, y: 0, ready: false });
+let interceptionTagRaf = 0;
+watch(
+  () => [gameStore.interceptionTag.value?.seq ?? 0, gameStore.interceptionTag.value?.shownAt != null, rendererReady.value],
+  () => {
+    cancelAnimationFrame(interceptionTagRaf);
+    interceptionTagPos.ready = false;
+    const follow = () => {
+      const tag = gameStore.interceptionTag.value;
+      const square = interceptionTagSquare(gameStore.game.value, tag);
+      if (!tag || tag.shownAt === null || !renderer) { interceptionTagPos.ready = false; return; }
+      const p = square ? renderer.headToCanvas(square, false, 22) : null;
+      if (p) { interceptionTagPos.x = p.x; interceptionTagPos.y = p.y; interceptionTagPos.ready = true; }
+      else interceptionTagPos.ready = false;
+      interceptionTagRaf = requestAnimationFrame(follow);
+    };
+    follow();
+  },
+);
+onBeforeUnmount(() => cancelAnimationFrame(interceptionTagRaf));
+// Owner 11-12: the Kaboom! card names who holds the bomb (the player on the server's bomb square). Copy only; the
+// answer and what is sent are unchanged.
+const kaboomHolderLine = computed(() => {
+  if (!gameStore.state.skillChoice?.mine || !kaboomDecorationShown.value) return '';
+  const g = gameStore.game.value;
+  const holder = kaboomBombHolder(g, gameStore.interceptionTag.value);
+  const name = holder ? interceptionPlayerName(g, holder.playerId) : '';
+  if (!holder || !name) return '';
+  return holder.intercepted ? $t('hud.kaboomHolder.intercepted', { player: name }) : $t('hud.kaboomHolder.holds', { player: name });
+});
 // owner 2026-07-07: the store's defenderAction notice rides the chat-toast stack (reuses its
 // positioning + stacking). A short 6s toast, no sender. Owed a live pass (demo can't fire it).
 watch(
@@ -2160,15 +2256,6 @@ function acquiredSkills(player: PlayerJson, team: { roster: unknown }): string {
   return playerSkillDisplayNames(player).filter((s) => !baseline.has(s)).join(', '); // base + temporary grants; "+MA, +MA" for two improvements
 }
 
-// owner 2026-07-02 (UI-5): HD-2D removed from the picker (set stays parked);
-// FUMBBL's checker-disc mode replaces it
-const SPRITE_SET_LABELS: Record<string, string> = {
-  get classic() { return $t('hud.spriteSetLabels.superFumbbl'); }, get checkers() { return $t('hud.spriteSetLabels.checkers'); }, get chess() { return $t('hud.spriteSetLabels.chess'); }, get walk() { return $t('hud.spriteSetLabels.superFumbbl'); },
-};
-/** Owner 09-15: the checker discs are ORIGINAL art (67af2368), so the mode is offered always — the 09-04 pack gate
- *  (FUMBBL iconsets) no longer applies. Owner 09-05: no separate Classic mode — mods ride the chain. */
-const availableSpriteSets = computed<AppSettings['spriteSet'][]>(() => ['walk', 'checkers', 'chess']); // owner 09-15: Chess (original PixelLab pieces)
-
 /** Match11: all display states, including a real Off state, live on the quick bar. */
 const TZ_MODES = ['opposition', 'friendly', 'both', 'off'] as const;
 const TZ_LABELS: Record<string, string> = { get opposition() { return $t('hud.tzLabels.opposition'); }, get friendly() { return $t('hud.tzLabels.friendly'); }, get both() { return $t('hud.tzLabels.relevantToTheSelected'); }, get off() { return $t('hud.tzLabels.off'); } }; // owner 10-13: 'both' = the zones relevant to the selection
@@ -2194,14 +2281,9 @@ function cycleTackleZones() {
   popQuickBarTip('tackleZones');
 }
 
-// In-game control owns presentation only. Pack selection lives in Settings → UI.
+// Skill display (icons / markings) is chosen in Settings > Skills; owner 11-12: the quick-bar toggle left the bar.
 const SKILL_MODES = ['icons', 'markings'] as const;
 type SkillMode = (typeof SKILL_MODES)[number];
-const SKILL_MODE_SHORT: Record<SkillMode, string> = { icons: '🖼', markings: 'ABC' };
-const SKILL_MODE_LABELS: Record<SkillMode, string> = {
-  get icons() { return $t('hud.skillModeLabels.skillIcons'); },
-  get markings() { return $t('hud.skillModeLabels.skillMarkings'); },
-};
 const skillMode = computed<SkillMode>(() => settings.skillDisplay === 'markings' ? 'markings' : 'icons');
 // Retained only for the renderer's compatibility signature; pack choice is the shared snapshot.
 const effectiveIconStyle = computed<'bb3'>(() => 'bb3');
@@ -2215,10 +2297,6 @@ function skillIconUrl(
 const kickElectionIconUrl = computed(() => skillIconUrl('Kick', effectiveIconStyle.value));
 /** Owner 10-18: the Regeneration line on the fix-up rail carries the skill's icon (the apothecary's when the set lacks it). */
 const regenerationIconUrl = computed(() => skillIconUrl('Regeneration', effectiveIconStyle.value) || apothecaryIconUrl);
-function cycleSkillDisplay() {
-  toggleSkillDisplay(settings);
-  popQuickBarTip('skillDisplay');
-}
 
 /** Owner 09-22 (telestrator Path tool): world point → pitch square (null off the pitch), and a square's world centre. */
 function telestratorSquareAt(worldX: number, worldY: number): [number, number] | null {
@@ -2235,60 +2313,6 @@ function setTelestratorPosition(position: EdgePanelPosition | null): void {
     return;
   }
   settings.uiLayout.telestrator = { ...position, scale: 1 };
-}
-
-/**
- * BB3-style config buttons (owner 2026-07-02): the menubar pickers' functionality
- * moves here — settings, tackle zones, sprite set, log-panel toggle, camera reset.
- * The tileset/turf picker moved to Settings → Client (owner 2026-07-03).
- */
-// Owner 09-05: the quick bar cycles the SAME choices as Settings > Appearance — 'walk' (Super FUMBBL), every installed
-// sprite pack ('pack:<installId>'), then Checkers — and clears/assigns the pack slot exactly like the dropdown. It
-// used to flip only the mode string, so with a pack assigned it could never reach Super FUMBBL.
-const spriteChoices = computed<string[]>(() => {
-  const packs = assetMods.installed
-    .filter((pack) => packSupports(pack, 'playerSprites') || packSupports(pack, 'walkSheets'))
-    .map((pack) => `pack:${pack.installId}`);
-  return ['walk', ...packs, ...availableSpriteSets.value.filter((set) => set !== 'walk')];
-});
-const currentSpriteChoice = computed(() => {
-  const a = settings.assetPackAssignments;
-  const packId = a.playerSprites || a.walkSheets;
-  return packId ? `pack:${packId}` : spriteSet.value;
-});
-const spriteChoiceLabel = computed(() => {
-  const c = currentSpriteChoice.value;
-  if (c.startsWith('pack:')) { const pack = assetMods.installed.find((p) => p.installId === c.slice(5)); return pack ? `${pack.name} ${pack.version}` : c; }
-  return SPRITE_SET_LABELS[c] ?? c;
-});
-async function applySpriteChoice(value: string): Promise<void> {
-  const persist = (active: typeof settings.assetPackAssignments) => {
-    settings.assetPackAssignments = active;
-    settings.skillIconPackInstallId = active.skillIcons;
-  };
-  if (value.startsWith('pack:')) {
-    const pack = assetMods.installed.find((candidate) => candidate.installId === value.slice(5));
-    if (!pack) return;
-    spriteSet.value = 'walk';
-    await commitAssetAssignments({
-      ...settings.assetPackAssignments,
-      playerSprites: packSupports(pack, 'playerSprites') ? pack.installId : '',
-      walkSheets: packSupports(pack, 'walkSheets') ? pack.installId : '',
-    }, persist, beginAssetAssignmentIntent());
-    return;
-  }
-  spriteSet.value = value as AppSettings['spriteSet'];
-  if (settings.assetPackAssignments.playerSprites || settings.assetPackAssignments.walkSheets) {
-    await commitAssetAssignments({ ...settings.assetPackAssignments, playerSprites: '', walkSheets: '' }, persist, beginAssetAssignmentIntent());
-  }
-}
-function cycleSprites() {
-  const choices = spriteChoices.value;
-  const index = choices.indexOf(currentSpriteChoice.value);
-  // A pack choice commits asynchronously; pop once the label reflects it, unless a newer press came meanwhile (the
-  // press number is taken BEFORE the activation is awaited).
-  const press = quickBarPresses.take();
-  void applySpriteChoice(choices[(index + 1) % choices.length] ?? 'walk').finally(() => popQuickBarTip('sprites', press));
 }
 
 // Owner feature request 2026-08-18: Report now opens a MODAL — the tester writes a short description
@@ -7059,6 +7083,40 @@ function passTemplateAllowed(walkReachCount = -1): boolean {
   const g = gameStore.game.value;
   return walkReachCount >= 0 && !!g && passAtRestArmRequired(g, o66Ctx(), walkReachCount);
 }
+/** Task 3 (owner 11-13, pass parity): the template squares that are click targets (`extra`), so the marks agree with
+ *  what a click does. Bomb, Hail Mary and the PASS action: the whole range (any square throws there). PASS_MOVE with the
+ *  kept square-throw variant off: only the squares a click throws at (a team-mate who can catch, passTargetAllowed);
+ *  an open square there is a walk, as upstream's fieldInteraction delegates it to Move. Free-select keeps the range. */
+function passClickTargets(g: NonNullable<typeof gameStore.game.value>, actingId: string, from: [number, number], st: string): [number, number][] {
+  const range = passRangeSquares(g, from);
+  const action = String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  if (st !== 'PASS' || action !== 'passMove' || gameStore.state.freeSelectPass) return range;
+  return range.filter((sq) => passTargetAllowed(g, actingId, sq, { from }));
+}
+/** Review 11-13 (major 1): may the renderer's own armed card stand for this target? The same rules the router and the
+ *  senders use: Pass = passTargetAllowed measured from the plotted destination when a route is plotted; Hand-off = the
+ *  destination receivers with a route, else handOffCatcherAllowed; Foul = the checked sender decides at Confirm. */
+function o66ActionTargetAllowed(mode: 'foul' | 'handoff' | 'pass', targetId: string, square: [number, number]): boolean {
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!g || !actingId) return false;
+  if (mode === 'pass') return passTargetAllowed(g, actingId, square, { from: plannedPassDestination() });
+  if (mode === 'handoff') {
+    const handOffFrom = plannedHandOffDestination(g);
+    return handOffFrom ? handOffReceiverIdsFrom(g, actingId, handOffFrom).includes(targetId) : handOffCatcherAllowed(g, actingId, targetId);
+  }
+  return true;
+}
+/** Task 3: in the PASS / HAIL_MARY_PASS action the passer does not walk (the server sends no walk squares for a
+ *  non-moving action, PlayerAction.isMoving); every click is a throw. */
+function passActionStandsStill(g: { actingPlayer?: unknown }): boolean {
+  const action = String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  return action === 'pass' || action === 'hailMaryPass';
+}
+/** Review 11-13 (minor 4): the HAND_OVER action (not HAND_OVER_MOVE) does not walk. */
+function handOverStandsStill(g: { actingPlayer?: unknown }): boolean {
+  return String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'handOver';
+}
 function isThrowMateState(state: string): state is 'THROW_TEAM_MATE' | 'KICK_TEAM_MATE' {
   return state === 'THROW_TEAM_MATE' || state === 'KICK_TEAM_MATE';
 }
@@ -7133,6 +7191,12 @@ const o66MoveSquares = computed<[number, number][]>(() => {
   }
   const actingId = o66ActorId(g);
   if (!actingId || !renderer) return [];
+  // Task 3 (owner 11-13, pass parity): no walk reach in the PASS / HAIL_MARY_PASS action (see passActionStandsStill).
+  if (st === 'PASS' && passActionStandsStill(g)) return [];
+  // Review 11-13 (minor 4): nor in the HAND_OVER action (the Hand-off to Any Player toggle): not a moving action either
+  // (PlayerAction.isMoving:68-72; UtilServerPlayerMove.updateMoveSquares:78-86 clears the squares). An empty reach also
+  // retires a plotted route on that action echo (the reach watch drops a preview whose destination is not offered).
+  if (st === 'HAND_OVER' && handOverStandsStill(g)) return [];
   // Raw `punt` repurposes moveSquareArray as the four server-selected orthogonal targets; `puntMove` keeps the
   // normal client walk reach. Mirrors PuntLogicModule.java:56-69 and StepInitPunt.java:140-163.
   if (st === 'PUNT' && isPuntTargeting(g)) {
@@ -7213,6 +7277,11 @@ const furiousOutburstInstruction = computed(() => {
 });
 // g1960010 (Elyod 11-03): after Use the server waits for a Hit and Run square or the End (CLIENT_END_TURN); say so.
 const hitAndRunInstruction = computed(() => hitAndRunInstructionVisible(gameStore.game.value, o66Ctx(), {
+  playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, controlsActing: (id) => gameStore.iControl(id),
+}));
+// F1-1: while the coach's hand-off is in the HAND_OVER action (the "Hand-off to Any Player" toggle), say so: an
+// opponent can take the ball in that state only. Pure received state; it goes with the server's echo.
+const handOffAnyPlayerInstruction = computed(() => handOffToAnyPlayerActive(gameStore.game.value, o66Ctx(), {
   playing: gameStore.isPlaying.value, myTurn: !!gameStore.myTurn.value, controlsActing: (id) => gameStore.iControl(id),
 }));
 // Owner 09-28 (UAT g992, S10 + S11): tell the coach who must throw a bomb that a throw is expected. Pure received
@@ -7352,7 +7421,7 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
         // explicitly feeds the same Quick+Short squares into `extra`: `squares` remains the exact click gate while
         // `extra` owns the coloured Pass chart. The pass-roll map stays null, so this never restores yellow cards.
         if (ttmLanding) extra = ttmRangeSquares(g, from);
-        else if (hailMaryPass || st === 'BOMB' || (st === 'PASS' && passTemplateAllowed(squares.length))) extra = passRangeSquares(g, from);
+        else if (hailMaryPass || st === 'BOMB' || (st === 'PASS' && passTemplateAllowed(squares.length))) extra = passClickTargets(g, actingId, from, st);
         // Keep card suppression at the host projection seam: tilePickExtra continues to own click legality while
         // the selected destination continues through passDestinationRollPreview below.
         passRolls = throwRollSurface(g, from, actingId,
@@ -7883,6 +7952,8 @@ function commitPlannedPassFromDestination(actorId: string | null, square: [numbe
   const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   if (!g || !pend || pend.route.length === 0 || !actingId || (actorId && actorId !== actingId)) return false;
   if (deriveClientState(g, o66Ctx()) !== 'PASS') return false;
+  // Review 11-13 (major 1): the planned throw is one upstream's click would make from the destination; otherwise nothing.
+  if (!passTargetAllowed(g, actingId, square, { from: pend.dest })) return true;
   const route = touchSendRoute(pend.route, targetPlayerId ?? square); // round 5: touch mode sends only the route on screen
   if (!route) return true; // refused with a reason; nothing else is sent
   if (gameStore.startPlan({ playerId: actingId, actKind: 'pass', route, targetCoordinate: square, targetPlayerId })) {
@@ -7910,7 +7981,7 @@ watch(() => gameStore.state.plannedPassRetired?.seq, (seq) => {
 function plannedHandOffDestination(g: NonNullable<typeof gameStore.game.value>): [number, number] | null {
   const pend = o66PendingMove.value;
   if (!pend || pend.route.length === 0) return null;
-  if (!plannedHandOffAction(g)) return null;
+  if (plannedHandOffAction(g) !== 'handOverMove') return null; // review 11-13 minor 4: HAND_OVER cannot walk
   return [pend.dest[0], pend.dest[1]];
 }
 /** The acting player's declared Hand-off action (handOverMove, or the plain handOver), kept by the plan: it walks
@@ -8231,7 +8302,12 @@ watch(() => {
     if (g && renderer && host && hoverSq) {
       const throwerId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       const from = o66PendingMove.value?.dest ?? (throwerId ? playerSquareById(throwerId) : null);
-      const preview = from && throwerId
+      // Task 3 (owner 11-13, pass parity): no throw readout over a square a click will not throw at (PassLogicModule
+      // playerPeek / fieldPeek: in PASS_MOVE only a team-mate who can catch previews a throw; the free-select arm of the
+      // kept variant keeps its any-square readout).
+      const throwable = mode !== 'PASS' || gameStore.state.freeSelectPass
+        || (!!from && !!throwerId && passTargetAllowed(g, throwerId, hoverSq, { from }));
+      const preview = from && throwerId && throwable
         ? passDestinationRollPreview(g, from, hoverSq, throwerId, mode)
         : null;
       if (!preview) { passBombHoverTip.value = null; }
@@ -9925,6 +10001,10 @@ function runO66Action(a: CoachAction, playerId: string) {
     gameStore.toggleIncorporeal();
   } else if (a.action === 'toggleHailMaryPass') {
     gameStore.toggleHailMaryPass();
+  } else if (a.action === 'passAnySquare') {
+    gameStore.declarePassAnySquare(); // Task 3: "Pass Ball (any square)" = acting(PASS), MoveLogicModule:96-100
+  } else if (a.action === 'toggleHandOverAnyone') {
+    gameStore.toggleHandOverAnyone(); // F1-1: acting(HAND_OVER <-> HAND_OVER_MOVE), MoveLogicModule:87-95
   } else if (a.action === 'jump') {
     gameStore.chooseJump(playerId);
   } else if (a.kind === 'declare') {
@@ -10273,12 +10353,14 @@ function o66ArmPassTemplate(actingId: string) {
   renderer.setPassTemplateMaxRange(null);
   // Arming a pass/bomb template must also set the matching action mode so the renderer draws it.
   setAction(st === 'BOMB' ? 'bomb' : 'pass');
-  const reach = renderer.o66Reach(actingId);
+  // Task 3: no walk reach in the PASS / HAIL_MARY_PASS action (passActionStandsStill).
+  const reach = st === 'PASS' && passActionStandsStill(g) ? { squares: [] as [number, number][], rush: [] as [number, number][] } : renderer.o66Reach(actingId);
   const from = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
     .find((d) => d.playerId === actingId)?.playerCoordinate);
   // Owner 08-12: no range template while a declared Pass is walking (passMove); it arms at targeting.
   // g870: `reach` is the measured walk budget — an empty one is the AT-REST arm (passTemplateAllowed's 4th term).
-  const extra = from && (hailMaryPass || st === 'BOMB' || passTemplateAllowed(reach?.squares.length ?? 0)) ? passRangeSquares(g, from) : null;
+  // Task 3: the click targets only (passClickTargets), so a passMove template marks what a click throws at.
+  const extra = from && (hailMaryPass || st === 'BOMB' || passTemplateAllowed(reach?.squares.length ?? 0)) ? passClickTargets(g, actingId, from, st) : null;
   renderer.setTilePick(true, hailMaryPass ? null : (reach?.squares ?? []), 'order66-move', hailMaryPass ? null : (reach?.rush ?? []), extra);
   renderer.setO66MoveRolls(null);
   const passRolls = !hailMaryPass && from && (st === 'PASS' || st === 'BOMB')
@@ -10338,7 +10420,9 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
       items.unshift({ get label() { return $t('hud.text.showPassTemplate'); }, action: () => { passTemplateForced.value = true; o66ArmPassTemplate(actingId); ctxMenu.visible = false; } }); // #250 case ②
     }
     // #252 (owner-fg 07-29): "Throw Pass" arms free-select on the declared passer (Tarkin R-1 a3fca567).
-    if (canFreeSelectPass(g, o66Ctx()) && target.playerId === actingId) {
+    // Task 3 (owner 11-13): part of the kept square-throw variant, off; upstream's "Pass Ball (any square)" row comes
+    // from availableActions (passAnySquare) instead.
+    if (PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE && canFreeSelectPass(g, o66Ctx()) && target.playerId === actingId) {
       items.unshift({ get label() { return $t('hud.text.throwPass'); }, action: () => { gameStore.armFreeSelectPass(); ctxMenu.visible = false; } });
       items[0]!.ffb = 'PASS_ANY_SQUARE'; // FUMBBL Controls: FFB's "Pass Ball (any square)" row
     }
@@ -12333,8 +12417,6 @@ const touchQuickItems = computed<TouchQuickItem[]>(() => [
   { id: 'gameMenu', label: $t('hud.touch.gameMenu'), active: ui.gameMenuOpen },
   { id: 'flipPitch', label: $t('hud.touch.flipPitch'), active: settings.pitchFlipped },
   { id: 'enlargeLog', label: $t('hud.touch.enlargeLog'), active: logExpanded.value },
-  { id: 'sprites', label: $t('hud.configBar.spritesSpritechoicelabel', { spriteChoiceLabel: spriteChoiceLabel.value }) },
-  { id: 'skillDisplay', label: $t('hud.configBar.skillDisplayP0', { p0: SKILL_MODE_LABELS[skillMode.value] }) },
   { id: 'autoDirector', label: settings.autoDirector ? $t('hud.configBar.autoDirectorOnAuto') : $t('hud.configBar.autoDirectorOffCalm'), active: settings.autoDirector },
   { id: 'report', label: $t('hud.configBar.report') },
 ]);
@@ -12345,8 +12427,6 @@ function runTouchQuickItem(id: string): void {
     case 'gameMenu': quickToggleGameMenu(); return;
     case 'flipPitch': settings.pitchFlipped = !settings.pitchFlipped; return; // = the F shortcut (togglePitchFlip)
     case 'enlargeLog': logExpanded.value = !logExpanded.value; if (logExpanded.value) panelCollapsed.value = false; return; // = L
-    case 'sprites': cycleSprites(); return;
-    case 'skillDisplay': cycleSkillDisplay(); return;
     case 'autoDirector': toggleAutoDirector(); return;
     case 'report': quickOpenReport(); return;
     default: return;
@@ -12417,8 +12497,6 @@ const runAction = createInGameActionRunner({
     if (logExpanded.value) panelCollapsed.value = false;
   },
   cycleTackleZones,
-  cycleSprites,
-  cycleSkillDisplay,
   toggleAutoDirector,
   togglePitchFlip: () => { settings.pitchFlipped = !settings.pitchFlipped; return true; },
   openChat: () => {
@@ -12596,7 +12674,8 @@ onMounted(async () => {
   // quick-action button bar, ~150px tall (his screenshot). A user resize still
   // wins (settings.logSize persists over this).
   if (!settings.logSize) {
-    const barW = (document.querySelector('.config-bar') as HTMLElement | null)?.offsetWidth;
+    const bar = document.querySelector('.config-bar') as HTMLElement | null;
+    const barW = bar ? quickBarWidthWithRetiredButtons(bar) : undefined;
     defaultPanelSize.value = { w: Math.max(300, barW ?? 360), h: 150 };
     await nextTick(); // let the new size render before the anchor capture below
     if (!rendererMountActive) return;
@@ -12948,6 +13027,15 @@ onMounted(async () => {
         if (clickState === 'HAND_OVER' && !fumbblControls() /* fumbbl-gate:hand-off-at-destination */ && clickActingId && playerId !== clickActingId && gameStore.iControl(clickActingId)
             && gameStore.iControl(playerId) && armHandOffAtDestination(g, clickActingId, playerId)) return;
         const ix = o66PlayerClick(g, o66Ctx(), playerId, (pid) => gameStore.iControl(pid));
+        // F1-1: with a route plotted, an opponent's hand-off (HAND_OVER action) is not made from the current square either
+        // (owner 10-15: a plotted route means the hand-off is made from its destination). The destination card measures
+        // team-mates only, so the coach is told to cancel the route first (the touch mode's existing copy); nothing is sent.
+        if (ix.kind === 'handOverTarget' && !gameStore.iControl(playerId) && plannedHandOffDestination(g)) {
+          const sq = playerSquareById(playerId);
+          const p = sq && renderer ? renderer.squareToCanvas(sq) : null;
+          showToast($t('hud.touch.routeNotUsed'), p?.x ?? 200, (p?.y ?? 200) - 20, 2600);
+          return;
+        }
         // Owner 10-15 decision: a PRONE teammate clicked while ours is declared and untouched. No wire: the declared
         // player is deselected locally and the prone player's own menu opens (Stand Up, Stand Up and Blitz, ...). A pick
         // runs the switch rule through declareAction (one cancel, the server's clear, then the pick's declaration); a
@@ -13686,6 +13774,14 @@ onMounted(async () => {
   };
   // Owner 2026-07-04c: foul/handoff/pass — confirm modal + wire.
   renderer.onActionTarget = (req) => {
+    // Review 11-13 (major 1): the renderer arms its own card for a receiver click while its action mode is 'pass' /
+    // 'handoff', ahead of the router, with its own eligibility (team-mate with tackle zones; no Animosity race, no
+    // planned-destination range). In Order 66 a target the shared rule refuses is never armed: upstream ignores the click
+    // (PassLogicModule.playerInteraction:47-55 / canPlayerGetPass:127-138; HandOverLogicModule.canPlayerGetHandOver).
+    if (req && settings.order66 && !o66ActionTargetAllowed(req.mode, req.targetId, req.targetSquare as [number, number])) {
+      renderer?.cancelArmedAction(); // re-enters with null: clears the card
+      return;
+    }
     // Owner 10-13 (pass at destination): with a route plotted, the armed Pass is thrown from the route's destination
     // after the walk. The card says so and the range ruler runs from that square to the target while it is up.
     const passFrom = req?.mode === 'pass' && settings.order66 ? (renderer?.plannedPassOrigin() ?? null) : null;
@@ -13735,10 +13831,26 @@ onMounted(async () => {
       commitPlannedHandOffFromDestination(actorId, targetId, plannedOrigin as [number, number]);
       return;
     }
+    // Review 11-13 (major 1): in Order 66 a renderer-armed card (a receiver click while the Pass template is armed sets
+    // actionMode 'pass') never falls into the legacy macros below, which DECLARE an action (acting(pass) + clientPass) -
+    // a silent PASS_MOVE -> PASS switch upstream only makes through its own row. It goes through the same checked senders
+    // the router uses, and only for a target the shared rule allows (PassLogicModule.playerInteraction:47-55,
+    // canPlayerGetPass:127-138; HandOverLogicModule.canPlayerGetHandOver). Anything else sends nothing.
+    if (settings.order66) {
+      const g = gameStore.game.value;
+      if (!g) return;
+      if (mode === 'pass') {
+        if (passTargetAllowed(g, actorId, targetSquare as [number, number])) sendDirectPassWithBridge(targetSquare as [number, number]);
+      } else if (mode === 'handoff') {
+        if (handOffCatcherAllowed(g, actorId, targetId)) gameStore.sendHandOverTarget(targetId);
+      }
+      // A Foul card never arms in Order 66 (the renderer arms on a click only in pass / hand-off mode; the Foul victim
+      // click goes through the router's foulTarget), so nothing is sent for one.
+      return;
+    }
     const p = path as [number, number][];
-    // LEGACY ONLY (order66=off): this action-modal hotbar is hidden in Order 66 (template v-if !settings.order66),
-    // so o66 play NEVER reaches here — the o66 foul/pass teleport fix lives in onPlayerClick/onTilePick via
-    // startPlan (the planner queue). Keep the legacy imperative macros for the order66=off planner path.
+    // LEGACY ONLY (order66=off): this action-modal hotbar is hidden in Order 66 (template v-if !settings.order66);
+    // Order 66 returns above. Keep the legacy imperative macros for the order66=off planner path.
     if (mode === 'foul') gameStore.playerFoul(actorId, targetId, p);
     else if (mode === 'handoff') gameStore.playerHandOff(actorId, targetId, p);
     else gameStore.playerPass(actorId, targetSquare as [number, number], p);
@@ -13882,6 +13994,26 @@ onMounted(async () => {
           };
           const fumblerooskieBlitzWalk = fumblerooskieActive.value
             && String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'kickEmBlitz';
+          // Task 3 + review 11-13 (major 3, round 2): pass / hand-off TILE picks are decided BEFORE the Jump, Ball & Chain
+          // and walk-planner branches (passFamilyTileRoute): an occupied square is a PLAYER click as in upstream's AWT client
+          // (PassLogicModule / HandOverLogicModule playerInteraction never read the jumping flag, so a Jump toggled during
+          // PASS_MOVE cannot swallow an eligible receiver); an empty square in PASS / HAIL_MARY_PASS is the stationary
+          // throw (fieldInteraction:70-79, a Jump survives acting(PASS), MoveLogicModule:96-100); PASS_MOVE /
+          // HAND_OVER_MOVE empty squares stay movement (fieldInteraction:63-69 delegates to Move, where Jump applies).
+          if (!gameStore.state.freeSelectPass) {
+            const tileRoute = passFamilyTileRoute(g, o66Ctx(), c);
+            if (tileRoute.kind === 'playerClick') {
+              const at = renderer?.playerScreenPos(tileRoute.playerId);
+              renderer?.onPlayerClick?.(tileRoute.playerId, at?.x ?? 0, at?.y ?? 0);
+              return;
+            }
+            if (tileRoute.kind === 'ignore') return;
+            if (tileRoute.kind === 'throw') {
+              if (fumbblControls()) { fumbblThrowAt(c, 'pass'); return; } // fumbbl-gate:two-click-target (one click throws)
+              nominateOrConfirmThrow(c, 'pass');
+              return;
+            }
+          }
           // Ball & Chain tile clicks send one aim step; the server owns random scatter and final placement.
           if (st === 'MOVE' && movesRandomly(g, actingId)) {
             if (walkStillOnScreen()) return;
@@ -14017,6 +14149,10 @@ onMounted(async () => {
             // sequenced plan — declare→walk→throw, ball flies from the ARRIVAL square (no teleport). The planned
             // path already went through its own waypoint confirm, so it commits directly (not two-click).
             const pend = o66PendingMove.value;
+            // Task 3 (owner 11-13, pass parity): outside the walk reach a passMove square click throws only where upstream's
+            // click would (a team-mate who can catch, in range from where the throw is made); an open square does nothing
+            // (PassLogicModule.fieldInteraction delegates it to Move). The kept variant (switch on) throws at any square.
+            if (!passTargetAllowed(g, actingId, c, { from: pend && pend.route.length > 0 ? pend.dest : null })) return;
             if (pend && pend.route.length > 0 && touchModeActive.value) {
               // Touch mode: the target previews (template, ruler, rolls from the route's end); Confirm walks and throws.
               if (!passTargetInRangeFrom(g, pend.dest, c)) return;
@@ -16719,9 +16855,11 @@ watch(() => [
             :title="$t('hud.uiPanel.p0TurnP1', { p0: homePanel?.coach ?? $t('hud.uiPanel.home'), p1: homePanel?.turnNr ?? 0 })">{{ $t('hud.uiPanel.turnP0', { p0: homePanel?.turnNr ?? 0 }) }}</span>
           <button v-if="gameStore.isPlaying.value && !touchModeActive" class="sb-cell end-turn"
             :disabled="!gameStore.myTurn.value || endTurnUnavailableDuringReaction"
+            :aria-disabled="highKickAnswerHeld || undefined"
+            :data-held="highKickAnswerHeld"
             :data-opponent="!gameStore.myTurn.value"
             :data-setup="endTurnButtonKind === 'confirmSetup'"
-            :title="!gameStore.myTurn.value ? $t('hud.uiPanel.waitingForOpponent') : endTurnUnavailableDuringReaction ? $t('hud.uiPanel.endTurnUnavailableDuring') : setupPhase ? $t('hud.uiPanel.confirmYourSetup') : $t('hud.uiPanel.endTheCurrentTurn')"
+            :title="!gameStore.myTurn.value ? $t('hud.uiPanel.waitingForOpponent') : endTurnUnavailableDuringReaction ? $t('hud.uiPanel.endTurnUnavailableDuring') : highKickAnswerHeld ? $t('hud.highKickWaitingForLanding') : setupPhase ? $t('hud.uiPanel.confirmYourSetup') : $t('hud.uiPanel.endTheCurrentTurn')"
             @click="endTurn()">{{ endTurnButtonText }}<PadGlyph name="View" class="end-turn-glyph" /></button>
           <span class="sb-cell sb-turn away" :data-active="awayPanel?.playing ?? false"
             :title="$t('hud.uiPanel.p0TurnP1', { p0: awayPanel?.coach ?? $t('hud.uiPanel.away'), p1: awayPanel?.turnNr ?? 0 })">{{ $t('hud.uiPanel.turnP0', { p0: awayPanel?.turnNr ?? 0 }) }}</span>
@@ -16778,13 +16916,8 @@ watch(() => [
             @click="quickToggleGameMenu()">⚙</QuickBarButton>
           <QuickBarButton stateful :active="tackleZonesActive" class="icon-button" data-tour="hud-tackle" data-pad-action="tackleZones" data-quick-tip="tackleZones" :title="tackleZonesTitle"
             @click="cycleTackleZones()">🛡</QuickBarButton>
-          <QuickBarButton stateful :active="spriteSet !== 'classic'" :data-sprite-set="spriteSet" class="icon-button" data-tour="hud-sprites" data-pad-action="sprites" data-quick-tip="sprites"
-            :title="$t('hud.configBar.spritesSpritechoicelabel', { spriteChoiceLabel })"
-            @click="cycleSprites()">👤</QuickBarButton>
-          <QuickBarButton stateful :active="skillMode === 'markings'" class="skill-mode-btn" data-tour="hud-skills" data-pad-action="skillDisplay" data-quick-tip="skillDisplay"
-            :data-skill-mode="skillMode" :aria-label="$t('hud.configBar.skillDisplayP0', { p0: SKILL_MODE_LABELS[skillMode] })"
-            :title="$t('hud.configBar.skillDisplayP0Toggle', { p0: SKILL_MODE_LABELS[skillMode] })"
-            @click="cycleSkillDisplay()">{{ SKILL_MODE_SHORT[skillMode] }}</QuickBarButton>
+          <!-- Owner 11-12: the Sprites and Skill display buttons left the quick bar (rare to use; a stray Sprites click
+               cleared a mod pack's sprite assignment). Settings > Art (Player sprites) and Settings > Skills keep them. -->
           <!-- collapse-log button removed (owner 2026-07-03): the log panel has
                its own ▾ collapse button on its title bar. -->
           <!-- Owner 10-06: the stadium toggle left the quick bar (Settings > Display keeps it). -->
@@ -17045,7 +17178,7 @@ watch(() => [
         <!-- Touch mode (spec-touch-mode-2026-11-12 section 4): the action center replaces the floating menu and the Confirm bars. -->
         <ActionCenter v-if="actionCenterModeNow !== 'hidden' || (touchModeActive && !!touchOverrideRows)" :mode="actionCenterModeNow === 'hidden' ? 'inspect' : actionCenterModeNow" :rows="actionCenterRows" :show-back="!!touchMenuRows"
           :override="touchOverrideRows" :confirm-label="touchConfirmLabel" :can-cancel="touchCanCancel || (actionCenterModeNow === 'respond' && !!touchStage)"
-          :end-turn-label="$t(touchEndControlNow.labelKey)" :end-turn-enabled="gameStore.myTurn.value && !endTurnUnavailableDuringReaction"
+          :end-turn-label="$t(touchEndControlNow.labelKey)" :end-turn-enabled="gameStore.myTurn.value && !endTurnUnavailableDuringReaction" :end-turn-held="highKickAnswerHeld"
           :hold-ms="settings.touchEndTurnHoldMs" :button-px="settings.touchButtonSize"
           :turn-key="touchTurnKey" @run="runActionCenterRow" @confirm="touchConfirm()" @cancel="touchCancel()" @end-turn="touchEndTurn" @back="actionCenterBack()"
           @formations="setupPanelSection = 'templates'" @saved-setups="setupPanelSection = 'saved'; savedSetupsCollapsed = false" />
@@ -17257,6 +17390,7 @@ watch(() => [
           :title="$t('hud.dragToMove')" @pointerdown="startReactivePromptDrag('skillChoice', $event)">
           <img v-if="skillSilhouette" class="sc-silhouette" :src="skillSilhouette" alt="" />
           <div class="sc-title">{{ modifierSkillCardCopy?.title ?? hmpScatterSkillCardCopy?.title ?? passSkillCardCopy?.title ?? (swoopCardCopy?.title ?? (isJuggernautCard ? $t('hud.useJuggernautToPush') : $t('hud.useLabel', { label: gameStore.state.skillChoice.label }))) }}</div>
+          <div v-if="kaboomHolderLine" class="sc-subtext" data-testid="kaboom-holder">{{ kaboomHolderLine }}</div>
           <div v-if="gameStore.state.skillChoice.injuryResult" class="sc-subtext">{{ $t('hud.currentInjuryInjuryresult', { injuryResult: gameStore.state.skillChoice.injuryResult }) }}</div>
           <!-- Owner 10-26: server explanation lines override our sub-text (title, dice and buttons stay). -->
           <ServerExplanation :lines="skillUseServerLines">
@@ -17343,6 +17477,11 @@ watch(() => [
         <PitchConfirmationPanel v-if="hitAndRunInstruction" class="pitch-instruction" :label="$t('hud.hitAndRunPickSquare')"
           test-id="hit-and-run-instruction" compact>
           {{ $t('hud.hitAndRunPickSquare') }}
+        </PitchConfirmationPanel>
+
+        <PitchConfirmationPanel v-if="handOffAnyPlayerInstruction" class="pitch-instruction" :label="$t('hud.handOffAnyPlayerActive')"
+          test-id="hand-off-any-player-instruction" compact>
+          {{ $t('hud.handOffAnyPlayerActive') }}
         </PitchConfirmationPanel>
 
         <!-- B8-3: fan-factor cinematic — a d3 per side, then the difference
@@ -18260,7 +18399,8 @@ watch(() => [
           </div>
           <template v-if="!touchModeActive" #actions>
             <button v-if="quickSnapAllowance" class="pick-confirm" @click="gameStore.playerEndTurn()">{{ $t('hud.confirm') }}</button>
-            <button v-else class="pick-confirm" @click.stop="confirmHighKick()">{{ $t('hud.confirm') }}</button>
+            <button v-else class="pick-confirm" :aria-disabled="highKickAnswerHeld" :data-held="highKickAnswerHeld"
+              :title="highKickAnswerHeld ? $t('hud.highKickWaitingForLanding') : undefined" @click.stop="confirmHighKick()">{{ $t('hud.confirm') }}</button>
           </template>
         </PitchConfirmationPanel>
 
@@ -18600,6 +18740,13 @@ watch(() => [
         <div v-if="fallOverVisible && gameStore.state.fallOver && fallOverPos.ready" class="fall-toast"
           :style="{ left: fallOverPos.x + 'px', top: fallOverPos.y + 'px' }">
           <span class="fall-toast-type">{{ $t('hud.fallToast.fallsOver') }}</span>
+        </div>
+
+        <!-- Owner 11-12 (g1963248): who intercepted the pass / bomb, over that player's head, for every seat. -->
+        <div v-if="interceptionTagText && interceptionTagPos.ready" class="intercept-tag"
+          :data-kind="gameStore.interceptionTag.value?.kind" role="status"
+          :style="{ left: interceptionTagPos.x + 'px', top: interceptionTagPos.y + 'px' }">
+          <span class="intercept-tag-text">{{ interceptionTagText }}</span>
         </div>
 
         <!-- Owner 10-20: game-load rank panel (both coaches' FUMBBL rank cards); pointer-events none, never a latch. -->
@@ -22104,8 +22251,10 @@ watch(() => [
   border-radius: 6px;
   cursor: pointer;
 }
-.pick-confirm:hover:not(:disabled) { background: #47774e; }
+.pick-confirm:hover:not(:disabled):not([data-held='true']) { background: #47774e; }
 .pick-confirm:disabled { background: var(--ui-surface); border-color: var(--ui-border); color: var(--ui-muted); cursor: default; }
+/* Owner 11-13: High Kick Confirm before the ball has landed - reads unavailable, still clickable for the waiting notice. */
+.pick-confirm[data-held='true'] { background: var(--ui-surface); border-color: var(--ui-border); color: var(--ui-muted); cursor: default; }
 
 /* Owner 2026-07-04c: foul/handoff/pass hover roll tip + confirm modal */
 .action-roll-tip {
@@ -22330,6 +22479,32 @@ watch(() => [
 .ko-toast-lines { display: flex; flex-direction: column; align-items: center; gap: 1px; max-width: 17rem; }
 .ko-toast-lines .ko-toast-lead { font-size: 0.86em; font-weight: 700; letter-spacing: 0.05em; }
 .ko-toast-lines .ko-toast-casualty { white-space: nowrap; }
+/* Owner 11-12: the interceptor tag - head-mounted like the passive follow-up chip; gold for a catch / deflection,
+   slate for a miss. Never takes input. */
+.intercept-tag {
+  position: absolute;
+  z-index: 40;
+  transform: translate(-50%, -100%);
+  padding: 2px 8px;
+  border-radius: 9px;
+  background: #3a2c08e6;
+  border: 1px solid #f5c542cc;
+  box-shadow: 0 3px 10px #0009;
+  pointer-events: none;
+  animation: injury-in var(--p-240) ease-out;
+  white-space: nowrap;
+}
+.intercept-tag[data-kind='missed'] { background: #2a3140e6; border-color: #6a86b0aa; }
+.intercept-tag-text {
+  font-family: var(--font-display);
+  font-size: max(var(--ui-min-primary-text-size, 16px), 0.82rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ffe08a;
+  text-shadow: 0 1px 3px #000c;
+}
+.intercept-tag[data-kind='missed'] .intercept-tag-text { color: #cfe0ff; }
 /* Owner 2026-07-08: FALLS OVER toast (failed Dodge/Rush) — token-anchored like the stun tag,
    a cooler slate palette so a fall reads distinct from an injury. */
 .fall-toast {
@@ -22979,20 +23154,6 @@ watch(() => [
 .quick-live-detail { color: #d3d6db; font-size: max(var(--ui-min-text-size, 12px), 0.684rem); letter-spacing: 0.048em; }
 .config-bar .quick-live[data-flash='true'] { animation: live-flash 0.4s ease-in-out 3; }
 /* Report modal styles: components/BugReportModal.vue (owner 10-13). */
-/* Skill display has exactly two local presentation states: Icons / Markings. */
-.config-bar button.skill-mode-btn {
-  font-family: Arial, Helvetica, sans-serif;
-  font-size: max(var(--ui-min-text-size, 12px), 0.7rem);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--ui-accent);
-}
-.config-bar button.skill-mode-btn[data-skill-mode='icons'] {
-  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif;
-  font-size: max(var(--ui-min-primary-text-size, 16px), 1.18rem);
-  font-weight: 400;
-  letter-spacing: 0;
-}
 /* Preserve the edge anchor and full-size hit targets on narrow windows by collapsing only
    the redundant REPORT word; the button retains its title and accessible action name. */
 @media (max-width: 520px) {
@@ -24960,12 +25121,13 @@ watch(() => [
   cursor: pointer;
   transition: filter 0.12s ease, transform 0.08s ease, box-shadow 0.08s ease;
 }
-.pitch-host .hud-center.scoreboard .end-turn:hover:not(:disabled) { filter: brightness(1.12); }
-.pitch-host .hud-center.scoreboard .end-turn:active:not(:disabled) {
+.pitch-host .hud-center.scoreboard .end-turn:hover:not(:disabled):not([data-held='true']) { filter: brightness(1.12); }
+.pitch-host .hud-center.scoreboard .end-turn:active:not(:disabled):not([data-held='true']) {
   transform: translateY(2px);
   box-shadow: inset 0 2px 2px #45050a, inset 0 -1px 0 #ff7b84, 0 1px 0 #210306, 0 2px 4px #0009;
 }
-.pitch-host .hud-center.scoreboard .end-turn:disabled {
+.pitch-host .hud-center.scoreboard .end-turn:disabled,
+.pitch-host .hud-center.scoreboard .end-turn[data-held='true'] {
   color: #aeb4bc;
   background: linear-gradient(180deg, #525860, #292e34 48%, #111419);
   border-color: #111419;
