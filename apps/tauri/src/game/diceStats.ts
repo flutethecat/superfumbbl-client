@@ -10,6 +10,11 @@
 // on the other team (a failed dodge / rush / jump, a crowd push, Ball & Chain, a team-mate landing on a player, a
 // Stab or Chainsaw kickback on oneself) is nobody's attack, so it counts for neither team: no totals, no faces, no
 // luck trial, and the victim's team gets no inverted trial for it.
+// Owner 2026-11-14 (supersedes the 10-13 ruling for OWN-ACTION FALLS only): the armour and injury rolls of a player who
+// falls from his own failed dodge, rush or jump (dropDodge, dropGfi, dropLeap) now count. The opposing coach rolls
+// them, so they belong to the faller's OPPOSING team, at team level only (there is no attacker, and no player is
+// credited): dice totals, faces and the Armour / Injury luck trials. They are not attacks, so the Turns lost row (and
+// its KO recovery trials) still leaves them out. Crowd pushes, landings, spells and the rest still count for nobody.
 import { reactive } from 'vue';
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveArmour, effectiveStat, playerSkillValue } from '@fumbbl40k/ffb-protocol';
@@ -606,8 +611,18 @@ function currentBlocker(stats: DiceStats, actingId: string | null): string | nul
  *    a victim on the acting player's own team counts for nobody. The acting player is not always the original
  *    thrower either (Swoop re-actors to the swooper, StepSwoop.java:233), and that is the intent:
  *    bomb (+ForSpp), ttmHitPlayer (+ForSpp), startedBlastin, kegHit
+ *  OWN-ACTION FALLS (owner 2026-11-14, superseding 10-13 for these only): COUNT for the faller's OPPOSING team, team
+ *  level only (OWN_FALL_FAMILIES, ownFallRollerTeam). Not attacks: no player is credited, and the Turns lost row skips
+ *  them. Upstream (InjuryTypeDropDodge / DropDodgeForSpp / DropGFI / DropJump): the armour takes only the faller's own
+ *  Chainsaw (blocksLikeChainsaw) or Iron Hard Skin entry and an opposing Arm Bar (+1 armour, else +1 injury); the
+ *  injury takes the faller's own modifiers (Stunty ...), Arm Bar, and the injury modifiers of whatever attacker the
+ *  server hands the factory: none for an ordinary fall (StepFallDown passes null), but the block DEFENDER for a Blitz's
+ *  failed rush (his Mighty Blow can apply; valued from the stated attacker, threshold only, never credited). All of
+ *  them are stated on the report, read as for any other roll (an unvalued one stays unmeasured).
+ *    dropDodge, dropDodgeForSpp (BB2025 Arm Bar: the stated "attacker" is the Arm Bar player, for SPP only; he is not
+ *    credited), dropGfi (also a Blitz's failed rush into the block, where upstream states the block DEFENDER as
+ *    "attacker", StepDropFallingPlayers.java:192: not credited either), dropLeap (Leap, Pogo and Jump)
  *  COUNTS for NOBODY (no opposing attack, or environmental):
- *    dropDodge, dropDodgeForSpp (Arm Bar supplies the opposing player but it is a failed dodge), dropGfi, dropLeap,
  *    crowdpush, crowdpushForSpp, ktmCrowd, trapdoorFall (+ForSpp: environmental), ttmLanding, eatPlayer,
  *    ktmInjury, ktmFumbleInjury, ktmFumbleApoKoInjury, fireball, lightning, throwARock (inducement / spell /
  *    fan: no player in the report to credit)
@@ -618,6 +633,16 @@ const ATTACK_FAMILIES = new Set(['block', 'blockProne', 'blockStunned', 'saboteu
   'projectileVomit', 'quickBite', 'bitten', 'pilingOnArmor', 'pilingOnInjury']);
 const BLOCK_FALL_FAMILIES = new Set(['block', 'blockProne', 'blockStunned']);
 const ACTING_ATTACK_FAMILIES = new Set(['bomb', 'ttmHitPlayer', 'startedBlastin', 'kegHit']);
+/** Owner 2026-11-14: a fall from the player's own failed action, with what the Luck story calls it. */
+const OWN_FALL_FAMILIES: ReadonlyMap<string, string> = new Map([['dropDodge', 'failed dodge'], ['dropGfi', 'failed rush'], ['dropLeap', 'failed jump']]);
+
+/** Owner 2026-11-14: the team that rolled an own-action fall's armour and injury dice - the faller's opponent - or null
+ *  when the report is not such a fall (or its faller is not on either team). The stated attacker is never read. */
+function ownFallRollerTeam(game: GameJson | null, r: Report): TeamLike | null {
+  if (!OWN_FALL_FAMILIES.has(injuryTypeFamily(String(r.injuryType ?? '')))) return null;
+  const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
+  return otherTeam(game, teamOf(game, defenderId));
+}
 
 /**
  * The attacker whose armour / injury roll an `injury` report is, or null when it is nobody's attack (see the table
@@ -648,7 +673,7 @@ function inflictingAttacker(stats: DiceStats, game: GameJson | null, r: Report, 
  * attacker) only: the roll as it fell (a break / a removal is good). The defender's team gets no inverted trial.
  */
 /** The armour roll of an `injury` report, as diceLuck.armourBreakThreshold reads it. */
-function armourInputFor(game: GameJson | null, r: Report, attackerId: string, armour: [number, number]): ArmourRollInput {
+function armourInputFor(game: GameJson | null, r: Report, attackerId: string | null, armour: [number, number]): ArmourRollInput {
   const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
   const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
   const attackerTeam = teamOf(game, attackerId), own = teamOf(game, defenderId);
@@ -665,16 +690,27 @@ function armourInputFor(game: GameJson | null, r: Report, attackerId: string, ar
   };
 }
 
-function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, attackerId: string, armour: [number, number] | null, injury: [number, number] | null): void {
+/** `attackerId` null = an own-action fall (owner 2026-11-14): the faller's opponent's TEAM tally only (a stated Mighty
+ *  Blow is valued from the report's stated attacker, see below), and the Luck story names the faller and his failed
+ *  action (`fallKind`). */
+function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr: number | null, r: Report, attackerId: string | null, armour: [number, number] | null, injury: [number, number] | null, fallKind: string | null = null): void {
   const defenderId = typeof r.defenderId === 'string' ? r.defenderId : null;
   const own = teamOf(game, defenderId);
   const them = otherTeam(game, own);
   const defender = playerJson(game, defenderId);
   if (!game || !own || !them || !defender) return; // nobody to score it for
   const theirs = tallyFor(stats, them.teamId, attackerId);
+  const storyPlayer = attackerId ?? defenderId;
+  const storyTail = fallKind ? ` on a ${fallKind}` : '';
   const names = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
   const injuryModifiers = names(r.injuryModifiers);
-  const mightyBlow = mightyBlowValue(game, attackerId);
+  // An own-action fall credits no attacker, but upstream may still hand one to the injury modifier factory: a Blitz's
+  // failed rush (StepDropFallingPlayers.java:192, bb2020 PilingOnBehaviour.java:168) passes the block DEFENDER, whose
+  // Mighty Blow can then be stated on the injury roll. Its value is read from the STATED attacker for the threshold
+  // only; a stated Mighty Blow with no such player on the pitch cannot be valued (unmeasured). Ordinary falls pass a
+  // null attacker (StepFallDown) and the Arm Bar player is only the reported attackerId, so nothing else applies.
+  const statedMbOwner = attackerId == null && typeof r.attackerId === 'string' && playerJson(game, r.attackerId) ? r.attackerId : null;
+  const mightyBlow = attackerId != null ? mightyBlowValue(game, attackerId) : statedMbOwner ? mightyBlowValue(game, statedMbOwner) : null;
 
   if (armour && typeof r.armorBroken === 'boolean') {
     const key = `${commandNr}|${defenderId}|${armour[0]},${armour[1]}`;
@@ -687,7 +723,7 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
       else {
         const breaks = twoD6AtLeast(threshold); // of 36
         // owner 10-16 (Luck): broken favours the attacker's team, held the victim's
-        noteBreakEvent(stats, game, rollOutcomes(breaks / 36, them.teamId, own.teamId), r.armorBroken ? 0 : 1, `Armour ${r.armorBroken ? 'broken' : 'held'} (${threshold}+)`, attackerId, stats.turnClock ?? readTurnClock(game));
+        noteBreakEvent(stats, game, rollOutcomes(breaks / 36, them.teamId, own.teamId), r.armorBroken ? 0 : 1, `Armour ${r.armorBroken ? 'broken' : 'held'} (${threshold}+)${storyTail}`, storyPlayer, stats.turnClock ?? readTurnClock(game));
         for (const t of theirs) {
           const b = luckOf(t, 'armour');
           addTrial(b, binaryKey(breaks, 36), r.armorBroken ? 6 : 0);
@@ -701,13 +737,14 @@ function noteInjuryReportLuck(stats: DiceStats, game: GameJson | null, commandNr
     const key = `${commandNr}|${defenderId}|${injury[0]},${injury[1]}`;
     if (commandNr == null || key !== stats.lastInjuryTrial) {
       stats.lastInjuryTrial = key;
-      const trial = injuryTrial({ dice: injury, modifiers: injuryModifiers, thickSkull: has(game, defenderId, 'Thick Skull'), mightyBlow, statedState: Number(r.injury) & 0xff });
+      const trial = mightyBlow == null && injuryModifiers.includes('Mighty Blow') ? null
+        : injuryTrial({ dice: injury, modifiers: injuryModifiers, thickSkull: has(game, defenderId, 'Thick Skull'), mightyBlow: mightyBlow ?? 1, statedState: Number(r.injury) & 0xff });
       // UNMEASURED: an unvalued modifier, or a stated result that is not this table's for the roll
       if (!trial) { for (const t of theirs) luckOf(t, 'injury').unmeasured += 1; }
       else {
         // owner 10-16 (Luck): a KO or a casualty favours the attacker's team, a stun the victim's only when removal was likelier
         noteBreakEvent(stats, game, injuryRollOutcomes(trial.counts, own.teamId, them.teamId),
-          trial.level, `Injury roll: ${['stun', 'KO', 'casualty'][trial.level]}`, attackerId, stats.turnClock ?? readTurnClock(game));
+          trial.level, `Injury roll: ${['stun', 'KO', 'casualty'][trial.level]}${storyTail}`, storyPlayer, stats.turnClock ?? readTurnClock(game));
         const ko6 = koWeightFor(game, own); // the VICTIM's team's kegs
         const expected6 = parseDist(injuryKey(trial.counts, ko6, false)).mean6;
         for (const [list, mine, side] of [[theirs, false, 'their']] as const) {
@@ -1674,6 +1711,8 @@ function noteCutShortStep(stats: DiceStats, game: GameJson | null, r: Report, id
   if (!next.turnoverArmed) stats.tcsHit = null;
   // Astra cut r2 #1: an interception is no failure of a turnover-capable roll of the acting team - nothing is charged
   if (id === 'interceptionRoll' && r.successful === true) stats.tcsHit = null;
+  // Owner 11-16 (g1964457): a referee send-off is a turnover but no failed turnover-capable roll - nothing is charged
+  if ((id === 'referee' || id === 'biasedRef') && r.foulingPlayerBanned === true) stats.tcsHit = null;
   stats.tcsArm = next;
   // a successful roll arms nothing: it is no longer the roll a turnover would be charged to
   if (TCS_ROLL_IDS.has(id) && r.successful === true && roller && playing.has(roller)) stats.tcsLast = null;
@@ -1981,6 +2020,17 @@ export function ingestDiceReports(stats: DiceStats, gameId: string | null, comma
     }
     if (id === 'injury') {
       const attacker = inflictingAttacker(stats, game, r, actingId);
+      const fallRoller = attacker ? null : ownFallRollerTeam(game, r);
+      if (fallRoller) {
+        // owner 2026-11-14: a fall from the player's own failed action - the opposing coach's roll, booked for his TEAM
+        // only (no player: there is no attacker). Dice and luck trials; not an attack, so no Turns lost trial.
+        const tallies = tallyFor(stats, fallRoller.teamId, null);
+        const [armour, injury] = shownRolls(r);
+        if (armour) { for (const v of armour) pushD6(tallies, v, 'armourFaces'); for (const t of tallies) t.armour.push(armour[0] + armour[1]); }
+        if (injury) { for (const v of injury) pushD6(tallies, v, 'injuryFaces'); for (const t of tallies) t.injury.push(injury[0] + injury[1]); }
+        noteInjuryReportLuck(stats, game, commandNr, r, null, armour, injury, OWN_FALL_FAMILIES.get(injuryTypeFamily(String(r.injuryType ?? ''))) ?? null);
+        continue;
+      }
       if (!attacker) {
         // owner 10-13: not a roll made against an opponent - counted for neither team's dice rows. Owner 10-15: the
         // blocker's own fall still costs his team turns, dealt by the defender (the link made at the blockChoice)

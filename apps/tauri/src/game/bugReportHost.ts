@@ -37,20 +37,27 @@ export interface BugReportHost {
   onWireLogUnreadable?: () => void;
 }
 
-// ---- the most recent wire log, for a report filed from the shell ------------------------------------------------
+// ---- the last game's wire log of THIS app run, for a report filed from the shell ----------------------------------
 // The store clears `state.wireLogFile` when a game is left, so the shell (shown only with no game loaded) would never
-// see one. App.vue watches the store's path and remembers the last non-empty one here, in memory and in localStorage so
-// it survives a restart. The Tauri reader (read_bug_report_log) takes the basename and refuses anything else, so a
-// remembered name can only ever read a log the app itself wrote. A file that has since gone is sent without (the read
-// degrades to null) and forgotten, so the next report says "No game log".
+// see one. App.vue watches the store's path and remembers the last non-empty one here, IN MEMORY ONLY (owner 11-14,
+// report "nogame": a copy kept in localStorage attached a five-day-old game's log to a report about no game at all). A
+// coach whose game just dropped and who reports from the lobby still sends that game's log. Retention ends on a page
+// reload as well as an app restart (the memory is the page's), and a game played with logging off leaves nothing. The Tauri reader (read_bug_report_log) takes the basename and refuses anything else, so a remembered name can
+// only ever read a log the app itself wrote. A file that has since gone is sent without (the read degrades to null) and
+// forgotten.
 
+/** The storage key older builds wrote (localStorage and sessionStorage). Removed at start, never read. */
 const LAST_WIRE_LOG_KEY = 'sf.lastWireLogFile';
-/** A ref, so the dialog's attachments list follows it. null = not read from storage yet. */
-const lastWireLog = ref<string | null>(null);
+function removeOldStoredWireLog(): void {
+  try { globalThis.localStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* storage blocked */ }
+  try { globalThis.sessionStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* storage blocked */ }
+}
+removeOldStoredWireLog();
+/** A ref, so the dialog's attachments list follows it. '' = none (no logged game since this page loaded). */
+const lastWireLog = ref('');
 
-// Owner 10-22 (second client window): two windows share localStorage, so the per-WINDOW copy lives in sessionStorage.
-// localStorage is only the restart fallback, read when this window has none AND the second-client setting is off; with
-// the setting on, a window offers only a log carrying its own instance tag (wireLogName.ts), never the other window's.
+// Owner 10-22 (second client window): with the second-client setting on, a window offers only a log carrying its own
+// instance tag (wireLogName.ts), never the other window's. (Memory is per window anyway; the check stays as a guard.)
 
 /** Whether the second-client setting is effectively on. settings.ts registers it at load (this module stays free of
  *  the settings import); unregistered = off, the single-window behaviour. */
@@ -69,40 +76,27 @@ export function isOwnWindowWireLog(path: string): boolean {
 
 export function rememberWireLogFile(path: string): void {
   const value = (path || '').trim();
-  if (!value) return;
-  lastWireLog.value = value;
-  try { globalThis.sessionStorage?.setItem(LAST_WIRE_LOG_KEY, value); } catch { /* storage blocked: memory only */ }
-  try { globalThis.localStorage?.setItem(LAST_WIRE_LOG_KEY, value); } catch { /* storage blocked: memory only */ }
+  if (value) lastWireLog.value = value;
 }
 
+/** The last game's wire log of this app run; '' = none. */
 export function lastWireLogFile(): string {
-  if (lastWireLog.value === null) {
-    let value = '';
-    try { value = globalThis.sessionStorage?.getItem(LAST_WIRE_LOG_KEY) ?? ''; } catch { value = ''; }
-    if (!value && !secondClientEnabled()) {
-      try { value = globalThis.localStorage?.getItem(LAST_WIRE_LOG_KEY) ?? ''; } catch { value = ''; }
-    }
-    lastWireLog.value = value;
-  }
   return lastWireLog.value && isOwnWindowWireLog(lastWireLog.value) ? lastWireLog.value : '';
-}
-
-function clearStoredWireLog(): void {
-  try { globalThis.sessionStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
-  try { globalThis.localStorage?.removeItem(LAST_WIRE_LOG_KEY); } catch { /* ignore */ }
 }
 
 /** The remembered log could not be read (deleted, or never there): stop offering it. */
 export function forgetWireLogFile(): void {
   lastWireLog.value = '';
-  clearStoredWireLog();
 }
 
 /** Test seam. */
 export function resetLastWireLogFile(): void {
-  lastWireLog.value = null;
-  clearStoredWireLog();
+  lastWireLog.value = '';
+  removeOldStoredWireLog();
 }
+
+/** Owner 11-14: which wire log a report attached (context.wireLogSource), for triage. */
+export type ReportWireLogSource = 'currentGame' | 'lastGameThisRun' | 'none';
 
 /** The blade names the coach sees on the ribbon, for the attachments list (context.blade carries the raw view id). */
 const BLADE_LABELS: Record<string, string> = {
@@ -116,13 +110,13 @@ export function bladeLabel(view: string): string {
 export interface ShellReportDeps {
   /** The current console view (App.vue `view`): rides as context.blade. */
   blade: () => string;
-  settings: { activeServerTarget: string; coach40k: string; coach: string };
+  settings: { activeServerTarget: string; coach40k: string; coach: string; wireLog?: boolean };
   state: { log: readonly BugReportLogEntry[]; devLog: readonly BugReportDevLogEntry[]; sessionState: unknown };
 }
 
 /**
  * Owner 2026-10-13: the Report host for the console shell's blade ribbon. No game is loaded there, so: no pitch (the
- * window screenshot is the DOM alone), gameId null, the MOST RECENT wire log if one is remembered (else "No game log"),
+ * window screenshot is the DOM alone), gameId null, the last game's wire log of this app run (else none),
  * and context.blade = which blade the coach reported from. The service is the active server target, as in a game.
  */
 export function createShellReportHost(deps: ShellReportDeps): BugReportHost {
@@ -132,7 +126,8 @@ export function createShellReportHost(deps: ShellReportDeps): BugReportHost {
     gameService: () => gameServiceFromTarget(deps.settings.activeServerTarget),
     wireLogPath: () => lastWireLogFile(),
     wireLogLine: (fileName) => t('bugReport.text.wireLogFilenameYour', { fileName }),
-    noWireLogLine: t('bugReport.text.noGameLog'),
+    // Owner 11-14: "verbose wire logging is off" only when it is; otherwise no log is available from this session.
+    get noWireLogLine() { return deps.settings.wireLog === false ? t('hud.noWireLogLine') : t('bugReport.text.noGameLog'); },
     onWireLogUnreadable: forgetWireLogFile,
     logEntries: () => deps.state.log,
     devLogEntries: () => deps.state.devLog,
@@ -141,6 +136,7 @@ export function createShellReportHost(deps: ShellReportDeps): BugReportHost {
       coach40k: deps.settings.coach40k || null,
       fumbblCoach: deps.settings.coach || null,
       wireLogFile: wireLogBasename(lastWireLogFile()) || null,
+      wireLogSource: (lastWireLogFile() ? 'lastGameThisRun' : 'none') satisfies ReportWireLogSource,
       serverTarget: deps.settings.activeServerTarget,
       sessionState: deps.state.sessionState,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,

@@ -2080,7 +2080,7 @@ function showCoinToss(result: 'heads' | 'tails', coach: string, won: boolean, ca
 }
 
 
-// Owner 07-03: turnover = INVOLUNTARY turn loss. FFB has NO explicit turnover flag (ReportTurnEnd carries only playerIdTouchdown) ⇒ ARM on a failing action report, fire on the next non-TD turnEnd in regular turnMode; a succeeding roll disarms. ⚠ the failing-report set may still need widening (Both-Down, foul send-offs, negatrait fumbles) as observed live.
+// Owner 07-03: turnover = INVOLUNTARY turn loss. FFB has NO explicit turnover flag (ReportTurnEnd carries only playerIdTouchdown) ⇒ ARM on a failing action report, fire on the next non-TD turnEnd in regular turnMode; a succeeding roll disarms. Foul send-offs arm too (owner 11-16; a successful bribe disarms). ⚠ the failing-report set may still need widening (negatrait fumbles) as observed live.
 // The heuristic itself lives in turnPresentation.ts (turnoverArmStep): ONE implementation for this live presenter, the
 // review transport and the spectator dice ledger.
 export { turnoverArmAfterReport };
@@ -2104,6 +2104,10 @@ let turnoverSeqCounter = 0;
 const TURNOVER_DELAY_MS = 500; // owner 2026-08-19: min settle beat before the turnover splash (halved from 1000)
 const TURNOVER_AFTER_INJURY_DELAY_MS = TURNOVER_DELAY_MS * 0.8; // owner 08-23: 20% tighter only after armour/injury
 const TURNOVER_SETTLE_CAP_MS = 3000; // owner 2026-08-19: max wait for the injury chain (TTM landing) before the splash fires anyway
+/** Owner 11-16 (g1964457): a send-off is now a turnover, and its result card (state.sendOffResult, held 4200 ms by the
+ *  view) or the opponent's referee card (state.sendOffWaiting, 1500 + 4200 ms when no view reports the flip) sits in the
+ *  splash's place - the splash follows the card. Fail-open cap for that wait only (the card hold + the reveal fallback). */
+export const TURNOVER_SEND_OFF_CAP_MS = 6000;
 const TURNOVER_HOLD_MS = 3800;
 
 // item4 (owner 08-18, live-play): the turnover splash could fire OVER a still-bouncing ball. The settle
@@ -2174,7 +2178,10 @@ export function turnoverSplashReady(
   waitedMs: number,
   otherAnimsSettled: boolean,
   minimumDelayMs = TURNOVER_DELAY_MS,
+  sendOffCardUp = false,
 ): boolean {
+  // owner 11-16: a send-off card on screen holds the splash until it clears, under its own (longer) fail-open cap
+  if (sendOffCardUp) return waitedMs >= presentationMs(TURNOVER_SEND_OFF_CAP_MS);
   if (waitedMs >= presentationMs(TURNOVER_SETTLE_CAP_MS)) return true; // fail-open cap wins unconditionally
   return waitedMs >= presentationMs(minimumDelayMs) && otherAnimsSettled && !ballInFlight();
 }
@@ -2312,7 +2319,8 @@ function showTurnover(
     if (!fireAllowed) { turnoverTimer = null; return; }
     if (rockThrowResolving()) { turnoverTimer = scheduleGameTimeout(tick, 150); return; } // owner 10-04: the rock reads first
     const waited = Date.now() - started;
-    if (turnoverSplashReady(waited, settled(), minimumDelayMs)) { fire(); return; } // item4: + ball-at-rest, same 3000ms cap
+    const sendOffCardUp = !!state.sendOffResult || !!state.sendOffWaiting; // owner 11-16: the splash follows the send-off card
+    if (turnoverSplashReady(waited, settled(), minimumDelayMs, sendOffCardUp)) { fire(); return; } // item4: + ball-at-rest, same 3000ms cap
     turnoverTimer = scheduleGameTimeout(tick, 150);
   };
   turnoverTimer = scheduleGameTimeout(tick, presentationMs(minimumDelayMs));
@@ -2328,7 +2336,7 @@ const TURN_START_HOLD_MS = 1730; // owner 2026-07-06: -1/3 (was 2600)
 
 /** #172: Pick-Me-Up arms only AFTER the turn-splash window. ⚠ Same TREATMENT as #170, deliberately NOT the same code (SR-128/PW-4: this window is TIMER-owned ⇒ release = RE-ARM ON THE CLEAR, never a boolean sampled at arm); ⚠ NOT `kind:'prompt'` (SR-110: the splashes ride bare setTimeout, a prompt would order against an empty drain). ⚖ presentation-only; `pregameHandled` latches at RESOLVE, not stash (#173 AL-6 — a held prompt can never retire unarmed). */
 let pendingPickPrompt: { key: string; arm: () => void; gameId: string | number | null } | null = null;
-/** Fail-open watchdog sized FROM the constants (turnover cap 3000+hold 3800 = 6800 < 14000) — guarantees LATE, never NEVER. ⚠ Re-derive if TURNOVER_SETTLE_CAP_MS/TURNOVER_HOLD_MS move; not a tuning knob. */
+/** Fail-open watchdog sized FROM the constants (turnover cap 3000+hold 3800 = 6800, behind a send-off card 6000+3800 = 9800 < 14000) — guarantees LATE, never NEVER. ⚠ Re-derive if TURNOVER_SETTLE_CAP_MS/TURNOVER_SEND_OFF_CAP_MS/TURNOVER_HOLD_MS move; not a tuning knob. */
 const PICK_PROMPT_WATCHDOG_MS = 14000;
 let pendingPickWatchdog: ReturnType<typeof setTimeout> | null = null;
 /** Turn splash pending or on screen? Reads surfaced state AND live timer handles (the window opens before either splash is visible). */
@@ -21302,6 +21310,7 @@ export function installTurnPresentationTestHarness(fixture: GameJson): {
   turnToastKey = '';
   turnoverArmed = false;
   turnoverArmedAfterInjury = false;
+  turnoverArmExtra = {}; // owner 11-16: the foul / rescue context never leaks across harnessed games
   const priorActionRolls = visibleActionRollProjection;
   const priorEndStats = state.endGameStats;
   const priorDefectors = state.defectors;

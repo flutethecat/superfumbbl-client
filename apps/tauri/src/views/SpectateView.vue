@@ -2356,6 +2356,7 @@ const reportHost: BugReportHost = {
       homeCoach: (g?.teamHome as { coach?: string } | undefined)?.coach ?? null,
       awayCoach: (g?.teamAway as { coach?: string } | undefined)?.coach ?? null,
       wireLogFile: wireLogBasename(reportWireLogPath.value) || null,
+      wireLogSource: reportWireLogPath.value ? 'currentGame' : 'none', // owner 11-14: for triage (the store's file, as before)
       serverTarget: settings.activeServerTarget,
       sessionState: gameStore.state.sessionState,
       half: g?.half ?? null,
@@ -2422,8 +2423,9 @@ function pushReportToast(text: string, ms = 6000) {
   }
 }
 
-function onReportSent() {
-  pushReportToast('🐞 Report sent — thanks! The wire log went with it.');
+function onReportSent(info: { wireLogAttached: boolean }) {
+  // owner 11-14: the wire log is named only when it really went with the report
+  pushReportToast(`🐞 Report sent — thanks!${info.wireLogAttached ? $t('app.text.yourMostRecentGame') : ''}`);
   // Owner 10-17: after the report, a toast says a newer build exists (the prompt itself never opens mid-game)
   void updateHintAfterReport(APP_VERSION).then((hint) => { if (hint) pushReportToast(hint); });
 }

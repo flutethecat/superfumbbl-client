@@ -1411,12 +1411,31 @@ function vomitDecoratedSquares(game: GameJson): [number, number][] {
     .map((dd) => [dd.coordinate![0], dd.coordinate![1]] as [number, number]);
 }
 
-/** S28: the opposing players to mark for Putrid Regurgitation. Only while the RAW action is putridRegurgitationBlock or
- *  putridRegurgitationBlitz (never ...Move, whose decorations are plain and whose vomit block the server refuses), and
- *  only for opponents whose square carries a VOMIT decoration, and none once the server has set a defender (the accepted
- *  block, fixture cmd 94). No distance or adjacency rule of our own. */
+/** Upstream `UtilCards.hasUnusedSkillWithProperty(ActingPlayer, canUseVomitAfterBlock)` (UtilCards.java:129-136) over
+ *  `ActingPlayer.isSkillUsed` (ActingPlayer.java:218-220): the acting player carries Putrid Regurgitation and it is in
+ *  neither the activation's usedSkills nor the player's own. The server marks it used when it ACCEPTS the vomit block
+ *  (bb2025 StepInitBlocking.java:214-216, before it sets the defender at :220), so this is the server's own signal that the
+ *  vomit has been made. Unreadable used-state reads as unused only if the skill itself is present (the server re-checks). */
+function actingVomitSkillUnused(game: GameJson, actingId: string): boolean {
+  const acting = game.actingPlayer as { playerId?: string | null; usedSkills?: string[] } | undefined;
+  if (String(acting?.playerId ?? '') !== actingId) return false;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z]/g, '');
+  const usedThisActivation = (acting?.usedSkills ?? []).map(norm);
+  return CAN_VOMIT_AFTER_BLOCK_SKILLS.some((s) => !usedThisActivation.includes(norm(s)))
+    && hasUnusedGrantor(game, actingId, CAN_VOMIT_AFTER_BLOCK_SKILLS);
+}
+
+/** S28: the opposing players to mark for Putrid Regurgitation (the click is vomitClickAllowed, below). Upstream
+ *  PutridRegurgitationBlockLogicModule.playerInteraction:34-35 and PutridRegurgitationBlitzLogicModule:42-44: the RAW
+ *  action is putridRegurgitationBlock / putridRegurgitationBlitz (never ...Move, whose decorations are plain and whose vomit
+ *  block the server refuses), the acting player's Putrid Regurgitation is still unused, and the opponent is blockable:
+ *  its square carries the server's VOMIT decoration. No distance or adjacency rule of our own.
+ *  g1963805 (1.0.326): NOT game.defenderId. After the block that triggers Putrid Regurgitation the server keeps the old
+ *  defender set through the whole target choice (StepEndBlocking.java:352-360 changes the action and redecorates but
+ *  never clears it), so a defender check hid every target. The accepted vomit (fixture cmd 94) is closed by the skill
+ *  being marked used in that same frame. */
 export function vomitTargetIds(game: GameJson, actingId: string): string[] {
-  if (String((game as { defenderId?: string | null }).defenderId ?? '')) return []; // a block is in progress: the target choice is over
+  if (!actingVomitSkillUnused(game, actingId)) return []; // the vomit was accepted (or the skill is spent): the choice is over
   const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
   if (action !== 'putridRegurgitationBlock' && action !== 'putridRegurgitationBlitz') return [];
   const iAmHome = playerSideIsHome(game, actingId);
@@ -1431,6 +1450,17 @@ export function vomitTargetIds(game: GameJson, actingId: string): string[] {
     if (pos && squares.some((c) => c[0] === pos[0] && c[1] === pos[1])) out.push(p.playerId);
   }
   return out;
+}
+
+/** The Putrid Regurgitation vomit click, exactly upstream's: PutridRegurgitationBlockLogicModule.playerInteraction:34-36
+ *  (an unused canUseVomitAfterBlock + extension.isBlockable) and PutridRegurgitationBlitzLogicModule:42-45 (the same, plus
+ *  the raw action PUTRID_REGURGITATION_BLITZ: never ...Move, which shares the client state). isBlockable
+ *  (BlockLogicExtension.java:202-208) = a dice decoration on the target's square (any kind) = blockTargetDecorated; the
+ *  router already keeps own players out. No defender check (g1963805: the finished block's defender is still set). */
+export function vomitClickAllowed(game: GameJson, actingId: string, targetId: string): boolean {
+  const action = String((game.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+  if (action !== 'putridRegurgitationBlock' && action !== 'putridRegurgitationBlitz') return false;
+  return actingVomitSkillUnused(game, actingId) && blockTargetDecorated(game, targetId);
 }
 
 /** S39: the ONE id feed of the skill-target mark channel (renderer.setSkillTargetMarks). Blastin' Solves Everything when the
@@ -2097,6 +2127,15 @@ export function forgoAvailable(game: GameJson, playerId: string): boolean {
   if (!p) return false;
   const base = baseState(p.playerState ?? 0);
   return base !== BASE_PRONE && base !== BASE_STUNNED; // PlayerState.isProneOrStunned
+}
+
+/** The player stands on the ball's square while the ball is in play and at rest: the ball carrier. */
+function holdsBall(game: GameJson, playerId: string): boolean {
+  const fm = game.fieldModel as { ballInPlay?: boolean; ballMoving?: boolean; ballCoordinate?: unknown } | undefined;
+  if (!fm?.ballInPlay || fm.ballMoving) return false;
+  const ball = normSquare(fm.ballCoordinate);
+  const pos = normSquare(findPlayer(game, playerId)?.playerCoordinate);
+  return !!ball && !!pos && ball[0] === pos[0] && ball[1] === pos[1];
 }
 
 /** Law 10d: fresh declares are legal only before the acting player has activation progress. This port can call
@@ -3541,7 +3580,9 @@ function playerDeclareSet(game: GameJson, playerId: string, p: PlayerDataLike, c
     // SECURE_THE_BALL as upstream; picked, it sends acting(FORGO, false) (:237-239) and the server ends the activation
     // at once (forceDispatch, PlayerAction.java:127-129; bb2025 StepEndSelecting:464-467 sets forgone, pushes the end).
     // Upstream label "Forgo Activation" (bb2025 ClientStateSelect:311-312); a text row, no icon.
-    if (!prone && forgoAvailable(game, playerId)) {
+    // Owner 11-16: the row is offered to the BALL CARRIER only (the stalling case it exists for); upstream offers it to
+    // every standing player, so this is a deliberate narrowing of the menu, not of the rule (forgoAvailable is unchanged).
+    if (!prone && forgoAvailable(game, playerId) && holdsBall(game, playerId)) {
       out.push({
         action: 'forgo', get label() { return t('hud.actions.text.forgoActivation'); }, kind: 'declare', enabled: true,
         get reason() { return t('hud.actions.reason.forgoActivation'); },

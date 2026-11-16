@@ -508,7 +508,8 @@ export function pgLikelihoodRows(t: DiceTally): PgLikelihoodRow[] {
   const all = allDiceLikelihood(t);
   const armour = c('armour'), action = c('action'), block = c('block'), turns = t.luck?.turns?.c ?? {};
   // Each figure is worded ONCE (`value`) and used by both the one-line summary and the popover's labelled line.
-  // Owner 10-13: armour and injury cover only the rolls the team made against its opponent, so there is one figure per row.
+  // Owner 10-13: armour and injury cover only the rolls the team made against its opponent, so there is one figure per row
+  // (owner 2026-11-14: that includes the rolls against an opponent who fell on his own failed dodge, rush or jump).
   const armourValue = n(armour.theirRolls) ? $t('cards.postGame.armourValue.p0BrokenOfP1', { p0: n(armour.theirBroken), p1: n(armour.theirRolls), p2: exp1(armour.theirExpected) }) : '';
   const armourParts = armourValue ? [armourValue] : [];
   const armourStats = armourValue ? [{ get label() { return $t('cards.postGame.armourStats.armour'); }, value: armourValue }] : [];

@@ -11,7 +11,7 @@
 
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { deriveClientState, isActiveActivation, type ClientStateContext, type ClientStateId } from './clientStateMachine';
-import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, blitzBlockMoveVerdict, rushPromptBeforeAttack, handOffCatcherAllowed, passTargetAllowed, type CoachAction } from './availableActions';
+import { availableActions, actingHasActed, isBallCarrier, illCarryYouAvailable, jumpCapabilityAvailable, canPlaceCarriedPlayerNow, hasCanDropBallProperty, adjacentStandingEnemyIds, adjacentDownEnemyIds, adjacentOwnTeammateIds, serverMoveSquares, sameSquare, normSquare, highKickNomineeIds, canBeBlocked, blockTargetDecorated, playerSideIsHome, passRangeSquares, ttmRangeSquares, kickEmCommitAllowed, blastinTargetIds, vomitClickAllowed, blitzBlockMoveVerdict, rushPromptBeforeAttack, handOffCatcherAllowed, passTargetAllowed, type CoachAction } from './availableActions';
 import { isBlastinSecondBeat } from '../blastinSecondBeat';
 import { t } from '../../i18n';
 
@@ -1535,7 +1535,13 @@ export function onPlayerClick(
       if (state === 'PUTRID_REGURGITATION_BLITZ' && actingNow && rushPromptBeforeAttack(game)) {
         return { kind: 'openActionMenu', playerId: actingNow, actions: availableActions(game, ctx, actingNow) };
       }
-      if (blockTargetDecorated(game, clickedPlayerId)) return { kind: 'block', defenderId: clickedPlayerId, blockKind: starBlockKind };
+      // Putrid Regurgitation: upstream's click gate (vomitClickAllowed) - raw action, an unused Putrid Regurgitation, a
+      // decorated target (PutridRegurgitationBlockLogicModule:34-35, ...BlitzLogicModule:42-44), never game.defenderId.
+      // After the accepted vomit the skill is used, so a second click sends nothing.
+      const targetOk = starBlockKind === 'vomit'
+        ? !!actingNow && vomitClickAllowed(game, actingNow, clickedPlayerId)
+        : blockTargetDecorated(game, clickedPlayerId);
+      if (targetOk) return { kind: 'block', defenderId: clickedPlayerId, blockKind: starBlockKind };
       return { kind: 'ignore', reason: `not a decorated ${starBlockKind}-block target` };
     }
     if (clickedPlayerId === actingPlayerId(game)) return { kind: 'ignore', reason: 'law 10e: own-player left-click is inert (End Activation = menu/Esc)' };

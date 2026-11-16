@@ -63,6 +63,12 @@ function dirTag(name: unknown): string {
   return isFieldDirection(name) ? `${TAG_MARK}D${name}|${FIELD_DIRECTION_ABBR[name]} (field)${TAG_END}` : String(name ?? '?');
 }
 function armourTag(glyph: string): string { return `${TAG_MARK}S${glyph}${TAG_END}`; }
+/** A player's own fall on a failed move (lower-case injury type): upstream's DropDodge, DropDodgeForSpp, DropGFI and
+ *  DropJump ("dropLeap"). */
+function isOwnFallInjuryType(normalizedInjuryType: string): boolean {
+  return normalizedInjuryType === 'dropdodge' || normalizedInjuryType === 'dropdodgeforspp'
+    || normalizedInjuryType === 'dropgfi' || normalizedInjuryType === 'dropleap';
+}
 function niStatDownTag(text: string): string { return `${TAG_MARK}N${text}${TAG_END}`; }
 // Owner 08-19: a HIDDEN word — stays in the text (copy keeps it) but renders zero-visual
 // (the view collapses the run), e.g. the word "rolls" before an inline die glyph.
@@ -1471,12 +1477,14 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     //               injury/Foul.java + subclasses)
     //   knockdown → no lead (block-family names start with "block"; the injury sentence names
     //               the target once after the injury dice)
-    //   failed move → "<Target> falls down!" for the server's dropDodge/dropGfi injury types.
+    //   failed move → "<Target> falls | Armour [..]" for the server's drop* (own fall) injury types.
     //   other       → today's bare player-name prefix.
     const injuryTypeName = typeof r.injuryType === 'string' ? r.injuryType : '';
     const normalizedInjuryType = injuryTypeName.toLowerCase();
     const isCrowdPush = normalizedInjuryType === 'crowdpush' || normalizedInjuryType === 'crowdpushforspp';
-    const isFailedMove = normalizedInjuryType === 'dropdodge' || normalizedInjuryType === 'dropgfi';
+    // The player's own fall on a failed move: upstream's drop* injury types (DropDodge, DropDodgeForSpp - a failed
+    // dodge with Arm Bar - DropGFI and DropJump, wire "dropLeap").
+    const isFailedMove = isOwnFallInjuryType(normalizedInjuryType);
     const isBlockFamily = normalizedInjuryType.startsWith('block');
     const isFoulInjury = injuryTypeName.startsWith('foul');
     // Owner 10-13: a foul reads "<Fouler> fouls <Target> | armour .. | Injury: ..". The fouler is the report's
@@ -1497,9 +1505,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       ? `Block${attacker ? ` by ${attacker}` : ''}`
       : injuryTypeName.startsWith('foul')
         ? `Foul${attacker ? ` by ${attacker}` : ''}`
-        : isFailedMove
-          ? (normalizedInjuryType === 'dropgfi' ? 'Failed Rush' : 'Failed Dodge')
-          : isCrowdPush
+        : isCrowdPush
             ? 'Crowd push'
             : `${genericCause.charAt(0).toUpperCase()}${genericCause.slice(1)}`;
     const lead: string = isCrowdPush
@@ -1520,12 +1526,19 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     // copied text reads "armour [2, 6] broken!". The 🛡 emoji leaves the text entirely.
     // Owner 08-19 (quiet-success grammar): "held" is SUPPRESSED — a held line ends at the
     // dice (icon + dice, nothing after); "broken" remains explicit.
+    // Owner 11-16 (player report: a held rush-fall armour roll read as the rush roll itself): a failed-move fall reads
+    // "<P> falls | Armour [1, 2]" with the word Armour as plain visible text (no icon tag), the cause left to the row's
+    // action icon; a broken one continues exactly as before (" broken!; Injury: [..]").
     const parts: string[] = [];
+    const ownFallHead = `${name} falls`;
     if (ar) {
       const armourMods = armourModifierSuffix(r.armorModifiers, broke);
-      const armourPart = `${armourTag('armour')} ${d6Pair(ar)}${armourMods}${broke ? ' broken!' : ''}`;
+      const armourWord = isFailedMove ? 'Armour' : armourTag('armour');
+      const armourPart = `${armourWord} ${d6Pair(ar)}${armourMods}${broke ? ' broken!' : ''}`;
       parts.push(armourPart);
-      const attributedArmour = attributedId ? `${lead} | ${armourPart}` : `${name} | ${armourCause} | ${armourPart}`;
+      const attributedArmour = attributedId
+        ? `${lead} | ${armourPart}`
+        : isFailedMove ? `${ownFallHead} | ${armourPart}` : `${name} | ${armourCause} | ${armourPart}`;
       // An armour roll that held never has an injury phase. Preserve that normal
       // report grammar even if a malformed payload happens to carry extra dice.
       // Owner 10-15: a chainsaw HIT whose armour holds says so (both styles; owner spelling "armor")
@@ -1557,7 +1570,9 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
       : '';
     parts.push(`Injury: ${d6Pair(ir)}${injuryMods}`);
     const body = parts.join(attributedId ? ' | ' : '; ');
-    const head = ar && !attributedId ? `${name} | ${armourCause} | ${body}` : lead ? `${lead} | ${body}` : body;
+    const head = ar && !attributedId
+      ? (isFailedMove ? `${ownFallHead} | ${body}` : `${name} | ${armourCause} | ${body}`)
+      : lead ? `${lead} | ${body}` : body;
     return [head, effect, casualtyLine].filter(Boolean).join('\n');
   },
   // Owner 2026-07-06 (finding C): the apothecary report is NOT a pass/fail d6 — it
@@ -2375,7 +2390,7 @@ function graphicalLines(report: Report, game: GameJson | null, context: ReportLo
       else if (type.startsWith('foul')) {
         const foulerId = typeof report.attackerId === 'string' && report.attackerId ? report.attackerId : game?.actingPlayer?.playerId;
         head = `${pn(game, foulerId)} fouls ${name}`;
-      } else if (type === 'dropdodge' || type === 'dropgfi') head = `${name} falls down!`;
+      } else if (isOwnFallInjuryType(type)) head = `${name} falls down!`;
       else if (type === 'chainsaw' || type === 'chainsawforspp') {
         // owner 10-15: the chainsaw roll row above says who hit whom, or that it kicked back; this row is its armour /
         // injury step for the player hit (the target, or the chainsaw player on a kickback), its outcome one level deeper

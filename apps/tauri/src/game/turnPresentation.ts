@@ -23,9 +23,14 @@ export interface TurnPresentationContext {
   lastFailureBy?: string;
   lastFailureRoll?: string;
   failureSeq?: number;
+  /** Owner 11-16 (g1964457): the playing-side attacker of the latest foul (its `injury` report's attackerId), so a
+   *  referee ban that follows in a later frame can name the player it sends off (ReportReferee carries no id). */
+  foulerId?: string;
 }
-/** The optional rescue-context keys (persisted by the store and the checkpoint validator). */
-export const TURN_RESCUE_CONTEXT_KEYS = ['rescuableInterceptor', 'armedBy', 'armedByRoll', 'armedFailure', 'lastFailure', 'lastFailureBy', 'lastFailureRoll', 'failureSeq'] as const;
+/** The optional context keys (persisted by the store and the checkpoint validator; a turn boundary clears them). */
+export const TURN_RESCUE_CONTEXT_KEYS = ['rescuableInterceptor', 'armedBy', 'armedByRoll', 'armedFailure', 'lastFailure', 'lastFailureBy', 'lastFailureRoll', 'failureSeq', 'foulerId'] as const;
+/** `armedByRoll` of a turnover armed by a referee send-off of the playing side's fouler. */
+export const SEND_OFF_ARMING = 'sendOff';
 /** A turn boundary ends every rescue window: no failure of the ending turn can be rescued (or rescue an interception)
  *  after its turnEnd, so the rescue keys never leak into the next turn's context (the boundary context is fresh). */
 export function clearTurnRescueContext(context: TurnPresentationContext): void {
@@ -150,9 +155,43 @@ export function turnoverArmStep(
   let knockedDown: string | null = null;
   for (const report of reports) {
     const id = String(report.reportId);
+    if (id === 'referee' || id === 'biasedRef') {
+      // Owner 11-16 (g1964457): a spotted foul ends the turn. The referee (or a Biased Referee: ReportBiasedRef, same
+      // `foulingPlayerBanned` field) runs only inside the ACTING player's Foul / Pile Driver sequence (generator
+      // bb2025/Foul.java:33, bb2020/Foul.java:46, bb2016/Foul.java:34, mixed/PileDriver.java:32; bb2025
+      // SneakyGitBehaviour.java:90-125), and the acting player is the playing side's - so the ban is that side's.
+      // Every outcome but a successful bribe publishes END_TURN (bb2025 / bb2020 StepBribes.java:188-203 - a successful
+      // Argue the Call too; bb2016 StepEjectPlayer.java:120 after StepBribes.java:137-161; mixed StepEjectPlayer.java:119).
+      if (report.foulingPlayerBanned === true) {
+        const fouler = context.foulerId;
+        context.turnoverArmed = true;
+        clearArming(context);
+        context.armedByRoll = SEND_OFF_ARMING;
+        if (fouler) context.armedBy = fouler;
+        delete context.foulerId;
+      }
+      continue;
+    }
+    if (id === 'bribesRoll') {
+      // A SUCCESSFUL bribe jumps to the end of the foul with no END_TURN (StepBribes.java:188-191 in every ruleset): the
+      // player stays and the turn goes on. Only the bribe for the send-off that armed it (secret-weapon bribes at the end
+      // of a drive, bb2025 StepEndTurn.java:834-849, are other players). A failed bribe changes nothing (a second one
+      // may follow when ONLY_ONE_BRIBE_PER_SEND_OFF is off: the last one decides).
+      const pid = String(report.playerId ?? '');
+      if (report.successful === true && context.turnoverArmed && context.armedByRoll === SEND_OFF_ARMING && pid
+        && (context.armedBy ? context.armedBy === pid : playingPlayerIds.has(pid))) {
+        context.turnoverArmed = false;
+        context.turnoverAfterInjury = false;
+        clearArming(context);
+      }
+      continue;
+    }
     if (id === 'injury') {
       const fallen = String(report.defenderId ?? report.playerId ?? '');
       const injuryType = injuryTypeName(report.injuryType).toLowerCase();
+      const fouler = String(report.attackerId ?? '');
+      // foul, foulForSpp, foulWithChainsaw, foulForSppWithChainsaw (ffb-common injury/Foul*.java)
+      if (injuryType.startsWith('foul') && fouler && playingPlayerIds.has(fouler)) context.foulerId = fouler;
       const nonKnockdown = /crowd|bitten|quickbite|ttmlanding/.test(injuryType);
       const attacker = String(report.attackerId ?? '');
       const sameTeamBlock = !!attacker && playingPlayerIds.has(attacker);
@@ -190,8 +229,12 @@ export function turnoverArmStep(
     }
     if (id === 'interceptionRoll' && report.successful === false && pid && !playingPlayerIds.has(pid)) context.rescuableInterceptor = pid;
     else if (id !== 'reRoll' && id !== 'skillUse') delete context.rescuableInterceptor;
+    if (id === 'playerAction') delete context.foulerId;
     const wasArmed = context.turnoverArmed;
-    context.turnoverArmed = turnoverArmAfterReport(context.turnoverArmed, report, playingPlayerIds);
+    // A send-off ends the turn whatever rolls follow it (a team-mate catching the fouler's scattered ball, mixed
+    // StepEjectPlayer.java:120-124): only the bribe above or a fresh activation (the turn went on after all) disarms it.
+    const sendOffHeld = wasArmed && context.armedByRoll === SEND_OFF_ARMING && id !== 'playerAction';
+    context.turnoverArmed = sendOffHeld || turnoverArmAfterReport(context.turnoverArmed, report, playingPlayerIds);
     const playingFailure = TURNOVER_FAIL_IDS.has(id) && report.successful === false && !!pid && playingPlayerIds.has(pid);
     if (playingFailure) {
       const seq = (context.failureSeq ?? 0) + 1;
@@ -215,6 +258,7 @@ export function turnoverArmStep(
     context.turnoverArmed = false;
     context.turnoverAfterInjury = false;
     delete context.rescuableInterceptor;
+    delete context.foulerId;
     clearArming(context);
   }
   return { context, knockedDown };
