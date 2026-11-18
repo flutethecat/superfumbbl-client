@@ -144,7 +144,7 @@ import { preClickBlockDots, type PreClickBlockDot } from './preClickBlockDots';
 function nudgeMapSignature(map: ReadonlyMap<string, Offset>): string {
   return [...map].map(([id, o]) => `${id}:${o.dx.toFixed(1)},${o.dy.toFixed(1)}`).sort().join('|');
 }
-import { bundledWalkEntriesForRaces, bundledWalkManifest, isBundledStarRole } from './bundledWalk';
+import { bundledWalkEntriesForRaces, bundledWalkManifest } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
 import type { StadiumBakeCorners, StadiumBakeRequest, StadiumBakeResult } from './stadiumBake/bake';
 import {
@@ -12887,12 +12887,13 @@ export class PitchRenderer {
     const races = [this.game?.teamHome?.race, this.game?.teamAway?.race].filter((race): race is string => !!race);
     if (races.length === 0) return;
     // Owner 09-09: star players ride the 'stars' pseudo-race — preload only the stars these two rosters carry.
-    const starNames: string[] = [];
+    // Owner 11-17: every position name goes in; borrowed "Position (Roster)" players also load that roster's sheets.
+    const positionNames: string[] = [];
     for (const team of [this.game?.teamHome, this.game?.teamAway]) {
       const positions = (team?.roster as { positionArray?: { positionName?: string }[] } | undefined)?.positionArray ?? [];
-      for (const position of positions) if (isBundledStarRole(position.positionName)) starNames.push(position.positionName!);
+      for (const position of positions) if (position.positionName) positionNames.push(position.positionName);
     }
-    void loadBundledWalkSheets(bundledWalkEntriesForRaces(races, starNames)).then(() => {
+    void loadBundledWalkSheets(bundledWalkEntriesForRaces(races, positionNames)).then(() => {
       if (!this.destroyed && this.spriteSet === 'walk') this.refresh();
     });
   }

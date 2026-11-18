@@ -79,17 +79,55 @@ export function resolveBundledWalkRole(
   positionName: string | undefined,
 ): { race: string; role: string } | undefined {
   if (!positionName) return undefined;
-  // exact roster name first; else the ruleset-tag-stripped race (owner 09-07: "BB2025 Lizardmen" -> lizardmen)
-  const raceKey = BUNDLED_ROLES.has(normalize(race)) ? normalize(race) : rosterRaceKey(race);
   const name = normalize(positionName);
-  const roles = BUNDLED_ROLES.get(raceKey);
-  if (roles) {
-    const alias = ROLE_ALIASES[raceKey]?.[name];
-    const role = alias && roles.has(alias) ? alias : roles.has(name) ? name : undefined;
-    if (role) return { race: raceKey, role };
+  // exact roster name first; else the ruleset-tag-stripped race (owner 09-07: "BB2025 Lizardmen" -> lizardmen) —
+  // the first of these that ships at all decides, exactly as before 11-17
+  const primary = BUNDLED_ROLES.has(normalize(race)) ? normalize(race) : rosterRaceKey(race);
+  const primaryRole = roleIn(primary, name);
+  if (primaryRole) return { race: primary, role: primaryRole };
+  // Owner 11-17: a league copy of a roster carries a trailing tag ("Malal (WOBBL)") — fall back to the plain roster.
+  const tagged = splitTrailingParen(race);
+  if (tagged) {
+    for (const key of new Set([normalize(tagged.head), rosterRaceKey(tagged.head)])) {
+      const role = key !== primary ? roleIn(key, name) : undefined;
+      if (role) return { race: key, role };
+    }
+  }
+  // Owner 11-17: a player converted from another roster is named "Position (Roster)" ("Rat Ogre (Clan Moulder)",
+  // "Werebear (Were)", "Rat Ogre (Clan Moulder (WOBBL))") — draw that roster's sheet for the position.
+  const borrowed = splitTrailingParen(positionName);
+  if (borrowed) {
+    const target = resolveBundledWalkRole(borrowed.inner, borrowed.head);
+    if (target) return target;
   }
   // star players: the hiring roster does not carry the sheet, the 'stars' pseudo-race does
-  if (raceKey !== STAR_RACE && isBundledStarRole(positionName)) return { race: STAR_RACE, role: name };
+  if (primary !== STAR_RACE && isBundledStarRole(positionName)) return { race: STAR_RACE, role: name };
+  return undefined;
+}
+
+function roleIn(raceKey: string, name: string): string | undefined {
+  const roles = BUNDLED_ROLES.get(raceKey);
+  if (!roles) return undefined;
+  const alias = ROLE_ALIASES[raceKey]?.[name];
+  return alias && roles.has(alias) ? alias : roles.has(name) ? name : undefined;
+}
+
+/** Splits off the LAST balanced parenthetical when the text ends with it:
+ *  "Rat Ogre (Clan Moulder (WOBBL))" -> { head: 'Rat Ogre', inner: 'Clan Moulder (WOBBL)' };
+ *  "Werecat (Were) (Kurgan)" -> { head: 'Werecat (Were)', inner: 'Kurgan' }; anything else -> undefined. */
+function splitTrailingParen(value: string): { head: string; inner: string } | undefined {
+  const text = value.trimEnd();
+  if (!text.endsWith(')')) return undefined;
+  let depth = 0;
+  for (let index = text.length - 1; index >= 0; index -= 1) {
+    const char = text[index];
+    if (char === ')') depth += 1;
+    else if (char === '(' && --depth === 0) {
+      const head = text.slice(0, index).trim();
+      const inner = text.slice(index + 1, -1).trim();
+      return head && inner ? { head, inner } : undefined;
+    }
+  }
   return undefined;
 }
 
@@ -115,12 +153,25 @@ const entries: BundledWalkEntry[] = manifest.sheets.map((sheet) => {
 
 /** The bundled entries for the given team races (any case/spacing) — what a game needs, not the whole manifest.
  *  Owner 09-09: `starNames` = the star-player position names on those rosters; only THOSE star sheets load
- *  (never the whole 66-star set), each star once even when both teams could hire him. */
-export function bundledWalkEntriesForRaces(races: Iterable<string>, starNames: Iterable<string> = []): BundledWalkEntry[] {
-  const wanted = new Set([...races].map((race) => rosterRaceKey(race)).concat([...races].map((race) => normalize(race))));
+ *  (never the whole 66-star set), each star once even when both teams could hire him.
+ *  Owner 11-17: callers pass EVERY position name; star names still select star sheets, and each name also loads
+ *  exactly the sheet resolveBundledWalkRole picks for it on either roster (a league-tagged roster's plain art, a
+ *  borrowed "Position (Roster)" player's sheet) so every token that resolves has its texture. */
+export function bundledWalkEntriesForRaces(races: Iterable<string>, positionNames: Iterable<string> = []): BundledWalkEntry[] {
+  const raceList = [...races];
+  const names = [...positionNames];
+  const wanted = new Set(raceList.map((race) => rosterRaceKey(race)).concat(raceList.map((race) => normalize(race))));
   wanted.delete(STAR_RACE);
-  const stars = new Set([...starNames].map((name) => normalize(name)));
-  return entries.filter((entry) => entry.race === STAR_RACE ? stars.has(entry.role) : wanted.has(entry.race));
+  const stars = new Set(names.map((name) => normalize(name)));
+  const targets = new Set<string>();
+  for (const race of raceList) {
+    for (const name of names) {
+      const target = resolveBundledWalkRole(race, name);
+      if (target) targets.add(`${target.race}|${target.role}`);
+    }
+  }
+  return entries.filter((entry) => targets.has(`${entry.race}|${entry.role}`)
+    || (entry.race === STAR_RACE ? stars.has(entry.role) : wanted.has(entry.race)));
 }
 
 export function bundledWalkManifest(): BundledWalkEntry[] {

@@ -850,5 +850,80 @@
     "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-zoat-d364cb54.zip",
     "size": 2244985,
     "sha256": "bd9dcf06c05ecd728041612a11668736ce57fd4a38d5679c148df34160450b73"
+  },
+  "walk/albionwanderers@01c62bdfb37e42c5": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-albionwanderers-01c62bdf.zip",
+    "size": 4785076,
+    "sha256": "608c44c9fe9a547100222ff0db6f8be3a572b9374fe19d0f04ce823f28441e79"
+  },
+  "walk/avariel@9ce4270eba7f0f30": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-avariel-9ce4270e.zip",
+    "size": 4736439,
+    "sha256": "92dce2ba24a4a5d2a06c152b5a2b4f86101bd015bc569b92ef7de0fbec34fa6e"
+  },
+  "walk/carnivalofchaos@a3624e5cf20a6b8a": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-carnivalofchaos-a3624e5c.zip",
+    "size": 4914206,
+    "sha256": "92f9ab0c430935d028d94ce57460990c5f65cd95381bcfb5fdaaf5bba13fb585"
+  },
+  "walk/chaoshalfling@c33c671ae1fc9acf": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-chaoshalfling-c33c671a.zip",
+    "size": 5275626,
+    "sha256": "6c4f203971ceb100aff50d369a8210329db5860eef666ab64f4bada73f525a3d"
+  },
+  "walk/daemonsofnurgle@78785f262af72248": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-daemonsofnurgle-78785f26.zip",
+    "size": 1704374,
+    "sha256": "e059c0d73b53224aa4f4a29858d8201e8d7b029c51b3bcd116d80764b582cc44"
+  },
+  "walk/draconian@cd8411be61a4e0c7": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-draconian-cd8411be.zip",
+    "size": 3923014,
+    "sha256": "e9379211c30cecc2daf9eda174dc10e3ab8f1295b0d50d8d9b37151e2fc9a557"
+  },
+  "walk/fimir@d266fdfb7b3bc404": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-fimir-d266fdfb.zip",
+    "size": 3164543,
+    "sha256": "6e3c258b5439889b19dd7a7ac9b18e706b7683865c4dc580c7a1a67bb83801f3"
+  },
+  "walk/gnoll@c13c8b0969d33017": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-gnoll-c13c8b09.zip",
+    "size": 2716798,
+    "sha256": "497193e883af62f582cea424f9357d7f6f4eb322ba964c49c6467a01745aee71"
+  },
+  "walk/magmaelemental@461bcdc05aab8e00": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-magmaelemental-461bcdc0.zip",
+    "size": 801526,
+    "sha256": "4073572997d594ceaf379a7d6e18ecd3e2c026d3f906d39796c2eeee3e57eeaa"
+  },
+  "walk/malal@d5047f01e81b34cf": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-malal-d5047f01.zip",
+    "size": 2224105,
+    "sha256": "8a16326c33c1cd89e14934cbd910065ab5429884ec5ad98e335abec15a0c155c"
+  },
+  "walk/mootmouldies@3b0963ce48c34483": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-mootmouldies-3b0963ce.zip",
+    "size": 4828130,
+    "sha256": "07cf0150569965271a17c899669a346dd3a254b973948d0881b1402786bab6c7"
+  },
+  "walk/mudelemental@63e9929bab2ad89d": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-mudelemental-63e9929b.zip",
+    "size": 742690,
+    "sha256": "aac6086c4ed7f195a266723e9bc5d3328467084f8cdbbbc7448aa7966055866a"
+  },
+  "walk/selene@29831aedc490183d": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-selene-29831aed.zip",
+    "size": 5519943,
+    "sha256": "b8441ac0048b24956913e2806dab0987221c7e3332416ead938fb33d361b1d0a"
+  },
+  "walk/smokeelemental@24325bccd43c8b14": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-smokeelemental-24325bcc.zip",
+    "size": 404442,
+    "sha256": "50aa457f4e539b0b9631be22cc7b5fa53369b3bf5d535234f059a0f8c8bedd4f"
+  },
+  "walk/spawnofchaos@7b82a7c7c63b3554": {
+    "url": "https://github.com/flutethecat/superfumbbl-client/releases/download/parts/walk-spawnofchaos-7b82a7c7.zip",
+    "size": 27229908,
+    "sha256": "6094083d3e924d132813591df771aaaeab22ea48e06493a3f900c53424f29438"
   }
 }
