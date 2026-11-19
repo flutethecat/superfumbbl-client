@@ -48,6 +48,8 @@ export interface TouchCommitSnapshot {
   gazeRefusal?: string | null;
   /** The route's last square is next to the armed gaze victim. */
   routeEndsAdjacentToGazeVictim?: boolean;
+  /** The armed gaze victim (owner 11-18: a drawn route walks, then gazes at this player). */
+  gazeVictim?: string | null;
   gazeVictimName?: string;
   /** A Pass / Hand-off card armed over the plotted route (renderer armed action). */
   armedCardOverRoute: 'pass' | 'handoff' | null;
@@ -65,6 +67,8 @@ export interface TouchCommitSenders {
   foulFromRoute(victimId: string, route: Square[]): boolean | void;
   foulInPlace(victimId: string): boolean | void;
   gaze(): boolean | void;
+  /** Owner 11-18: the store's walk-then-gaze plan over the drawn route. */
+  gazeFromRoute(victimId: string, route: Square[]): boolean | void;
   /** The stage holder's result: a reason key when it sent nothing, else null. */
   stage(): TouchCommitReason | null;
 }
@@ -97,6 +101,8 @@ export function touchCommitPlan(kind: TouchPreviewKind, s: TouchCommitSnapshot, 
     case 'foul':
       if (!s.foulVictim) return refuse(TOUCH_COMMIT_REASONS.notAvailable);
       if (route && s.routeEndsAdjacentToFoulVictim) return sent('foul-from-route', send.foulFromRoute(s.foulVictim, route));
+      // Owner 11-19: a drawn route that does not reach the victim is walked as drawn; the foul waits for adjacency.
+      if (route) return sent('walk-toward-foul-victim', send.walk(route));
       if (!route && s.foulerAdjacentToVictim) return sent('foul-in-place', send.foulInPlace(s.foulVictim));
       // Never a contact walk computed at Confirm: the walk to the victim must be drawn first.
       return refuse(TOUCH_COMMIT_REASONS.moveNextTo, { p0: s.foulVictimName ?? '' });
@@ -119,10 +125,13 @@ export function touchCommitPlan(kind: TouchPreviewKind, s: TouchCommitSnapshot, 
       if (s.throwInRangeFromHere === false) return refuse(TOUCH_COMMIT_REASONS.notAvailable);
       return sent(`${s.throwKind}-from-here`, send.throwFromHere(s.throwKind, s.throwSquare));
     case 'gaze':
-      // Round-6 finding 2: a drawn route is walked first (the victim stays armed; the gaze is its own Confirm on arrival),
-      // never dropped for a gaze from here. A route that does not end next to the victim is refused.
+      // Round-6 finding 2: a drawn route is walked first, never dropped for a gaze from here. A route that does not end
+      // next to the victim is refused. Owner 11-18: the one Confirm walks the drawn route and then gazes (the store's
+      // walk-then-gaze plan); the gaze is no longer a second Confirm on arrival.
       if (route) {
-        if (!s.routeEndsAdjacentToGazeVictim) return refuse(TOUCH_COMMIT_REASONS.moveNextTo, { p0: s.gazeVictimName ?? '' });
+        // Owner 11-19: a drawn route that does not reach the victim is walked as drawn; the gaze waits for adjacency.
+        if (!s.routeEndsAdjacentToGazeVictim) return sent('walk-toward-gaze-victim', send.walk(route));
+        if (s.gazeVictim) return sent('gaze-walk-then-gaze', send.gazeFromRoute(s.gazeVictim, route));
         return sent('gaze-approach-walk', send.walk(route));
       }
       if (s.gazeConfirmable) return sent('gaze', send.gaze());

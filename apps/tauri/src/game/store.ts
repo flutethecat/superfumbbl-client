@@ -16560,7 +16560,9 @@ export function throwMateCommand(
 }
 
 // Planner advances from server model echoes, sends one square at a time, and fires the terminal action only after required outcomes resolve.
-type PlanActKind = 'pass' | 'foul' | 'handOver' | 'throwTeamMate' | 'kickTeamMate' | 'block' | 'blitz' | 'move' | 'blitzWalk';
+// 'gaze' (owner 11-18): walk the planned route under the already-declared gazeMove, then the one CLIENT_GAZE at the
+// armed victim (plannerStart / plannerFireAct / plannedGazeRefusal).
+type PlanActKind = 'pass' | 'foul' | 'handOver' | 'throwTeamMate' | 'kickTeamMate' | 'block' | 'blitz' | 'move' | 'blitzWalk' | 'gaze';
 interface PlannerPlan {
   seq: number;
   playerId: string;
@@ -17287,6 +17289,10 @@ function clearAnsweredDialogInstance(): void {
 function latchAnsweredDialogInstance(key: string | null, instance: object | null = null): void {
   answeredDialogInstanceKey = key;
   answeredDialogInstanceRef = key ? instance : null;
+  // Review 11-18: the coach's answer to a dialog that paused a plan opens a FRESH bounded response window. The pause had
+  // exempted the plan from the watchdog; an answer near the old deadline must not retire a healthy plan before the
+  // server can reply. Still fail-open: silence after the answer retires the plan as before.
+  if (key && plannerPlan) plannerArmAbort();
 }
 function dialogAlreadyAnswered(): boolean {
   if (!answeredDialogInstanceKey) return false;
@@ -17463,6 +17469,17 @@ function plannerStart(input: {
       return false;
     }
   }
+  // Owner 11-18: the walk-then-gaze plan rides an activation that is ALREADY a live gaze move (gazeMove echoed, the
+  // victim armed by the coach's click) and only walks; it never declares. Without a walk it is not a plan at all (the
+  // coach's confirm gazes from here). A consumed gaze (`gaze`) cannot walk without giving the gaze up, so no plan.
+  if (actKind === 'gaze') {
+    const liveGazeMove = plannerActingId() === playerId && plannerActingAction() === 'gazeMove' && gameStore.hasLiveGazeIntent();
+    if ((input.route ?? []).length === 0 || !input.targetPlayerId || !liveGazeMove
+        || gameStore.armedGazeVictimId() !== input.targetPlayerId) {
+      log('system', `ignored: ${playerName(game.value, playerId)}'s walk-then-gaze could not start (no live gaze move with that victim armed)`);
+      return false;
+    }
+  }
   // Owner 11-03 (Take Root): a pinned player (rooted / chomped; upstream StepMove refuses it and the server offers no
   // square) has no walk. A plan that would move it is refused quietly, and so is every Block / Blitz plan (Sol r1 P1):
   // a pinned blitzer's block is never sent by a plan - it stays on the explicit readied click / chooser path. A
@@ -17478,8 +17495,8 @@ function plannerStart(input: {
   const moving = route.length > 0;
   // TTM/KTM/blitz are ALWAYS declared as their moving variant via the earlier click/menu, so they use it regardless of route length; pass/foul/hand-off switch to the plain (standing) variant when there's no walk.
   let declare: string = moving
-    ? ({ pass: 'passMove', foul: 'foulMove', handOver: 'handOverMove', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove' } as const)[actKind]
-    : ({ pass: 'pass', foul: 'foul', handOver: 'handOver', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove' } as const)[actKind];
+    ? ({ pass: 'passMove', foul: 'foulMove', handOver: 'handOverMove', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove', gaze: 'gazeMove' } as const)[actKind]
+    : ({ pass: 'pass', foul: 'foul', handOver: 'handOver', throwTeamMate: 'throwTeamMateMove', kickTeamMate: 'kickTeamMateMove', block: 'block', blitz: 'blitzMove', move: 'move', blitzWalk: 'blitzMove', gaze: 'gazeMove' } as const)[actKind];
   // P0 10-18 (nerdkingdan g1954531 #2442-2448, chainsaw foul "didn't work"): a foul plan with no walk left must NOT
   // re-declare the standing `foul` while the server already has this player acting under `foulMove`. Upstream
   // StepInitMoving accepts CLIENT_FOUL ONLY under FOUL_MOVE (bb2025/move/StepInitMoving.java:192-197; pass and
@@ -17636,11 +17653,59 @@ function plannedHandOffRefusal(p: NonNullable<typeof plannerPlan>): string | nul
   return null;
 }
 
+/** Owner 11-18: why a walk-then-gaze plan must NOT gaze at the end of its walk (null = gaze). The rest of the send-time
+ *  check (the victim still standing with tackle zones, adjacent, the skill unused, the gazer active) is
+ *  confirmGazeTarget's own gate, which refuses with its existing notice. */
+function plannedGazeRefusal(p: NonNullable<typeof plannerPlan>): string | null {
+  const at = plannerCoord(p.playerId);
+  const dest = p.route[p.route.length - 1];
+  if (!at || !dest || at[0] !== dest[0] || at[1] !== dest[1]) return 'the gazer did not reach the planned square';
+  if (gameStore.armedGazeVictimId() !== p.targetPlayerId) return 'the nominated victim has changed';
+  return null;
+}
+
+/** Review 11-18: true only while plannerFireAct makes the plan's own terminal call, after its arrival and resolution
+ *  checks. While a walk-to-foul / walk-then-gaze plan is live, every other direct foul / gaze send is refused (a
+ *  repeated confirm must not act before the walk ends). The latch is the plan itself: it releases when the plan
+ *  completes, is cancelled, retires or its watchdog expires. */
+let plannerTerminalSend = false;
+function plannerOwnsAct(kind: 'foul' | 'gaze'): boolean {
+  return plannerPlan?.actKind === kind && !plannerTerminalSend;
+}
+function asPlannerTerminal<T>(send: () => T): T {
+  plannerTerminalSend = true;
+  try { return send(); } finally { plannerTerminalSend = false; }
+}
+
+/** Review 11-18: the plan in its terminal leg no longer owns the activation (another player, another action, or none)
+ *  or its player stands off the route's final square. Retires the plan (quietly after a failed roll / gate, as the
+ *  walk does) and returns true; nothing is sent. */
+function plannerTerminalOwnershipLost(p: NonNullable<typeof plannerPlan>): boolean {
+  const g = game.value;
+  let reason: string | null = null;
+  if (!g || plannerActingId() !== p.playerId) reason = 'lost the activation before the act';
+  else if (plannerActingAction() !== p.declare) reason = 'the action changed before the act';
+  else if (p.route.length > 0) {
+    const at = plannerCoord(p.playerId);
+    const dest = p.route[p.route.length - 1]!;
+    if (!at || at[0] !== dest[0] || at[1] !== dest[1]) reason = 'the player is not on the planned square';
+  }
+  if (!reason) return false;
+  if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`);
+  else if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
+  else plannerFlush(reason);
+  return true;
+}
+
 /** Send the trailing act command (leg 3) and retire the plan — the derived act state / server resolution is the ack; we never hang on full resolution (opponent-side interception resolves independently). */
 function plannerFireAct() {
   const p = plannerPlan; if (!p) return;
   // #99-b: a WALK-ONLY plan (pure Move / bare blitz Walk) has NO act leg — the per-square walk IS the whole plan; once the final square settles, just retire. (o66Move/o66BlitzMove multi-square delegate here purely to get #76's per-square drip so the server rolls each TZ-exit dodge/GFI — a batched clientMove skips them = the #99 bug.)
   if (p.actKind === 'move' || p.actKind === 'blitzWalk') { plannerSet(null); plannerClearAbort(); return; }
+  // Review 11-18: the act is the plan's player's, on the plan's own activation, from the plan's final square. Checked on
+  // every terminal wake (also the chooser commits that call here): an activation lost or handed to another player, or
+  // a player off the planned square, retires the plan - nothing is ever sent for whoever is acting now.
+  if (!p.terminalSent && plannerTerminalOwnershipLost(p)) return;
   if (p.actKind === 'pass' && p.targetCoordinate) {
     if (!p.terminalSent) {
       // Owner 10-13: a walk-then-pass plan throws from where the walk ENDED. Re-check the throw against the server's
@@ -17668,8 +17733,24 @@ function plannerFireAct() {
     // S42: carry the remembered Foul / Chainsaw choice; a carrier with none is asked (plan stays 'acting').
     const foulFlag = foulTerminalChoice(game.value!, p.playerId);
     if (foulFlag === 'ask') { holdFoulChoice(p.playerId, p.targetPlayerId); return; }
-    p.terminalSent = gameStore.sendFoulTarget(p.targetPlayerId, foulFlag);
+    const foulTarget = p.targetPlayerId;
+    p.terminalSent = asPlannerTerminal(() => gameStore.sendFoulTarget(foulTarget, foulFlag, p.playerId));
     if (!p.terminalSent) return;
+  }
+  else if (p.actKind === 'gaze' && p.targetPlayerId) {
+    // Owner 11-18: the walk ended on the planned square with its rolls resolved and no dialog up (plannerAdvance's
+    // pause); the one CLIENT_GAZE the coach confirmed goes out through the ordinary confirm, never anything else.
+    const refusal = plannedGazeRefusal(p);
+    if (refusal) {
+      const text = $t('store.gameStore.gazeNotConfirmedReason', { reason: refusal });
+      log('system', `plan: GAZE ${playerName(game.value!, p.playerId)} retired at the destination (${refusal})`);
+      state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+      plannerSet(null); plannerClearAbort();
+      return;
+    }
+    // confirmGazeTarget retires this plan itself; a refused gaze is noticed there, sends nothing, and the plan ends.
+    const gazeTarget = p.targetPlayerId;
+    p.terminalSent = asPlannerTerminal(() => gameStore.confirmGazeTarget(gazeTarget));
   }
   else if (p.actKind === 'handOver' && p.targetPlayerId) {
     // Owner 10-15: a walk-then-hand-off plan hands off from where the walk ENDED. Re-check it against the server's
@@ -17769,6 +17850,9 @@ function plannerAdvance() {
     plannerRetireQuietly(`${playerName(g, p.playerId)} is rooted to the spot`);
     return;
   }
+  // Review 11-18: a plan waiting in its terminal leg releases on the frame that ends or hands over its activation,
+  // before (not after) any dialog pause.
+  if (p.phase === 'acting' && !p.terminalSent && plannerTerminalOwnershipLost(p)) return;
   // ---- PAUSE (a decision surface is up) ----
   if (plannerClientPromptHold) return; // Astra 10-10: the coach is being asked whether to end; the wake is the prompt closing
   if (plannerPromptPending()) return;
@@ -17828,9 +17912,11 @@ function plannerAdvance() {
           const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
             ? gameStore.o66BlitzMove(p.playerId, first)
             : gameStore.o66Move(p.playerId, first)));
-          // A refused send has no server echo to wait for. Keep the declaring index intact and retry only when
-          // another authoritative frame calls plannerAdvance; never manufacture an 8s phantom-response timeout.
-          if (!accepted) { plannerClearAbort(); return; }
+          // A refused send has no server echo to wait for. Keep the declaring index intact and retry when another
+          // authoritative frame calls plannerAdvance. Review 11-18 (latches fail open): the abort-only watchdog stays
+          // armed, bounded by the silence window and the cap since the plan's last own send, so a refused send with no
+          // later frame retires the plan instead of leaving it (and "a move is already in progress") forever.
+          if (!accepted) { plannerArmAbort(true); return; }
           p.phase = 'moving';
           p.sentIdx = 0;
           p.sentOfferRevisions[0] = firstOffer.revision;
@@ -17945,7 +18031,7 @@ function plannerAdvance() {
           if (!accepted) {
             if (wasRescued) p.retryResolvedIdx = p.sentIdx;
             if (lash) p.spentMove = spent;
-            plannerClearAbort();
+            plannerArmAbort(true); // review 11-18: bounded, abort-only (see the declaring branch)
             return;
           }
           p.sentOfferRevisions[p.sentIdx] = retryOffer.revision;
@@ -17976,7 +18062,7 @@ function plannerAdvance() {
           : gameStore.o66Move(p.playerId, next)));
         // Commit the sent index only after the command reached transport. A later model frame retries the same
         // square after a refusal; once accepted, the new index makes duplicate frames idempotent as before.
-        if (!accepted) { plannerClearAbort(); return; }
+        if (!accepted) { plannerArmAbort(true); return; } // review 11-18: bounded, abort-only (see the declaring branch)
         p.sentIdx = nextIdx;
         p.sentOfferRevisions[nextIdx] = nextOffer.revision;
         plannerSentCommand(p);
@@ -18442,6 +18528,14 @@ export function installGazeIntentTestHarness(
   confirmArmed(victimId: string): boolean;
   confirmTarget(victimId: string): boolean;
   move(playerId: string, route: [number, number][]): void;
+  /** Owner 11-18: the production walk-then-gaze plan (gameStore.startPlan actKind 'gaze'). */
+  startGazePlan(playerId: string, route: [number, number][], victimId: string): boolean;
+  /** A server echo of a step: the player stands on `square` and `moveSquares` is the fresh offer; then the planner and
+   *  the gaze intent lifecycle run over it, as an applied frame does. */
+  echoStep(playerId: string, square: [number, number], moveSquares: [number, number][]): void;
+  /** Re-run the planner over the model as it stands (a later applied frame). */
+  advance(): void;
+  planActive(): boolean;
   setCoordinate(playerId: string, square: [number, number]): void;
   movementOffered(): boolean;
   cancelConfirm(): void;
@@ -18491,6 +18585,28 @@ export function installGazeIntentTestHarness(
     confirmArmed: (victimId) => gameStore.canConfirmGazeTarget(victimId),
     confirmTarget: (victimId) => gameStore.confirmGazeTarget(victimId),
     move: (playerId, route) => gameStore.o66Move(playerId, route),
+    startGazePlan: (playerId, route, victimId) => gameStore.startPlan({ playerId, actKind: 'gaze', route, targetPlayerId: victimId }),
+    echoStep(playerId, square, moveSquares) {
+      const data = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
+      if (data) data.playerCoordinate = [square[0], square[1]];
+      if (game.value) {
+        const priorSquares = game.value.fieldModel.moveSquareArray ?? [];
+        const nextSquares = moveSquares.map((entry) => ({ coordinate: [entry[0], entry[1]] }));
+        game.value.fieldModel.moveSquareArray = nextSquares as GameJson['fieldModel']['moveSquareArray'];
+        observeMoveOfferGeneration({
+          modelChangeList: {
+            modelChangeArray: [
+              ...priorSquares.map((entry) => ({ modelChangeId: 'fieldModelRemoveMoveSquare', modelChangeValue: entry })),
+              ...nextSquares.map((entry) => ({ modelChangeId: 'fieldModelAddMoveSquare', modelChangeValue: entry })),
+            ],
+          },
+        });
+      }
+      gazeIntentOnModelApplied();
+      plannerAdvance();
+    },
+    advance() { gazeIntentOnModelApplied(); plannerAdvance(); },
+    planActive: () => plannerActive(),
     setCoordinate(playerId, square) {
       const data = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
       if (data) data.playerCoordinate = [square[0], square[1]];
@@ -32930,6 +33046,7 @@ export const gameStore = {
   confirmGazeTarget(victimId: string): boolean {
     const intent = state.gazeIntent;
     const g = game.value;
+    if (plannerOwnsAct('gaze')) { log('system', 'ignored: the walk-then-gaze plan gazes once its walk has ended'); return false; } // review 11-18
     if (!gameStore.canConfirmGazeTarget(victimId)) {
       const reason = !intent || !g ? 'the Gaze activation is no longer active'
         : gameStore.armedGazeVictimId() !== victimId ? 'the nominated victim has changed'
@@ -34376,8 +34493,13 @@ export const gameStore = {
   /** From server-confirmed FOUL/HAND_OVER/PASS states, emit only the terminal target command. */
   /** `usingChainsawChoice` is the coach's Foul (false) / Chainsaw (true) pick (S42); a caller that passes none (Classic,
    *  the legacy paths) keeps the old rule: the flag is whether the fouler carries Chainsaw. */
-  sendFoulTarget(defenderId: string, usingChainsawChoice?: boolean): boolean {
+  sendFoulTarget(defenderId: string, usingChainsawChoice?: boolean, expectedActingId?: string): boolean {
     if (!play.active || !game.value) return false;
+    // Review 11-18: a plan's foul is for the plan's player only, never for whoever is acting now.
+    if (expectedActingId && String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') !== expectedActingId) {
+      log('system', 'ignored: the planned foul belongs to a player who is no longer acting'); return false;
+    }
+    if (plannerOwnsAct('foul')) { log('system', 'ignored: the walk-to-foul plan fouls once its walk has ended'); return false; } // review 11-18
     if (!isMyTurn(game.value)) { log('system', 'ignored: not your turn'); return false; }
     const ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(game.value) === game.value.teamHome };
     if (deriveClientState(game.value, ctx) !== 'FOUL') return false;
@@ -34404,6 +34526,7 @@ export const gameStore = {
    *  Chainsaw row, or (no choice held: reconnect, declared by another path) opens the chooser and sends nothing. */
   sendFoulTargetOrChoose(defenderId: string): boolean {
     if (!play.active || !game.value) return false;
+    if (plannerOwnsAct('foul')) { log('system', 'ignored: the walk-to-foul plan fouls once its walk has ended'); return false; } // review 11-18
     const acting = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     const flag = acting ? foulTerminalChoice(game.value, acting) : undefined;
     if (flag === 'ask') { holdFoulChoice(acting, defenderId); return false; }

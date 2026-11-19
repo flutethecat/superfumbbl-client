@@ -1,5 +1,6 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { exertsTacklezone, FLAG_ACTIVE, playerSideIsHome } from './availableActions';
+import { plannedContactStep, routeEndsBeside, type ContactReachResult } from './leftClickBlitzPlanner';
 
 export type GazeMovementState = 'GAZE_MOVE' | 'GAZE';
 
@@ -24,6 +25,8 @@ export function isGazeMovementState(state: string): state is GazeMovementState {
  *  - 'approach' a legal victim that is not adjacent: the view plots the walk to a square next to it;
  *  - 'refused'  adjacent but the send-time check fails (see gazeConfirmRefusalReason);
  *  - 'ordinary' not a gaze victim at all (own side, off pitch, no tackle zones): the click keeps its usual meaning.
+ * Owner 11-18: with a route laid out (`routeLaidOut`), the route wins over a gaze from here - an adjacent, otherwise
+ * gazeable victim is an 'approach' too (walk the planned route, then gaze), unless the walk is spent (gazeWalkSpent).
  */
 export type GazeVictimClick = 'confirm' | 'arm' | 'approach' | 'refused' | 'ordinary';
 
@@ -36,7 +39,7 @@ export function gazeWalkSpent(game: GameJson): boolean {
   return String((game.actingPlayer as { playerAction?: string | null } | null | undefined)?.playerAction ?? '') === 'gaze';
 }
 
-export function gazeVictimClick(game: GameJson, intent: GazeIntent | null, clickedId: string): GazeVictimClick {
+export function gazeVictimClick(game: GameJson, intent: GazeIntent | null, clickedId: string, routeLaidOut = false): GazeVictimClick {
   if (!intent || intent.phase !== 'active') return 'ordinary';
   if (!canNominateGazeVictim(game, intent.actingPlayerId, clickedId)) return 'ordinary';
   // BB2020: the server already holds the declared target; any other opponent is not a gaze victim this activation.
@@ -50,6 +53,7 @@ export function gazeVictimClick(game: GameJson, intent: GazeIntent | null, click
   ) === 1;
   if (!adjacent) return gazeWalkSpent(game) ? 'refused' : 'approach';
   if (gazeConfirmRefusalReason(game, { ...intent, victimId: clickedId }) !== null) return 'refused';
+  if (routeLaidOut && !gazeWalkSpent(game)) return 'approach';
   return (intent.victimId ?? intent.pendingVictimId) === clickedId ? 'confirm' : 'arm';
 }
 
@@ -69,17 +73,19 @@ export function gazeTargetMarkerId(
 
 type GazeSquare = [number, number];
 /** The shared walk-to-contact plot (renderer `o66ContactReach`), passed in so this module stays renderer-free. */
-export type GazeContactReach = { status: string; path: GazeSquare[] } | null;
+export type GazeContactReach = ContactReachResult;
 export type GazeApproachStep =
   | { kind: 'plot'; route: GazeSquare[] }
   | { kind: 'walk'; route: GazeSquare[] }
   | { kind: 'unreachable'; surrounded: boolean };
 
 /**
- * Owner 10-08: a click on a legal gaze victim that is NOT adjacent. Click 1 plots the walk to a square next to it
- * (the existing stance picker decides the square - this only reads its answer); click 2 on the SAME victim walks the
- * plotted route, honouring a route the coach re-plotted by hand as long as it still ends next to the victim. The walk
- * is an ordinary gaze move: nothing here sends, and the gaze itself still needs its own click once adjacent.
+ * Owner 10-08 / 11-18: a click on a legal gaze victim the gazer walks to (not adjacent, or adjacent with a route laid
+ * out). Click 1 arms the victim and picks the walk the Blitz way (plannedContactStep): a planned route that ends next
+ * to the victim is kept unchanged, one that stops short is extended from its last square, and only with no planned
+ * route is the stance picker's walk to contact plotted. Click 2 on the SAME victim, with the stored route still ending
+ * next to it, is 'walk': the view sends exactly that route as the walk-then-gaze plan (nothing is recomputed). Nothing
+ * here sends.
  */
 export function gazeApproachClick(input: {
   victimId: string;
@@ -87,18 +93,24 @@ export function gazeApproachClick(input: {
   armedVictimId: string | null;
   plannedRoute: GazeSquare[] | null;
   contactReach: (victimSquare: GazeSquare) => GazeContactReach;
+  /** Extend the planned route from its last square (renderer `o66ExtendPath`); absent = no extension possible. */
+  extendWaypoint?: (route: GazeSquare[], destination: GazeSquare) => GazeSquare[] | null;
+  routeCost?: (route: GazeSquare[]) => number;
 }): GazeApproachStep {
   const { victimSquare, plannedRoute } = input;
   if (!victimSquare) return { kind: 'unreachable', surrounded: false };
-  const last = plannedRoute && plannedRoute.length > 0 ? plannedRoute[plannedRoute.length - 1]! : null;
-  const endsNextToVictim = !!last
-    && Math.max(Math.abs(last[0] - victimSquare[0]), Math.abs(last[1] - victimSquare[1])) === 1;
-  if (input.armedVictimId === input.victimId && endsNextToVictim) return { kind: 'walk', route: plannedRoute! };
-  const reach = input.contactReach(victimSquare);
-  if (!reach || reach.status !== 'PATH' || reach.path.length === 0) {
-    return { kind: 'unreachable', surrounded: reach?.status === 'SURROUNDED' };
-  }
-  return { kind: 'plot', route: reach.path };
+  // Owner 11-19: the armed victim with the stored route still beside it is the confirm; otherwise the click is a fresh
+  // nomination (the kept route extended append-only to contact below).
+  if (input.armedVictimId === input.victimId && routeEndsBeside(plannedRoute, victimSquare)) return { kind: 'walk', route: plannedRoute! };
+  const step = plannedContactStep({
+    target: victimSquare,
+    waypointRoute: plannedRoute ?? [],
+    contactReach: () => input.contactReach(victimSquare),
+    extendWaypoint: input.extendWaypoint ?? (() => null),
+    routeCost: input.routeCost,
+  });
+  if (step.kind === 'unreachable') return step;
+  return { kind: 'plot', route: step.route };
 }
 
 /**

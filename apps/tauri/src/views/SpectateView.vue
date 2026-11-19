@@ -224,7 +224,7 @@ import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectio
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
 import { passRangeSquares, passTargetAllowed, handOffCatcherAllowed, PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE, ttmRangeSquares, throwRollSurface, adjacentStandingEnemyIds, handOffReceiverIdsFrom, handOffCatchTargetAt, normSquare, highKickNomineeIds, serverMoveSquares, movesRandomly, BLOCK_KIND_LABEL, blockAlternativeOffers, blockAlternativeArmourTarget, blockAttackPreview, chompAvailable, chompAvailableAgainst, pickupTargetAtBall, foulArmourTargetAt, passDestinationRollPreview, canBeBlocked, jumpVerbForPlayer, boundingLeapOffer, kegTargetIds, skillTargetMarkIds, vomitLatchAfterSend, blastinPickLatched, vomitMarksHidden, vomitWatchSource, availableActions, BIG_GUY_ACTIVATE_RULE_ID, hasWideRailActivationRule, zoatBlitzGazeSendable, furiousOutburstCoordinatePrompt, allYouCanEatSecondBombPrompt, caughtBombThrowPrompt, type CoachAction, type BlockKind, type WideRailActivationOption } from '../game/logic/availableActions';
 import { wideRailPreActionRule, type WideRailPreActionRuleId } from '../game/logic/wideRailPreAction';
-import { leftClickBlitzContactRoute } from '../game/logic/leftClickBlitzPlanner';
+import { leftClickBlitzContactRoute, plannedContactStep, routeEndsBeside, type PlannedContactStep } from '../game/logic/leftClickBlitzPlanner';
 import { createMoveClickGate } from '../game/logic/moveClickGate';
 import { createActionDiceLifecycle } from '../game/logic/actionDiceLifecycle';
 import { createActionDiceQueueDrain } from '../game/logic/actionDiceQueueDrain';
@@ -240,7 +240,7 @@ import { prettySkillName } from '../game/logic/prettySkillName';
 import { blastinStaleRerollDialog, turnSideIsHome } from '../game/blastinSecondBeat';
 import { reactiveSkillDecisionText, reactiveSkillUsingText } from '../game/logic/coachDecisionStatus';
 import { playerSkillCategoryClass } from '../game/skillCategory';
-import { gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, isGazeMovementState } from '../game/logic/gazeMovementState';
+import { canNominateGazeVictim, gazeApproachClick, gazeConfirmRefusalReason, gazeTargetMarkerId, gazeVictimClick, gazeWalkSpent, isGazeMovementState } from '../game/logic/gazeMovementState';
 import { installGazeVictimPresentation } from '../game/gazeVictimPresentation';
 import { buildInducementChips, hideZeroRerollChips, cheeringFansChip, CHEERING_FANS_CHIP_ICON } from '../game/logic/coachPanelChips';
 import { sppEarnedThisGame } from '../game/logic/sppEarned';
@@ -8117,6 +8117,140 @@ function previewLeftClickBlitzRoute(actingId: string, targetId: string): [number
     routeCost: (route) => renderer?.o66RouteRollCost(actingId, route) ?? 0, // owner 10-03: rushes before dodges
   })?.route ?? null;
 }
+/** Owner 11-18 ("a planned route is prioritized and the path is not replanned"): the Foul / Hypnotic Gaze walk to
+ *  `targetSq`, picked the Blitz way over the coach's planned route (plannedContactStep): kept when it ends beside the
+ *  target, extended from its last square when it stops short, the stance picker's direct walk only when nothing is
+ *  planned. No square is held back for a block. */
+function plannedContactRouteTo(actingId: string, targetSq: [number, number] | null): PlannedContactStep {
+  if (!targetSq || !renderer) return { kind: 'unreachable', surrounded: false };
+  return plannedContactStep({
+    target: targetSq,
+    waypointRoute: o66PendingMove.value?.route ?? [],
+    contactReach: () => renderer?.o66ContactReach(actingId, targetSq) ?? null,
+    extendWaypoint: (route, destination) => renderer?.o66ExtendPath(actingId, route, destination, { appendOnly: true }) ?? null, // never trims the route
+    routeCost: (route) => renderer?.o66RouteRollCost(actingId, route) ?? 0, // owner 10-03: rushes before dodges
+  });
+}
+/** Owner 11-18: the chosen walk becomes THE planned route - the one drawn and the one every confirm sends. Touch mode
+ *  draws it from its plan (touchPlan), never here. */
+function storePlannedContactRoute(actingId: string, route: [number, number][]) {
+  o66PendingMove.value = { dest: route[route.length - 1]!, route };
+  if (!touchModeActive.value) setO66PathFromOrigin(playerSquareById(actingId), route, actingId);
+}
+/** Owner 11-18 (decision 1): a route the coach has laid out wins over acting from the current square. FUMBBL Controls
+ *  keeps upstream's click (an adjacent victim acts at once; it never plots routes for these). */
+function plannedRouteWins(): boolean {
+  return !fumbblControls() && (o66PendingMove.value?.route.length ?? 0) > 0;
+}
+/** Owner 11-18: nominate a down foul victim the fouler walks to. The walk is picked over the planned route, stored and
+ *  drawn. An unreachable victim (or a planned route that cannot be extended to it) is refused with the reason and the
+ *  planned route is kept. Nothing is sent. */
+function nominateFoulVictim(foulActing: string, victimId: string): boolean {
+  const vsq = playerSquareById(victimId);
+  const here = playerSquareById(foulActing);
+  if ((o66PendingMove.value?.route.length ?? 0) === 0 && here && routeEndsBeside([here], vsq)) {
+    o66PendingFoul.value = victimId; // already beside the victim and nothing planned: no walk to store
+    return true;
+  }
+  const step = plannedContactRouteTo(foulActing, vsq);
+  if (step.kind === 'unreachable') {
+    const p = vsq ? renderer?.squareToCanvas(vsq) : null;
+    showToast(step.surrounded ? $t('hud.text.canTFoulThe') : $t('hud.text.canTFoulToo'), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+    o66PendingFoul.value = null;
+    return false;
+  }
+  o66PendingFoul.value = victimId;
+  storePlannedContactRoute(foulActing, step.route);
+  return true;
+}
+/** Review 11-18: a walk-then-act plan of this kind owns the action (from its confirm until it completes, is cancelled,
+ *  retires or its watchdog expires - the store's plan IS the latch, so it fails open with the plan). A repeated target
+ *  click / Confirm / Space / touch Confirm is consumed meanwhile; the store refuses the direct send too. */
+function planOwnsAct(kind: 'foul' | 'gaze'): boolean {
+  return gameStore.activePlanIdentity()?.actKind === kind;
+}
+/** Review 11-18 (Confirm validates only): the stored route no longer ends next to the target. Refused with the touch
+ *  rail's notice; the stored route is left exactly as it is and nothing is computed. */
+function refuseRouteNotBeside(targetId: string): void {
+  const g = gameStore.game.value;
+  const roster = g ? [...g.teamHome.playerArray, ...g.teamAway.playerArray] as { playerId: string; playerName?: string }[] : [];
+  const sq = playerSquareById(targetId);
+  const p = sq ? renderer?.squareToCanvas(sq) : null;
+  showToast($t('hud.touch.moveNextToFirst', { p0: roster.find((x) => x.playerId === targetId)?.playerName ?? '' }), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+}
+/** Owner 11-18: send the nominated foul over the STORED route (the one drawn): walk-then-foul when it ends beside the
+ *  victim; `inPlace` when no route is stored and the victim is already adjacent. Owner 11-19: a stored route that does
+ *  not end beside the victim (shortened, re-plotted elsewhere, or the victim moved) is sent by Confirm / Space as a PLAIN
+ *  walk - exactly the drawn route, nothing recomputed, no foul - and the victim stays nominated ("the foul waits for
+ *  adjacency"). A click on the nominated victim (`fromTargetClick`) is a fresh nomination instead: the kept route is
+ *  extended append-only to contact, stored and drawn, nothing sent. */
+function commitNominatedFoul(foulActing: string, victimId: string, inPlace: () => unknown, fromTargetClick: boolean): void {
+  if (planOwnsAct('foul')) return; // consumed: the walk-to-foul plan already owns the foul
+  const route = o66PendingMove.value?.route ?? [];
+  const vsq = playerSquareById(victimId);
+  const from = route.length > 0 ? route[route.length - 1]! : playerSquareById(foulActing); // no route: from here
+  const reaches = !!from && routeEndsBeside([from], vsq);
+  if (!reaches) {
+    if (fromTargetClick) { nominateFoulVictim(foulActing, victimId); return; } // a click on the victim plans (owner 11-19)
+    if (route.length === 0) { refuseRouteNotBeside(victimId); return; } // no route and not adjacent: unchanged
+    gameStore.o66Move(foulActing, route); // the drawn route as a plain walk; the victim stays nominated
+    o66PendingMove.value = null; renderer?.setO66Path([]);
+    return;
+  }
+  if (route.length > 0) gameStore.startPlan({ playerId: foulActing, actKind: 'foul', route, targetPlayerId: victimId });
+  else inPlace();
+  o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
+}
+/** Owner 11-18 (decision 2): the route laid out wins over a gaze from here, unless the gaze walk is spent (a consumed
+ *  gaze cannot walk without giving the gaze up). */
+function gazeRouteWins(g: GameJson): boolean {
+  return plannedRouteWins() && !gazeWalkSpent(g);
+}
+/** Owner 11-18: ONE confirm walks the stored route and then gazes at the armed victim (the store's walk-then-gaze plan).
+ *  Owner 11-19: a stored route that does not end beside the victim is sent as a PLAIN walk (exactly the drawn route,
+ *  nothing recomputed, no gaze) and the victim stays armed until the gazer stands beside it. If the plan cannot start,
+ *  the route is walked as before (the victim stays armed for the gaze on arrival). */
+function commitGazeFromRoute(gazeActing: string, victimId: string): void {
+  if (planOwnsAct('gaze')) return; // consumed: the walk-then-gaze plan already owns the gaze
+  const route = o66PendingMove.value?.route ?? [];
+  if (route.length === 0) return;
+  if (!routeEndsBeside(route, playerSquareById(victimId))) { // the gaze waits for adjacency
+    gameStore.o66Move(gazeActing, route);
+    o66PendingMove.value = null; renderer?.setO66Path([]);
+    return;
+  }
+  if (!gameStore.startPlan({ playerId: gazeActing, actKind: 'gaze', route, targetPlayerId: victimId })) gameStore.o66Move(gazeActing, route);
+  o66PendingMove.value = null; renderer?.setO66Path([]);
+}
+/** Owner 10-08 / 11-18: a gaze victim the gazer walks to. Click 1 arms it and stores + draws the walk picked over the
+ *  planned route; click 2 on the same armed victim with the stored route still ending beside it walks then gazes;
+ *  owner 11-19: otherwise the click is a fresh nomination (the kept route extended append-only to contact, nothing sent). */
+function nominateGazeApproach(gazeActing: string, victimId: string, armedVictimId: string | null): void {
+  const step = gazeApproachClick({
+    victimId,
+    victimSquare: playerSquareById(victimId),
+    armedVictimId,
+    plannedRoute: o66PendingMove.value?.route ?? null,
+    contactReach: (square) => renderer?.o66ContactReach(gazeActing, square) ?? null,
+    extendWaypoint: (route, destination) => renderer?.o66ExtendPath(gazeActing, route, destination, { appendOnly: true }) ?? null, // never trims the route
+    routeCost: (route) => renderer?.o66RouteRollCost(gazeActing, route) ?? 0,
+  });
+  if (step.kind === 'walk') {
+    if (!touchSecondTapCommits()) return; // touch mode: Confirm walks it
+    commitGazeFromRoute(gazeActing, victimId);
+    return;
+  }
+  if (step.kind === 'unreachable') {
+    const vsq = playerSquareById(victimId);
+    const p = vsq ? renderer?.squareToCanvas(vsq) : null;
+    showToast(step.surrounded ? $t('hud.text.canTGazeThe') : $t('hud.text.canTGazeToo'), p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
+    disarmGazeVictim(); // the planned route is kept
+    return;
+  }
+  if (!gameStore.armGazeTarget(victimId)) return;
+  o66PendingGaze.value = victimId;
+  storePlannedContactRoute(gazeActing, step.route);
+}
 function playerSquareById(pid: string): [number, number] | null {
   const g = gameStore.game.value;
   return g ? normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
@@ -11091,6 +11225,39 @@ function nominateOrConfirmPunt(g: Parameters<typeof o66SquareClick>[0], actingId
   }
 }
 
+/** Owner 11-19: a nomination kept through a plain walk ("the foul waits for adjacency") never outlives its activation:
+ *  it clears when another player acts, the action is no longer a Foul, the fouler is down, or the victim is no longer
+ *  a down opponent on the pitch (the activation-end, turn-change and explicit-cancel clears are the existing ones). The
+ *  armed gaze victim likewise clears when it can no longer be gazed (the store's intent already follows the actor). */
+const o66PendingFoulBy = ref<string | null>(null);
+watch(o66PendingFoul, (v) => {
+  const g = gameStore.game.value;
+  o66PendingFoulBy.value = v && g ? String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '') : null;
+}, { flush: 'sync' });
+/** True while the kept foul nomination can no longer be this activation's foul (read on every applied frame). */
+function pendingFoulStale(): boolean {
+  const g = gameStore.game.value;
+  const victim = o66PendingFoul.value;
+  if (!g || !victim) return false;
+  void gameStore.state.appliedFrameSeq; // re-read on every applied frame (the model is mutated in place)
+  const actor = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const data = (id: string) => (g.fieldModel.playerDataArray as { playerId: string; playerState?: number; playerCoordinate?: unknown }[]).find((d) => d.playerId === id);
+  const vbase = (data(victim)?.playerState ?? 0) & 0xff;
+  const abase = (data(actor)?.playerState ?? 0) & 0xff;
+  return !actor || actor !== o66PendingFoulBy.value || deriveClientState(g, o66Ctx()) !== 'FOUL'
+    || (abase !== 1 && abase !== 2) || (vbase !== 3 && vbase !== 4) || !normSquare(data(victim)?.playerCoordinate)
+    || gameStore.iControl(victim);
+}
+/** True while the armed gaze victim can no longer be gazed (no tackle zones, off the pitch, own side). */
+function armedGazeStale(): boolean {
+  const g = gameStore.game.value;
+  const armed = gameStore.armedGazeVictimId();
+  const gazer = gameStore.state.gazeIntent?.actingPlayerId ?? '';
+  void gameStore.state.appliedFrameSeq;
+  return !!g && !!armed && !!gazer && !canNominateGazeVictim(g, gazer, armed);
+}
+watch(pendingFoulStale, (stale) => { if (stale) o66PendingFoul.value = null; });
+watch(armedGazeStale, (stale) => { if (stale) disarmGazeVictim(); });
 /** Owner 10-08: drop the armed gaze victim; the gaze activation (and its move rail) stays live. */
 function disarmGazeVictim() {
   gameStore.clearGazeVictim();
@@ -11101,6 +11268,7 @@ watch(() => gameStore.armedGazeVictimId(), (victimId) => { o66PendingGaze.value 
 
 /** The single confirmation before the wire: sends the one CLIENT_GAZE for the armed victim (store re-checks legality). */
 function confirmArmedGaze(): boolean {
+  if (planOwnsAct('gaze')) return false; // review 11-18: the walk-then-gaze plan owns the gaze until it ends
   const victimId = gameStore.armedGazeVictimId();
   if (!victimId || !gameStore.confirmGazeTarget(victimId)) return false;
   o66PendingGaze.value = null;
@@ -11310,15 +11478,28 @@ function o66ConfirmPending(): boolean {
     o66PendingPunt.value = null;
     return true;
   }
-  // Owner 10-08: an armed victim that is gazeable from here confirms; otherwise Space keeps its move-rail meaning
-  // (a walk plotted toward a distant armed victim commits below, the victim stays armed for the arrival click).
-  if ((st === 'GAZE_MOVE' || st === 'GAZE') && canConfirmArmedGaze.value) {
-    confirmArmedGaze();
-    return true;
+  // Owner 10-08: an armed victim that is gazeable from here confirms; otherwise Space keeps its move-rail meaning.
+  // Owner 11-18: with a route laid out the route wins - an armed victim is walked to along the stored route and then
+  // gazed (one confirm, the store's walk-then-gaze plan), even when it is adjacent to the gazer's square now.
+  if (st === 'GAZE_MOVE' || st === 'GAZE') {
+    if (planOwnsAct('gaze')) return true; // review 11-18: a repeated Confirm while the walk-then-gaze plan runs is consumed
+    const armedVictim = gameStore.armedGazeVictimId();
+    if (armedVictim && gazeRouteWins(g)) { commitGazeFromRoute(actingId, armedVictim); return true; }
+    if (canConfirmArmedGaze.value) { confirmArmedGaze(); return true; }
   }
   // The Modern target was already confirmed; declaration/target acknowledgement now owns the route.
   // Consume repeat Confirm presses without degrading the stored Blitz into a plain Move send.
   if (o66PendingLeftClickBlitzPlan.value) return true;
+  // #48 (Space/confirm-bar parity, EX-1 foul): confirm a nominated FOUL exactly as the 2nd click on the victim does.
+  // Owner 11-18: BEFORE the plain-walk commit below, which used to send the stored route as a walk with no foul. The
+  // stored route (the one drawn) is sent as walk-then-foul, nothing recomputed; with no route and the victim adjacent
+  // the foul goes from here (#36: a doomed foul is never sent - the nomination already refused an unreachable victim).
+  if (st === 'FOUL' && planOwnsAct('foul')) return true; // review 11-18: a repeated Confirm while the walk-to-foul plan runs
+  if (o66PendingFoul.value) {
+    const victimId = o66PendingFoul.value;
+    commitNominatedFoul(actingId, victimId, () => gameStore.startPlan({ playerId: actingId, actKind: 'foul', route: [], targetPlayerId: victimId }), false);
+    return true;
+  }
   const pend = o66PendingMove.value;
   // Owner 10-13: a Pass armed over a plotted route confirms walk-then-pass, not the walk alone.
   if (st === 'PASS' && pend && actionModal.value?.mode === 'pass' && renderer?.hasArmedAction()) {
@@ -11373,30 +11554,6 @@ function o66ConfirmPending(): boolean {
       o66PendingPass.value = null;
       o66PendingThrowKind.value = null;
     }
-    return true;
-  }
-  // #48 (Space/confirm-bar parity, EX-1 foul): confirm a nominated FOUL — mirrors the 2nd-click EXECUTE in
-  // onPlayerClick (recompute the contact reach, then startPlan foul). Doomed reach → don't confirm (the click
-  // path teaches WHY); pass/hand-off are single-click, never reached here.
-  if (o66PendingFoul.value) {
-    const victimId = o66PendingFoul.value;
-    const vsq = normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
-      .find((d) => d.playerId === victimId)?.playerCoordinate);
-    // #217 (owner-fg 07-29): declared waypoints are the DEFAULT — if the coach plotted a walk (o66PendingMove) whose
-    // last square is ADJACENT to the victim, boot FROM that route (no auto-reach re-gate). Only when NO legal plotted
-    // path exists do we auto-route to contact, keeping the #36 backstop (doomed reach ⇒ don't waste the once-per-turn
-    // foul). Mirrors the onPlayerClick EXECUTE site + the #241 waypoint-honoring class.
-    const planned = o66PendingMove.value?.route ?? null;
-    const lastSq = planned && planned.length > 0 ? planned[planned.length - 1] : null;
-    const adjToVictim = !!(lastSq && vsq && Math.max(Math.abs(lastSq[0] - vsq[0]), Math.abs(lastSq[1] - vsq[1])) === 1);
-    if (adjToVictim) {
-      gameStore.startPlan({ playerId: actingId, actKind: 'foul', route: planned!, targetPlayerId: victimId });
-    } else {
-      const reach = vsq ? renderer?.o66ContactReach(actingId, vsq) : null;
-      if (reach && reach.status !== 'PATH') return false; // #36 backstop — only when no legal plotted path exists
-      gameStore.startPlan({ playerId: actingId, actKind: 'foul', route: reach?.path ?? [], targetPlayerId: victimId });
-    }
-    o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
     return true;
   }
   return false;
@@ -11567,6 +11724,20 @@ const canConfirmArmedGaze = computed(() => {
   const victimId = intent?.phase === 'active' ? (intent.victimId ?? intent.pendingVictimId) : null;
   return !!victimId && gameStore.canConfirmGazeTarget(victimId);
 });
+/** Owner 11-19: a stored route that does not end beside the nominated / armed victim - the confirm walks it only. */
+function confirmWalksTowardTarget(victimId: string | null): boolean {
+  void gameStore.state.appliedFrameSeq; // the victim may have moved (the model is updated in place)
+  const route = o66PendingMove.value?.route ?? [];
+  return !!victimId && route.length > 0 && !routeEndsBeside(route, playerSquareById(victimId));
+}
+/** Owner 11-18: an armed gaze victim over a route laid out - the confirm walks the route and then gazes. */
+const gazeRouteArmed = computed(() => {
+  void o66PendingMove.value;
+  const g = gameStore.game.value;
+  if (!g || !gameStore.armedGazeVictimId() || !gameStore.hasLiveGazeIntent()) return false;
+  const st = deriveClientState(g, o66Ctx());
+  return (st === 'GAZE_MOVE' || st === 'GAZE') && gazeRouteWins(g);
+});
 /** #48 (owner, confirm-bar parity): the bottom confirm-bar label for a nominated o66 PUNT, MOVE route or FOUL.
  *  Click/Space both confirm via o66ConfirmPending. Pass/hand-off stay single-click (EX-1) → no bar. */
 type O66PendingConfirmKind = 'punt' | 'foul' | 'gaze' | 'blitz' | 'move';
@@ -11574,7 +11745,9 @@ const o66PendingConfirmKind = computed<O66PendingConfirmKind | null>(() => {
   if (!settings.order66 || !gameStore.isPlaying.value || !gameStore.myTurn.value) return null;
   if (o66AggroStage.value || o66PendingLeftClickBlitzPlan.value) return null;
   if (o66PendingPunt.value) return 'punt';
-  if (o66PendingFoul.value) return 'foul';
+  // Owner 11-19: with a route that does not end beside the victim the confirm sends a plain walk - the bar says so.
+  if (o66PendingFoul.value) return confirmWalksTowardTarget(o66PendingFoul.value) ? 'move' : 'foul';
+  if (gazeRouteArmed.value) return confirmWalksTowardTarget(gameStore.armedGazeVictimId()) ? 'move' : 'gaze';
   if (canConfirmArmedGaze.value) return 'gaze';
   if (o66PendingMove.value) {
     const g = gameStore.game.value;
@@ -12032,9 +12205,8 @@ function touchRouteServes(k: TouchPreviewKind): boolean {
     const sq = id ? playerSquareById(id) : null;
     return !!sq && Math.max(Math.abs(sq[0] - end[0]), Math.abs(sq[1] - end[1])) === 1;
   };
-  if (k === 'foul') return nextTo(o66PendingFoul.value);
+  if (k === 'foul' || k === 'gaze') return true; // owner 11-19: the victim stays nominated through any re-plot
   if (k === 'aggro') return nextTo(o66AggroStage.value?.target);
-  if (k === 'gaze') return nextTo(gameStore.armedGazeVictimId());
   if (k === 'throw') return o66PendingThrowKind.value === 'pass' && !!o66PendingPass.value && passTargetInRangeFrom(g, end, o66PendingPass.value);
   return true;
 }
@@ -12159,6 +12331,7 @@ function touchCommitSnapshot(): TouchCommitSnapshot {
     gazeRefusal: g && gameStore.state.gazeIntent ? gazeConfirmRefusalReason(g, gameStore.state.gazeIntent) : null,
     routeEndsAdjacentToGazeVictim: adjacent(end, gameStore.armedGazeVictimId() ? playerSquareById(gameStore.armedGazeVictimId()!) : null),
     gazeVictimName: name(gameStore.armedGazeVictimId()),
+    gazeVictim: gameStore.armedGazeVictimId(),
   };
 }
 /** The existing senders each plan uses (the same calls the mouse second click / Confirm bar makes). */
@@ -12213,6 +12386,7 @@ const touchCommitSenders: TouchCommitSenders = {
   foulFromRoute: (victimId, route) => {
     const actingId = currentActingId();
     if (!actingId) return;
+    if (planOwnsAct('foul')) return; // consumed
     gameStore.startPlan({ playerId: actingId, actKind: 'foul', route, targetPlayerId: victimId });
     o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
   },
@@ -12220,11 +12394,21 @@ const touchCommitSenders: TouchCommitSenders = {
     // Round-4 finding 1: only when the fouler already stands next to the victim (no walk at all).
     const actingId = currentActingId();
     if (!actingId) return false;
+    if (planOwnsAct('foul')) return true; // consumed: nothing sent, the plan continues
     const ok = gameStore.startPlan({ playerId: actingId, actKind: 'foul', route: [], targetPlayerId: victimId });
     o66PendingFoul.value = null;
     return ok;
   },
-  gaze: () => { confirmArmedGaze(); },
+  gaze: () => { if (planOwnsAct('gaze')) return; confirmArmedGaze(); }, // consumed while the walk-then-gaze plan runs
+  gazeFromRoute: (victimId, route) => {
+    // Owner 11-18: walk the drawn route, then gaze (the store's walk-then-gaze plan); the route alone if it cannot start.
+    const actingId = currentActingId();
+    if (!actingId) return false;
+    if (planOwnsAct('gaze')) return true; // consumed: nothing sent, the plan continues
+    if (!gameStore.startPlan({ playerId: actingId, actKind: 'gaze', route, targetPlayerId: victimId })) gameStore.o66Move(actingId, route);
+    o66PendingMove.value = null; renderer?.setO66Path([]);
+    return true;
+  },
   stage: () => {
     // A stage whose binding or legality moved on, or whose send was refused (kept to retry), says so.
     const r = touchStages.confirm();
@@ -13266,7 +13450,10 @@ onMounted(async () => {
         }
         // A.5 (o66j #8): FOUL / HAND-OFF / PASS target clicks (the acting player already declared the moving
         // variant + optionally walked; these send the trailing command, state = ack).
-        if (ix.kind === 'foulTarget') {
+        // Owner 11-18 (decision 1): with a route laid out, the route wins - the adjacent victim is nominated over it by the
+        // FOUL block below (walk the planned route, then foul) instead of being fouled from here.
+        if (ix.kind === 'foulTarget' && planOwnsAct('foul')) return; // review 11-18: consumed while the walk-to-foul plan runs
+        if (ix.kind === 'foulTarget' && !plannedRouteWins()) {
           const foulVictim = ix.defenderId;
           if (touchStageTap({ kind: 'foulTarget', target: foulVictim, label: $t('hud.o66PendingConfirmLabel.confirmFoul'),
             revalidate: () => touchRouterStill(foulVictim, 'foulTarget'), commit: () => gameStore.sendFoulTargetOrChoose(foulVictim) })) { swallowBlockTargetSelection(foulVictim); return; } // preview; Confirm sends
@@ -13303,14 +13490,17 @@ onMounted(async () => {
         }
         // HYPNOTIC GAZE (owner 10-08, JLeav 1.0.135): no victim is named at declare. The victim is picked here, read
         // against the gazer's CURRENT square: an ADJACENT gazeable opponent arms on click 1 and sends the one
-        // CLIENT_GAZE on click 2 (the same two-click as Foul); a DISTANT one plots the walk to contact (click 1) and
-        // walks it (click 2) with the victim still armed, so one more click on arrival sends. Any other click disarms.
+        // CLIENT_GAZE on click 2 (the same two-click as Foul); a DISTANT one stores + draws the walk to contact (click 1)
+        // and click 2 walks it and then gazes (owner 11-18: the store's walk-then-gaze plan, one confirm). The walk is
+        // picked over the coach's planned route the Blitz way, and with a route laid out an adjacent victim is walked to
+        // as well (the route wins). Any other click disarms.
         {
           const gazeActing = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
           const gst = deriveClientState(g, o66Ctx());
           if ((gst === 'GAZE_MOVE' || gst === 'GAZE') && gazeActing && gameStore.iControl(gazeActing) && gameStore.hasLiveGazeIntent()) {
             if (endActConfirm.value) return;
-            const gazeClick = gazeVictimClick(g, gameStore.state.gazeIntent, playerId);
+            const gazeClick = gazeVictimClick(g, gameStore.state.gazeIntent, playerId, gazeRouteWins(g));
+            if (planOwnsAct('gaze') && gazeClick !== 'ordinary') return; // review 11-18: consumed while the plan walks
             if (gazeClick === 'confirm') {
               if (touchSecondTapCommits()) confirmArmedGaze(); // touch mode: only Confirm gazes
               return;
@@ -13334,43 +13524,7 @@ onMounted(async () => {
             }
             if (gazeClick === 'approach') {
               if (fumbblControls()) return; // fumbbl-gate:gaze-approach (a distant victim does nothing: walk adjacent first)
-              const step = gazeApproachClick({
-                victimId: playerId,
-                victimSquare: playerSquareById(playerId),
-                armedVictimId: gameStore.armedGazeVictimId(),
-                plannedRoute: o66PendingMove.value?.route ?? null,
-                contactReach: (square) => renderer?.o66ContactReach(gazeActing, square) ?? null,
-              });
-              if (step.kind === 'walk') {
-                if (!touchSecondTapCommits()) return; // touch mode: Confirm walks it
-                // 2nd click: walk the plotted route as an ordinary gaze move. Nothing gaze-specific is sent.
-                gameStore.o66Move(gazeActing, step.route);
-                o66PendingMove.value = null; renderer?.setO66Path([]);
-                return;
-              }
-              if (step.kind === 'unreachable') {
-                const vsq = playerSquareById(playerId);
-                const p = vsq ? renderer?.squareToCanvas(vsq) : null;
-                showToast(step.surrounded ? $t('hud.text.canTGazeThe') : $t('hud.text.canTGazeToo'),
-                  p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
-                disarmGazeVictim();
-                return;
-              }
-              // 1st click: arm the victim and show the walk to contact from the shared stance picker (unchanged).
-              if (!gameStore.armGazeTarget(playerId)) return;
-              o66PendingGaze.value = playerId;
-              if (touchModeActive.value) {
-                // Round 5 (the finding-1 rule for Gaze): a plotted approach that already ends beside the victim is kept;
-                // otherwise the contact walk becomes the preview route. The plan draws it; never drawn alone.
-                const plotted = o66PendingMove.value?.route ?? [];
-                const end = plotted.length ? plotted[plotted.length - 1]! : null;
-                const vsq = playerSquareById(playerId);
-                const beside = !!end && !!vsq && Math.max(Math.abs(end[0] - vsq[0]), Math.abs(end[1] - vsq[1])) === 1;
-                if (!beside) o66PendingMove.value = { dest: step.route[step.route.length - 1]!, route: step.route };
-                return;
-              }
-              o66PendingMove.value = { dest: step.route[step.route.length - 1]!, route: step.route };
-              setO66PathFromOrigin(playerSquareById(gazeActing), step.route, gazeActing);
+              nominateGazeApproach(gazeActing, playerId, gameStore.armedGazeVictimId());
               return;
             }
             disarmGazeVictim(); // 'ordinary': not a gaze victim - the click keeps its usual meaning below
@@ -13418,20 +13572,21 @@ onMounted(async () => {
           }
         }
         // FOUL (triage #3, owner 08-11 — fouls ride the blitz rail): after declaring Foul from the menu (state FOUL),
-        // a click on a DOWN enemy boots it. An ADJACENT victim boots on one click via the router's foulTarget above
-        // (the coach walked the plan to contact). A DISTANT victim uses a 2-click like Gaze: 1st NOMINATES (gate on
-        // reachability so we never arm a doomed plan; plot the walk-to-contact + 🥾 AV+ cue), 2nd on the SAME victim
-        // EXECUTES from the PLANNED path (o66PendingMove waypoints honored; auto-route only as the no-plan fallback).
-        // foulMove is already declared, so a walk plan skips the re-declare; an already-adjacent boot goes straight
-        // through sendFoulTarget (avoiding the foul/foulMove variant re-declare).
+        // a click on a DOWN enemy boots it. An ADJACENT victim with no route laid out boots on one click via the router's
+        // foulTarget above. Any other victim uses a 2-click like Gaze: 1st NOMINATES (gate on reachability so we never arm
+        // a doomed plan; store + draw the walk + 🥾 AV+ cue), 2nd on the SAME victim EXECUTES exactly the stored route.
+        // Owner 11-18: the walk is picked over the coach's planned route the Blitz way (kept when it ends beside the
+        // victim, extended from its last square when it stops short, the direct walk only when nothing is planned), and
+        // an adjacent victim with a route laid out comes here too (the route wins). foulMove is already declared, so a
+        // walk plan skips the re-declare; an already-adjacent boot goes straight through sendFoulTarget.
         {
           const foulActing = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
           const fpd = (g.fieldModel.playerDataArray as { playerId: string; playerState?: number; playerCoordinate?: unknown }[]).find((d) => d.playerId === playerId);
           const fbase = (fpd?.playerState ?? 0) & 0xff;
           if (deriveClientState(g, o66Ctx()) === 'FOUL' && foulActing && !gameStore.iControl(playerId) && (fbase === 3 || fbase === 4)) {
             if (endActConfirm.value) return;
+            if (planOwnsAct('foul')) return; // review 11-18: consumed while the walk-to-foul plan runs
             const vsq = normSquare(fpd?.playerCoordinate);
-            const reach = vsq ? renderer?.o66ContactReach(foulActing, vsq) : null;
             // FUMBBL Controls (FoulLogicModule): an ADJACENT down victim is fouled on ONE click (the execute below, with
             // no walk); a distant one does nothing.
             if (fumbblControls()) { // fumbbl-gate:foul-distant
@@ -13440,37 +13595,20 @@ onMounted(async () => {
               o66PendingFoul.value = playerId; o66PendingMove.value = null;
             }
             if (o66PendingFoul.value === playerId) {
+              // Owner 11-19 (rule 5, mouse AND touch): the nominated victim with a stored route that does not reach it
+              // (no route: not adjacent) is a fresh nomination - extend the kept route append-only, store, draw, send
+              // nothing. Decided before the touch second-tap guard, which only holds back a real commit.
+              const pendRoute = o66PendingMove.value?.route ?? [];
+              const reachFrom = pendRoute.length > 0 ? pendRoute[pendRoute.length - 1]! : playerSquareById(foulActing);
+              if (!reachFrom || !routeEndsBeside([reachFrom], vsq)) { nominateFoulVictim(foulActing, playerId); return; }
               if (!touchSecondTapCommits()) return; // touch mode: only Confirm fouls
-              // 2nd click: EXECUTE. Honor a plotted adjacent route; else auto-route to contact.
-              const planned = o66PendingMove.value?.route ?? null;
-              const lastSq = planned && planned.length > 0 ? planned[planned.length - 1] : null;
-              const adjToVictim = !!(lastSq && vsq && Math.max(Math.abs(lastSq[0] - vsq[0]), Math.abs(lastSq[1] - vsq[1])) === 1);
-              const foulRoute = adjToVictim ? planned! : (reach?.path ?? []);
-              if (foulRoute.length > 0) gameStore.startPlan({ playerId: foulActing, actKind: 'foul', route: foulRoute, targetPlayerId: playerId });
-              else gameStore.sendFoulTargetOrChoose(playerId);
-              o66PendingFoul.value = null; o66PendingMove.value = null; renderer?.setO66Path([]);
+              // 2nd click: a confirm - EXECUTE the stored route (the one drawn) or refuse; nothing recomputed.
+              commitNominatedFoul(foulActing, playerId, () => gameStore.sendFoulTargetOrChoose(playerId), true);
               return;
             }
-            // 1st click: NOMINATE — never arm a doomed plan (o66ContactReach); teach WHY, plot the walk + 🥾 cue.
-            if (reach && reach.status !== 'PATH') {
-              const p = vsq ? renderer?.squareToCanvas(vsq) : null;
-              showToast(reach.status === 'SURROUNDED' ? $t('hud.text.canTFoulThe') : $t('hud.text.canTFoulToo'),
-                p?.x ?? 200, (p?.y ?? 200) - 20, 2200);
-              o66PendingFoul.value = null;
-              return;
-            }
-            o66PendingFoul.value = playerId;
-            if (touchModeActive.value) {
-              // Round-5 finding 1: the walk Confirm will send is the preview route. Keep a plotted approach that ends beside
-              // the victim; otherwise the contact walk becomes the preview route (drawn from the plan, never drawn alone).
-              const plotted = o66PendingMove.value?.route ?? [];
-              const plottedEnd = plotted.length ? plotted[plotted.length - 1]! : null;
-              const reachesVictim = !!plottedEnd && !!vsq && Math.max(Math.abs(plottedEnd[0] - vsq[0]), Math.abs(plottedEnd[1] - vsq[1])) === 1;
-              const contact = reach?.path ?? [];
-              if (!reachesVictim && contact.length) o66PendingMove.value = { dest: contact[contact.length - 1]!, route: contact };
-              return;
-            }
-            setO66PathFromOrigin(playerSquareById(foulActing), reach?.path ?? [], foulActing);
+            // 1st click: NOMINATE — never arm a doomed plan; teach WHY, store + draw the walk + 🥾 cue. Touch mode draws the
+            // stored route from its plan (round-5 finding 1: the walk Confirm sends is the preview route).
+            nominateFoulVictim(foulActing, playerId);
             return;
           }
         }
@@ -13981,10 +14119,13 @@ onMounted(async () => {
           // handled above and stay live. The latch fails open (store watchdog).
           if (fumbblControls() && gameStore.declarationInFlight()) return;
           // Owner 10-08: a click elsewhere disarms the gaze victim (the activation stays) - except the click that
-          // confirms the plotted walk, which keeps the victim armed for the arrival click.
+          // confirms the plotted walk, which keeps the victim armed for the arrival click. Owner 11-19: a click that
+          // plans the route (a square in the walk reach, from the plan's end or from the gazer) keeps it armed too.
           {
             const gazeDest = o66PendingMove.value?.dest ?? null;
-            if (!(gazeDest && gazeDest[0] === c[0] && gazeDest[1] === c[1])) disarmGazeVictim();
+            const plansRoute = !!actingId && [o66PendingMove.value?.route ?? [], []].some((r) =>
+              (renderer?.o66Reach(actingId, r)?.squares ?? []).some((s) => s[0] === c[0] && s[1] === c[1]));
+            if (!(gazeDest && gazeDest[0] === c[0] && gazeDest[1] === c[1]) && !plansRoute) disarmGazeVictim();
           }
           // Owner 09-27 (live g1947538, plain move on 1.0.25): the 09-23 swallow guarded the legacy planner only, so
           // this route still plotted and committed walks mid-animation. Movement clicks now hold until the token has
@@ -18587,9 +18728,9 @@ watch(() => [
 
         <!-- Owner o66aa: 2-click target cue — 🏈 over a pass/hand-off target, 🥾 AV+ over a foul victim. -->
         <!-- Block, Foul, and Gaze cues confirm the same pending target as the bottom bar / Space. -->
-        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !touchModeActive && (!!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze), 'pass-destination': o66TargetCue.throwRoll != null }"
+        <div v-if="o66TargetCue && !o66PendingPunt" class="o66-target-cue" :class="{ clickable: !touchModeActive && (!!o66AggroStage || !!o66PendingFoul || canConfirmArmedGaze || gazeRouteArmed), 'pass-destination': o66TargetCue.throwRoll != null }"
           :style="{ left: o66TargetCue.x + 'px', top: o66TargetCue.y + 'px' }"
-          @click="!touchModeActive && (guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze) && confirmPlannerFromButton())))">
+          @click="!touchModeActive && (guardConfirmCard() || (o66AggroStage ? confirmAggroStage() : ((o66PendingFoul || canConfirmArmedGaze || gazeRouteArmed) && confirmPlannerFromButton())))">
           <span class="o66-target-icon">{{ o66TargetCue.label }}</span>
           <span v-if="o66TargetCue.throwRoll != null" class="o66-target-pass-roll">{{ $t('hud.pass') }}
             <D6Face class="o66-target-d6" :value="o66TargetCue.throwRoll" :label="$t('hud.passNeedsThrowroll', { throwRoll: o66TargetCue.throwRoll })" />+

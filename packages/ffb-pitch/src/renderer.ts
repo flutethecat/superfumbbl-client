@@ -8900,14 +8900,16 @@ export class PitchRenderer {
    *  square to `to`, keeping rush/dodge accounting GLOBAL (stepsUsed = priorRoute.length so rushes count from the
    *  player's whole budget, not fresh from the waypoint). If `to` already lies ON the prior route, TRUNCATE back to
    *  it (click a visited square to shorten the plan). Returns the full combined route (excl. the start square) or
-   *  null if the extension can't be reached within the remaining budget. */
-  o66ExtendPath(playerId: string, priorRoute: Square[], to: Square, opts?: { reserveForBlock?: boolean }): Square[] | null {
+   *  null if the extension can't be reached within the remaining budget.
+   *  `appendOnly` (owner 11-18, Foul / Gaze contact selection): never trim - the WHOLE prior route stays the prefix and
+   *  the new segment is charged after its full length; a destination already on the route is walked back to. */
+  o66ExtendPath(playerId: string, priorRoute: Square[], to: Square, opts?: { reserveForBlock?: boolean; appendOnly?: boolean }): Square[] | null {
     const b = this.o66MovementBudget(playerId);
     if (!b) return null;
     const toKey = squareKey(to[0], to[1]);
     // backtrack: clicking a square already on the plan trims it there (no re-route)
     const hit = priorRoute.findIndex((s) => squareKey(s[0], s[1]) === toKey);
-    if (hit >= 0) return priorRoute.slice(0, hit + 1);
+    if (hit >= 0 && !opts?.appendOnly) return priorRoute.slice(0, hit + 1);
     const start: Square = priorRoute.length ? priorRoute[priorRoute.length - 1]! : b.from;
     const occupied = new Set(this.playersBySquare.keys());
     occupied.delete(squareKey(b.from[0], b.from[1]));
