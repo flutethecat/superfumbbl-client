@@ -8,7 +8,7 @@ import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { statsMechanicFor } from '@fumbbl40k/ffb-protocol';
 import { POSTGAME_STATS, teamLogo } from './gameStatRows';
 import { DICE_COVERAGE_TEXT, TWO_D6_SHARE, actionFaces, actionLikelihood, allDiceLikelihood, armourLikelihood, blockLikelihood, diceCoverageNote, diceFacts, emptyTally, turnsLikelihood, oneInOdds, twoD6Totals, type DiceCoverage, type DiceCoverageNote, type DiceFact, type DiceTally, type Likelihood, type TurnsAttackRecord } from './diceStats';
-import { normalCdf, normalInv, LUCK_ODDS_CAP, NOT_MEASURED } from './diceLuck';
+import { normalCdf, normalInv, KIND_MAX_COUNT, LUCK_ODDS_CAP, NOT_MEASURED } from './diceLuck';
 import { emptyBreaks, oneInX, type BreakEntry, type LuckBreaks } from './luckBreaks';
 import type { CutShortEntry } from './turnsCutShort';
 import { addedSkillsLast, playerRosterSkills, type RosterSkill } from './skillDisplay';
@@ -19,6 +19,7 @@ import { isStarOrMercenary, playerProgress, type ValuePosition } from './playerV
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import type { RosterInjuryBadge } from './rosterLevelArt';
 import { $t } from '../i18n';
+import { ACTION_ROLL_GROUPS, actionRollGroup, type ActionRollGroup } from './actionRollNames';
 import { luckAttackDisplay, luckHeadDisplay, luckOutcomeDisplay, luckTailDisplay } from './luckLabelDisplay';
 
 export type Side = 'home' | 'away';
@@ -762,7 +763,97 @@ function pgLuckRow(t: DiceTally): PgLikelihoodRow {
       ...(badLines.length ? [{ label: '', value: $t('cards.postGame.text.rarestBadBreaks') }, ...badLines] : [])],
   };
 }
-export interface PgDiceChartRow { key: string; title: string; chart: PgChart; block?: boolean }
+export interface PgDiceChartRow {
+  key: string; title: string; chart: PgChart; block?: boolean;
+  /** Owner 11-19: the Armour chart's heading figure (pgArmourLuck); null when no armour roll was measured. */
+  armourLuck?: PgArmourLuck | null;
+}
+/**
+ * Owner 11-19 ("an expected stat to the armor analyzer ... top right display"): the Armour dice chart's heading reads,
+ * after its roll count, `{broken} / {rolls} broken · expected x.x` like Dodges by target. The figure is the Armour
+ * likelihood row's own counters (diceStats.ts: the armour rolls this team made against the opponent that could be
+ * measured, `theirRolls` / `theirBroken` / `theirExpected` = the summed fair chance of each break), so it can be a
+ * smaller number than the chart's roll count (every armour roll's dice total). Unmeasured rolls are never folded in;
+ * they are reported apart. Null when nothing was measured (an older cached game carries no counters).
+ */
+export interface PgArmourLuck { broken: number; rolls: number; expected: number; unmeasured: number }
+export function pgArmourLuck(t: DiceTally | undefined): PgArmourLuck | null {
+  const b = t?.luck?.armour as { unmeasured?: unknown; c?: Record<string, unknown> } | undefined;
+  if (!b || typeof b !== 'object' || !b.c || typeof b.c !== 'object') return null;
+  // review 11-19: a cached snapshot is untrusted stored data - a malformed figure is dropped, never shown
+  const rolls = pgCount(b.c.theirRolls), broken = pgCount(b.c.theirBroken), unmeasured = pgCount(b.unmeasured);
+  if (rolls == null || broken == null || unmeasured == null || rolls <= 0 || broken > rolls) return null;
+  const expected = pgExpectedOf(b.c.theirExpected, rolls);
+  return expected == null ? null : { broken, rolls, expected, unmeasured };
+}
+/** A stored count: absent = 0; else a non-negative safe integer within the luck code's own bound (diceLuck KIND_MAX_COUNT).
+ *  null = malformed (NaN, negative, fractional, a string, huge). */
+function pgCount(v: unknown): number | null {
+  if (v === undefined) return 0;
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= KIND_MAX_COUNT ? v : null;
+}
+/** A stored expected count over `rolls` trials: absent = 0; else finite with 0 <= expected <= rolls (each trial's fair
+ *  chance is at most 1; a hair over for the float sum is allowed). null = malformed. */
+function pgExpectedOf(v: unknown, rolls: number): number | null {
+  if (v === undefined) return 0;
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > rolls + 1e-9) return null;
+  return Math.min(v, rolls);
+}
+
+/**
+ * Owner 11-19 ("a button to the Dice luck screen ... for all action rolls ... Any roll that isn't a dodge or block would
+ * go here and be displayed individually. E.g. 6/11 | Expected"): the Dice pane's ACTION ROLLS sub-pane. One row per roll
+ * kind the shown team(s) rolled (the tally's per-kind buckets, `luck.actionKinds`, the ones Coach Stats' Action rolls
+ * pop-out reads), dodges left out (they have their own Dodges by target chart). Grouped and named as Coach Stats does
+ * (actionRollNames.ts), most rolls first within a group. Each cell is the kind's measured rolls, passes and the summed
+ * fair chance of passing; rolls that could not be measured are carried apart and never given an expected value.
+ */
+export interface PgActionRollCell { n: number; unmeasured: number; passed: number; expected: number }
+export interface PgActionRollRow { kind: string; group: ActionRollGroup; cells: Partial<Record<Side, PgActionRollCell>> }
+export interface PgActionRolls {
+  sides: Side[];
+  groups: { group: ActionRollGroup; rows: PgActionRollRow[] }[];
+  /** per side, the sum of its listed cells; absent for a side that rolled none of the listed kinds */
+  totals: Partial<Record<Side, PgActionRollCell>>;
+  empty: boolean;
+}
+/** Kinds the sub-pane leaves out: dodges have their own chart. */
+export const PG_ACTION_ROLLS_EXCLUDED: ReadonlySet<string> = new Set(['dodgeRoll']);
+/** One kind's bucket as a cell; null when it rolled nothing or is malformed (review 11-19: a cached snapshot is untrusted
+ *  stored data - a bucket that fails validation is dropped, and so never reaches the totals). */
+function pgActionRollCell(raw: unknown): PgActionRollCell | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const b = raw as { n?: unknown; unmeasured?: unknown; c?: unknown };
+  if (b.c !== undefined && (!b.c || typeof b.c !== 'object' || Array.isArray(b.c))) return null;
+  const c = (b.c ?? {}) as Record<string, unknown>;
+  const n = pgCount(b.n), unmeasured = pgCount(b.unmeasured), passed = pgCount(c.passed);
+  if (n == null || unmeasured == null || passed == null || passed > n) return null;
+  const expected = pgExpectedOf(c.expected, n);
+  if (expected == null || n + unmeasured <= 0) return null;
+  return { n, unmeasured, passed, expected };
+}
+export function pgActionRolls(tallies: Partial<Record<Side, DiceTally | undefined>>, sides: readonly Side[]): PgActionRolls {
+  const rows = new Map<string, PgActionRollRow>();
+  const totals: Partial<Record<Side, PgActionRollCell>> = {};
+  for (const side of sides) {
+    const kinds = tallies[side]?.luck?.actionKinds as unknown;
+    if (!kinds || typeof kinds !== 'object' || Array.isArray(kinds)) continue;
+    for (const [kind, raw] of Object.entries(kinds as Record<string, unknown>)) {
+      if (PG_ACTION_ROLLS_EXCLUDED.has(kind)) continue;
+      const cell = pgActionRollCell(raw);
+      if (!cell) continue;
+      const row = rows.get(kind) ?? { kind, group: actionRollGroup(kind), cells: {} };
+      row.cells[side] = cell;
+      rows.set(kind, row);
+      const sum = totals[side] ??= { n: 0, unmeasured: 0, passed: 0, expected: 0 };
+      sum.n += cell.n; sum.unmeasured += cell.unmeasured; sum.passed += cell.passed; sum.expected += cell.expected;
+    }
+  }
+  const rolled = (r: PgActionRollRow) => sides.reduce((a, s) => a + (r.cells[s] ? r.cells[s]!.n + r.cells[s]!.unmeasured : 0), 0);
+  const sorted = [...rows.values()].sort((a, b) => rolled(b) - rolled(a) || a.kind.localeCompare(b.kind));
+  const groups = ACTION_ROLL_GROUPS.map((group) => ({ group, rows: sorted.filter((r) => r.group === group) })).filter((g) => g.rows.length);
+  return { sides: [...sides], groups, totals, empty: groups.length === 0 };
+}
 /** Owner 10-01 (S67): dodges BY TARGET (2+..6+). Per column, bottom to top: GREEN = passed without a re-roll, BLUE =
  *  passed after a re-roll, RED = failed even after a re-roll; the outline is every attempt (its empty part = failed
  *  with no re-roll); `ey` = expected passes WITH re-rolls (owner 10-01 r4):
@@ -858,7 +949,7 @@ export function pgDiceSide(t: DiceTally | undefined, surface: { team: string; lo
     { key: 'd6', get title() { return $t('cards.postGame.charts.d6Distribution'); }, chart: pgBarChart(t.d6.slice(1), even, faces) },
     { key: 'action', get title() { return $t('cards.postGame.charts.actionDice'); }, chart: pgBarChart(actionFaces(t).slice(1), even, faces) },
     { key: 'block', get title() { return $t('cards.postGame.charts.blockDice'); }, chart: pgBarChart(t.block.slice(1), even, BLOCK_FACE_LABELS), block: true },
-    { key: 'armour', get title() { return $t('cards.postGame.charts.armourDice'); }, chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals) },
+    { key: 'armour', get title() { return $t('cards.postGame.charts.armourDice'); }, chart: pgBarChart(twoD6Totals(t.armour).slice(2), TWO_D6_SHARE.slice(2), totals), armourLuck: pgArmourLuck(t) },
     { key: 'injury', get title() { return $t('cards.postGame.charts.injuryDice'); }, chart: pgBarChart(twoD6Totals(t.injury).slice(2), TWO_D6_SHARE.slice(2), totals) },
     { key: 'dodge', get title() { return $t('cards.postGame.charts.dodgeDice'); }, chart: pgBarChart(t.dodgeFaces.slice(1), even, faces) },
   ];

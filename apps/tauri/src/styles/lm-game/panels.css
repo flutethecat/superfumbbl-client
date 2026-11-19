@@ -213,6 +213,7 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .mvp-nominate-confirm,
 .sf-lm.lm-game .ind-btn,
 .sf-lm.lm-game .pg-luck-chart-btn,
+.sf-lm.lm-game .pg-arolls-btn,
 .sf-lm.lm-game .pg-luck-close,
 .sf-lm.lm-game .pg-dice-close,
 .sf-lm.lm-game .open-recent-history {
@@ -231,6 +232,7 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .mvp-nominate-confirm:hover:not(:disabled),
 .sf-lm.lm-game .ind-btn:hover:not(:disabled),
 .sf-lm.lm-game .pg-luck-chart-btn:hover,
+.sf-lm.lm-game .pg-arolls-btn:hover,
 .sf-lm.lm-game .pg-luck-close:hover,
 .sf-lm.lm-game .pg-dice-close:hover {
   color: var(--ui-text);
@@ -272,6 +274,7 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .ind-blade:focus-visible,
 .sf-lm.lm-game .ind-x:focus-visible,
 .sf-lm.lm-game .pg-luck-chart-btn:focus-visible,
+.sf-lm.lm-game .pg-arolls-btn:focus-visible,
 .sf-lm.lm-game .pg-luck-close:focus-visible,
 .sf-lm.lm-game .pg-dice-close:focus-visible,
 .sf-lm.lm-game .pg-dice-switch button:focus-visible,
@@ -455,6 +458,28 @@ html.sf-high-contrast .sf-lm.lm-game.roster-popout[role] {
 .sf-lm.lm-game .pg-luck-ytick, .sf-lm.lm-game .pg-luck-xtick { fill: var(--ui-muted); }
 .sf-lm.lm-game .pg-luck-col[data-hover='true'] { fill: color-mix(in srgb, var(--ui-text) 8%, transparent); }
 .sf-lm.lm-game .pg-luck-col:focus-visible { outline: 2px solid var(--ui-focus); outline-offset: -2px; }
+/* Owner 11-19: the Action rolls subpane (its frame, title and buttons are the Luck pane's) and the Armour heading figure */
+.sf-lm.lm-game .pg-dice-block h4 .pg-arolls-btn { letter-spacing: .08em; }
+.sf-lm.lm-game .pg-arolls-empty, .sf-lm.lm-game .pg-arolls-none, .sf-lm.lm-game .pg-arolls-unmeasured { color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-arolls-body:focus-visible { outline-color: var(--ui-focus); }
+.sf-lm.lm-game .pg-arolls-table thead th {
+  font-family: var(--sf-band-font);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ui-text);
+  background: var(--sf-panel-bottom);
+  border-bottom-color: var(--sf-panel-line);
+}
+.sf-lm.lm-game .pg-arolls-team[data-side='home'] { color: var(--sf-seat-home); box-shadow: inset 0 -3px 0 var(--sf-seat-home); }
+.sf-lm.lm-game .pg-arolls-team[data-side='away'] { color: var(--sf-seat-away); box-shadow: inset 0 -3px 0 var(--sf-seat-away); }
+.sf-lm.lm-game .pg-arolls-cell[data-side='home'] { background: color-mix(in srgb, var(--sf-seat-home) 9%, transparent); }
+.sf-lm.lm-game .pg-arolls-cell[data-side='away'] { background: color-mix(in srgb, var(--sf-seat-away) 9%, transparent); }
+.sf-lm.lm-game .pg-arolls-group th { font-family: var(--sf-band-font); font-weight: 400; color: var(--lmg-panels-caption); }
+.sf-lm.lm-game .pg-arolls-row > * { border-top-color: var(--sf-panel-line); }
+.sf-lm.lm-game .pg-arolls-kind { font-family: var(--sf-band-font); font-weight: 400; color: var(--ui-text); }
+.sf-lm.lm-game .pg-arolls-figure b { color: var(--ui-heading); }
+.sf-lm.lm-game .pg-arolls-total > * { border-top-color: var(--sf-panel-line); }
 
 /* ==== the teleported bubbles: the skill tooltip and the dice row tip (each carries the root classes itself) ========= */
 .sf-lm.lm-game.skill-tip {

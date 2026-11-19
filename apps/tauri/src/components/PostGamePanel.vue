@@ -20,8 +20,9 @@ import { gameStatRows } from '../game/gameStatRows';
 import type { SkillIconStyle } from '@fumbbl40k/ffb-pitch';
 import {
   PG_CHART_BASE, PG_CHART_H, PG_CHART_TOP, PG_CHART_W, PG_GAUGE_AREA, PG_GAUGE_CURVE, mvpAwardEntries, mvpCardFor, mvpConcededSides, pgDiceCoverage, pgDiceSide, pgGaugeAria, pgGaugeReading, pgGaugeTitle, pgGaugeX, pgHasMarker, pgOddsSentence, pgPlayerDetail, pgTeamBreaks,
-  postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
+  pgActionRolls, postGamePublic, type PgLikelihoodRow, type PgMvpCard, type PostGameSnapshot, type Side,
 } from '../game/postGameProjection';
+import { ACTION_ROLL_GROUP_LABEL, actionRollName } from '../game/actionRollNames';
 import { $t, terms } from '../i18n';
 
 export type MvpRoll = { phase: 'awaiting' | 'cycling' | 'landed' | 'none'; display: string };
@@ -325,17 +326,63 @@ function closeLuckChart(back = true): void {
     back?.focus();
   });
 }
-function onLuckPaneKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); closeLuckChart(); return; }
-  if (event.key !== 'Tab' || !luckPaneEl.value) return;
-  const stops = Array.from(luckPaneEl.value.querySelectorAll<HTMLElement>('button, [tabindex="0"]'));
+/** Tab stays inside an open subpane (wraps at either end). */
+function trapSubpaneTab(event: KeyboardEvent, pane: HTMLElement | null): void {
+  if (event.key !== 'Tab' || !pane) return;
+  const stops = Array.from(pane.querySelectorAll<HTMLElement>('button, [tabindex="0"]'));
   if (stops.length === 0) return;
   const first = stops[0]!, last = stops[stops.length - 1]!;
   const at = document.activeElement;
-  if (event.shiftKey && (at === first || !luckPaneEl.value.contains(at))) { event.preventDefault(); last.focus(); }
-  else if (!event.shiftKey && (at === last || !luckPaneEl.value.contains(at))) { event.preventDefault(); first.focus(); }
+  if (event.shiftKey && (at === first || !pane.contains(at))) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && (at === last || !pane.contains(at))) { event.preventDefault(); first.focus(); }
+}
+/** Review 11-19: a subpane owns its keys. The game view's window keydown handler (SpectateView onKeydown) pans the pitch on
+ *  the arrows (preventing the native scroll) and opens chat on Enter (moving focus behind the dialog), so no key typed
+ *  inside a subpane bubbles past it. Nothing here prevents a default: native scrolling and button activation still work. */
+function onLuckPaneKeydown(event: KeyboardEvent): void {
+  event.stopPropagation();
+  if (event.key === 'Escape') { event.preventDefault(); closeLuckChart(); return; }
+  trapSubpaneTab(event, luckPaneEl.value);
+}
+/** A subpane opener's activation keys (Enter, Space) are its own: the game handler would take Enter for chat. */
+function onSubpaneOpenerKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
 }
 watch([diceModalOpen, diceSide, diceBoth, () => props.showStats], () => closeLuckChart(false));
+
+// Owner 11-19: the ACTION ROLLS subpane - an "Action rolls" button in the Action dice chart's heading opens, in the Luck
+// chart's place, every action roll kind but dodges (postGameProjection pgActionRolls), one row per kind, for the team(s)
+// the pane's tabs show. One subpane at a time; Escape or its close button hands focus back to the button that opened it.
+const actionRollsOpen = ref(false);
+const actionRollsPaneEl = ref<HTMLElement | null>(null);
+let actionRollsOpener: HTMLElement | null = null;
+const actionRolls = computed(() => pgActionRolls(props.snapshot.tallies, diceCols.value.map((c) => c.side)));
+const actionRollsTeam = (side: Side) => (side === 'home' ? pgDice.value.home.team : pgDice.value.away.team);
+function openActionRolls(event: Event): void {
+  closeDiceTip();
+  closeLuckChart(false);
+  actionRollsOpener = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  actionRollsOpen.value = true;
+  void nextTick(() => actionRollsPaneEl.value?.querySelector<HTMLElement>('.pg-arolls-close')?.focus());
+}
+function closeActionRolls(back = true): void {
+  if (!actionRollsOpen.value) return;
+  actionRollsOpen.value = false;
+  const opener = actionRollsOpener;
+  actionRollsOpener = null;
+  if (!back) return;
+  void nextTick(() => {
+    const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('.pg-arolls-btn');
+    target?.focus();
+  });
+}
+function onActionRollsKeydown(event: KeyboardEvent): void {
+  event.stopPropagation(); // see onLuckPaneKeydown
+  if (event.key === 'Escape') { event.preventDefault(); closeActionRolls(); return; }
+  trapSubpaneTab(event, actionRollsPaneEl.value);
+}
+watch([diceModalOpen, diceSide, diceBoth, () => props.showStats], () => closeActionRolls(false));
+watch(luckChartOpen, (on) => { if (on) closeActionRolls(false); });
 onBeforeUnmount(() => { closeDiceTip(); listenForDiceTipDismiss(false); });
 
 // Owner 10-15: the "i" in the header toggles a short note on how the expected figures are worked out. Escape (which
@@ -581,6 +628,50 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
               </div>
             </div>
           </div>
+          <!-- Owner 11-19: the Action rolls subpane (postGameProjection pgActionRolls): every action roll kind but dodges, one row
+               per kind, "passed / rolls passed · expected x.x" per team shown; Both = home and away side by side. -->
+          <div v-if="actionRollsOpen" ref="actionRollsPaneEl" class="pg-luck-pane pg-arolls-pane" role="dialog" aria-modal="true" :aria-label="$t('coachStats.actionRolls.title')" @keydown="onActionRollsKeydown">
+            <header class="pg-luck-head">
+              <b class="pg-luck-title">{{ $t('coachStats.actionRolls.title') }}</b>
+              <button type="button" class="pg-luck-close pg-arolls-close" :aria-label="$t('coachStats.actionRolls.close')" @click="closeActionRolls()">✕</button>
+            </header>
+            <p v-if="actionRolls.empty" class="pg-arolls-empty">{{ $t('cards.postGamePanel.pgDiceModal.noActionRollsYet') }}</p>
+            <div v-else class="pg-arolls-body" tabindex="0" role="region" :aria-label="$t('coachStats.actionRolls.title')">
+              <table class="pg-arolls-table" :data-cols="actionRolls.sides.length">
+                <thead>
+                  <tr>
+                    <th scope="col" class="pg-arolls-kind">{{ $t('coachStats.actionRolls.roll') }}</th>
+                    <th v-for="side in actionRolls.sides" :key="side" scope="col" class="pg-arolls-team" :data-side="side">{{ actionRollsTeam(side) }}</th>
+                  </tr>
+                </thead>
+                <tbody v-for="g in actionRolls.groups" :key="g.group" :data-group="g.group">
+                  <tr class="pg-arolls-group"><th scope="colgroup" :colspan="actionRolls.sides.length + 1">{{ $t(ACTION_ROLL_GROUP_LABEL[g.group]) }}</th></tr>
+                  <tr v-for="r in g.rows" :key="r.kind" class="pg-arolls-row" :data-kind="r.kind">
+                    <th scope="row" class="pg-arolls-kind">{{ actionRollName(r.kind) }}</th>
+                    <td v-for="side in actionRolls.sides" :key="side" class="pg-arolls-cell" :data-side="side">
+                      <template v-for="cell in [r.cells[side]]" :key="side">
+                        <template v-if="cell"><span v-if="cell.n > 0" class="pg-arolls-figure">{{ $t('cards.postGamePanel.pgDiceModal.passedAttemptsPassedExpected', { passed: cell.passed, attempts: cell.n }) }} <b>{{ cell.expected.toFixed(1) }}</b></span><span
+                          v-else class="pg-arolls-figure pg-arolls-none">—</span> <span v-if="cell.unmeasured > 0" class="pg-arolls-unmeasured">{{ $t('coachStats.actionRolls.unmeasured', { n: cell.unmeasured }) }}</span></template>
+                        <span v-else class="pg-arolls-figure pg-arolls-none">—</span>
+                      </template>
+                    </td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr class="pg-arolls-total">
+                    <th scope="row" class="pg-arolls-kind">{{ $t('cards.postGamePanel.pgDiceModal.actionRollsTotal') }}</th>
+                    <td v-for="side in actionRolls.sides" :key="side" class="pg-arolls-cell" :data-side="side">
+                      <template v-for="cell in [actionRolls.totals[side]]" :key="side">
+                        <template v-if="cell"><span v-if="cell.n > 0" class="pg-arolls-figure">{{ $t('cards.postGamePanel.pgDiceModal.passedAttemptsPassedExpected', { passed: cell.passed, attempts: cell.n }) }} <b>{{ cell.expected.toFixed(1) }}</b></span><span
+                          v-else class="pg-arolls-figure pg-arolls-none">—</span> <span v-if="cell.unmeasured > 0" class="pg-arolls-unmeasured">{{ $t('coachStats.actionRolls.unmeasured', { n: cell.unmeasured }) }}</span></template>
+                        <span v-else class="pg-arolls-figure pg-arolls-none">—</span>
+                      </template>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
           <div class="pg-dice-grid" :data-view="diceBoth ? 'both' : 'side'">
             <section class="pg-dice-left">
               <h3>{{ $t('cards.postGamePanel.pgDiceModal.diceDistribution') }}</h3>
@@ -621,7 +712,11 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                 <div v-for="col in diceCols" :key="col.side" class="pg-dice-col" :data-side="col.side" :role="diceBoth ? 'group' : undefined" :aria-label="diceBoth ? col.data.team : undefined">
                   <template v-for="side in [col.data]" :key="col.side">
                   <div v-for="row in side.charts.slice(ri, ri + 1)" :key="row.key" class="pg-dice-block">
-                    <h4>{{ row.title }} <span class="pg-dice-n"><template v-if="row.block">{{ side.blocks }} {{ $t('postGame.dice.blocks', { count: side.blocks }) }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? $t('postGame.dice.rolls') : $t('postGame.dice.dice') }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template></span></h4>
+                    <!-- Owner 11-19: the Action dice heading carries the "Action rolls" button (the subpane above); the Armour
+                         heading adds "broken / measured broken · expected x.x" after its roll count (pgArmourLuck). -->
+                    <h4 :data-chart="row.key">{{ row.title }} <button v-if="row.key === 'action'" type="button" class="pg-arolls-btn" :aria-haspopup="'dialog'" :aria-expanded="actionRollsOpen"
+                      @keydown="onSubpaneOpenerKeydown" @click="openActionRolls($event)">{{ $t('coachStats.actionRolls.title') }}</button> <span class="pg-dice-n"
+                      :title="row.armourLuck ? $t('cards.postGamePanel.pgDiceModal.armourMeasuredTitle', { rolls: row.armourLuck.rolls, broken: row.armourLuck.broken, expected: row.armourLuck.expected.toFixed(1) }) + (row.armourLuck.unmeasured ? $t('pg.unmeasuredNote', { n: row.armourLuck.unmeasured }) : '') : undefined"><template v-if="row.block">{{ side.blocks }} {{ $t('postGame.dice.blocks', { count: side.blocks }) }}</template><template v-else>{{ row.chart.total }} {{ row.key === 'armour' || row.key === 'injury' ? $t('postGame.dice.rolls') : $t('postGame.dice.dice') }}</template><template v-if="row.block"> · <b>{{ side.oneNinth }}</b> 1/9 · <b>{{ side.oneThirtySixth }}</b> 1/36</template><template v-if="row.armourLuck"> · <span class="pg-armour-luck">{{ $t('cards.postGamePanel.pgDiceModal.brokenRollsBrokenExpected', { broken: row.armourLuck.broken, rolls: row.armourLuck.rolls }) }} <b>{{ row.armourLuck.expected.toFixed(1) }}</b></span></template></span></h4>
                     <svg class="pg-dice-chart" :viewBox="`0 0 ${PG_CHART_W} ${row.block ? PG_CHART_H + PG_BLOCK_FACE_EXTRA : PG_CHART_H}`" role="img" :aria-label="$t('cards.postGamePanel.pgDiceModal.titleDistribution', { title: row.title })">
                       <rect v-for="(b, i) in row.chart.bars" :key="i" :x="b.x" :y="b.y" :width="b.w" :height="b.h" class="pg-dice-bar" :class="{ 'pg-dice-bar-block': row.block }" />
                       <path :d="row.chart.expectedPath" class="pg-dice-expected" />
@@ -666,7 +761,7 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
                             @click="onDiceInfoClick(row.key, $event)"><span aria-hidden="true">i</span></button>
                           <!-- Owner 10-22: the Luck chart's button sits on the row, under the word "Luck" (it was the last line of the
                                popover). After the "i" in the DOM, so Tab reads the row's title, its details, then "By turn". -->
-                          <button v-if="!diceBoth && row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @click="openLuckChart">{{ $t('cards.postGamePanel.pgDiceModal.byTurn') }}</button>
+                          <button v-if="!diceBoth && row.key === 'luck' && row.like.measured" type="button" class="pg-luck-chart-btn" :aria-label="$t('cards.postGamePanel.pgDiceModal.luckByTurn')" @keydown="onSubpaneOpenerKeydown" @click="openLuckChart">{{ $t('cards.postGamePanel.pgDiceModal.byTurn') }}</button>
                         </span>
                         <!-- Owner 11-05: the percentile rides the marker as a small tag; the "1 in N" sits in a small box in the
                              gauge's top-right corner; each gauge is its own small box; the right-hand column is a word. -->
@@ -1308,6 +1403,34 @@ defineExpose({ openDice: () => { diceModalOpen.value = true; } });
 .pg-luck-tip { position: absolute; top: 4px; right: 4px; display: flex; flex-direction: column; gap: 2px; max-width: min(26rem, 90%); padding: 6px 9px; background: var(--ui-surface-1, #0b0f18); border: 1px solid var(--ui-border); border-radius: 6px; font-size: 0.85em; pointer-events: none; }
 .pg-luck-tip-line[data-side='home'] { color: #6d9bff; }
 .pg-luck-tip-line[data-side='away'] { color: #ff7a7e; }
+/* Owner 11-19: the Action rolls button (Action dice heading) and its subpane; the Armour heading's measured figure */
+.pg-arolls-btn { border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface-2); color: var(--ui-text); font: inherit; cursor: pointer; }
+.pg-arolls-btn:hover, .pg-arolls-btn:focus-visible { border-color: var(--ui-accent, #6d9bff); outline: none; }
+.pg-dice-block h4 .pg-arolls-btn { align-self: center; margin: 0 auto 0 0.5em; padding: 0.05rem 0.5rem; font-size: max(var(--ui-min-text-size, 12px), 0.72em); font-weight: 400; letter-spacing: 0; line-height: 1.3; white-space: nowrap; }
+.pg-armour-luck { white-space: nowrap; }
+/* review 11-19: the Action rolls pane takes its content's height (a short table leaves no screen of empty space), up to the
+   card's height less the Luck pane's 8px inset, then its table scrolls. The Luck by turn pane keeps its full size. */
+.pg-arolls-pane { bottom: auto; box-sizing: border-box; max-height: calc(100% - 16px); }
+.pg-arolls-empty { margin: 0.5em 0; color: var(--ui-muted); }
+.pg-arolls-body { flex: 0 1 auto; min-height: 0; overflow: auto; outline: none; }
+.pg-arolls-body:focus-visible { outline: 2px solid var(--ui-accent, #6d9bff); outline-offset: 2px; }
+.pg-arolls-table { width: 100%; border-collapse: collapse; font-size: 0.95em; }
+.pg-arolls-table th, .pg-arolls-table td { padding: 4px 12px; text-align: left; vertical-align: baseline; }
+.pg-arolls-table thead th { position: sticky; top: 0; z-index: 1; background: var(--ui-surface-2); border-bottom: 1px solid var(--ui-border); font-weight: 700; }
+.pg-arolls-table[data-cols='1'] .pg-arolls-kind { width: 40%; }
+.pg-arolls-table[data-cols='2'] .pg-arolls-kind { width: 28%; }
+.pg-arolls-team[data-side='home'] { color: #6d9bff; box-shadow: inset 0 -3px 0 #3d7cff; }
+.pg-arolls-team[data-side='away'] { color: #ff7a7e; box-shadow: inset 0 -3px 0 #f2363c; }
+.pg-arolls-cell[data-side='home'] { background: #3d7cff14; }
+.pg-arolls-cell[data-side='away'] { background: #f2363c14; }
+.pg-arolls-group th { padding-top: 10px; font-size: 0.8em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ui-muted); }
+.pg-arolls-row > * { border-top: 1px solid #ffffff12; }
+.pg-arolls-kind { font-weight: 600; white-space: nowrap; }
+.pg-arolls-figure { white-space: nowrap; }
+.pg-arolls-figure b { color: var(--ui-accent); font-weight: 800; }
+.pg-arolls-none { color: var(--ui-muted); }
+.pg-arolls-unmeasured { font-size: 0.85em; color: var(--ui-muted); white-space: nowrap; }
+.pg-arolls-total > * { border-top: 2px solid var(--ui-border); font-weight: 700; padding-top: 6px; }
 .pg-dice-gauge-row + .pg-dice-gauge-row { border-top: 1px solid color-mix(in srgb, var(--ui-border) 55%, transparent); }
 .pg-dice-gauge-row[data-measured='false'] .pg-dice-curve, .pg-dice-gauge-row[data-measured='false'] .pg-dice-mean { opacity: 0.4; }
 .pg-stat-cell.pg-stat-label { text-align: center; color: var(--ui-muted); font-size: 0.9rem; }

@@ -231,21 +231,9 @@ export function recordText(r: Pick<RaceRecord, 'w' | 'd' | 'l'>): string { retur
 
 // ---- owner 11-04: the Action roll breakdown (the Coach Stats "Details" pop-out) ----
 
-export type ActionRollGroup = 'movement' | 'ballHandling' | 'negativeTraits' | 'other';
-export const ACTION_ROLL_GROUPS: readonly ActionRollGroup[] = ['movement', 'ballHandling', 'negativeTraits', 'other'];
-
-/** The group of each roll kind (the server report id; `leapRoll:leap` = a jump made with Leap / Pogo). Anything not
- *  listed is "other". */
-const ACTION_ROLL_GROUP: Record<string, ActionRollGroup> = {
-  dodgeRoll: 'movement', goForItRoll: 'movement', leapRoll: 'movement', 'leapRoll:leap': 'movement', jumpRoll: 'movement',
-  standUpRoll: 'movement', jumpUpRoll: 'movement',
-  pickUpRoll: 'ballHandling', catchRoll: 'ballHandling', passRoll: 'ballHandling', interceptionRoll: 'ballHandling',
-  throwTeamMateRoll: 'ballHandling', rightStuffRoll: 'ballHandling', safeThrowRoll: 'ballHandling', kickTeamMateRoll: 'ballHandling',
-  foulAppearanceRoll: 'negativeTraits', reallyStupidRoll: 'negativeTraits', bloodLustRoll: 'negativeTraits', boneHeadRoll: 'negativeTraits',
-  wildAnimalRoll: 'negativeTraits', animalSavageryRoll: 'negativeTraits', takeRootRoll: 'negativeTraits', unchannelledFuryRoll: 'negativeTraits',
-  confusionRoll: 'negativeTraits', alwaysHungryRoll: 'negativeTraits', escapeRoll: 'negativeTraits', animosityRoll: 'negativeTraits',
-};
-export function actionRollGroup(kind: string): ActionRollGroup { return ACTION_ROLL_GROUP[kind] ?? 'other'; }
+// The kinds' groups and names live in actionRollNames.ts (shared with the end-of-game Dice pane's Action rolls sub-pane).
+import { ACTION_ROLL_GROUPS, actionRollFallbackName, actionRollGroup, type ActionRollGroup } from './actionRollNames';
+export { ACTION_ROLL_GROUPS, actionRollFallbackName, actionRollGroup, type ActionRollGroup };
 
 export interface ActionRollRow {
   kind: string; group: ActionRollGroup;
@@ -311,12 +299,6 @@ export function koRecoveries(games: readonly CoachGameRecord[], size: number | n
     mergeStoredBucket(theirs, (ko as Record<string, unknown>).against);
   }
   return { for: bucketRow(mine), against: bucketRow(theirs) };
-}
-
-/** A readable name for a roll kind no label covers: `chompRoll` -> "Chomp", `catchOfTheDay` -> "Catch Of The Day". */
-export function actionRollFallbackName(kind: string): string {
-  const base = kind.replace(/:.*$/, '').replace(/Roll$/, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').trim();
-  return base ? base.charAt(0).toUpperCase() + base.slice(1) : kind;
 }
 
 // ---- owner 11-04: win rate vs the opponent's Coach Rating (the Coach Stats "Extra stats" pop-out) ----

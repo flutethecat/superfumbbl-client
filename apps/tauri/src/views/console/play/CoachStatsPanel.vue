@@ -44,11 +44,12 @@ import { COACH_LUCK_KEYS, type CoachGameRecord, type CoachLuckKey, type CoachSta
 import { COACH_SYNC_GAMES, cancelCoachStatsSync, coachSyncState, coachSyncVisible, readCoachSyncAvailability } from '../../../game/coachStatsSync';
 import { coachSyncStorage, syncFumbblCoachGames } from '../../../game/coachStatsSyncRuntime';
 import {
-  ACTION_ROLL_GROUPS, actionBreakdown, actionRollFallbackName, crBands, koRecoveries, diceWindows, filterByServer, historySince, matchups, opponentCoaches, perGameStats, raceRecords, recordText, signedLuck,
+  ACTION_ROLL_GROUPS, actionBreakdown, crBands, koRecoveries, diceWindows, filterByServer, historySince, matchups, opponentCoaches, perGameStats, raceRecords, recordText, signedLuck,
   type CoachServerFilter, type LuckSummary,
 } from '../../../game/coachStats';
-import { t, terms } from '../../../i18n';
+import { t } from '../../../i18n';
 import CoachStatsPopout from './CoachStatsPopout.vue';
+import { ACTION_ROLL_GROUP_LABEL, actionRollName } from '../../../game/actionRollNames';
 import { forkFeaturesEnabled } from '../../../game/forkAccess';
 
 const props = defineProps<{ games: readonly CoachGameRecord[]; name: string }>();
@@ -82,30 +83,9 @@ const DETAIL_WINDOWS: (number | null)[] = [10, 25, null];
 const detailWindow = ref<number | null>(null);
 const actionRows = computed(() => actionBreakdown(shown.value, detailWindow.value));
 const actionGroups = computed(() => ACTION_ROLL_GROUPS.map((group) => ({ group, rows: actionRows.value.filter((r) => r.group === group) })).filter((g) => g.rows.length));
-const GROUP_LABEL = {
-  movement: 'coachStats.actionRolls.group.movement', ballHandling: 'coachStats.actionRolls.group.ballHandling',
-  negativeTraits: 'coachStats.actionRolls.group.negativeTraits', other: 'coachStats.actionRolls.group.other',
-} as const;
-/** Our own label keys for the roll kinds the game terms do not name. */
-const ROLL_KEY: Record<string, string> = {
-  goForItRoll: 'coachStats.roll.rush', leapRoll: 'coachStats.roll.jump', jumpRoll: 'coachStats.roll.jump', standUpRoll: 'coachStats.roll.standUp',
-  pickUpRoll: 'coachStats.roll.pickUp', throwTeamMateRoll: 'coachStats.roll.throwTeamMate', wildAnimalRoll: 'coachStats.roll.wildAnimal',
-  escapeRoll: 'coachStats.roll.escape', confusionRoll: 'coachStats.roll.confusion',
-};
-/** The rulebook's skill names (the game-terms translations, terms()) for the rest. */
-const ROLL_TERM: Record<string, string> = {
-  dodgeRoll: 'Dodge', 'leapRoll:leap': 'Leap', jumpUpRoll: 'Jump Up', catchRoll: 'Catch', passRoll: 'Pass', interceptionRoll: 'Interception',
-  rightStuffRoll: 'Right Stuff', safeThrowRoll: 'Safe Pass', foulAppearanceRoll: 'Foul Appearance', reallyStupidRoll: 'Really Stupid',
-  bloodLustRoll: 'Bloodlust', boneHeadRoll: 'Bone Head', animalSavageryRoll: 'Animal Savagery', takeRootRoll: 'Take Root',
-  unchannelledFuryRoll: 'Unchannelled Fury', alwaysHungryRoll: 'Always Hungry', animosityRoll: 'Animosity', regenerationRoll: 'Regeneration',
-  hypnoticGazeRoll: 'Hypnotic Gaze', dauntlessRoll: 'Dauntless', chainsawRoll: 'Chainsaw', breatheFire: 'Breathe Fire',
-  projectileVomit: 'Projectile Vomit', steadyFootingRoll: 'Steady Footing',
-};
-function rollName(kind: string): string {
-  if (ROLL_KEY[kind]) return t(ROLL_KEY[kind]!);
-  if (ROLL_TERM[kind]) return terms(ROLL_TERM[kind]!);
-  return actionRollFallbackName(kind);
-}
+// The kinds' names and group headings are shared with the end-of-game Dice pane (game/actionRollNames.ts).
+const GROUP_LABEL = ACTION_ROLL_GROUP_LABEL;
+const rollName = actionRollName;
 const actionVerdict = (v: 'lucky' | 'even' | 'unlucky' | null) => (v === 'lucky' ? t('pg.luck.lucky') : v === 'unlucky' ? t('pg.luck.unlucky') : t('coachStats.luck.even'));
 function openDetails(): void { detailsOpen.value = true; }
 
