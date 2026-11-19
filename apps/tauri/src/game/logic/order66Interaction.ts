@@ -217,13 +217,13 @@ export function withPlottedRouteCancelRow<T extends { endActivation?: boolean }>
  *  right-click that landed OFF the 26x15 grid (sidelines, dugouts, surround):
  *  - 'acting-menu': my turn, I control the acting player -> the acting player's rail menu, as right-clicking him does;
  *  - 'as-empty-square': my turn, no controlled acting player -> the empty-square cascade (go back / cancel / clear / deselect);
- *  - 'ignore': spectating / replay / not my turn / not the Order 66 surface -> today's behaviour (nothing).
+ *  - 'ignore': spectating / replay / not my turn -> today's behaviour (nothing).
  *  An on-pitch right-click is never touched here ('as-is'). */
 export function offPitchRightClickRoute(input: {
-  offPitch: boolean; order66: boolean; isPlaying: boolean; myTurn: boolean; actingControlled: boolean;
+  offPitch: boolean; isPlaying: boolean; myTurn: boolean; actingControlled: boolean;
 }): 'as-is' | 'acting-menu' | 'as-empty-square' | 'ignore' {
   if (!input.offPitch) return 'as-is';
-  if (!input.order66 || !input.isPlaying || !input.myTurn) return 'ignore';
+  if (!input.isPlaying || !input.myTurn) return 'ignore';
   return input.actingControlled ? 'acting-menu' : 'as-empty-square';
 }
 

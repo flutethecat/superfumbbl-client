@@ -159,8 +159,6 @@ const gitSha = typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'nogit';
 // Owner 09-25: declared BEFORE the immediate watchers below — the Discord presence watcher ran at setup, hit the
 // const in its temporal dead zone (ReferenceError) and presence never pushed (live 09-25 on the dev rig).
 const inTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
-// ORDER 66 (A.2): a port-branch build (0.2.8-o66a…) — surfaces the order66 toggle without needing -dev.
-const isO66Build = appVersion.includes('o66');
 // Owner 09-23: version check — at startup ask GitHub for the latest public release; when it is newer than this
 // build, prompt with a button that opens the release page in the system browser. Dev cuts never prompt.
 const updatePrompt = ref<{ version: string; url: string; inApp: boolean; notes?: string; required?: boolean } | null>(null);

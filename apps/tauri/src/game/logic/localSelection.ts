@@ -43,7 +43,6 @@ export function localSelectionCanWalk(game: GameJson, ctx: ClientStateContext, p
 export interface LocalMoverInput {
   /** The view's client-local selection (set by a left-click, never sent). */
   localId: string | null;
-  order66: boolean;
   playing: boolean;
   myTurn: boolean;
   controls: (playerId: string) => boolean;
@@ -57,7 +56,7 @@ export interface LocalMoverInput {
  *  surface again, exactly as before. */
 export function localMoverId(game: GameJson | null | undefined, ctx: ClientStateContext, input: LocalMoverInput): string {
   const id = input.localId ?? '';
-  if (!id || !game || !input.order66 || !input.playing || !input.myTurn || input.busy) return '';
+  if (!id || !game || !input.playing || !input.myTurn || input.busy) return '';
   if (serverActingId(game)) return '';
   if (deriveClientState(game, ctx) !== 'SELECT_PLAYER') return '';
   if (!input.controls(id)) return '';

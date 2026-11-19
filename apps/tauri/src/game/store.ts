@@ -2028,8 +2028,6 @@ let dodgySnackGen = 0;
 let pendingMasterChef: { team: string; stolen: number; rolls: number[] } | null = null;
 /** S45: which blocking kick-off splash cine (Master Chef / Dodgy Snack) owns the screen — drives the click-to-skip catcher (`presentation` is not reactive). */
 const blockingSplashCine = shallowRef<'masterChef' | 'dodgySnack' | null>(null);
-/** S45: the non-FIFO (order66 off) Master Chef pregame step is on screen — holds the pregame pump and survives collapseStalePregameCine like a prayer. */
-let legacyMasterChefShowing = false;
 
 let coinTimer: ReturnType<typeof setTimeout> | null = null;
 // #71: coinThrow report lands LATE (kickoff batch, g643) → reveal presents on the coin-CHOICE round-trip instead, RECONSTRUCTED from server facts (call + winner; ⚖ not a prediction — coin==call ⇔ caller won, determined by seq12). Only when I called; `coinRevealResult` is asserted vs the authoritative report when it lands.
@@ -2453,7 +2451,6 @@ const rerollSplashWanted = (isTeam: boolean, raw?: string) => (isTeam || !!raw) 
 const FAIL_BEAT_MS = 750; // owner 10-16: 1220 -> 750 (the failed dodge read was too long); owner 2026-07-08: −1/3 (was 1830)
 // Owner C3 pt.2: a SUCCESSFUL roll reads ~half the fail beat (owner-tuned to 560); tune here if the feel is off.
 const SUCCESS_ROLL_BEAT_MS = 560;
-// C3 pt.2 + #65 (07-17): FED-PATH STEP STAGGER — per-square drain-hold set ABOVE the renderer's 200ms tween so a fed walk settles per boundary (spectate parity by construction); the 3 roll beats subsume it via Math.max. ⚠ INERT in o66 play (#67 drain owns pacing; sole call site is the `!o66Play` branch) — LEGACY-play only, a Track-B comment-out candidate (N-4).
 // Owner 2026-07-06: a ball PICKUP roll holds the drain this long (success or fail) so the pickup reads before the ball settles / the turn advances.
 const PICKUP_BEAT_MS = 950;
 const REROLL_BEAT_MS = 1100; // the reroll splash reads before the re-rolled result (spectate drain hold)
@@ -3441,7 +3438,6 @@ const SWARMING_SPLASH_SEEN_CAP = 32;
 const swarmingSplashSeen = new Set<string>();
 let swarmingSplashSeenGameId: string | null = null;
 let swarmingSplashSeq = 0;
-let swarmingTimer: ReturnType<typeof setTimeout> | null = null;
 const swarmingAmountByTeam = new Map<string, number>();
 function noteSwarmingGameAdopted(model: GameJson | null | undefined): void {
   if (!model) return; // a disconnect is not a game change: a same-game reconnect keeps the keys
@@ -3522,12 +3518,9 @@ function swarmingSplashState(splash: SwarmingSplash): NonNullable<typeof state.s
 }
 /** Sol r1 P2-4: the release of the published review route's on-screen Swarming hold (dismissShownCine resolves it). */
 let publishedCineRelease: (() => void) | null = null;
-/** Sol r1 P2-3: retire the displayed and every queued Swarming splash (pregame queue and #67 FIFO) - catch-up entry,
+/** Sol r1 P2-3: retire the displayed and every queued Swarming splash (#67 FIFO) - catch-up entry,
  *  catch-up cleanup, resets, seeks, socket close. The occurrence keys stay spent, so nothing re-fires afterwards. */
 function clearSwarmingSplash(): void {
-  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
-  swarmingTimer = null;
-  for (let i = pregameCineQueue.length - 1; i >= 0; i--) if (pregameCineQueue[i]?.kind === 'swarming') pregameCineQueue.splice(i, 1);
   for (let i = presentation.queue.length - 1; i >= 0; i--) {
     const event = presentation.queue[i];
     if (event?.kind === 'cine' && event.label.startsWith('swarming:')) presentation.queue.splice(i, 1);
@@ -3537,22 +3530,10 @@ function clearSwarmingSplash(): void {
   publishedCineRelease?.(); // the published hold fails open too: nothing waits on a splash that is gone
   state.swarmingSplash = null;
 }
-/** Spectate / replay pregame step: the kick-off card's own dwell timer shape (showKickoff). */
-function showSwarmingSplash(splash: SwarmingSplash): void {
-  state.swarmingSplash = swarmingSplashState(splash);
-  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
-  swarmingTimer = settings.clickDismissCinematics ? null
-    : scheduleGameTimeout(() => { swarmingTimer = null; state.swarmingSplash = null; }, presentationMs(KICKOFF_CINE_MS));
-}
 function surfaceSwarmingSplash(reports: readonly Record<string, unknown>[], g: GameJson | null, occurrence: string | null): void {
   for (const splash of freshSwarmingSplashes(reports, g, occurrence)) {
-    if (settings.order66) {
-      enqueueFifoCine(`swarming:${splash.teamId}`, () => { state.swarmingSplash = swarmingSplashState(splash); },
-        () => { state.swarmingSplash = null; }, presentationMs(KICKOFF_CINE_MS));
-    } else {
-      enqueuePregameCine(() => showSwarmingSplash(splash), presentationMs(KICKOFF_CINE_MS), 'swarming');
-      holdPlayback(presentationMs(KICKOFF_CINE_MS)); // the splash reads before the placement frames apply
-    }
+    enqueueFifoCine(`swarming:${splash.teamId}`, () => { state.swarmingSplash = swarmingSplashState(splash); },
+      () => { state.swarmingSplash = null; }, presentationMs(KICKOFF_CINE_MS));
   }
 }
 /** Pure: the successful mascotUsed report of a frame, if any (a failed mascot that falls back to a TRR rides the
@@ -3622,16 +3603,6 @@ interface FanFactorRoll {
 }
 
 // Wire kick-off result name → redesigned splash banner stem (normalized key match).
-let weatherTimer: ReturnType<typeof setTimeout> | null = null;
-function showWeather(roll: number[], weather: string, dwellMs = presentationMs(WEATHER_CINE_MS), changing = false) {
-  // The legacy o66 caller remains suppressed; the authoritative o66 FIFO path below owns live weather presentation.
-  if (settings.order66) return;
-  state.weatherCine = { roll, weather, changing };
-  if (weatherTimer) cancelGameTimeout(weatherTimer);
-  weatherTimer = settings.clickDismissCinematics
-    ? null
-    : scheduleGameTimeout(() => (state.weatherCine = null), dwellMs); // owner 09-09: the Changing Weather event passes its shorter dwell
-}
 
 const KICKOFF_SPLASH: Record<string, string> = {
   gettheref: 'get_the_ref', timeout: 'timeout', soliddefence: 'solid_defence', highkick: 'high_kick',
@@ -3914,25 +3885,6 @@ let followupResolvedWhileOpen: string | null = null;
  *  else that block reports later; cleared by a fresh block roll or a new acting player. */
 let noDialogStayKey: { attackerId: string; defenderId: string } | null = null;
 
-let fanFactorTimer: ReturnType<typeof setTimeout> | null = null;
-function showFanFactor(home: FanFactorRoll, away: FanFactorRoll, g: GameJson) {
-  // o66aj: fan-factor splash SUPPRESSED in o66 (result still lands in the model) — same rule as showWeather: a re-enable rides the #67 drain, NOT the dead buffer-beat plan.
-  if (settings.order66) return;
-  const diff = Math.abs(home.total - away.total);
-  const leader: 'home' | 'away' | 'tie' =
-    home.total === away.total ? 'tie' : home.total > away.total ? 'home' : 'away';
-  state.fanFactorCine = {
-    home,
-    away,
-    homeCoach: g.teamHome.coach ?? 'Home',
-    awayCoach: g.teamAway.coach ?? 'Away',
-    diff,
-    leader,
-  };
-  if (fanFactorTimer) cancelGameTimeout(fanFactorTimer);
-  fanFactorTimer = settings.clickDismissCinematics ? null : scheduleGameTimeout(() => (state.fanFactorCine = null), presentationMs(FAN_CINE_MS));
-}
-
 /** B6-5/B8-2/B8-3: pre-game dice cinematics off the report stream (coin/weather/fan-factor); shared by live playback + the demo loader. */
 // Pregame cines play ONE AT A TIME via this queue — it decouples cine PRESENTATION from model application (play mode applies frames immediately; without it the overlays all fire at once).
 const PREGAME_CINE_GAP_MS = 450; // a small breath between cinematics
@@ -3940,7 +3892,7 @@ type PregameCineStep = {
   fire: () => void;
   clear?: () => void;
   holdMs: number;
-  kind?: 'fan' | 'weather' | 'coin' | 'kickoff' | 'prayer' | 'masterChef' | 'swarming';
+  kind?: 'fan' | 'weather' | 'coin' | 'kickoff' | 'prayer';
 };
 const pregameCineQueue: PregameCineStep[] = [];
 let pregameCineBusyUntil = 0;
@@ -3948,7 +3900,7 @@ let pregameCineTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** A queued splash (fan/weather/coin/kickoff/prayer) is currently on screen. */
 function isQueuedCineShowing() {
-  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || state.swarmingSplash || state.prayerAnnounce || legacyMasterChefShowing);
+  return !!(state.coinToss || state.weatherCine || state.fanFactorCine || state.kickoffCine || state.swarmingSplash || state.prayerAnnounce);
 }
 
 /** Only legacy/cinematic surfaces with an owner-approved skip affordance. Prayer announcements always complete on the FIFO clock. */
@@ -4086,9 +4038,9 @@ function dismissShownCine() {
   // Slice 2: a FIFO kickoff-transaction cine owns its own completion — release exactly THAT slot (advances one
   // FIFO event, clears its own cine field) and leave the pregame pump (coin/fan/weather + spectate kickoff) alone.
   if (presentation.presenting?.kind === 'cine') { presentation.presenting.release(); return; }
-  // S45: the non-FIFO (order66 off) Master Chef / Dodgy Snack pregame steps: clear that splash and let the pump go on.
+  // S45: a non-FIFO Master Chef / Dodgy Snack splash (the catch-up Dodgy Snack pregame step): clear that splash and let the pump go on.
   if (blockingSplashCine.value) {
-    if (blockingSplashCine.value === 'masterChef') { legacyMasterChefShowing = false; state.masterChefSplash = null; }
+    if (blockingSplashCine.value === 'masterChef') { state.masterChefSplash = null; }
     else { state.dodgySnackCine = null; state.dodgySnackAnnouncement = null; }
     blockingSplashCine.value = null;
     if (pregameCineTimer) { cancelGameTimeout(pregameCineTimer); pregameCineTimer = null; }
@@ -4097,8 +4049,8 @@ function dismissShownCine() {
     return;
   }
   if (!isDismissibleCineShowing()) return;
-  for (const t of [coinTimer, weatherTimer, fanFactorTimer, kickoffTimer, swarmingTimer]) if (t) cancelGameTimeout(t);
-  coinTimer = weatherTimer = fanFactorTimer = kickoffTimer = swarmingTimer = null;
+  for (const t of [coinTimer, kickoffTimer]) if (t) cancelGameTimeout(t);
+  coinTimer = kickoffTimer = null;
   if (pregameCineTimer) { cancelGameTimeout(pregameCineTimer); pregameCineTimer = null; }
   if (state.coinToss) finishCoinToss(true);
   state.weatherCine = null;
@@ -4126,8 +4078,6 @@ function enqueuePriorityCoinReveal(fire: () => void, holdMs: number): void {
     const kind = pregameCineQueue[index]?.kind;
     if (kind === 'fan' || kind === 'weather' || kind === 'coin') pregameCineQueue.splice(index, 1);
   }
-  if (fanFactorTimer) { cancelGameTimeout(fanFactorTimer); fanFactorTimer = null; }
-  if (weatherTimer) { cancelGameTimeout(weatherTimer); weatherTimer = null; }
   state.fanFactorCine = null;
   state.weatherCine = null;
   if (!protectedSurfaceShowing) {
@@ -4174,10 +4124,10 @@ function collapseStalePregameCine() {
   if (!pregameCineBusy()) return; // normal (non-raced) pregame: queue already drained — pacing untouched
   // Received prayer announcements are mandatory and own their FIFO lifetime. Collapsing the surrounding pregame
   // queue would either drop queued prayers or cancel the active prayer's clear timer, leaving it wedged forever.
-  if (state.prayerAnnounce || legacyMasterChefShowing || pregameCineQueue.some((step) => step.kind === 'prayer' || step.kind === 'masterChef')) return;
+  if (state.prayerAnnounce || pregameCineQueue.some((step) => step.kind === 'prayer')) return;
   const keepCoin = !playback.catchingUp;
   const queuedCoin = pregameCineQueue.find((s) => s.kind === 'coin');
-  const keptKickoffs = pregameCineQueue.filter((s) => s.kind === 'kickoff' || s.kind === 'swarming'); // never drop a queued kickoff (or Swarming) splash
+  const keptKickoffs = pregameCineQueue.filter((s) => s.kind === 'kickoff'); // never drop a queued kickoff splash
   pregameCineQueue.length = 0;
   if (keepCoin && queuedCoin) {
     // Re-wrap the coin with a compressed auto-clear: showCoinToss arms COIN_CINE_MS (and NO timer in
@@ -4197,15 +4147,15 @@ function collapseStalePregameCine() {
   }
   pregameCineQueue.push(...keptKickoffs);
   // On-screen stale cines: fan/weather vanish now; a coin already showing keeps the same bounded remainder.
-  if (state.fanFactorCine) { if (fanFactorTimer) cancelGameTimeout(fanFactorTimer); fanFactorTimer = null; state.fanFactorCine = null; }
-  if (state.weatherCine) { if (weatherTimer) cancelGameTimeout(weatherTimer); weatherTimer = null; state.weatherCine = null; }
+  if (state.fanFactorCine) { state.fanFactorCine = null; }
+  if (state.weatherCine) { state.weatherCine = null; }
   if (state.coinToss) {
     if (coinTimer) cancelGameTimeout(coinTimer);
     coinTimer = null;
     if (keepCoin) coinTimer = scheduleGameTimeout(() => { coinTimer = null; finishCoinToss(true); pumpPregameCine(); }, presentationMs(COIN_COMPRESSED_MS));
     else finishCoinToss(false);
   }
-  // Sol r1 P1: an on-screen Swarming splash (a pregame step, not a #67 FIFO cine) is part of this kick-off, not stale
+  // Sol r1 P1: an on-screen Swarming splash that is not a #67 FIFO cine is part of this kick-off, not stale
   // pregame: it keeps its remaining dwell, and the running pump timer releases the kept steps behind it.
   const swarmingStepShowing = !!state.swarmingSplash
     && !(presentation.presenting?.kind === 'cine' && presentation.presenting.id.startsWith('swarming:'));
@@ -4233,10 +4183,7 @@ function clearPregameCine() {
   if (kickoffTimer) cancelGameTimeout(kickoffTimer);
   kickoffTimer = null;
   state.kickoffCine = null;
-  if (swarmingTimer) cancelGameTimeout(swarmingTimer);
-  swarmingTimer = null;
   state.swarmingSplash = null;
-  legacyMasterChefShowing = false;
   state.prayerAnnounce = null;
   pendingPrayerEffects.length = 0;
 }
@@ -4269,7 +4216,7 @@ function flushPendingKickoffSplash(): void {
 }
 
 /** S45: surface the stashed Master Chef steal as a BLOCKING cine — after the landing reveal, ahead of the kick-off event cine
- *  (both enqueue behind each other in server order). Play/live: a gate-bearing #67 FIFO cine; non-FIFO (order66 off): a pregame-cine step.
+ *  (both enqueue behind each other in server order): a gate-bearing #67 FIFO cine.
  *  Nothing is inserted without a report; catch-up drops it (historical). */
 function flushPendingMasterChef(): void {
   const chef = pendingMasterChef;
@@ -4282,17 +4229,7 @@ function flushPendingMasterChef(): void {
     state.masterChefSplash = null;
     if (blockingSplashCine.value === 'masterChef') blockingSplashCine.value = null;
   };
-  if (settings.order66) {
-    enqueueFifoCine('masterChef', () => { set(); blockingSplashCine.value = 'masterChef'; }, clear, presentationMs(RIOTOUS_CINE_MS));
-  } else {
-    // The view no longer times this splash itself, so the pregame step owns its lifetime in click-dismiss mode too.
-    const clearLegacy = () => { legacyMasterChefShowing = false; clear(); };
-    enqueuePregameCine(() => {
-      set(); legacyMasterChefShowing = true; blockingSplashCine.value = 'masterChef'; // the click-to-skip catcher (dismissShownCine) covers this step too
-      if (!settings.clickDismissCinematics) scheduleGameTimeout(() => { clearLegacy(); pumpPregameCine(); }, presentationMs(RIOTOUS_CINE_MS)); // click mode: held until the click
-    }, presentationMs(RIOTOUS_CINE_MS), 'masterChef', clearLegacy);
-    holdPlayback(presentationMs(RIOTOUS_CINE_MS));
-  }
+  enqueueFifoCine('masterChef', () => { set(); blockingSplashCine.value = 'masterChef'; }, clear, presentationMs(RIOTOUS_CINE_MS));
 }
 
 const prayerDialogDrainArms = new Set<string>();
@@ -4563,7 +4500,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
     flushPendingMasterChef(); // S45 fallback: a stashed steal never lands behind its own kick-off event (normally already surfaced at the scatter reveal)
     const kName = kickoff.name, kRoll = kickoff.roll;
     const kOutcome = kickoffOutcome(kName, kickoffPalette, reports, g); // owner 09-24: "<Team> wins" under the banner
-    if (settings.order66 && !playback.catchingUp) {
+    if (!playback.catchingUp) {
       // Slice 2: PLAY mode — the kickoff event card OWNS its dwell on the #67 FIFO (ahead of the kickArc barrier
       // enqueued later this frame), so the apex-hold card and the descent gate are ONE serialized transaction. It
       // sets state.kickoffCine (unchanged apex-hold trigger: SpectateView watcher) and clears it on completion; no
@@ -4582,9 +4519,10 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       holdPlayback(presentationMs(KICKOFF_CINE_MS));
     }
   }
-  if (home && away && !suppressPresentation) enqueuePregameCine(() => showFanFactor(home, away, g), presentationMs(FAN_CINE_MS), 'fan');
+  // The fan-factor and pregame weather steps show no splash (the result lands in the model); each keeps its dwell.
+  if (home && away && !suppressPresentation) enqueuePregameCine(() => {}, presentationMs(FAN_CINE_MS), 'fan');
   if (weather && !suppressPresentation) {
-    if (settings.order66 && !playback.catchingUp && kickoffTransactionActive()) {
+    if (!playback.catchingUp && kickoffTransactionActive()) {
       // Weather Change is a child of the authoritative kickoff transaction for both audiences.
       const wRoll = weather.roll, wName = weather.weather;
       // Owner 09-09: a weather roll in the KICK-OFF frame is the Changing Weather event -> the shorter card.
@@ -4599,23 +4537,18 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       );
     } else {
       const weatherDwell = presentationMs(kickoff ? WEATHER_CHANGE_CINE_MS : WEATHER_CINE_MS);
-      enqueuePregameCine(() => showWeather(weather!.roll, weather!.weather, weatherDwell, !!kickoff), weatherDwell, 'weather');
+      enqueuePregameCine(() => {}, weatherDwell, 'weather');
     }
   }
   if (weatherMageResult && !playback.catchingUp) {
     const result = weatherMageResult;
-    if (settings.order66) {
-      enqueueFifoCine('weatherMageUse', () => showWeatherMageSplash(g), () => { state.rerollSplash = null; }, presentationMs(REROLL_SPLASH_HOLD_MS));
-      enqueueFifoCine(
-        'weatherMageWeather',
-        () => { state.weatherCine = result; },
-        () => { state.weatherCine = null; },
-        presentationMs(WEATHER_CINE_MS),
-      );
-    } else {
-      enqueuePregameCine(() => showWeatherMageSplash(g), presentationMs(REROLL_SPLASH_HOLD_MS));
-      enqueuePregameCine(() => showWeather(result.roll, result.weather), presentationMs(WEATHER_CINE_MS), 'weather');
-    }
+    enqueueFifoCine('weatherMageUse', () => showWeatherMageSplash(g), () => { state.rerollSplash = null; }, presentationMs(REROLL_SPLASH_HOLD_MS));
+    enqueueFifoCine(
+      'weatherMageWeather',
+      () => { state.weatherCine = result; },
+      () => { state.weatherCine = null; },
+      presentationMs(WEATHER_CINE_MS),
+    );
   }
   // #71: reveal already presented on the choice round-trip ⇒ SUPPRESS this late report cine; ⚖ backstop asserts the report agrees with the reconstruction (mismatch logged, never re-shown).
   if (!suppressPresentation && coin && coinRevealShown) {
@@ -4643,7 +4576,7 @@ function detectPregameCinematics(reports: Record<string, unknown>[], g: GameJson
       scheduleGameTimeout(() => { if (gen === dodgySnackGen) state.dodgySnackCine = null; }, presentationMs(DODGY_SNACK_CINE_MS));
       if (ownsAnnouncementTimer && !settings.clickDismissCinematics) scheduleGameTimeout(() => { if (gen === dodgySnackGen) state.dodgySnackAnnouncement = null; if (blockingSplashCine.value === 'dodgySnack') blockingSplashCine.value = null; }, presentationMs(DODGY_SNACK_ANNOUNCEMENT_MS)); // the FIFO cine owns it in play
     };
-    if (settings.order66 && !playback.catchingUp) {
+    if (!playback.catchingUp) {
       // Play: the kick-off card is a `cine` on the #67 FIFO — the splash is the next cine BEHIND it, after the short gap.
       // running/queue also covers the card between its shift and its arm, which neither `presenting` nor the queue shows.
       if (presentation.running || presentation.queue.length > 0) enqueueBeat(presentationMs(400));
@@ -8613,7 +8546,7 @@ function discardConfirmedMovementPresentation(): void {
 }
 
 function confirmedMovementPresentationRequested(): boolean {
-  return replay.active || (settings.order66 && confirmedMovementPresentationConsumers.size > 0);
+  return replay.active || confirmedMovementPresentationConsumers.size > 0;
 }
 
 function syncConfirmedMovementPresentationCapability(): void {
@@ -9111,7 +9044,7 @@ function deferTurnStartBehindKickArc(side: 'home' | 'away'): boolean {
   // seat. The bare-state branch (b) below applies to spectate/replay too (it was play-only), and a kickoff card
   // still QUEUED in the pregame pump (spectate path: enqueuePregameCine) counts as held — the 647 watch re-fires
   // once that card has shown and cleared.
-  const queuedKickoffCard = pregameCineQueue.some((step) => step.kind === 'kickoff' || step.kind === 'masterChef');
+  const queuedKickoffCard = pregameCineQueue.some((step) => step.kind === 'kickoff');
   // S45: on EVERY seat the splash waits for the whole kick-off chain the #67 FIFO still holds — Master Chef / event / Dodgy Snack cines,
   // the queued or running flight (authoritativeKick, kickArc barrier) and the bounce. A spectator's chain rides the same FIFO.
   // Owner pacing rule (647): NOTHING co-fires with the turn splash at kickoff — it queues behind the WHOLE
@@ -11105,7 +11038,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // event per server catchRoll report, in report order (Astra confirmation P2: a same-frame Catch-skill reroll).
   const stagedKickoffCatches = new Map<object, StagedKickoffCatch>();
   // #78 (owner 08-05): pace pickup, catch resolution, and EVERY ball-scatter hop in o66 play; spectate keeps holdPlayback. The frame's sound rides its beat (#92 Group-A cue); beats ride the #67 FIFO so they land AFTER move steps and degrade to instant on flush/catch-up.
-  if (settings.order66 && !playback.catchingUp) {
+  if (!playback.catchingUp) {
     const snd = String((cmd as { sound?: unknown }).sound ?? '');
     // Owner 10-02 (g1949371): the loose-ball chain's frame gate — each hop and each catch roll reads before the
     // next frame applies (ballChainWaitMs). Summed here, armed once below.
@@ -11653,10 +11586,8 @@ function applyFrameContents(frame: QueuedFrame) {
     const arrows = projectedPushes.arrows;
     // Owner 07-03: hold arrows behind the block dice (spectator pacing, via the driver's resolve anchor); null clears immediately.
     const arrowsToShow = arrows.length > 0 ? arrows : null;
-    // #122 (Yularen RE-ENABLE 07-22): o66 arrows are ⚖ PHANTOM-SAFE BY CONSTRUCTION vs W1 ([[server-wedge-catalog]]): (a) every arrow derives from a square ACTUALLY VACATED this frame (Stand-Firm/declined = no transition = no arrow); (b) set SYNCHRONOUSLY, not via the scheduleResolved timer (the W1 mechanism); (c) recomputed per frame + nulls when nothing moved. The timer path STAYS on the flag-OFF/spectate branch, byte-untouched.
-    if (settings.order66) state.pushArrows = arrowsToShow; // shared live path — phantom-safe, synchronous
-    else if (arrowsToShow) blockPipeline.scheduleResolved(() => (state.pushArrows = arrowsToShow));
-    else state.pushArrows = arrowsToShow;
+    // #122 (Yularen RE-ENABLE 07-22): o66 arrows are ⚖ PHANTOM-SAFE BY CONSTRUCTION vs W1 ([[server-wedge-catalog]]): (a) every arrow derives from a square ACTUALLY VACATED this frame (Stand-Firm/declined = no transition = no arrow); (b) set SYNCHRONOUSLY, not via the scheduleResolved timer (the W1 mechanism); (c) recomputed per frame + nulls when nothing moved.
+    state.pushArrows = arrowsToShow; // shared live path — phantom-safe, synchronous
   }
   // Owner 07-08: FALLS OVER (dropDodge/dropGfi) fires regardless of armour; classify before the held-armour gate below.
   const fallOverCoords = new Map(preCoords);
@@ -12432,11 +12363,11 @@ function applyFrameContents(frame: QueuedFrame) {
           // Astra r1: a staged kick-off rerolled result re-rolls its staged failed die in place too (no second die)
           else if (stagedCatch && modal.reRolled && pendingActionReroll) { modal.rerollSkill = pendingActionReroll.raw; modal.rerollTeam = pendingActionReroll.isTeam; }
           if (stagedCatch) addKickoffCatchArm(stagedCatch, publishModal);
-          else if (modal.kind === 'catch' && modal.reRolled && failedCatchModalShown && settings.order66 && !playback.catchingUp) rerolledCatchModals.push(publishModal);
+          else if (modal.kind === 'catch' && modal.reRolled && failedCatchModalShown && !playback.catchingUp) rerolledCatchModals.push(publishModal);
           // Owner 10-22 (1.0.253 chain rules): failed die (already up, held for the offer), the reroll beat, then the
           // rerolled die - never the rerolled die at once under the reroll toast.
           // Astra r2: Modern only - Classic has no modal reader, so it keeps its timing byte-identical (no beat, no gate)
-          else if (modal.kind === 'catch' && answersDialog && settings.order66 && settings.uiMode !== 'classic' && !playback.catchingUp) { dialogRerolledCatch = true; rerolledCatchModals.push(publishModal); }
+          else if (modal.kind === 'catch' && answersDialog && settings.uiMode !== 'classic' && !playback.catchingUp) { dialogRerolledCatch = true; rerolledCatchModals.push(publishModal); }
           else {
             publishModal();
             if (modal.kind === 'catch' && !modal.ok) failedCatchModalShown = true;
@@ -12731,9 +12662,6 @@ function applyFrameContents(frame: QueuedFrame) {
       // so it distinguishes a pre-step-1 roll (suppress the hold) from a step-2+ roll (hold as before). resolve-not-
       // drop: the die still shows via pushDice above; only the frame-hold is withheld ahead of step 1. FAIL (a fall,
       // no step follows) and PICKUP (end-of-move) keep their beats — neither precedes a movement step.
-      // Gate ONLY in o66 play (the #67 per-tile drain is play-only, so presentation.activation is meaningful there);
-      // spectate/non-o66 have no per-tile step render and keep the beat unconditional.
-      const o66Play = settings.order66;
       const actingMoverId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       const actingHasStepped = actingMoverId !== '' && presentation.activation === actingMoverId;
       // Owner 10-09: a failed movement roll of the moving player - the frames behind it (the fall, the turn end) wait
@@ -12755,7 +12683,7 @@ function applyFrameContents(frame: QueuedFrame) {
         holdPlayback(moverArrivalLeadMs(actingMoverId) + presentationMs(FAILED_MOVE_ROLL_HOLD.resultReadMs));
       } else if (hasFail) holdPlayback(presentationMs(FAIL_BEAT_MS), true);
       else if (hasPickup) holdPlayback(presentationMs(PICKUP_BEAT_MS), true);
-      else if (firstRolls.length > 0 && (actingHasStepped || !o66Play)) holdPlayback(presentationMs(SUCCESS_ROLL_BEAT_MS), true);
+      else if (firstRolls.length > 0 && actingHasStepped) holdPlayback(presentationMs(SUCCESS_ROLL_BEAT_MS), true);
     }
   }
   // ASK_FOR_KICK_AFTER_ROLL publishes this before the coach chooses. Preview only: no arc arm.
@@ -12826,7 +12754,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // Preliminary scatter never arms a gate; result cues keep their received position ahead of final KICK.
   flushPendingKickoffSplash();
   // Spectators consume the same inert Order-66 block surface as a live non-choosing seat.
-  if (!play.active && settings.order66) {
+  if (!play.active) {
     const dp = game.value.dialogParameter as Record<string, unknown> | null;
     const dlg = String(dp?.dialogId ?? '');
     if (dp && (dlg === 'blockRoll' || dlg === 'blockRollProperties' || dlg === 'blockRollPartialReRoll')) {
@@ -14569,7 +14497,7 @@ function bombFlightWaitMs(): number {
 }
 let ballBounceMovementWaitSince = 0;
 function ballChainPacingActive(): boolean {
-  return settings.order66 && !replay.active && !playback.catchingUp;
+  return !replay.active && !playback.catchingUp;
 }
 function armBallChainBeat(ms: number): void {
   if (!ballChainPacingActive()) return;
@@ -15112,13 +15040,11 @@ function enqueueSync(cmd: Record<string, unknown>, replayEndOfInput = false) {
     retireBlockWatchOnDefenderDelta(((cmd.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray ?? [])); // at receipt, before any presentation hold queues the frame
     defenderDeltaJudgedAtReceipt.add(cmd as object);
   }
-  // Order 66 play applies every sync immediately; spectator and flag-off paths retain paced playback.
-  const o66Play = settings.order66 && play.active;
-  // Outside Order 66, pace regular play frames but keep pregame/setup lockstep and queue continuity.
+  // Order 66 play applies every sync immediately; the spectator path retains paced playback.
   const frame: QueuedFrame = { cmd, receivedAt: activeLogReceipt?.receivedWallAt ?? Date.now(), receipt: activeLogReceipt ?? undefined, replayEndOfInput, ...onTheBall };
   // Owner 10-02: a touchdown-resolving frame that lands while the scoring run is still presenting takes the queue
   // (pumpPlayback holds it until the walk is shown); everything after it queues behind it in order.
-  if ((o66Play || (play.active && game.value.turnMode !== 'regular')) && playback.queue.length === 0
+  if (play.active && playback.queue.length === 0
       && Date.now() >= opponentBlockChoiceRevealUntil && !touchdownResolutionMustWait(frame)
       && ballChainWaitMs(frame) === 0 && bombFlightWaitMs() === 0 && ttmPresentationWaitMs() === 0 && rescuedMoveHoldWaitMs() === 0
       && stagedCatchReadWaitMs(frame) === 0 && failedMoveHoldWaitMs() === 0 && landingRerollHoldWaitMs() === 0 && fallArmourWaitMs() === 0) {
@@ -15420,8 +15346,8 @@ function clearCinematics(hardGameBoundary = false) {
   fallArmourPendingUntil = 0; // owner 10-20 fall beat
   reviewFollowPresentedAt = null; // owner 10-13
   if (!midCoinWindow && coinTimer) { cancelGameTimeout(coinTimer); coinTimer = null; }
-  for (const t of [turnoverTimer, turnoverClearTimer, weatherTimer, kickoffTimer, fanFactorTimer]) if (t) cancelGameTimeout(t);
-  turnoverTimer = turnoverClearTimer = weatherTimer = kickoffTimer = fanFactorTimer = null;
+  for (const t of [turnoverTimer, turnoverClearTimer, kickoffTimer]) if (t) cancelGameTimeout(t);
+  turnoverTimer = turnoverClearTimer = kickoffTimer = null;
   for (const t of demoCineTimers) cancelGameTimeout(t);
   demoCineTimers = [];
   clearAutoBeats(); // #166: drop any pending opt-in auto-answer beats on a game change
@@ -17416,8 +17342,6 @@ function plannerStart(input: {
   declareOnly?: boolean; declareAction?: string;
 }): boolean {
   if (!play.active || !game.value) return false;
-  const onTheBall = isOnTheBallTurnMode(game.value.turnMode);
-  if (!settings.order66 && !onTheBall) return false;
   const { playerId, actKind } = input;
   if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return false; }
   // Owner 10-15 P0 #3: no plan starts while our cancel is unanswered - the previous activation still stands on the
@@ -18190,7 +18114,6 @@ export function installMovePlannerTestHarness(
   const priorSession = session;
   endTurnInFlight = false; endTurnInFlightTurnKey = null; endTurnInFlightMode = null; srvTurnMode = typeof fixture.turnMode === 'string' ? fixture.turnMode : null; // owner 10-16: a fresh harness never inherits an in-flight End Turn; its fixture seeds the turn-mode mirror
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorMovementIntent = state.movementIntent;
   const priorMovementPresentationFence = state.movementPresentationFence;
@@ -18212,7 +18135,6 @@ export function installMovePlannerTestHarness(
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
   interactiveSetup = true;
-  settings.order66 = true;
   // This harness exercises the production Modern Order-66 planner/presentation seam; mirror the mounted Modern
   // capability so its confirmed-step assertions do not bypass the consumer contract under test.
   const unregisterConfirmedMovementPresentation = gameStore.registerConfirmedMovementPresentationConsumer();
@@ -18348,7 +18270,6 @@ export function installMovePlannerTestHarness(
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
       interactiveSetup = priorInteractiveSetup;
-      settings.order66 = priorOrder66;
       state.movementIntent = priorMovementIntent;
       state.movementPresentationFence = priorMovementPresentationFence;
       state.boardPresentationFence = priorBoardPresentationFence;
@@ -18379,7 +18300,6 @@ export function installFoulAppearanceBlockWatchTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorNotice = state.actionNotice;
   const logStart = state.log.length;
@@ -18387,7 +18307,6 @@ export function installFoulAppearanceBlockWatchTestHarness(
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = true;
   interactiveSetup = true;
   state.actionNotice = null;
   session = {
@@ -18429,7 +18348,6 @@ export function installFoulAppearanceBlockWatchTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       state.actionNotice = priorNotice;
     },
@@ -18547,7 +18465,6 @@ export function installGazeIntentTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorUiMode = settings.uiMode;
   const priorIntent = state.gazeIntent;
   const priorActionNotice = state.actionNotice;
@@ -18558,7 +18475,6 @@ export function installGazeIntentTestHarness(
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = true;
   settings.uiMode = options.uiMode ?? 'fumbbl40k';
   state.gazeIntent = null;
   state.actionNotice = null;
@@ -18624,7 +18540,6 @@ export function installGazeIntentTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       settings.uiMode = priorUiMode;
       state.gazeIntent = priorIntent;
       state.actionNotice = priorActionNotice;
@@ -18681,7 +18596,6 @@ export function installApothecaryTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorUiMode = settings.uiMode;
   const priorChoice = state.apothecaryChoice;
   const priorAutoReturn = state.apothecaryAutoReturn;
@@ -18718,7 +18632,6 @@ export function installApothecaryTestHarness(
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = false;
   session = {
     serverVersion, // the version this (game) connection announced
     send(command: Record<string, unknown>) {
@@ -18812,7 +18725,6 @@ export function installApothecaryTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       settings.uiMode = priorUiMode;
       state.apothecaryChoice = priorChoice;
       state.apothecaryAutoReturn = priorAutoReturn;
@@ -19473,7 +19385,6 @@ export function installConfirmedMovementDrainTestHarness(
   const priorPlay = { ...play };
   const priorReplayActive = replay.active;
   const priorCatchingUp = playback.catchingUp;
-  const priorOrder66 = settings.order66;
   const priorActive = state.confirmedMovementDrainActive;
   const priorRecovery = state.movementPresentationRecovery;
   const priorCommandNr = lastAppliedCommandNr;
@@ -19489,7 +19400,6 @@ export function installConfirmedMovementDrainTestHarness(
     : 'confirmed-drain-spectator';
   replay.active = mode === 'replay';
   playback.catchingUp = true;
-  settings.order66 = true;
   let commandNr = 0;
 
   return {
@@ -19523,7 +19433,6 @@ export function installConfirmedMovementDrainTestHarness(
       play.autoPregame = priorPlay.autoPregame;
       replay.active = priorReplayActive;
       playback.catchingUp = priorCatchingUp;
-      settings.order66 = priorOrder66;
       state.confirmedMovementDrainActive = priorActive;
       state.movementPresentationRecovery = priorRecovery;
       lastAppliedCommandNr = priorCommandNr;
@@ -19561,7 +19470,6 @@ export function installTouchdownPacingTestHarness(
   const priorPlay = { ...play };
   const priorReplayActive = replay.active;
   const priorCatchingUp = playback.catchingUp;
-  const priorOrder66 = settings.order66;
   const priorWireLog = settings.wireLog;
   const priorCommandNr = lastAppliedCommandNr;
   const priorSession = session;
@@ -19580,7 +19488,6 @@ export function installTouchdownPacingTestHarness(
   replay.active = options.replay === true;
   playback.catchingUp = false;
   playback.lastReceivedAt = 0;
-  settings.order66 = true;
   settings.wireLog = false;
   const unregister = gameStore.registerConfirmedMovementPresentationConsumer();
   return {
@@ -19605,7 +19512,6 @@ export function installTouchdownPacingTestHarness(
       play.coach = priorPlay.coach;
       replay.active = priorReplayActive;
       playback.catchingUp = priorCatchingUp;
-      settings.order66 = priorOrder66;
       settings.wireLog = priorWireLog;
       lastAppliedCommandNr = priorCommandNr;
       session = priorSession;
@@ -19632,14 +19538,12 @@ export function installBlockPartialTestHarness(
   sendMultiChoice(targetId: string, diceIndex: number, reRollSource?: unknown, proIndex?: number): void;
   setCoach(coach: string): void;
   setPlaying(playing: boolean): void;
-  setOrder66(enabled: boolean): void;
   presentationSeat(): 'home' | 'away' | null;
   dispose(): void;
 } {
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorInteractive = interactiveReRolls;
   const priorBlockPartial = state.blockPartial;
   const priorMulti = state.multiBlockResolution;
@@ -19652,7 +19556,6 @@ export function installBlockPartialTestHarness(
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = false;
   interactiveReRolls = true;
   session = {
     send(command: Record<string, unknown>) {
@@ -19709,7 +19612,6 @@ export function installBlockPartialTestHarness(
     sendMultiChoice(targetId, diceIndex, reRollSource, proIndex) { gameStore.sendMultiBlockChoiceForTarget(targetId, diceIndex, reRollSource, proIndex); },
     setCoach(coach) { play.coach = coach; },
     setPlaying(playing) { play.active = playing; },
-    setOrder66(enabled) { settings.order66 = enabled; },
     presentationSeat: () => gameStore.blockPresentationSeat.value,
     dispose() {
       if (opponentBlockChoiceRevealTimer) cancelGameTimeout(opponentBlockChoiceRevealTimer);
@@ -19722,7 +19624,6 @@ export function installBlockPartialTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       interactiveReRolls = priorInteractive;
       state.blockPartial = priorBlockPartial;
       state.multiBlockResolution = priorMulti;
@@ -20621,7 +20522,6 @@ export function installStarDeclareTestHarness(
   const priorPlay = { ...play };
   const priorSrvId = srvActingId;
   const priorSrvAction = srvActingAction;
-  const priorOrder66 = settings.order66;
   const priorInteractive = interactiveReRolls;
   const priorPendingWideRailDeclare = pendingWideRailDeclare;
   const priorAcknowledgedWideRailDeclare = acknowledgedWideRailDeclare;
@@ -20635,7 +20535,6 @@ export function installStarDeclareTestHarness(
     ? String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach')
     : 'watcher-not-on-either-roster';
   session = { send } as unknown as GameSession;
-  settings.order66 = true;
   interactiveReRolls = true;
   return {
     declare(playerId: string, action: string, expectedWireAction: string) {
@@ -20689,7 +20588,6 @@ export function installStarDeclareTestHarness(
       game.value = priorGame;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
-      settings.order66 = priorOrder66;
       interactiveReRolls = priorInteractive;
     },
   };
@@ -20728,7 +20626,6 @@ export function installStarTerminalTrioTestHarness(
   const priorSession = session;
   const priorPlay = { ...play };
   const priorSrvActingId = srvActingId;
-  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorDemoMode = state.demoMode;
   const priorReplayActive = replay.active;
@@ -20761,7 +20658,6 @@ export function installStarTerminalTrioTestHarness(
   };
   applySeat();
   srvActingId = null; // clean slate: declares fire immediately (whenPriorActivationEnded fast path) declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
-  settings.order66 = true;
   clearPlayerPick();
   clearYesNo();
   kickEmBlitzTargetHandledOccurrence = null;
@@ -20799,7 +20695,6 @@ export function installStarTerminalTrioTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       srvActingId = priorSrvActingId; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
-      settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       state.demoMode = priorDemoMode;
       replay.active = priorReplayActive;
@@ -20846,7 +20741,6 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   const priorPrimalIntent = primalSavageryIntent;
   const priorAnsweredSkills = answeredSkillDialog;
   const priorScatter = state.bncScatter;
-  const priorOrder66 = settings.order66;
   const priorLiveDialog = liveReRollDialog;
   const priorEpoch = liveReRollOfferEpoch;
   const priorMovement = liveMovementOccurrence;
@@ -20865,7 +20759,6 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   rerollRailFloorUntil = 0; // owner 10-26: the toast rail's floor is per epoch
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   game.value.turnMode = 'regular';
-  settings.order66 = false;
   play.active = true;
   play.coach = String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach');
   interactiveReRolls = true;
@@ -20907,7 +20800,6 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
       primalSavageryIntent = priorPrimalIntent;
       answeredSkillDialog = priorAnsweredSkills;
       state.bncScatter = priorScatter;
-      settings.order66 = priorOrder66;
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active;
@@ -20992,7 +20884,6 @@ export function installPassPickupReRollPlannerTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorInteractiveReRolls = interactiveReRolls;
   const priorPrompt = state.reRollPrompt;
@@ -21018,7 +20909,6 @@ export function installPassPickupReRollPlannerTestHarness(
   game.value.turnMode = 'regular';
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = true;
   interactiveSetup = false;
   interactiveReRolls = true;
   session = {
@@ -21070,7 +20960,6 @@ export function installPassPickupReRollPlannerTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       interactiveReRolls = priorInteractiveReRolls;
       moveOfferOccurrences.clear();
@@ -21174,7 +21063,6 @@ export function installSetupErrorRecoveryTestHarness(
   swarmSubmit(): void;
   attempt(command: Record<string, unknown>): boolean;
   plannerPending(): boolean;
-  setOrder66(enabled: boolean): void;
   driveLegacyDialog(): void;
   playerPick(): typeof state.playerPick;
   armBlockPartial(): void;
@@ -21194,7 +21082,6 @@ export function installSetupErrorRecoveryTestHarness(
   const priorUiMode = settings.uiMode;
   const priorInducementUse = state.inducementUse;
   const priorKickPlacement = state.kickPlacement;
-  const priorOrder66 = settings.order66;
   const priorInteractiveSetup = interactiveSetup;
   const priorFastPregame = fastPregame;
   const priorSetup = state.setupPhase;
@@ -21270,7 +21157,6 @@ export function installSetupErrorRecoveryTestHarness(
     swarmSubmit: () => gameStore.swarmingConfirm(),
     attempt: (command) => sendCommand(command),
     plannerPending: () => plannerPromptPending(),
-    setOrder66: (enabled) => { settings.order66 = enabled; },
     driveLegacyDialog: () => drivePregameStep(),
     playerPick: () => state.playerPick,
     armBlockPartial: () => { state.blockPartial = {} as NonNullable<typeof state.blockPartial>; },
@@ -21298,7 +21184,6 @@ export function installSetupErrorRecoveryTestHarness(
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
       settings.uiMode = priorUiMode;
-      settings.order66 = priorOrder66;
       interactiveSetup = priorInteractiveSetup;
       fastPregame = priorFastPregame;
       state.setupPhase = priorSetup;
@@ -21663,7 +21548,6 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
 } {
   const priorGame = game.value;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorSoundCueActive = soundCueActive;
   const priorCue = state.fireballAnim;
   const priorInjury = state.injurySplash;
@@ -21679,7 +21563,6 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
-  settings.order66 = false;
   soundCueActive = true;
   state.fireballAnim = null;
   state.injurySplash = null;
@@ -21719,7 +21602,6 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
       state.actionDice = priorActionDice;
       state.actionDiceQueue = [];
       soundCueActive = priorSoundCueActive;
-      settings.order66 = priorOrder66;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
@@ -21748,7 +21630,6 @@ export function installPassPacingTestHarness(fixture: GameJson): {
 } {
   const priorGame = game.value;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorCatchingUp = playback.catchingUp;
   const priorHold = state.passBallHold;
   const priorThrow = state.throwAnim;
@@ -21783,7 +21664,6 @@ export function installPassPacingTestHarness(fixture: GameJson): {
   } as GameJson['actingPlayer'];
   play.active = false;
   play.coach = 'pass-pacing-spectator';
-  settings.order66 = true;
   playback.catchingUp = false;
   state.passBallHold = null;
   state.throwAnim = null;
@@ -21838,7 +21718,6 @@ export function installPassPacingTestHarness(fixture: GameJson): {
       lastReportSig = priorLastReportSig;
       lastReportCommandNr = priorLastReportCommandNr;
       playback.catchingUp = priorCatchingUp;
-      settings.order66 = priorOrder66;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
@@ -21883,8 +21762,8 @@ export function installCoinPresentationTestHarness(
   const priorLastAppliedCommandNr = lastAppliedCommandNr;
 
   const resetCoinQueue = (publish = false) => {
-    for (const timer of [coinTimer, weatherTimer, fanFactorTimer, pregameCineTimer]) if (timer) cancelGameTimeout(timer);
-    coinTimer = weatherTimer = fanFactorTimer = pregameCineTimer = null;
+    for (const timer of [coinTimer, pregameCineTimer]) if (timer) cancelGameTimeout(timer);
+    coinTimer = pregameCineTimer = null;
     pregameCineQueue.length = 0;
     pregameCineBusyUntil = 0;
     state.weatherCine = null;
@@ -21907,13 +21786,8 @@ export function installCoinPresentationTestHarness(
 
   return {
     queueFanAndWeather() {
-      const g = game.value!;
-      enqueuePregameCine(
-        () => showFanFactor({ fans: 1, roll: 2, total: 3 }, { fans: 1, roll: 1, total: 2 }, g),
-        presentationMs(FAN_CINE_MS),
-        'fan',
-      );
-      enqueuePregameCine(() => showWeather([3, 4], 'Nice'), presentationMs(WEATHER_CINE_MS), 'weather');
+      enqueuePregameCine(() => {}, presentationMs(FAN_CINE_MS), 'fan');
+      enqueuePregameCine(() => {}, presentationMs(WEATHER_CINE_MS), 'weather');
     },
     reveal(input) {
       enqueuePriorityCoinReveal(
@@ -21964,11 +21838,10 @@ export function installCoinPresentationTestHarness(
   };
 }
 
-/** @internal Owner 10-30: the Swarming splash + waiting notice over production applyFrame. `order66` true = the play
- *  route (#67 FIFO cine), false = the spectate / replay route (pregame queue + its own dwell timer). */
+/** @internal Owner 10-30: the Swarming splash + waiting notice over production applyFrame (the #67 FIFO cine). */
 export function installSwarmingSplashTestHarness(
   fixture: GameJson,
-  options: { seat: 'home' | 'away' | 'spectator'; order66: boolean; clickDismiss?: boolean },
+  options: { seat: 'home' | 'away' | 'spectator'; clickDismiss?: boolean },
 ): {
   apply(command: Record<string, unknown>): void;
   splash(): typeof state.swarmingSplash;
@@ -22002,7 +21875,6 @@ export function installSwarmingSplashTestHarness(
 } {
   const priorGame = game.value;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorClickDismiss = settings.clickDismissCinematics;
   const priorCatchingUp = playback.catchingUp;
   const priorSplash = state.swarmingSplash;
@@ -22022,7 +21894,6 @@ export function installSwarmingSplashTestHarness(
   play.active = options.seat !== 'spectator';
   play.coach = options.seat === 'home' ? String(fixture.teamHome.coach ?? 'home-coach')
     : options.seat === 'away' ? String(fixture.teamAway.coach ?? 'away-coach') : 'spectator-not-seated';
-  settings.order66 = options.order66;
   settings.clickDismissCinematics = options.clickDismiss ?? false;
   state.swarmingSplash = null; state.swarmingWaiting = null;
   return {
@@ -22071,7 +21942,6 @@ export function installSwarmingSplashTestHarness(
       lastReportSig = priorLastReportSig; lastReportCommandNr = priorLastReportCommandNr;
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
-      settings.order66 = priorOrder66;
       settings.clickDismissCinematics = priorClickDismiss;
       playback.catchingUp = priorCatchingUp;
       state.swarmingSplash = priorSplash; state.swarmingWaiting = priorWaiting;
@@ -22086,7 +21956,7 @@ export function installHighKickAnswerGateTestHarness(
   fixture: GameJson,
   seat: 'home' | 'away',
   send: (command: Record<string, unknown>) => void,
-  options: { clickDismiss?: boolean; order66?: boolean } = {},
+  options: { clickDismiss?: boolean } = {},
 ): {
   apply(command: Record<string, unknown>): void;
   phase(): typeof state.highKickPhase;
@@ -22115,7 +21985,6 @@ export function installHighKickAnswerGateTestHarness(
   const priorSession = session;
   const priorAutoPregame = play.autoPregame;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorClickDismiss = settings.clickDismissCinematics;
   const priorInteractiveSetup = interactiveSetup;
   const priorSeatAutomation = seatAutomation;
@@ -22138,7 +22007,6 @@ export function installHighKickAnswerGateTestHarness(
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = true;
   play.coach = String((seat === 'home' ? fixture.teamHome : fixture.teamAway).coach ?? `${seat}-coach`);
-  settings.order66 = options.order66 ?? true;
   settings.clickDismissCinematics = options.clickDismiss ?? false;
   interactiveSetup = true;
   seatAutomation = false;
@@ -22180,7 +22048,7 @@ export function installHighKickAnswerGateTestHarness(
     setTransport(alive) { session = alive ? ({ send } as unknown as GameSession) : null; },
     dispose() {
       reset();
-      pendingMasterChef = null; blockingSplashCine.value = null; state.masterChefSplash = null; legacyMasterChefShowing = false;
+      pendingMasterChef = null; blockingSplashCine.value = null; state.masterChefSplash = null;
       play.autoPregame = priorAutoPregame;
       resetPlayback();
       clearAllGameTimeouts();
@@ -22189,7 +22057,6 @@ export function installHighKickAnswerGateTestHarness(
       session = priorSession;
       game.value = priorGame;
       play.active = priorPlay.active; play.coach = priorPlay.coach;
-      settings.order66 = priorOrder66;
       settings.clickDismissCinematics = priorClickDismiss;
       interactiveSetup = priorInteractiveSetup;
       seatAutomation = priorSeatAutomation;
@@ -22230,7 +22097,6 @@ export function installKickoffPresentationTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorClickDismiss = settings.clickDismissCinematics;
   const priorPreview = state.kickScatterPreview;
   const priorTargetReveal = state.kickTargetReveal;
@@ -22271,7 +22137,6 @@ export function installKickoffPresentationTestHarness(
     : seat === 'away'
       ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach')
       : 'spectator-not-seated';
-  settings.order66 = true;
   settings.clickDismissCinematics = true;
   state.kickScatterPreview = null;
   state.kickTargetReveal = null;
@@ -22345,7 +22210,6 @@ export function installKickoffPresentationTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       settings.clickDismissCinematics = priorClickDismiss;
       state.kickScatterPreview = priorPreview;
       state.kickTargetReveal = priorTargetReveal;
@@ -22375,7 +22239,6 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
 } {
   const priorGame = game.value;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorArmour = state.armorDice;
   const priorIndicator = state.followupIndicator;
 
@@ -22388,7 +22251,6 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
   lastPushFrom.clear();
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
   play.active = false; // spectator/passive seat — the toast path
-  settings.order66 = false;
   state.armorDice = null;
   state.followupIndicator = null;
 
@@ -22417,7 +22279,6 @@ export function installFollowupArmourTestHarness(fixture: GameJson): {
       lastPushFrom.clear();
       state.armorDice = priorArmour;
       state.followupIndicator = priorIndicator;
-      settings.order66 = priorOrder66;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
@@ -22507,7 +22368,6 @@ export function installSendOffTestHarness(
   const priorTransportAlive = offerTransportAlive;
   offerTransportAlive = true;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorInteractive = interactiveReRolls;
   const priorReplayActive = replay.active;
   const priorCatchingUp = playback.catchingUp;
@@ -22525,7 +22385,6 @@ export function installSendOffTestHarness(
     : seat === 'away' ? String((fixture.teamAway as { coach?: string }).coach ?? 'away-coach') : '';
   replay.active = seat === 'replay';
   playback.catchingUp = false;
-  settings.order66 = false;
   interactiveReRolls = true;
   state.sendOff = null;
   state.sendOffResult = null;
@@ -22577,7 +22436,6 @@ export function installSendOffTestHarness(
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
-      settings.order66 = priorOrder66;
       interactiveReRolls = priorInteractive;
       replay.active = priorReplayActive;
       playback.catchingUp = priorCatchingUp;
@@ -23067,7 +22925,6 @@ export function installFoulChoiceTestHarness(
   const priorGame = game.value;
   const priorSession = session;
   const priorPlay = { ...play };
-  const priorOrder66 = settings.order66;
   const priorPending = new Map(pendingRailCommands);
   const priorLog = [...state.log];
   const priorSrv = { id: srvActingId, action: srvActingAction };
@@ -23081,7 +22938,6 @@ export function installFoulChoiceTestHarness(
       if (send(command) === false) throw new Error('test transport refusal');
     },
   } as unknown as GameSession;
-  settings.order66 = true;
   foulChoice = null;
   state.foulChoiceHold = null;
   return {
@@ -23135,7 +22991,6 @@ export function installFoulChoiceTestHarness(
       srvActingId = priorSrv.id; srvActingAction = priorSrv.action; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
       session = priorSession;
       game.value = priorGame;
-      settings.order66 = priorOrder66;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;
@@ -24917,7 +24772,7 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
     () => { if (dialogInstanceLive(reRollArmedKey)) armReRollPrompt(); },
     () => { followupHandled.delete(key); })) return;
   if (stagedCatch) stagedCatch.arms.push(armReRollPrompt);
-  else if (settings.order66 && play.active && movementDraining(playerId)) enqueuePromptBehind('reRoll', armReRollPrompt);
+  else if (play.active && movementDraining(playerId)) enqueuePromptBehind('reRoll', armReRollPrompt);
   else armReRollPrompt();
 }
 /** Surface every block-roll variant to the chooser; derive sources from reRollProperties/action map and keep unverified skill commands disabled. */
@@ -25000,9 +24855,9 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
   };
   };
   const blitzerId = String(game.value?.actingPlayer?.playerId ?? dp.playerId ?? '');
-  if (settings.order66 && play.active && movementDraining()) enqueuePromptBehind('blockPartial', armBlockPartial);
+  if (play.active && movementDraining()) enqueuePromptBehind('blockPartial', armBlockPartial);
   // Owner 10-22: a spectator's card waits for the blitzer's walk to settle (see holdSpectatorBlockCard).
-  else if (settings.order66 && readOnly && !play.active && !replay.active && !playback.catchingUp && blitzerId
+  else if (readOnly && !play.active && !replay.active && !playback.catchingUp && blitzerId
       && movementDraining(blitzerId)) holdSpectatorBlockCard(blitzerId, armBlockPartial);
   else armBlockPartial();
   return true;
@@ -26525,7 +26380,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
     return;
   }
   // In Order 66, derive block dice/push/follow-up/reroll ownership from deriveReaction.
-  const o66On = settings.order66 && play.active; // o66-dispatch
+  const o66On = play.active; // o66-dispatch
   const o66Ctx: ClientStateContext = { mode: 'player', loggedIn: true, myIsHome: myPlayTeam(g) === g.teamHome };
   const o66Reaction = o66On
     ? deriveReaction(g, o66Ctx, (tid) => !!tid && tid === myTeamId, (pid) => mine.has(pid))
@@ -29066,62 +28921,10 @@ function drivePregameStep() {
         if (state.playerPick?.key.startsWith('blitzTarget:')) clearPlayerPick();
         return;
       }
-      const acting = g.actingPlayer as { playerId?: string | null; playerAction?: string | null } | undefined;
-      const ap = String(acting?.playerId ?? '');
-      // Order 66 SELECT_BLITZ_TARGET owns target interaction; bypass the legacy reactive auto-picker.
-      // Kick 'Em Blitz never enters this upstream state: its dedicated action walks first and attacks an
-      // adjacent downed player directly. In particular, never answer this state with a speculative Kick 'Em
+      // Order 66 SELECT_BLITZ_TARGET owns target interaction (drivePregameStep only runs in play), so this step
+      // never answers it. Kick 'Em Blitz never enters this upstream state: its dedicated action walks first and attacks
+      // an adjacent downed player directly. In particular, never answer this state with a speculative Kick 'Em
       // CLIENT_TARGET_SELECTED; doing so pre-nominates a target the upstream mechanic does not ask for.
-      if (settings.order66 && play.active) return;
-      // While a driven Blitz owns the target, suppress re-prompting; clear a stale guard if no block is active.
-      if (blitzDriving) {
-        if (blockInFlight) return; // a real blitz drive owns the target selection
-        blitzDriving = false; blitzAttackerId = null;
-        const notice = lt('store.notice.blitzTargetPromptArrived');
-        log('system', notice);
-        state.actionNotice = { text: shownText(notice), seq: (state.actionNotice?.seq ?? 0) + 1 };
-        // fall through to handle the prompt normally
-      }
-      // In BLITZ_SELECT, offer opposing on-pitch blockable targets and send CLIENT_TARGET_SELECTED.
-      const mySideId = myTeamId;
-      const mySide = mySideId === (g.teamHome as { teamId?: string }).teamId ? 'home' : 'away';
-      const myTurn = !!g.homePlaying === (mySide === 'home');
-      if (!myTurn) return; // only the acting coach answers (the dialog carries no teamId)
-      const mine = myPlayIds(g);
-      const eligible = (g.fieldModel?.playerDataArray ?? [])
-          .filter((p) => {
-            if (mine.has(p.playerId) || !p.playerCoordinate) return false;
-            const [x, y] = p.playerCoordinate;
-            if (x < 0 || x > 25 || y < 0 || y > 14) return false;
-            const base = playerStateBase(p.playerState) ?? (((p.playerState as number) ?? 0) & 0xff);
-            return base === 1 || base === 2; // STANDING | MOVING (server canBeBlocked)
-          })
-          .map((p) => p.playerId);
-      if (eligible.length === 0) return; // ordinary Blitz server auto-skips when none stand
-      // Unique per blitz declaration (a player acts once per turn) so a later blitz re-arms rather than colliding with a spent `once` key.
-      const turnNr = g.homePlaying ? g.turnDataHome?.turnNr : g.turnDataAway?.turnNr;
-      const key = `blitzTarget:${ap}:${turnNr}`;
-      // Astra confirm (10-08): Classic mode alone never arms the pick for a declared automated seat (it stalled there).
-      const interactive = humanSetupSurface() || classicHumanSeat();
-      if (interactive && !pregameHandled.has(key)) {
-        armPlayerPick({
-          key,
-          prompt: 'Blitz — nominate the target, then Confirm',
-          eligibleIds: eligible,
-          confirm: true,
-          onPick: (picked) => {
-            const targetId = picked[0];
-            if (targetId && once(key)) {
-              sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId: targetId });
-            }
-          },
-        });
-        return;
-      }
-      if (!interactive) {
-        const targetId = eligible[0];
-        if (targetId && once(key)) sendCommand({ netCommandId: NetCommandId.CLIENT_TARGET_SELECTED, playerId: targetId });
-      }
       return;
     }
     case 'selectGazeTarget': {
@@ -34441,25 +34244,6 @@ export const gameStore = {
   },
 
   /**
-   * ORDER 66 (owner o66am — THROW TEAM-MATE, PASS-shaped, step 1/2): the thrower WALKS adjacent (CLIENT_MOVE, like
-   * pass) then PICKS UP the Right Stuff team-mate — CLIENT_THROW_TEAM_MATE{actingPlayerId, thrownPlayerId} (verbatim
-   * upstream ThrowTeamMateLogicModule.playerInteraction: sendThrowTeamMate(thrower, player.id) while no thrown set).
-   * The LANDING square follows in o66ThrowMateLand. `path` empty = already adjacent to the team-mate.
-   */
-  // ⚰️ ORDER 66 (#6.4) RETIRED-FROM-PLAY: superseded by the planner queue (startPlan actKind 'throwTeamMate'). Blind scheduleGameTimeout(350ms) pickup = the #6.4 teleport class. No live callers remain; legacy-rip candidate.
-  o66ThrowMateSelect(throwerId: string, thrownId: string, path: [number, number][], kicked = false) {
-    if (!play.active || !game.value) return;
-    if (!iControlPlayer(throwerId)) { log('system', 'ignored: not your player / not your turn'); return; }
-    followupHandled.clear();
-    const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === throwerId)?.playerCoordinate;
-    if (path.length > 0 && from) {
-      sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: throwerId, coordinateFrom: from, coordinatesTo: path });
-    }
-    // Audit review 11-12: no live caller; if one appears, its pick-up still goes through the checked sender.
-    scheduleGameTimeout(() => { gameStore.sendThrowMatePickup(thrownId, kicked); }, path.length > 0 ? 350 : 60);
-    log('system', `play: ${kicked ? 'KICK' : 'THROW'} TEAM-MATE ${playerName(game.value, throwerId)} picks up ${playerName(game.value, thrownId)} (walk ${path.length} sq)`);
-  },
-  /**
    * ORDER 66 (owner o66am — THROW TEAM-MATE, step 2/2): the LANDING square —
    * CLIENT_THROW_TEAM_MATE{actingPlayerId, targetCoordinate} (upstream ThrowTeamMateLogicModule.fieldInteraction:
    * sendThrowTeamMate(thrower, coordinate) once a thrown team-mate is set). The server throws + scatters + resolves
@@ -34903,60 +34687,6 @@ export const gameStore = {
     log('system', `play: BLITZ ${playerName(game.value, attackerId)} → ${playerName(game.value, defenderId)} (server resolves)`);
   },
 
-  /** Owner 2026-07-04c: FOUL — declare, walk the planned path to contact, boot.
-   *  The server rolls armour/injury (and the ref); wire mirrored from the bot
-   *  (clientActingPlayer(foul) → clientMove → clientFoul). */
-  // ORDER 66 (#6.4): NOT used in O66 play — the planner queue (startPlan) supersedes it there. This is the
-  // LEGACY (order66=off) implementation, still reached via the action-modal hotbar's onActionConfirm (hidden in
-  // o66). Timer-sequenced macro (trailing setTimeout send) = the #6.4 teleport class; only reachable in legacy now.
-  playerFoul(playerId: string, defenderId: string, path: [number, number][]) {
-    if (!play.active || !game.value) return;
-    if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return; }
-    followupHandled.clear();
-    const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
-    const moving = path.length > 0 && !!from;
-    // g319 class-closure: a foul that WALKS to the victim must declare `foulMove` (a "moving" PlayerAction),
-    // NOT plain `foul` — else the server drops the walk (PlayerAction.isMoving():69). Same bug as blitz/
-    // hand-off; `foul` only worked because the owner's foul was adjacent. Ack-gate the move+boot too.
-    const action = moving ? 'foulMove' : 'foul';
-    // Owner o66ak: a CHAINSAW fouler boots WITH the chainsaw by default (flag mirrors the block flavors).
-    const usingChainsaw = actorHasChainsaw(playerId);
-    // Review batch (server-verified asymmetry): StepInitMoving accepts CLIENT_FOUL only under `foulMove`, so
-    // an ADJACENT foul (plain `foul`) while ANOTHER player's activation is still open silently dies — the same
-    // g334 class that bit plain block. End the foreign activation first (whenPriorActivationEnded), then declare.
-    whenPriorActivationEnded(playerId, () => {
-      sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: action, leaping: isJumping() });
-      whenActingPlayerAcked(playerId, action, (acked) => {
-        if (!acked) watchActivationTook(playerId, 'FOUL'); // blind-fire → feedback if the server never took it
-        if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-        // Audit review 11-12: the trailing boot goes through the checked sender, against the server state after the walk.
-        scheduleGameTimeout(() => { gameStore.sendFoulTarget(defenderId, usingChainsaw); }, moving ? 350 : 90);
-      });
-    });
-    log('system', `play: FOUL ${playerName(game.value, playerId)} → ${playerName(game.value, defenderId)}${usingChainsaw ? ' (CHAINSAW)' : ''} (server resolves)`);
-  },
-
-  /** Owner 2026-07-04c: HAND-OFF — declare, move to contact, hand the ball over. */
-  // ORDER 66 (#6.4): NOT used in O66 play (planner queue supersedes it). LEGACY (order66=off) implementation, reached via the action-modal hotbar's onActionConfirm (hidden in o66). #6.4 timer class; legacy-only now.
-  playerHandOff(playerId: string, catcherId: string, path: [number, number][]) {
-    if (!play.active || !game.value) return;
-    if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return; }
-    followupHandled.clear();
-    const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
-    const moving = path.length > 0 && !!from;
-    // Use handOverMove when walking to the catcher and handOver only when already adjacent.
-    const action = moving ? 'handOverMove' : 'handOver';
-    sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: action, leaping: isJumping() });
-    // g319: gate the follow-ups on the SERVER-CONFIRMED activation (fire-before-ack race — the move fired +0ms before the +7ms activation ack, so even the right action raced). Then walk, then hand over.
-    whenActingPlayerAcked(playerId, action, (acked) => {
-      if (!acked) watchActivationTook(playerId, 'HAND-OFF'); // review batch: feedback on a blind-fire drop
-      if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-      // Audit review 11-12: the trailing hand-off goes through the checked sender (possession, catcher), after the walk.
-      scheduleGameTimeout(() => { gameStore.sendHandOverTarget(catcherId); }, moving ? 350 : 90);
-    });
-    log('system', `play: HAND-OFF ${playerName(game.value, playerId)} → ${playerName(game.value, catcherId)} (server resolves)`);
-  },
-
   /** Bombardier does not move; declare THROW_BOMB and never send a trailing CLIENT_MOVE. */
   playerThrowBomb(playerId: string, targetCoordinate: [number, number]) {
     if (!play.active || !game.value) return;
@@ -34981,31 +34711,6 @@ export const gameStore = {
   },
 
   // Keg is a top-level throwKey action; target selection sends CLIENT_THROW_KEG.
-
-  /** Owner 2026-07-04c: PASS — declare, move, throw at the target square. The
-   *  server resolves the pass, interceptions, and the catch. */
-  // ORDER 66 (#6.4): NOT used in O66 play — the planner queue (startPlan) supersedes it. LEGACY (order66=off)
-  // implementation, reached via the action-modal hotbar's onActionConfirm (hidden in o66). The blind
-  // scheduleGameTimeout(350ms) CLIENT_PASS here was the teleport class; in o66 it's the tile-path fix that matters now.
-  playerPass(playerId: string, targetCoordinate: [number, number], path: [number, number][]) {
-    if (!play.active || !game.value) return;
-    if (!iControlPlayer(playerId)) { log('system', 'ignored: not your player / not your turn'); return; }
-    followupHandled.clear();
-    const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
-    const moving = path.length > 0 && !!from;
-    // g319 class-closure: a pass where the thrower WALKS first must declare `passMove` (a "moving"
-    // PlayerAction), NOT plain `pass` — else the server drops the walk (PlayerAction.isMoving():69). Same
-    // bug as blitz/hand-off/foul; `pass` only works from a standing throw. Ack-gate the move+throw too.
-    const action = moving ? 'passMove' : 'pass';
-    sendCommand({ netCommandId: NetCommandId.CLIENT_ACTING_PLAYER, playerId, playerAction: action, leaping: isJumping() });
-    whenActingPlayerAcked(playerId, action, (acked) => {
-      if (!acked) watchActivationTook(playerId, 'PASS'); // review batch: feedback on a blind-fire drop
-      if (moving) sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from!, coordinatesTo: path });
-      // Audit review 11-12: the trailing throw goes through the checked sender (possession, Animosity), after the walk.
-      scheduleGameTimeout(() => { gameStore.sendPassTarget(targetCoordinate); }, moving ? 350 : 90);
-    });
-    log('system', `play: PASS ${playerName(game.value, playerId)} → [${targetCoordinate[0]},${targetCoordinate[1]}] (server resolves)`);
-  },
 
   /** Owner 10-06 (Astra): the game (server url + mode + id) a dropped connection is being re-joined for (auto-retry
    *  running, a retry scheduled, or the "Connection closed" prompt up), else null. App.vue's Return-to-Menu prompt uses it: a confirm

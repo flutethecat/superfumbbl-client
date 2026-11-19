@@ -63,7 +63,15 @@ function skillIcon(skill: string, positionId: string | null | undefined): string
 const side = defineModel<Side>('side', { default: 'home' });
 const headSides = computed<readonly Side[]>(() => (props.switcher ? ['home', 'away'] : [side.value]));
 const rows = computed(() => {
-  const all = props.teams[side.value].roster;
+  // Owner 11-16: a pick pane (MVP nomination / Assign Touchdown) lists players in roster-number order, the order a
+  // coach knows them in; every other roster keeps the projection's order (SPP earned this game, highest first).
+  const source = props.teams[side.value].roster;
+  // A panel that lists two teams (the defensive Assign Touchdown case appends the other team's rows to this side's)
+  // keeps each team's block where it was and orders by number inside it. The block is the team the player belongs to
+  // by id, never the team's name.
+  const otherIds = new Set(props.teams[side.value === 'home' ? 'away' : 'home'].roster.map((pl) => pl.playerId));
+  const blockOf = (id: string) => (otherIds.has(id) ? 1 : 0);
+  const all = props.pick ? [...source].sort((a, b) => blockOf(a.playerId) - blockOf(b.playerId) || a.nr - b.nr) : source;
   if (!props.onlyIds) return all;
   const only = new Set(props.onlyIds);
   return all.filter((pl) => only.has(pl.playerId));

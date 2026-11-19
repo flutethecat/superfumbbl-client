@@ -503,9 +503,6 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   /** Owner 10-12: the pitch VIEW turned around 180 degrees (north / south or east / west swapped). A view choice only:
    *  teams, HUD seats and every command are unchanged. Toggled by the `pitchFlip` action and the Settings checkbox beside the pitch orientation. */
   pitchFlipped: boolean;
-  /** ORDER 66 (A.2): route play-mode interaction through the ported state machine (deriveClientState →
-   *  action menu + click-per-square move) instead of the hotbar/planner. Off = legacy path untouched. */
-  order66: boolean;
   /** Blitz declaration entry gesture. FUMBBL keeps context-menu-first declaration;
    *  Modern enables the friendly-player → opponent two-click planner. */
   declareBlitzBehavior: 'modern' | 'fumbbl';
@@ -948,7 +945,6 @@ const DEFAULTS: AppSettings = {
   // action drop-watchdog + the server-side/client-side wire traffic). NOT persisted-on by default; a
   // stored `true` from a prior `-dev` launch still opens it (owner can toggle off). devWireCapture feeds
   // the meaningful wire events (reports/dialogs/turnMode + all outbound commands) into the dev log.
-  order66: true, // owner 2026-07-13: the 0.3.0 release IS the ORDER 66 port — ON by default (was dev-only default-off). Legacy path only via the toggle (devMode).
   declareBlitzBehavior: 'fumbbl',
   friendlyPlayerSwitch: true,
   deferFriendlySwitchEnd: false,
@@ -1266,6 +1262,9 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     delete raw.stateMarkerStyle;
     // v36 (owner 11-05): the FUMBBL-Classic view is retired; its effects opt-in has nothing left to configure.
     delete (raw as { classicEffects?: unknown }).classicEffects;
+    // The legacy interaction path and its `order66` switch are gone (Order 66 is the only path): an older blob's key is
+    // ignored and not written back. No version bump: nothing else changes.
+    delete (raw as { order66?: unknown }).order66;
     const merged: AppSettings = { ...DEFAULTS, ...raw };
     const opacity = (value: unknown, fallback: number): number =>
       typeof value === 'number' && Number.isFinite(value)
@@ -1502,18 +1501,10 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       if (legacy) { merged.auraDisturbingPresence = legacy; merged.auraPickMeUp = legacy; }
       merged.settingsVersion = 3;
     }
-    // Owner 2026-07-13 migration (v4): the 0.3.0 release IS the ORDER 66 port — FORCE order66 ON for existing
-    // installs whose persisted value is the old dev default (false), else they'd stay on the legacy planner.
-    // ONLY touches order66 (connection/url etc. untouched — a stale dev value survives).
+    // Owner 2026-07-13 migration (v4) forced the since-removed `order66` switch on; the version stamp keeps the ladder.
     if ((raw.settingsVersion ?? 0) < 4) {
-      merged.order66 = true;
       merged.settingsVersion = 4;
     }
-    // #13 (owner ruling 08-11): LEGACY INTERACTION FULLY DEPRECATED — Order 66 is the gold standard. Hard-pin
-    // order66 TRUE UNCONDITIONALLY (the v4 migration above only caught pre-v4 installs; a later install that
-    // unchecked the now-removed toggle would persist `false`). This makes it impossible for a stale settings file
-    // to resurrect the legacy planner. Phase ② excises the flag + dead legacy consumers progressively.
-    merged.order66 = true;
     merged.coachBrain = FORK_EDITION && (raw.coachBrain === 'random' || raw.coachBrain === 'fly-chaos') ? raw.coachBrain : 'none';
     merged.flyBrainUrl = typeof raw.flyBrainUrl === 'string' && raw.flyBrainUrl.trim()
       ? raw.flyBrainUrl.trim() : DEFAULTS.flyBrainUrl;

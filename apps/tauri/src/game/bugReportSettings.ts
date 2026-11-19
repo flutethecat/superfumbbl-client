@@ -30,7 +30,7 @@ export const BUG_REPORT_SETTINGS_KEYS = [
   'logStyle', 'chatStyle', 'logFont', 'logFontSize', 'chatToastsEnabled', 'chatDisabled', 'chatPoppedOut',
   'playerCardMode', 'spectatorView', 'spectatorClean', 'autoDirector',
   // input / audio / play mode / diagnostics switches
-  'inputMethod', 'controllerSupportEnabled', 'soundVolume', 'order66', 'compression', 'wireLog', 'debugLog', 'devMode',
+  'inputMethod', 'controllerSupportEnabled', 'soundVolume', 'compression', 'wireLog', 'debugLog', 'devMode',
   'devWireCapture',
   // Settings reflow lane C (11-03): camera, telestrator and accessibility modes, and the REQUESTED UI zoom (a number;
   // Sol r1: the one zoom key the forbidden-key pin exempts). The applied factor and the shell's refusal ride in env.
