@@ -1,4 +1,5 @@
 import { textureParserFor } from './artPack';
+import { installTextTextureRetention, type RetainableTextSystem, type TextTextureRetention, type TextTextureRetentionStats } from './textTextureRetention';
 import { createLongPress, isFingerPointer, tapSlopFor } from './touchInput';
 import { fitInSquare, holdInstalledUrls, loadInstalledTexture } from './installedTexture';
 import { Application, Assets, CanvasSource, CanvasTextMetrics, Container, Graphics, Matrix, Mesh, MeshGeometry, Rectangle, RenderLayer, Sprite, Text, TextStyle, Texture } from 'pixi.js';
@@ -4074,6 +4075,7 @@ export class PitchRenderer {
 
   /** Atomic pack-swap hook: persistent nodes rebuild; active effects redraw in place. */
   refreshSkillIconAssets(): void {
+    this.flushPortraitCache();
     if (this.app) this.refresh();
     for (const [node, redraw] of this.liveSkillAssets) {
       if (node.destroyed || !node.parent) {
@@ -5465,6 +5467,9 @@ export class PitchRenderer {
     }
     this.app = app;
     this.initializingApp = null;
+    // Perf (profile 2026-11-20): reuse released label textures instead of re-rasterising + re-uploading them.
+    this.textRetention = installTextTextureRetention((app.renderer as unknown as { canvasText?: RetainableTextSystem }).canvasText);
+    if (this.textRetention) (globalThis as { __ffbTextTextureStats?: () => TextTextureRetentionStats }).__ffbTextTextureStats = this.textRetention.stats;
     // Perf (1.0.261): retired label Text is destroyed once the rebuilt generation has rendered (destroyKeepingTextWarm).
     (app.renderer as { runners?: { postrender?: { add(item: { postrender(): void }): void } } } | undefined)
       ?.runners?.postrender?.add({ postrender: () => this.flushRetiredTexts() });
@@ -6568,7 +6573,19 @@ export class PitchRenderer {
     this.activeEdgeMarker = null;
   }
 
+  /** Perf (profile 2026-11-20): released label textures kept for reuse (textTextureRetention.ts). */
+  private textRetention: TextTextureRetention | null = null;
+  /** Active side + turn of the last setGame; a change (turnover / new turn) flushes the retained label textures. */
+  private textRetentionTurnKey: string | null = null;
+  private portraitGameId: unknown = undefined;
   setGame(game: GameJson | null, spectatorState?: SpectatorPitchState): void {
+    // Owner 11-20: drop the cached label textures every turnover, so they are re-rendered fresh now and then.
+    const turnKey = game ? `${game.gameId}:${game.half}:${!!game.homePlaying}:${this.turnNrOf(game)}` : null;
+    if (turnKey !== this.textRetentionTurnKey) {
+      if (this.textRetentionTurnKey !== null) { this.textRetention?.flush(); this.flushPortraitCache(); }
+      if (game?.gameId !== this.portraitGameId) { this.flushPortraitCache(); this.portraitGameId = game?.gameId; }
+      this.textRetentionTurnKey = turnKey;
+    }
     // Authoritative model paint always wins the current turn. Any display-only
     // refresh queued before it is already represented by the synchronous state
     // below and must not rebuild the just-painted token generation afterward.
@@ -11557,10 +11574,24 @@ export class PitchRenderer {
    * the docked player card's portrait): rebuilds the token at full size and
    * rasterizes it. Returns a data URL, or null when unavailable.
    */
+  /** Perf (profile 2026-11-20): rasterised portraits, keyed by playerPortraitKey. Cleared on every turnover (with the
+   *  label textures) and when a different game is set; a player's state change changes the key, so a new card. */
+  private portraitCache = new Map<string, string>();
+  private static readonly PORTRAIT_CACHE_CAP = 96;
+  private playerPortraitKey(playerId: string, data: { playerState: unknown; cards: unknown; cardEffects: unknown; [key: string]: unknown }, isHome: boolean): string {
+    // Everything on the field-model entry except the square: state (prone, stunned, ...), cards, effects.
+    return `${playerId}|${isHome ? 'h' : 'a'}|${JSON.stringify({ ...data, playerCoordinate: null })}`;
+  }
+  /** Drop every cached player-card portrait (turnover, new game, art or settings change). */
+  flushPortraitCache(): void { this.portraitCache.clear(); }
+
   playerPortrait(playerId: string): string | null {
     if (!this.app || !this.game) return null;
     let data = this.game.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
     if (!data) return null;
+    const cacheKey = this.playerPortraitKey(playerId, data, this.game.teamHome.playerArray.some((p) => p.playerId === playerId));
+    const cached = this.portraitCache.get(cacheKey);
+    if (cached !== undefined) return cached;
     // dugout players (selectable since 2026-07-02) render from a stub square
     if (!isOnPitch(data.playerCoordinate)) data = { ...data, playerCoordinate: [0, 0] };
     const isHome = this.game.teamHome.playerArray.some((p) => p.playerId === playerId);
@@ -11582,7 +11613,12 @@ export class PitchRenderer {
     (token as { boundsArea: Rectangle | null }).boundsArea = null;
     try {
       const canvas = this.app.renderer.extract.canvas({ target: token, resolution: 3 }) as HTMLCanvasElement;
-      return canvas.toDataURL?.() ?? null;
+      const url = canvas.toDataURL?.() ?? null;
+      if (url) {
+        if (this.portraitCache.size >= PitchRenderer.PORTRAIT_CACHE_CAP) this.portraitCache.delete(this.portraitCache.keys().next().value!);
+        this.portraitCache.set(cacheKey, url);
+      }
+      return url;
     } catch (error) {
       console.warn('ffb-pitch: portrait extract failed', error);
       return null;
@@ -12533,6 +12569,7 @@ export class PitchRenderer {
    *  A prior miss must not stay sticky merely because the theme/weather key did
    *  not change, and a replaced pack must not reuse its predecessor's texture. */
   refreshPitchAssets(): void {
+    this.flushPortraitCache();
     this.pitchDrawRequestGeneration++;
     this.pitchTextures.clear();
     this.pitchLuminance.clear();
@@ -23794,6 +23831,10 @@ export class PitchRenderer {
    *  last paint - it went BACK in time, or it skipped turns without painting them (a replay or review seek, where
    *  the player may have recovered and been distracted again unseen) - re-seeds from the turn shown. */
   private distractedOnsetTurn = new Map<string, { onset: number; seen: number }>();
+  private turnNrOf(game: GameJson): number {
+    const g = game as { turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } };
+    return (g.turnDataHome?.turnNr ?? 0) + (g.turnDataAway?.turnNr ?? 0);
+  }
   private distractedTurnOrdinal(): number {
     const g = this.game as { half?: number; turnDataHome?: { turnNr?: number }; turnDataAway?: { turnNr?: number } } | null;
     return (g?.half ?? 0) * 1000 + (g?.turnDataHome?.turnNr ?? 0) + (g?.turnDataAway?.turnNr ?? 0);
