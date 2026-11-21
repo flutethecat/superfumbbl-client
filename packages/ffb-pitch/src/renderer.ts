@@ -5798,17 +5798,21 @@ export class PitchRenderer {
     // Owner 2026-07-04: smooth WASD camera GLIDE. The world eases toward the held
     // pan direction's velocity and decelerates to a stop on release — replacing the
     // old instant 45px tile-shift per keypress.
-    app.ticker.add(() => {
+    app.ticker.add((ticker) => {
+      // Frame-rate independent: speeds and easing are tuned for 60 fps; `dt` is 1 at 60 fps, 2 at 30 fps, 0.5 at
+      // 120 fps (clamped so a stalled frame can't fling the camera). A dropped frame no longer slows the glide.
+      const dt = Math.min(4, Math.max(0, ticker?.deltaTime ?? 1));
       // Settings reflow (11-03): the edge-of-screen pan rides the same glide at its own speed, added to the keys'.
-      const targetX = this.panDir.x * this.panSpeedPx + this.edgePanDir.x * this.edgePanSpeedPx; // px/frame at full glide (Settings > Controls, 09-05)
+      const targetX = this.panDir.x * this.panSpeedPx + this.edgePanDir.x * this.edgePanSpeedPx; // px per 60-fps frame at full glide (Settings > Controls, 09-05)
       const targetY = this.panDir.y * this.panSpeedPx + this.edgePanDir.y * this.edgePanSpeedPx;
-      this.panVel.x += (targetX - this.panVel.x) * 0.18; // ease-in / decelerate
-      this.panVel.y += (targetY - this.panVel.y) * 0.18;
+      const ease = 1 - Math.pow(1 - 0.18, dt); // ease-in / decelerate (0.18 per 60-fps frame)
+      this.panVel.x += (targetX - this.panVel.x) * ease;
+      this.panVel.y += (targetY - this.panVel.y) * ease;
       if (Math.abs(this.panVel.x) < 0.05) this.panVel.x = 0;
       if (Math.abs(this.panVel.y) < 0.05) this.panVel.y = 0;
       if (this.panVel.x !== 0 || this.panVel.y !== 0) {
-        this.world.position.x += this.panVel.x;
-        this.world.position.y += this.panVel.y;
+        this.world.position.x += this.panVel.x * dt;
+        this.world.position.y += this.panVel.y * dt;
         this.clampCamera(); // FC: WASD glide also blocks at the pitch edge
       }
     });
