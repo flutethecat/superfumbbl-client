@@ -5,7 +5,7 @@ import type { AtlasImage, Canvas2DLike, PlacedSeat } from './standSeats';
 /**
  * Owner 11-12 ("Yes, fans should be in the seats."): the crowd of the baked 3D stadium. The RULES are the classic 2D
  * stands' (renderer.ts drawStadiumBody / drawBand): attendance per side from each team's Dedicated Fans (finite and
- * positive, else 3; min(1, fans / 7)), the end stands at the mean of the two, and the same sprite pool (crowd_1-4, the
+ * positive, else 3; min(1, fans / 7)), the end stands from each team's rolled Fan Factor, and the same sprite pool (crowd_1-4, the
  * five fantasy fans, and crowd_1 tinted as the standing "risen corpse"). Owner 11-12 (second ruling): in the bake the
  * attendance is the share of the stand's CHAIRS holding a fan, so a full fan factor is a full stadium (seatCrowd). The billboard pieces (opaque-crop atlas, upright camera-facing cards, the Modern 3D crowd height) are lifted
  * from pitch3d/crowd.ts, without its per-frame turning, anchors data or sign holders.
@@ -17,19 +17,28 @@ export function standNoise(x: number, y: number): number {
   return n - Math.floor(n);
 }
 
-/** The 2D stands' per-side attendance (renderer.ts stadiumFanDensities): home and away from their own team, the end
- *  stands from the mean of the two counts. */
-export interface CrowdDensity { home: number; away: number; ends: number }
+/** The stands' per-side attendance (renderer.ts stadiumFanDensities). Side stands (home / away, along the sidelines):
+ *  that team's Dedicated Fans. End stands (behind each end zone; nearEnd = x < 0 = the home end zone): that team's
+ *  rolled Fan Factor from the pre-game Fans roll (Dedicated Fans + the roll), once it is known. */
+export interface CrowdDensity { home: number; away: number; nearEnd: number; farEnd: number }
 export function standDensity(stand: StadiumStandSide, density: CrowdDensity): number {
-  return stand === 'home' ? density.home : stand === 'away' ? density.away : density.ends;
+  return density[stand];
 }
-/** The three densities from the two server-sent Dedicated Fans values, exactly as renderer.ts derives them. */
-export function crowdDensityFromFans(home: unknown, away: unknown): CrowdDensity {
+/** Dedicated Fans that fill a side stand. */
+export const SIDE_FULL_FANS = 7;
+/** Rolled Fan Factor that fills an end stand (7 Dedicated Fans + a 3 on the D3). */
+export const END_FULL_FAN_FACTOR = 10;
+/** The four densities from the server-sent values. Dedicated Fans: finite and positive, else 3. A Fan Factor that is
+ *  missing or not positive (before the pre-game Fans roll, or a ruleset without it) falls back to the mean of the two
+ *  Dedicated Fans on the side-stand scale, as both end stands showed before. */
+export function crowdDensityFromFans(home: unknown, away: unknown, homeFanFactor?: unknown, awayFanFactor?: unknown): CrowdDensity {
   const count = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : 3; };
+  const rolled = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : null; };
   const h = count(home), a = count(away);
-  return { home: Math.min(1, h / 7), away: Math.min(1, a / 7), ends: Math.min(1, (h + a) / 2 / 7) };
+  const fallback = Math.min(1, (h + a) / 2 / SIDE_FULL_FANS);
+  const end = (value: unknown) => { const n = rolled(value); return n === null ? fallback : Math.min(1, n / END_FULL_FAN_FACTOR); };
+  return { home: Math.min(1, h / SIDE_FULL_FANS), away: Math.min(1, a / SIDE_FULL_FANS), nearEnd: end(homeFanFactor), farEnd: end(awayFanFactor) };
 }
-
 /** renderer.ts crowdTextures, in order: index = floor(noise * 97) % pool size. Entry 9 is crowd_1 tinted. */
 export const CROWD_ART_URLS = Object.freeze(['crowd_1', 'crowd_2', 'crowd_3', 'crowd_4', 'fan_skeleton', 'fan_lizardman', 'fan_mummy', 'fan_wolfman', 'fan_orc']
   .map((name) => new URL(`../../assets/stadium/${name}.png`, import.meta.url).href));
@@ -50,30 +59,67 @@ function seatNoise(chair: Pick<PlacedSeat, 'x' | 'z'>): number {
   return standNoise(x * 0.013 + z * 0.007 + 3, x * 0.005 - z * 0.011 + 1);
 }
 
+/** Front-row bias (owner 11-21): a row's share of fans relative to the front row falls quadratically with its depth,
+ *  1 - BACK_ROW_DROP x t^2 (t = 0 front row .. 1 back row), so the back row fills at 1 - BACK_ROW_DROP of the front
+ *  row's rate. A full house still fills every chair. */
+export const BACK_ROW_DROP = 0.6;
+
+/** How many fans each row seats: `total` spread over rows of the given capacities (front first) in proportion to
+ *  capacity x the quadratic row weight, a full row passing its surplus on to the others. Sums to min(total, capacity)
+ *  and never decreases in any row as `total` grows. */
+export function fansPerRow(capacities: readonly number[], total: number): number[] {
+  const rows = capacities.length;
+  const capacity = capacities.reduce((sum, c) => sum + c, 0);
+  const target = Math.max(0, Math.min(capacity, Math.round(total)));
+  const counts = capacities.map(() => 0);
+  const weight = capacities.map((c, r) => c * (1 - BACK_ROW_DROP * (rows > 1 ? r / (rows - 1) : 0) ** 2));
+  // One fan at a time to the row furthest below its weighted share (front row first on ties): the count of every row
+  // only ever grows with `total`, so a fuller crowd is a superset of a thinner one.
+  for (let n = 0; n < target; n++) {
+    let best = -1, bestLoad = Infinity;
+    for (let r = 0; r < rows; r++) {
+      if (counts[r]! >= capacities[r]! || weight[r]! <= 0) continue;
+      const load = (counts[r]! + 0.5) / weight[r]!;
+      if (load < bestLoad) { best = r; bestLoad = load; }
+    }
+    if (best < 0) break;
+    counts[best]!++;
+  }
+  return counts;
+}
+
 /**
- * Who sits where (owner 11-12: "A full dedicated fan factor should be a full stadium"). Each stand's attendance (home and
- * away from their own team, the ends from the mean, as the 2D stands derive it) seats that SHARE of the stand's chairs:
- * attendance 1 fills every chair. The chairs of a stand are ordered once by per-seat noise and the first `seatedCount`
- * take a fan, so the same inputs always give the same picture and a fuller crowd is a superset of a thinner one. Fans sit
- * only on chairs; the sprite comes from the same per-seat noise over the 2D pool.
+ * Who sits where (owner 11-12: "A full dedicated fan factor should be a full stadium"). Each stand's attendance
+ * (crowdDensityFromFans) seats that SHARE of the stand's chairs: attendance 1 fills every chair. Owner 11-21: the fans
+ * favour the front - rows (chairs at the same tier height, lowest = front) get fansPerRow's quadratically falling
+ * share; inside a row the chairs are ordered once by per-seat noise and the first ones take a fan. The same inputs
+ * always give the same picture and a fuller crowd is a superset of a thinner one. The sprite comes from the same
+ * per-seat noise over the 2D pool.
  */
 export function seatCrowd(chairs: readonly PlacedSeat[], density: CrowdDensity): CrowdFan[] {
-  const byStand = new Map<StadiumStandSide, Array<{ chair: PlacedSeat; noise: number }>>();
+  const byStand = new Map<StadiumStandSide, Map<number, Array<{ chair: PlacedSeat; noise: number }>>>();
   for (const chair of chairs) {
-    const list = byStand.get(chair.stand) ?? [];
+    const rows = byStand.get(chair.stand) ?? new Map<number, Array<{ chair: PlacedSeat; noise: number }>>();
+    const row = Math.round(chair.surface * 1000); // tier tops are flat: one height per row
+    const list = rows.get(row) ?? [];
     list.push({ chair, noise: seatNoise(chair) });
-    byStand.set(chair.stand, list);
+    rows.set(row, list);
+    byStand.set(chair.stand, rows);
   }
   const fans: CrowdFan[] = [];
-  for (const [stand, list] of byStand) {
-    list.sort((a, b) => a.noise - b.noise || a.chair.x - b.chair.x || a.chair.z - b.chair.z);
-    for (const { chair, noise } of list.slice(0, seatedCount(standDensity(stand, density), list.length))) {
-      fans.push({ x: chair.x, y: chair.surface, z: chair.z, stand, sprite: Math.floor(noise * 97) % CROWD_POOL_SIZE });
-    }
+  for (const [stand, rowMap] of byStand) {
+    const rows = [...rowMap.entries()].sort((a, b) => a[0] - b[0]).map(([, list]) => list);
+    const chairCount = rows.reduce((n, list) => n + list.length, 0);
+    const perRow = fansPerRow(rows.map((list) => list.length), seatedCount(standDensity(stand, density), chairCount));
+    rows.forEach((list, r) => {
+      list.sort((a, b) => a.noise - b.noise || a.chair.x - b.chair.x || a.chair.z - b.chair.z);
+      for (const { chair, noise } of list.slice(0, perRow[r])) {
+        fans.push({ x: chair.x, y: chair.surface, z: chair.z, stand, sprite: Math.floor(noise * 97) % CROWD_POOL_SIZE });
+      }
+    });
   }
   return fans;
 }
-
 /** Chairs per stand (the bake reports them so the renderer can key on seated counts). */
 export function chairsPerStand(chairs: readonly Pick<PlacedSeat, 'stand'>[]): Record<StadiumStandSide, number> {
   const counts: Record<StadiumStandSide, number> = { home: 0, away: 0, nearEnd: 0, farEnd: 0 };

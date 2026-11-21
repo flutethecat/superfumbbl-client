@@ -146,6 +146,7 @@ function nudgeMapSignature(map: ReadonlyMap<string, Offset>): string {
 }
 import { bundledWalkEntriesForRaces, bundledWalkManifest } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
+import { crowdDensityFromFans, type CrowdDensity } from './stadiumBake/crowd';
 import type { StadiumBakeCorners, StadiumBakeRequest, StadiumBakeResult } from './stadiumBake/bake';
 import {
   DEFAULT_D6_FACE_VARIANT,
@@ -2770,6 +2771,7 @@ export class PitchRenderer {
     return JSON.stringify([
       !!g, String((g as { gameId?: unknown } | null)?.gameId ?? ''),
       fans(g?.teamHome as { dedicatedFans?: unknown } | undefined), fans(g?.teamAway as { dedicatedFans?: unknown } | undefined),
+      this.stadiumFanDensities(), // owner 11-21: the end stands follow the rolled Fan Factor
       this.stadiumEnabled,
       m ? [this.stadiumModelGeneration, m.texture.uid, m.dugoutsProvided, m.footprint.x0, m.footprint.x1, m.footprint.y0, m.footprint.y1,
         m.corners.tl.u, m.corners.tl.v, m.corners.tr.u, m.corners.tr.v, m.corners.bl.u, m.corners.bl.v] : null,
@@ -19104,17 +19106,14 @@ export class PitchRenderer {
     const upX = c.y - ax.y, upY = c.y - ay.y; // > 0: a step along +axis goes up the screen
     return Math.abs(upX) >= Math.abs(upY) ? [Math.sign(upX), 0] : [0, Math.sign(upY)];
   }
-  /** Owner 2026-07-02 fan attendance, per side: each team's Dedicated Fans (finite and positive, else 3) over 7, capped
-   *  at 1; the end stands take the mean of the two counts. The classic stands' crowd and the '3D stadium' bake's crowd
-   *  both read it. */
-  private stadiumFanDensities(): { home: number; away: number; ends: number } {
-    const fans = (team?: { dedicatedFans?: unknown }) => {
-      const value = Number(team?.dedicatedFans);
-      return Number.isFinite(value) && value > 0 ? value : 3;
-    };
-    const home = fans(this.game?.teamHome as { dedicatedFans?: unknown } | undefined);
-    const away = fans(this.game?.teamAway as { dedicatedFans?: unknown } | undefined);
-    return { home: Math.min(1, home / 7), away: Math.min(1, away / 7), ends: Math.min(1, (home + away) / 2 / 7) };
+  /** Fan attendance per stand (crowdDensityFromFans): the side stands from each team's Dedicated Fans (owner
+   *  2026-07-02), the end stands from each team's rolled Fan Factor (owner 11-21; nearEnd = the home end zone). The
+   *  classic stands' crowd and the '3D stadium' bake's crowd both read it. */
+  private stadiumFanDensities(): CrowdDensity {
+    const g = this.game as { teamHome?: { dedicatedFans?: unknown }; teamAway?: { dedicatedFans?: unknown };
+      gameResult?: { teamResultHome?: { fanFactor?: unknown }; teamResultAway?: { fanFactor?: unknown } } } | null;
+    return crowdDensityFromFans(g?.teamHome?.dedicatedFans, g?.teamAway?.dedicatedFans,
+      g?.gameResult?.teamResultHome?.fanFactor, g?.gameResult?.teamResultAway?.fanFactor);
   }
   /** Everything that changes the baked picture: the view direction and the crowd per side (owner 11-12). */
   private stadiumBakeKey(): string {
@@ -19124,11 +19123,11 @@ export class PitchRenderer {
    *  each stand SEATS (stadiumBake/crowd.ts seatedCount: round(attendance x chairs), clamped), so fan factors that seat
    *  the same fans never re-bake; before the first bake it carries the attendances themselves. */
   private stadiumChairCounts: { home: number; away: number; nearEnd: number; farEnd: number } | null = null;
-  private stadiumBakeKeyFor(far: readonly [number, number], d: { home: number; away: number; ends: number }): string {
+  private stadiumBakeKeyFor(far: readonly [number, number], d: CrowdDensity): string {
     const c = this.stadiumChairCounts;
     const seated = (attendance: number, chairs: number) => Math.max(0, Math.min(chairs, Math.round(attendance * chairs)));
-    const crowd = c ? `n${seated(d.home, c.home)}|${seated(d.away, c.away)}|${seated(d.ends, c.nearEnd)}|${seated(d.ends, c.farEnd)}`
-      : `${d.home}|${d.away}|${d.ends}`;
+    const crowd = c ? `n${seated(d.home, c.home)}|${seated(d.away, c.away)}|${seated(d.nearEnd, c.nearEnd)}|${seated(d.farEnd, c.farEnd)}`
+      : `${d.home}|${d.away}|${d.nearEnd}|${d.farEnd}`;
     return `${far[0]},${far[1]}|${crowd}`;
   }
   /** The bake for the current view, while the '3D stadium' style is chosen; null = draw the 2D stands. While a new crowd
@@ -19415,10 +19414,7 @@ export class PitchRenderer {
     // Fan attendance (owner 2026-07-02): stand occupancy is proportional to
     // each team's Dedicated Fans — 7 fans fills that team's side completely.
     // Owner 11-12: the same values feed the '3D stadium' bake's crowd (stadiumFanDensities).
-    const fanDensity = (side: 'home' | 'away' | 'mixed'): number => {
-      const { home, away, ends } = this.stadiumFanDensities();
-      return side === 'home' ? home : side === 'away' ? away : ends;
-    };
+    const fanDensity = (stand: StadiumStandSide): number => this.stadiumFanDensities()[stand];
 
     // Stands are ELEVATED (owner 2026-07-02, queue item 8): each seating ring
     // rises above the one in front, so the bowl reads as higher than the
@@ -19607,8 +19603,8 @@ export class PitchRenderer {
     const cornerRing = (endDepth: number, y: number): number => (y < -5 || y > 19 ? Math.max(endDepth, sideDepth(y)) : endDepth);
     drawBand(-1, 26, -10, -5, 'stand_blue', (_x, y) => -5 - y, fanDensity('home'), 'home');
     drawBand(-1, 26, 19, 24, 'stand_red', (_x, y) => y - 19, fanDensity('away'), 'away');
-    drawBand(-7, -2, -10, 24, 'stand_yellow', (x, y) => cornerRing(-2 - x, y), fanDensity('mixed'), 'nearEnd');
-    drawBand(27, 32, -10, 24, 'stand_green', (x, y) => cornerRing(x - 27, y), fanDensity('mixed'), 'farEnd');
+    drawBand(-7, -2, -10, 24, 'stand_yellow', (x, y) => cornerRing(-2 - x, y), fanDensity('nearEnd'), 'nearEnd');
+    drawBand(27, 32, -10, 24, 'stand_green', (x, y) => cornerRing(x - 27, y), fanDensity('farEnd'), 'farEnd');
 
     // B9-V3: the stadium graphics are built directly in the active orientation's
     // native frame (per-corner extPoint), so no post-transform is needed.
