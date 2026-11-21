@@ -3,7 +3,8 @@ import packJson from '../../assets/stadium3d/stadium-pack.json';
 import { mergeStadiumGeometry, parseStadiumGlb, disposeObjectTree, type StadiumBakePack } from './stadium';
 import { APRON_RECT, APRON_Y, createStandSkinMaterial, stadiumTierTops } from './standSkin';
 import { buildStandFurniture, paintSeatAtlas, standPitchward, surfaceSamplerFromGeometry, STAND_SEAT_ART_URLS, type AtlasImage, type Canvas2DLike } from './standSeats';
-import { CROWD_ART_URLS, CROWD_FRONT_OFFSET, CROWD_HEIGHT, chairsPerStand, crowdGeometry, paintCrowdAtlas, seatCrowd, type CrowdDensity } from './crowd';
+import { CROWD_ART_URLS, CROWD_FRONT_OFFSET, CROWD_PEOPLE, CROWD_HEIGHT, chairsPerStand, crowdGeometry, paintCrowdAtlas, seatCrowd, type CrowdDensity } from './crowd';
+import { facingOnScreen, indicesByFacing } from '../stadiumPeople';
 
 /**
  * Owner 11-09 (reconfirmed 11-12): the 3D stadium in the 2D client as a BAKED BACKDROP. The purchased stadium model,
@@ -43,7 +44,7 @@ export interface StadiumBakeRequest {
   /** Wanted texels per square across the screen; capped so neither image side exceeds maxSidePx. */
   pixelsPerSquare: number;
   maxSidePx: number;
-  /** Crowd attendance per side (renderer.ts fanDensity of each team's Dedicated Fans), 0..1. */
+  /** Crowd attendance per stand (crowd.ts crowdDensityFromFans), 0..1. */
   crowd: CrowdDensity;
 }
 
@@ -274,14 +275,24 @@ export async function bakeStadium(request: StadiumBakeRequest, deps: StadiumBake
     scene.add(...furniture.meshes);
 
     // Owner 11-12: fans in the seats, by the classic 2D stands' rules (crowd.ts), as camera-facing cards.
-    const fans = seatCrowd(furniture.placed, request.crowd);
+    // Owner 11-21: each stand's fans face the pitch; the camera sees them from the front, the back or in profile
+    // (mirrored when they face screen-left), and the figure comes from that facing's set.
+    const far: [number, number] = [Math.sign(request.farDir[0]) || 0, Math.sign(request.farDir[1]) || 0];
+    const screenRight: [number, number] = [-far[1], far[0]];
+    const byFacing = indicesByFacing(CROWD_PEOPLE);
+    const fans = seatCrowd(furniture.placed, request.crowd).map((fan) => {
+      const n = standPitchward(fan.stand);
+      const view = facingOnScreen({ x: n[0] * screenRight[0] + n[1] * screenRight[1], y: -(n[0] * far[0] + n[1] * far[1]) });
+      const set = byFacing[view.facing];
+      return { ...fan, sprite: set[fan.sprite % set.length]!, flip: view.flip };
+    });
     const crowdCanvas = deps.createCanvas();
     const crowdEntries = paintCrowdAtlas(crowdCanvas, crowdArt, () => deps.createCanvas());
     const crowdTexture = new THREE.CanvasTexture(crowdCanvas as unknown as HTMLCanvasElement);
     crowdTexture.colorSpace = THREE.SRGBColorSpace; crowdTexture.magFilter = THREE.NearestFilter; crowdTexture.minFilter = THREE.LinearMipmapLinearFilter;
     textures.add(crowdTexture);
     const toCamera: [number, number] = [-Math.sign(request.farDir[0]) || 0, -Math.sign(request.farDir[1]) || 0];
-    const crowd = new THREE.Mesh(crowdGeometry(fans, crowdEntries, toCamera, standPitchward),
+    const crowd = new THREE.Mesh(crowdGeometry(fans, crowdEntries, toCamera, standPitchward, request.elevation),
       new THREE.MeshStandardMaterial({ map: crowdTexture, alphaTest: 0.5, roughness: 1, side: THREE.DoubleSide }));
     crowd.name = 'baked-crowd'; crowd.receiveShadow = true;
     scene.add(crowd);

@@ -146,7 +146,8 @@ function nudgeMapSignature(map: ReadonlyMap<string, Offset>): string {
 }
 import { bundledWalkEntriesForRaces, bundledWalkManifest } from './bundledWalk';
 import { renderStadiumPack, type RenderedStadium, type StadiumPackManifest } from './stadiumModel';
-import { crowdDensityFromFans, type CrowdDensity } from './stadiumBake/crowd';
+import { crowdDensityFromFans, rowFillRates, type CrowdDensity } from './stadiumBake/crowd';
+import { STADIUM_PEOPLE, facingOnScreen, indicesByFacing, type PersonFacing, type PersonRole } from './stadiumPeople';
 import type { StadiumBakeCorners, StadiumBakeRequest, StadiumBakeResult } from './stadiumBake/bake';
 import {
   DEFAULT_D6_FACE_VARIANT,
@@ -2071,6 +2072,13 @@ function sameSquareList(a: readonly Square[], b: readonly Square[]): boolean {
   return true;
 }
 
+/** Owner 11-21: the ground direction (game x, y) each stand's spectators face - toward the pitch. */
+/** Seat rings per classic stand band (ring 0 = the front row). */
+const STAND_RINGS = 6;
+const STAND_PITCHWARD: Record<StadiumStandSide, readonly [number, number]> = {
+  home: [0, 1], away: [0, -1], nearEnd: [1, 0], farEnd: [-1, 0],
+};
+
 export class PitchRenderer {
   /** ms per block-die face — UI-7 study Option A (700ms, recommended);
    *  Option B = 1000ms. See docs/dice-timing-study.md. */
@@ -3021,8 +3029,14 @@ export class PitchRenderer {
   /** Stadium pack (Sprites/Stadium): seat-stand modules + crowd spectators. */
   private standTextures = new Map<string, Texture>();
   private crowdTextures: Texture[] = [];
-  /** The single crowd texture produced by renderer.generateTexture. Assets-owned
-   * textures in crowdTextures are borrowed and must never be destroyed here. */
+  /** Owner 11-21: crowdTextures are the fan figures of stadiumPeople.ts (CROWD_PEOPLE order); their facings, and the
+   *  tallest one (fans keep their relative sizes). */
+  private crowdFacings: PersonFacing[] = [];
+  private crowdTallest = 1;
+  /** Owner 11-21: referees, cheerleaders and assistant coaches beside the pitch (drawSidelineStaff), by role. */
+  private staffTextures = new Map<PersonRole, { facing: PersonFacing; texture: Texture }[]>();
+  /** A crowd texture produced by renderer.generateTexture (none since owner 11-21). Assets-owned textures in
+   *  crowdTextures are borrowed and must never be destroyed here. */
   private generatedCrowdTexture: Texture | null = null;
   /** Owner 2026-07-06: world-space positions of every rendered crowd sprite (set in
    *  drawStadium), so crowd quips / signs / thrown rocks can anchor to a real fan. */
@@ -6273,33 +6287,22 @@ export class PitchRenderer {
       if (!this.initActive(generation, app)) return;
       if (!this.initActive(generation, app)) return;
       if (!this.initActive(generation, app)) return;
-      // fan pool: humans + fantasy creatures (owner 2026-07-02) — all
-      // height-normalized at render time so every fan reads the same size.
-      // B9-16: fan_zombie is dropped here — its shipped art is a ground-emerging
-      // pose that distorts badly when height-normalized among standing fans; a
-      // standing "risen corpse" is baked in below instead.
-      for (const name of [
-        'crowd_1', 'crowd_2', 'crowd_3', 'crowd_4',
-        'fan_skeleton', 'fan_lizardman', 'fan_mummy', 'fan_wolfman', 'fan_orc',
-      ]) {
-        const texture = await Assets.load<Texture>(new URL(`../assets/stadium/${name}.png`, import.meta.url).href);
+      // Owner 11-21: the crowd and the pitch-side staff are the generated figures (stadiumPeople.ts), drawn at their
+      // own relative sizes and picked per stand by the facing the camera sees.
+      for (const person of STADIUM_PEOPLE) {
+        const texture = await Assets.load<Texture>(person.url);
         if (!this.initActive(generation, app)) return;
         texture.source.scaleMode = 'nearest';
-        this.crowdTextures.push(texture);
+        if (person.role === 'fan') {
+          this.crowdTextures.push(texture);
+          this.crowdFacings.push(person.facing);
+          this.crowdTallest = Math.max(this.crowdTallest, texture.height);
+        } else {
+          const list = this.staffTextures.get(person.role) ?? [];
+          list.push({ facing: person.facing, texture });
+          this.staffTextures.set(person.role, list);
+        }
         this.stadiumAssetRevision++;
-      }
-      // B9-16 (owner): swap the unnatural zombie for a STANDING risen corpse — a
-      // sickly-green tint of a standing human crowd sprite, baked to a texture so
-      // it height-normalizes like every other fan.
-      {
-        const tinted = new Sprite(this.crowdTextures[0]!); // crowd_1, a standing human
-        tinted.tint = 0x7d9a5c; // sickly zombie green
-        const zombieTex = app.renderer.generateTexture(tinted);
-        zombieTex.source.scaleMode = 'nearest';
-        this.generatedCrowdTexture = zombieTex;
-        this.crowdTextures.push(zombieTex);
-        this.stadiumAssetRevision++;
-        tinted.destroy();
       }
       // arena dressing: corner pennants + bunting strips
       for (const name of ['corner_flag_red', 'corner_flag_blue', 'bunting_red', 'bunting_blue']) {
@@ -12051,6 +12054,51 @@ export class PitchRenderer {
     }
     this.pruneLettering('dugout', dugoutLetteringKeys);
     this.watchLetteringFonts(dugoutFonts);
+    try { this.drawSidelineStaff(); }
+    catch (err) { console.warn('ffb-pitch: pitch-side staff render failed', err); }
+  }
+
+  /** Owner 11-21: two referees at the halfway line, one on each sideline, and each team's cheerleaders and assistant
+   *  coaches on its own sideline beside its dugout (home: the y > 15 side, from the halfway line toward the away end;
+   *  away: the y < 0 side, toward the home end), all facing the pitch. Drawn into the dugout layer, so every dugout
+   *  redraw rebuilds them. Capped at MAX_STAFF per role and team. */
+  private static readonly MAX_STAFF = 6;
+  private drawSidelineStaff(): void {
+    if (!this.game || this.boardCleared || this.staffTextures.size === 0) return;
+    const place = (role: PersonRole, at: readonly [number, number], toward: readonly [number, number], variant: number) => {
+      const all = this.staffTextures.get(role);
+      if (!all?.length) return;
+      const view = this.screenFacing(toward, at);
+      const set = all.filter((t) => t.facing === view.facing);
+      const pick = (set.length ? set : all)[variant % (set.length || all.length)]!;
+      const sprite = new Sprite(pick.texture);
+      sprite.anchor.set(0.5, 1);
+      const p = extPoint(at[0], at[1]);
+      const sx = Math.max(0, Math.min(25, Math.floor(at[0]))), sy = Math.floor(at[1]);
+      const height = TILE_W * 1.05 * depthScale(sx, Math.max(0, Math.min(14, sy))) * (pick.texture.height / Math.max(1, this.crowdTallest));
+      const scale = height / pick.texture.height;
+      sprite.scale.set(view.flip ? -scale : scale, scale);
+      sprite.position.set(p.x, p.y);
+      sprite.zIndex = this.depthZ(sx, sy);
+      this.dugoutLayer.addChild(sprite);
+    };
+    place('ref', [13, -0.75], [0, 1], 0);
+    place('ref', [13, 15.75], [0, -1], 1);
+    const count = (team: { cheerleaders?: unknown; assistantCoaches?: unknown } | undefined, key: 'cheerleaders' | 'assistantCoaches') => {
+      const n = Math.floor(Number(team?.[key]));
+      return Number.isFinite(n) && n > 0 ? Math.min(PitchRenderer.MAX_STAFF, n) : 0;
+    };
+    for (const isHome of [true, false]) {
+      const team = (isHome ? this.game.teamHome : this.game.teamAway) as { cheerleaders?: unknown; assistantCoaches?: unknown } | undefined;
+      // Coaches nearest the halfway line, then the cheerleaders; two staggered rows beside the touchline.
+      const staff: PersonRole[] = [...Array<PersonRole>(count(team, 'assistantCoaches')).fill('coach'), ...Array<PersonRole>(count(team, 'cheerleaders')).fill('cheer')];
+      staff.forEach((role, i) => {
+        const along = 1.0 + i * 0.8;
+        const row = i % 2 === 0 ? 0.8 : 1.9;
+        const at: [number, number] = isHome ? [13 + along, 15 + row] : [13 - along, -row];
+        place(role, at, isHome ? [0, -1] : [0, 1], i + (isHome ? 0 : 3));
+      });
+    }
   }
 
   /** Owner 2026-07-07: the SCORE / TURN-TIMER / RE-ROLL tracks. Two MIRRORED 3-column × 9-row
@@ -19106,6 +19154,12 @@ export class PitchRenderer {
     const upX = c.y - ax.y, upY = c.y - ay.y; // > 0: a step along +axis goes up the screen
     return Math.abs(upX) >= Math.abs(upY) ? [Math.sign(upX), 0] : [0, Math.sign(upY)];
   }
+  /** Owner 11-21: how the camera sees a figure at ground point `at` (game x, y) facing ground direction `toward`: from
+   *  the front, the back or in profile (flip = facing screen-left), in the active projection. */
+  private screenFacing(toward: readonly [number, number], at: readonly [number, number]): { facing: PersonFacing; flip: boolean } {
+    const p0 = extPoint(at[0], at[1]), p1 = extPoint(at[0] + toward[0] * 0.5, at[1] + toward[1] * 0.5);
+    return facingOnScreen({ x: p1.x - p0.x, y: p1.y - p0.y });
+  }
   /** Fan attendance per stand (crowdDensityFromFans): the side stands from each team's Dedicated Fans (owner
    *  2026-07-02), the end stands from each team's rolled Fan Factor (owner 11-21; nearEnd = the home end zone). The
    *  classic stands' crowd and the '3D stadium' bake's crowd both read it. */
@@ -19374,7 +19428,7 @@ export class PitchRenderer {
     };
 
     const graphics = new Graphics();
-    const crowd: { x: number; y: number; h: number; index: number; stand: 'home' | 'away' | 'end' }[] = [];
+    const crowd: { x: number; y: number; h: number; index: number; stand: 'home' | 'away' | 'end'; side: StadiumStandSide }[] = [];
 
     // "No Stadium" removes stands, crowd, fencing and props—not the physical
     // pitch surround. Keep a compact stone apron so the field remains grounded
@@ -19435,6 +19489,7 @@ export class PitchRenderer {
       const texture = this.standTextures.get(textureName);
       if (!texture) return;
       const standSet = this.standStyle === 'crowd' ? this.standSets.get(textureName.replace('stand_', '')) : undefined;
+      const rowRates = rowFillRates(STAND_RINGS, density);
       const pitchCentre = extPoint(13, 7.5);
       const cells: { x: number; y: number; ring: number }[] = [];
       for (let x = x0; x <= x1; x++) {
@@ -19503,13 +19558,16 @@ export class PitchRenderer {
         });
         graphics.poly(points).fill({ color: 0x0a0c10, alpha: Math.min(0.55, 0.12 + ring * 0.07) });
         const noise = turfNoise(x * 13 + y * 7 + 3, x * 5 - y * 11 + 1);
-        if (noise < density && this.crowdTextures.length > 0) {
+        // Owner 11-21: front rows fuller (crowd.ts rowFillRates: the quadratic row drop, the same mean attendance).
+        const rowRate = rowRates[Math.max(0, Math.min(STAND_RINGS - 1, ring))]!;
+        if (noise < rowRate && this.crowdTextures.length > 0) {
           crowd.push({
             x: (corners[0]!.x + corners[1]!.x) / 2,
             y: yB - lift - height * 0.08,
             h: height * 0.72,
-            index: Math.floor(noise * 97) % this.crowdTextures.length,
+            index: Math.floor(noise * 9973),
             stand: stand === 'home' || stand === 'away' ? stand : 'end',
+            side: stand,
           });
         }
       }
@@ -19609,11 +19667,18 @@ export class PitchRenderer {
     // B9-V3: the stadium graphics are built directly in the active orientation's
     // native frame (per-corner extPoint), so no post-transform is needed.
     this.stadiumLayer.addChild(graphics);
+    // Owner 11-21: every stand's fans face the pitch; the camera sees them from the front, the back or in profile.
+    const crowdByFacing = indicesByFacing(this.crowdFacings.map((facing) => ({ facing })));
+    const standView = new Map<StadiumStandSide, { facing: PersonFacing; flip: boolean }>();
+    for (const side of ['home', 'away', 'nearEnd', 'farEnd'] as const) standView.set(side, this.screenFacing(STAND_PITCHWARD[side], side === 'home' ? [13, -6] : side === 'away' ? [13, 21] : side === 'nearEnd' ? [-4, 7.5] : [29, 7.5]));
     for (const person of crowd) {
-      const sprite = new Sprite(this.crowdTextures[person.index]);
+      const view = standView.get(person.side)!;
+      const set = crowdByFacing[view.facing];
+      const sprite = new Sprite(this.crowdTextures[set[person.index % set.length]!]);
       sprite.anchor.set(0.5, 1);
-      const scale = person.h / sprite.texture.height;
-      sprite.scale.set(scale);
+      // person.h is the tallest figure's height; the others keep their relative size.
+      const scale = person.h / this.crowdTallest;
+      sprite.scale.set(view.flip ? -scale : scale, scale);
       sprite.position.set(person.x, person.y); // already native; spectators stay upright
       this.stadiumLayer.addChild(sprite);
     }
