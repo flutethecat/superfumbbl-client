@@ -4,7 +4,7 @@
 // them, and a server before the PR reads only the keys it knows. Staged 2026-10-25 ahead of the merge; owner (Sol r1):
 // sent only to a server that carries the PR (serverVersionGate JOIN_CLIENT_IDENTIFICATION_MIN_SERVER_VERSION).
 import { clientIdentityFields, type ClientIdentity, type ServerCommandVersion } from '@fumbbl40k/ffb-protocol';
-import { APPROVED_FFB_SERVER_VERSIONS, compareServerVersions, serverSupportsJoinClientIdentification } from './serverVersionGate';
+import { SPOKEN_FFB_PROTOCOL_VERSIONS, compareServerVersions, serverSupportsJoinClientIdentification } from './serverVersionGate';
 
 declare const __APP_VERSION__: string;
 
@@ -21,7 +21,7 @@ export const CLIENT_VERSION = typeof __APP_VERSION__ !== 'undefined' ? String(__
  * number. Ours is the newest FFB server release this client has been vetted against (the server-version gate's
  * approved list): approving a new server version is the act that moves our protocol forward, so the two never drift.
  */
-export function ffbProtocolVersion(approved: readonly string[] = APPROVED_FFB_SERVER_VERSIONS): string {
+export function ffbProtocolVersion(approved: readonly string[] = SPOKEN_FFB_PROTOCOL_VERSIONS): string {
   const sorted = [...approved].sort(compareServerVersions);
   return sorted[sorted.length - 1] ?? '';
 }

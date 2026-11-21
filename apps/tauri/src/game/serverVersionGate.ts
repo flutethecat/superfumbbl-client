@@ -14,8 +14,17 @@ import type { ClientMode, ServerCommandVersion } from '@fumbbl40k/ffb-protocol';
  *  3.3.1 = the live fumbbl.com game server on 2026-10-17 (asked directly: connect -> clientRequestVersion), the server
  *  every UAT game of 1.0.221-1.0.235 ran against, and still on 2026-11-09 (asked directly again). (An old capture said
  *  3.2.3; Astra caught that before it shipped.) 3.4.0 = the live fork server since 2026-10-26 (upstream 3.4.0 + PRs 325,
- *  336-342), the server the 3.4.0 protocol work was tested against (owner 11-09: "finish prepping for 3.4.0 protocol"). */
-export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1', '3.4.0'];
+ *  336-342), the server the 3.4.0 protocol work was tested against (owner 11-09: "finish prepping for 3.4.0 protocol").
+ *
+ *  2026-11-21 (owner: "push a kill switch patch to pause support until we're able to fix these"): 3.4.0 is OFF the
+ *  list. FUMBBL's live server moved to the released 3.4.0, which carries changes past the 3.4.0 code this client was
+ *  vetted against (the reroll dialogs among them). A coach seat on a 3.4.0 server is refused in the public edition
+ *  until the client is re-vetted; spectating and replays stay allowed. Put '3.4.0' back here when that work ships. */
+export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1'];
+
+/** The FFB protocol versions this client speaks (the join identification reports the newest). Separate from the
+ *  coach-seat approval list above: suspending a server version must not change what the client says it speaks. */
+export const SPOKEN_FFB_PROTOCOL_VERSIONS: readonly string[] = ['3.3.1', '3.4.0'];
 
 export interface ServerVersionBlock {
   /** The server's announced version. */
@@ -27,6 +36,24 @@ export interface ServerVersionBlock {
   /** The coach, when known (the "play with the FUMBBL client" link goes to the coach page, where FUMBBL's Play lives). */
   coach: string | null;
   approved: readonly string[];
+}
+
+/**
+ * Owner 2026-11-21: "Ensure a modal is displayed at launch directing users to use the main client until we're able to
+ * patch to catch up." The server version whose coach seats are suspended, or null when none is. While set, the public
+ * edition raises the server-version stop once at launch (launchSuspensionBlock), before any connection; the join gate
+ * above still refuses the seat itself. Set back to null in the patch that re-approves the version.
+ */
+export const PLAY_SUSPENDED_SERVER_VERSION: string | null = '3.4.0';
+
+/** The stop to show at launch, or null (fork / dev edition, or nothing suspended). `enforced` = the public edition. */
+export function launchSuspensionBlock(
+  enforced: boolean,
+  suspended: string | null = PLAY_SUSPENDED_SERVER_VERSION,
+  approved: readonly string[] = APPROVED_FFB_SERVER_VERSIONS,
+): ServerVersionBlock | null {
+  if (!enforced || suspended === null || approved.includes(suspended)) return null;
+  return { serverVersion: suspended, expectsClient: '', gameId: null, coach: null, approved };
 }
 
 /** The live block (the modal reads it); null = none. */

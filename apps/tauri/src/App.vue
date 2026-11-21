@@ -47,7 +47,7 @@ import type { ClientTourHost } from './game/clientTourController';
 import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
-import { fumbblPlayUrl, serverVersionBlock } from './game/serverVersionGate';
+import { fumbblPlayUrl, launchSuspensionBlock, serverVersionBlock } from './game/serverVersionGate';
 import { bareAppVersion, clientVersionBlock, clientVersionBlockStillApplies } from './game/clientVersionGate';
 import { UI_FONTS } from './game/uiFonts';
 import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
@@ -1083,6 +1083,17 @@ setJnlpLaunchGate(() => launchBlockedByRequiredUpdate()); // the shared router r
 // Owner 10-17: the server-version hard stop. The session refused the join (serverVersionGate); the modal says why and
 // points at the main FUMBBL client. Spectating is not blocked, so the modal only ever follows a coach's join.
 function dismissServerVersionBlock(): void { serverVersionBlock.value = null; }
+// Owner 11-21: while a server version is suspended, the stop is shown once per run, before any connection. It is raised
+// only when the shell is on screen (never under the beta splash / legal notice / setup wizard, where the modal does not
+// render and its key ownership would swallow those screens' keys) and only after the launch flags answered: a run with
+// fork features (the FORK edition, or --fork-server) gets no launch stop; its FUMBBL joins are still gated at the join.
+let launchSuspensionOffered = false;
+watch([firstOpenGateOpen, launchFlagsSettled], () => {
+  if (launchSuspensionOffered || firstOpenGateOpen.value || !launchFlagsSettled.value) return;
+  launchSuspensionOffered = true;
+  const suspended = launchSuspensionBlock(!forkFeaturesEnabled());
+  if (suspended && !serverVersionBlock.value) serverVersionBlock.value = suspended;
+}, { immediate: true });
 function openFumbblToPlay(): void { void openExternal(fumbblPlayUrl(serverVersionBlock.value?.coach ?? null)); }
 const serverVersionBlockRoot = ref<HTMLElement | null>(null);
 /** The block modal is on screen (an update prompt renders instead of it while that is up). */
