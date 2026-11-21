@@ -128,12 +128,6 @@ importers:
         specifier: ^8.18.0
         version: 8.21.0
 
-  packages/fly-coach:
-    dependencies:
-      '@fumbbl40k/ffb-protocol':
-        specifier: workspace:*
-        version: link:../ffb-protocol
-
 packages:
 
   '@asamuzakjp/css-color@6.0.7':
