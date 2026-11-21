@@ -2733,6 +2733,10 @@ export const UPSTREAM_LOG_TABLES: UpstreamLogTables = {
    "Pro Mascot": "Pro",
    "Pro Mascot TRR": "Pro",
    "Pro TRR": "Pro",
+   "Drive Bonus ReRoll": "Drive Bonus ReRoll",
+   "Mascot Drive Bonus": "Mascot Drive Bonus",
+   "Pro Drive Bonus": "Pro",
+   "Pro Mascot Drive Bonus": "Pro",
    "Swoop": "Swoop",
    "Hatred": "Hatred",
    "Working in Tandem": "Working in Tandem",
@@ -5480,6 +5484,10 @@ export const UPSTREAM_LOG_TABLES: UpstreamLogTables = {
     "description": "suffered a dislocated hip (-1 AG)",
     "showSiRoll": true
    },
+   "Broken Shoulder (-ST)": {
+    "description": "suffered a broken shoulder (-1 ST)",
+    "showSiRoll": true
+   },
    "Dislocated Shoulder (-ST)": {
     "description": "suffered a dislocated shoulder (-1 ST)",
     "showSiRoll": true
@@ -5652,6 +5660,10 @@ export const UPSTREAM_LOG_TABLES: UpstreamLogTables = {
    "Pro Mascot": "Pro",
    "Pro Mascot TRR": "Pro",
    "Pro TRR": "Pro",
+   "Drive Bonus ReRoll": "Drive Bonus ReRoll",
+   "Mascot Drive Bonus": "Mascot Drive Bonus",
+   "Pro Drive Bonus": "Pro",
+   "Pro Mascot Drive Bonus": "Pro",
    "Swoop": "Swoop",
    "Hatred": "Hatred",
    "Working in Tandem": "Working in Tandem",

@@ -38,7 +38,8 @@ import { hmpScatterMarksFrom, type HmpScatterMarks } from './hmpScatterTrail';
 import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, hasThrowInReport, kickoffTouchbackBallOut, lastScatterDirection, scatterBallOut, throwInBallOut, type BallOutCue } from './ballOutPresentation';
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
-import { blockProCompositeOptions, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption } from './blockDecisionProjection';
+import { BLOCK_PRO_COMPOSITE_KINDS, blockProCompositeOptions, blockTeamChoices, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption, type BlockTeamChoice } from './blockDecisionProjection';
+import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, hasDriveBonusOrLeader, mascotChoices, teamIdOfPlayer } from './teamReRollComposer';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
 import { allBlockDiceIndices, blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
 import { LONER_RETUMBLE_DELAY_MS } from './lonerCueLayout';
@@ -59,10 +60,15 @@ import { reduceGazeVictims, reduceRecoveringPlayers, stunnedPlayerIds, reduceHel
 import { computed, customRef, nextTick, reactive, ref, shallowRef, toRaw, triggerRef, watch } from 'vue';
 import { boardTurnKey, boardTurnKeyAfter, createBoardProjection, reduceBoardProjection } from './boardProjection';
 import {
+  BALL_AND_CHAIN_RE_ROLL_SETTING_KEY,
+  BALL_AND_CHAIN_RE_ROLL_VALUES,
+  DODGE_BLOCK_SETTING_KEY,
+  DODGE_BLOCK_VALUES,
   GameSession,
   ModelChangeId,
   NetCommandId,
   applyModelChangeList,
+  clientUserSettingsCommand,
   isRecoverableFumbblLobbyStatus,
   playerHasSkill,
   pushbackPayload,
@@ -124,7 +130,9 @@ import { blastinStaleRerollDialog, blastinChooserIsMe, blastinChoosingText, blas
 import { endActionConfirmText, actingTeamBlitzUsed } from './logic/blitzConsumedCopy';
 import { availableActions, actingHasActed, movesRandomly, playerPinned, adjacentDownEnemyIds, handOffCatcherAllowed, isBallCarrier, passTargetAllowed, passAnySquareAvailable, PASS_CLICK_THROWS_AT_ANY_PLAYER_SQUARE, throwMateCanPickUp, blitzBlockMoveAvailable, blitzBlockMoveVerdict, blitzBlockFitsAfterSteps, rushPromptBeforeAttack, BALL_AND_CHAIN_PREVENTED_DECLARES, moveSquareInfo, blockAlternativeOffers, BLOCK_KIND_LABEL, chompAvailableAgainst, canBeBlocked, catchOfTheDayAvailable, goredByTheBullAvailable, hasUnusedSkillNamed, highKickNomineeIds, incorporealAvailable, incorporealIsActive, onTheBallReactionAvailability, serverMoveSquares, sameSquare, normSquare, ttmRangeSquares, kickEmCommitAllowed, kickEmTargetIds, blastinTargetIds, hasWideRailActivationRuleForAction, wideRailActivationOptions, zoatBlitzTargetStageHeld, zoatBlitzTargetAcked, zoatBlitzGazeSendable, adjacentStandingEnemyIds, handOffReceiverIdsFrom, type WideRailActivationOption } from './logic/availableActions';
 import { dialogInstanceKey } from './logic/dialogDispatch';
-import { buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
+import { RE_ROLL_FOR_TARGETS_PROPERTIES, buildOpponentBlockSelectionCommand, buildReRollForTargetsCommand, opponentBlockSelectionRows, opponentBlockSelectionTeamId, reRollForTargetsOptions, reRollForTargetsPropertiesOptions, reRollForTargetsTargets } from './multiBlockTargetDialogs';
+/** reRollForTargets and its current-server form reRollForTargetsProperties share one card, answer and decline. */
+const isReRollForTargetsDialog = (id: unknown): boolean => id === 'reRollForTargets' || id === RE_ROLL_FOR_TARGETS_PROPERTIES;
 import { createTtmLandingPromptHold, isRightStuffReRolledAction } from './logic/ttmLandingPromptHold';
 import { REROLL_SUCCESS_AFTER_FAIL_CUE_MS, ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, dieSettleMs, rerollChainSuccessSound } from './logic/uiSoundCues';
 import { dwarfenWisdomOfferCardRetired, noteDwarfenWisdomOfferFrame, staleDialogOutlivedPhase } from './logic/staleDialog';
@@ -813,6 +821,8 @@ const legacyState = reactive({
     blockerId: string;
     rolls: { targetId: string; dice: number[]; nrOfDice: number; isOwnChoice: boolean | null; selectedIndex: number;
              pickable: boolean; teamRR: boolean; mascot: boolean; pro: boolean; brawler: boolean; consummate: boolean; consummateLabel: string | null;
+             /** Current server: drive bonus / Leader replace the plain team reroll; teamChoices carries them (blockTeamChoices). */
+             namedTeam: boolean; teamChoices: BlockTeamChoice[];
              /** Owner 10-10: Pro-with-fallback answers for this target (blockProCompositeOptions); empty when not offered. */
              proComposite: BlockProCompositeOption[];
              singleBlockDie: string | null; singleBlockDieLabel: string | null;
@@ -842,7 +852,7 @@ const legacyState = reactive({
     player: string;
     reRolledAction: string;
     targets: { targetId: string; target: string; minimumRoll: number | null }[];
-    options: { label: string; source: string }[];
+    options: { label: string; source: string; info?: string }[];
     loner: boolean;
     seq: number;
     instanceKey: string | null;
@@ -1000,6 +1010,10 @@ const legacyState = reactive({
     singleSkull: string | null; singleSkullLabel: string | null;
     // Owner 2026-07-12: a Team Mascot is its OWN block re-roll source (distinct from a plain TRR) — two variants, mirroring the non-block reroll prompt (0225b077): mascot = MASCOT alone, mascotTrr = MASCOT+TRR.
     mascot: boolean; mascotTrr: boolean;
+    /** Current server (c66198ac4): a drive bonus / Leader reroll is offered, so there is no plain Team Re-Roll button;
+     *  `teamChoices` holds them (and the Mascot with one of them as fallback), answered clientUseReRoll{block, source}. */
+    namedTeam?: boolean;
+    teamChoices?: BlockTeamChoice[];
     /** Owner 10-10: Pro-with-fallback answers ("Pro + RR" and the mascot variants) as upstream's block dialog offers
      *  them (blockProCompositeOptions). Chooser-only and live-dialog-only: absent on read-only / replay cards. */
     proComposite?: BlockProCompositeOption[];
@@ -1130,7 +1144,8 @@ const legacyState = reactive({
     key: string;
     prompt: string;
     declineLabel: string;
-    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string }[];
+    /** `info`: owner 11-21, the "i" text of a regeneration answer that spends a drive bonus reroll. */
+    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string }[];
     seq: number;
   } | null,
   /** Display-only Fireball 4+ chips retained until the server closes the wizard dialog. */
@@ -1468,7 +1483,7 @@ const legacyState = reactive({
   bloodlust: null as {
     stage: 'reroll' | 'decision' | 'bite';
     playerId: string; vampire: string; seq: number;
-    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill' }[];
+    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[];
     /** the failed d6 that triggered this reroll offer (owner W37 mock: shown alone on its own card line). */
     roll?: number;
     changeToMove?: boolean; action?: string;
@@ -19532,9 +19547,10 @@ export function installBlockPartialTestHarness(
   partial(): typeof state.blockPartial;
   stamp(): typeof state.blockResultStamp;
   multi(): typeof state.multiBlockResolution;
-  resolve(kind: 'accept' | 'declineReroll' | 'team' | 'mascot' | 'mascotTrr' | 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice' | BlockProCompositeKind, dieSelection?: number | number[]): void;
+  resolve(kind: 'accept' | 'declineReroll' | 'team' | 'mascot' | 'mascotTrr' | 'teamChoice' | 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice' | BlockProCompositeKind, dieSelection?: number | number[], teamChoiceSource?: string): void;
+  sendMultiTeamChoice(targetId: string, source: string): void;
   sendMultiHatred(targetId: string): void;
-  sendMultiProComposite(targetId: string, kind: BlockProCompositeKind): void;
+  sendMultiProComposite(targetId: string, kind: BlockProCompositeKind, proIndex?: number): void;
   sendMultiChoice(targetId: string, diceIndex: number, reRollSource?: unknown, proIndex?: number): void;
   setCoach(coach: string): void;
   setPlaying(playing: boolean): void;
@@ -19606,9 +19622,10 @@ export function installBlockPartialTestHarness(
     partial: () => state.blockPartial,
     stamp: () => state.blockResultStamp,
     multi: () => state.multiBlockResolution,
-    resolve(kind, dieSelection) { gameStore.resolveBlockPartial(kind, dieSelection); },
+    resolve(kind, dieSelection, teamChoiceSource) { gameStore.resolveBlockPartial(kind, dieSelection, teamChoiceSource ?? null); },
+    sendMultiTeamChoice(targetId, source) { gameStore.sendMultiBlockTeamChoice(targetId, source); },
     sendMultiHatred(targetId) { gameStore.sendMultiBlockHatred(targetId); },
-    sendMultiProComposite(targetId, kind) { gameStore.sendMultiBlockProComposite(targetId, kind); },
+    sendMultiProComposite(targetId, kind, proIndex) { gameStore.sendMultiBlockProComposite(targetId, kind, proIndex); },
     sendMultiChoice(targetId, diceIndex, reRollSource, proIndex) { gameStore.sendMultiBlockChoiceForTarget(targetId, diceIndex, reRollSource, proIndex); },
     setCoach(coach) { play.coach = coach; },
     setPlaying(playing) { play.active = playing; },
@@ -24404,6 +24421,7 @@ function bribesOfferFromDialog(g: GameJson, dp: Record<string, unknown> | undefi
 
 const KNOWN_RE_ROLL_PROPERTIES = new Set([
   'TRR', 'BRILLIANT_COACHING', 'MASCOT', 'PRO', 'LONER', 'PUMP_UP_THE_CROWD', 'SHOW_STAR',
+  'DRIVE_BONUS', 'LEADER', // c66198ac4 ReRollProperty (PR #349)
 ]);
 
 type UnrecognizedReRollField = { key: string; value: unknown };
@@ -24688,7 +24706,7 @@ function surfaceReRollPrompt(dp: Record<string, unknown>, mine = true) {
   // Owner 09-28 (S18): the server lists the Dodge skill even when Tackle at the origin square cancels it (server defect,
   // kept upstream-identical); the option is not offered and cannot be sent. Unknown origin = the card as the server sent it.
   // `rawOptions` is what the server offered (plus Primal Savagery); `options` is what the coach is given.
-  const rawOptions = offeredReRollOptions(dp, actingPlayer?.skillDisplayValuesMap);
+  const rawOptions = offeredReRollOptions(dp, actingPlayer?.skillDisplayValuesMap, game.value);
   if (primalSavageryAvailable(dp, actingPlayer, game.value?.actingPlayer as Record<string, unknown> | null | undefined, game.value)) {
     rawOptions.push({
       label: PRIMAL_SAVAGERY_SKILL,
@@ -24801,6 +24819,12 @@ function liveDefenderSquare(playerId: string): [number, number] | undefined {
     && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15
     ? [Number(c[0]), Number(c[1])] : undefined;
 }
+/** The drive bonus name for a block's team reroll buttons (DialogExtensionReRolls.driveBonusLabel): the chooser's team. */
+function blockDriveBonusName(dp: Record<string, unknown>): () => string {
+  const teamId = typeof dp.choosingTeamId === 'string' && dp.choosingTeamId ? dp.choosingTeamId
+    : teamIdOfPlayer(game.value, String(game.value?.actingPlayer?.playerId ?? dp.playerId ?? ''));
+  return () => driveBonusName(game.value, teamId);
+}
 function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boolean; reports?: readonly Record<string, unknown>[] } = {}): boolean {
   // Non-choosers get inert block-dice display with no reroll sources or sends.
   const readOnly = !!opts.readOnly;
@@ -24844,7 +24868,7 @@ function surfaceBlockPartial(dp: Record<string, unknown>, opts: { readOnly?: boo
     ...(reroll?.lonerFailed && lonerRetumbleApplies() ? { lonerRetumble: true as const } : {}),
     mine: !readOnly,
     pro: card.pro && !proWithheld,
-    proComposite: readOnly || proWithheld ? [] : blockProCompositeOptions(dp.dialogId, dp),
+    proComposite: readOnly || proWithheld ? [] : blockProCompositeOptions(dp.dialogId, dp, { driveBonus: blockDriveBonusName(dp) }),
     proWithheld,
     seq: (state.blockPartial?.seq ?? 0) + 1,
     // Owner 09-14 UAT: the dice card is anchored ONCE, where the defender stood when the dice landed — the live
@@ -24883,6 +24907,7 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
   // Owner 10-10 (Astra P1): the blocker's Pro is spent per the server's own player state though the dialog may still
   // list it for the other target (see playerProSpent) - hide it rather than let it cost that target its rerolls.
   const proSpent = playerProSpent(game.value, blockerId);
+  const rowDriveBonus = () => driveBonusName(game.value, teamIdOfPlayer(game.value, blockerId));
   const rolls = rollsRaw.map((r) => {
     const dice = Array.isArray(r.blockRoll) ? (r.blockRoll as unknown[]).map(Number) : [];
     const nrOfDice = Number(r.nrOfDice ?? 0);
@@ -24922,7 +24947,8 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
       pickable: nrOfDice > 0 || !hasAnyReroll,
       teamRR: srcTeam, mascot: rr.includes('MASCOT'), pro: srcPro && !proHidden, brawler: srcBrawler, consummate: srcConsummate,
       consummateLabel: consummateSrc ? valuedSkillLabel(consummateSrc, blockerSkillValues) : null,
-      proComposite: proSpent ? [] : blockProCompositeOptions(dp.dialogId, r),
+      proComposite: proSpent ? [] : blockProCompositeOptions(dp.dialogId, r, { driveBonus: rowDriveBonus }),
+      namedTeam: hasDriveBonusOrLeader(rr), teamChoices: blockTeamChoices(rr, rowDriveBonus),
       singleBlockDie: singleBlockDieSrc,
       singleBlockDieLabel: singleBlockDieSrc ? valuedSkillLabel(singleBlockDieSrc, blockerSkillValues) : null,
       multiBlockDice: multiBlockDiceSrc,
@@ -24963,7 +24989,10 @@ function surfaceReRollForTargets(g: GameJson, dp: Record<string, unknown>): void
   const playerId = String(dp.playerId ?? '');
   const player = playerById(g, playerId);
   const targets = reRollForTargetsTargets(dp);
-  const options = reRollForTargetsOptions(dp, (skill) => !!player && playerHasSkill(player, skill));
+  const hasSkill = (skill: string) => !!player && playerHasSkill(player, skill);
+  const options = dp.dialogId === RE_ROLL_FOR_TARGETS_PROPERTIES
+    ? reRollForTargetsPropertiesOptions(dp, hasSkill, () => driveBonusName(g, teamIdOfPlayer(g, playerId)))
+    : reRollForTargetsOptions(dp, hasSkill);
   liveReRollForTargetsDialog = dp;
   state.reRollForTargets = {
     playerId,
@@ -25774,8 +25803,8 @@ function maybeSurfaceDefenderAction(g: GameJson) {
 
 
 // Reused by the unified bloodlust card; source is the exact CLIENT_USE_RE_ROLL wire value.
-export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill' }[] {
-  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill' }[] = [];
+export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[] {
+  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[] = [];
   const singleUse = singleUseReRollName(dp);
   const skill = reRollSkillName(dp);
   const rrProps = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
@@ -25784,15 +25813,21 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
       : rrProps.includes('SHOW_STAR') ? 'Star of the Show'
         : null;
   const hasMascot = rrProps.includes('MASCOT');
-  const hasTeam = rrProps.some((property) =>
-    ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property))
-    || !!dp.teamReRollOption;
+  // TRR alone offers a team reroll - never LONER or a legacy drive bonus name on its own (offeredReRollOptions).
+  const hasTeam = rrProps.includes('TRR') || !!dp.teamReRollOption;
   if (singleUse) opts.push({ label: singleUse, source: singleUse, kind: 'skill' });
   if (skill && skill !== singleUse) opts.push({ label: skill, source: skill, kind: 'skill' });
   if (rrProps.includes('PRO') || dp.proReRollOption) opts.push({ label: 'Pro', source: 'Pro', kind: 'pro' });
   // Composite choices start with Pro, so they keep the Pro icon; source is the exact server wire value.
-  for (const composite of proCompositeReRollOptions(rrProps)) opts.push({ ...composite, kind: 'pro' });
-  if (specialTeamLabel) {
+  const driveBonus = () => driveBonusName(game.value, teamIdOfPlayer(game.value, String(dp.playerId ?? '')));
+  for (const composite of proCompositeReRollOptions(rrProps, driveBonus)) opts.push({ ...composite, kind: 'pro' });
+  if (hasDriveBonusOrLeader(rrProps)) {
+    // Current server: drive bonus / Leader replace the regular team button; the Mascot keeps its fallbacks (as offeredReRollOptions).
+    for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
+      opts.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, kind: 'team',
+        ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+    }
+  } else if (specialTeamLabel && hasTeam) {
     opts.push({ label: specialTeamLabel, source: 'Team ReRoll', kind: 'team' });
   } else if (hasMascot) {
     opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team' });
@@ -25912,7 +25947,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   else if (state.wizardTargetConfirm?.answersInstance && !cardDialogPresent(['wizardSpell'], state.wizardTargetConfirm.answersInstance)) clearWizardSpellElection();
   if (initialDialogId !== 'reRollRegenerationMultiple') clearRegenerationElection();
   if (initialDialogId !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
-  if (initialDialogId !== 'reRollForTargets') { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
+  if (!isReRollForTargetsDialog(initialDialogId)) { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
   // C8: the server's concedeGame CONFIRM dialog (the reply to our request) can arrive
   // in ANY turn mode — mid-drive from the Game Menu, turnMode 'setup' from the setup
   // panel's Concede, or a kickoff mini-turn — so handle it BEFORE the regular-mode
@@ -26059,15 +26094,17 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         if (followupHandled.has(key)) return;
         liveRegenerationOffer = offer;
         if (humanReRollSurface()) {
-          const choices = regenerationElectionChoices(offer)
+          const ownerTeamId = String((ownerTeam as { teamId?: unknown } | null)?.teamId ?? '');
+          const choices = regenerationElectionChoices(offer, () => driveBonusName(g, ownerTeamId))
             .filter((choice): choice is Exclude<RegenerationElectionChoice, { kind: 'decline' }> => choice.kind !== 'decline');
           liveRegenerationChoices = new Map(choices.map((choice) => [regenerationChoiceValue(choice), choice]));
           const options = choices.map((choice) => ({
             kind: 'regeneration' as const,
             value: regenerationChoiceValue(choice),
             label: choice.kind === 'reRoll'
-              ? `${playerName(g, choice.playerId)} — ${choice.reRollSource}`
+              ? `${playerName(g, choice.playerId)} — ${choice.label ?? choice.reRollSource}`
               : playerName(g, choice.playerId),
+            ...(choice.kind === 'reRoll' && choice.info ? { info: choice.info } : {}),
           }));
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
@@ -26474,9 +26511,13 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   }
   // BB2025 Foul Appearance in a Multiple Block: the ATTACKING coach (dialog playerId = acting player) picks a failed
   // target + source, or declines (DialogReRollForTargetsHandler:26-30). Headless declines (No Reroll: source + target null).
-  if (dlg === 'reRollForTargets') {
+  // The current server's reRollForTargetsProperties (Dauntless / Foul Appearance) rides the same card and answers.
+  if (isReRollForTargetsDialog(dlg)) {
     if (!dpPlayer || !mine.has(dpPlayer)) return; // not my player
     if (humanReRollSurface()) { surfaceReRollForTargets(g, dp as Record<string, unknown>); return; }
+    // No human surface: the client never answers a server dialog on its own. The new dialog is left for the seat (as an
+    // unknown dialog would be). The older reRollForTargets keeps its pre-existing headless decline (reported, unchanged).
+    if (dlg === RE_ROLL_FOR_TARGETS_PROPERTIES) return;
     if (dp && !headlessMultiTargetAnswered.has(dp)
       && sendCommand(buildReRollForTargetsCommand(String(dp.reRolledAction ?? ''), null, null))) {
       headlessMultiTargetAnswered.add(dp);
@@ -27236,7 +27277,8 @@ function forceAdvanceCurrentState(
     // (AbstractDialogForTargets.java:28-37); the step then moves on without a reroll (AbstractStepModifierMultipleBlock:67-68).
     // Same guards as resolveReRollForTargets: my player, the exact live raise, not already answered (a Pro answer the
     // server has not acked yet must not be followed by a second command); clear the card only after an accepted send.
-    case 'reRollForTargets': {
+    case 'reRollForTargets':
+    case 'reRollForTargetsProperties': {
       const live = g.dialogParameter as object | null | undefined;
       const rrPlayer = String((dp as { playerId?: unknown } | undefined)?.playerId ?? '');
       if (!rrPlayer || !myPlayIds(g).has(rrPlayer)) return finish('the reroll belongs to the other seat');
@@ -29355,9 +29397,43 @@ function handleGameShutdown(code: number) {
 /** Owner 2026-07-04d: server-PUSH commands outside the modelSync stream —
  *  admin broadcasts, wizard Zap notifications, and mid-game roster add/remove.
  *  Dispatched from the session's generic `command` event. */
+/** The coach's "Ask for Whirling Dervish" / "Ask for Dodge on Stumble" values as FUMBBL stored them (serverUserSettings
+ *  at join, then each save from Settings); null = none stored. Memory only: the last game's values stay visible after
+ *  it ends. Upstream keeps both in its Game Play menu ("Skill settings", c66198ac4 GamePlayMenu:118-120, 487-511). */
+const fumbblSkillSettings = reactive<{ ballAndChain: string | null; dodgeBlock: string | null }>({ ballAndChain: null, dodgeBlock: null });
+const FUMBBL_SKILL_SETTINGS = {
+  ballAndChain: { key: BALL_AND_CHAIN_RE_ROLL_SETTING_KEY, values: BALL_AND_CHAIN_RE_ROLL_VALUES as readonly string[] },
+  dodgeBlock: { key: DODGE_BLOCK_SETTING_KEY, values: DODGE_BLOCK_VALUES as readonly string[] },
+} as const;
+export type FumbblSkillSetting = keyof typeof FUMBBL_SKILL_SETTINGS;
+function refreshFumbblSkillSettings(): void {
+  const stored = session?.storedUserSettings;
+  if (!stored) return;
+  for (const name of Object.keys(FUMBBL_SKILL_SETTINGS) as FumbblSkillSetting[]) {
+    const value = stored.get(FUMBBL_SKILL_SETTINGS[name].key);
+    fumbblSkillSettings[name] = value != null && value.trim() !== '' ? value : null;
+  }
+}
+/** A save goes out on this coach's own seated game connection only, as upstream's client sends it from inside a game. */
+function fumbblSkillSettingsEditable(): boolean {
+  return !!session && play.active && !replay.active && state.sessionState === 'joined';
+}
+/** Store one of the two values for the coach on FUMBBL: upstream's clientUserSettings (client.setProperty +
+ *  saveUserSettings, GamePlayMenu.dialogClosed:502-511), carrying every other saved setting unchanged
+ *  (clientUserSettingsCommand). The server applies it to the running game at once
+ *  (ServerCommandHandlerUserSettings.updateGameplaySettings). Only the upstream option values are ever sent. */
+function saveFumbblSkillSetting(name: FumbblSkillSetting, value: string): boolean {
+  const spec = FUMBBL_SKILL_SETTINGS[name];
+  if (!spec || !spec.values.includes(value) || !fumbblSkillSettingsEditable() || !session) return false;
+  if (!sendCommand(clientUserSettingsCommand(session.storedUserSettings, spec.key, value) as unknown as Record<string, unknown>)) return false;
+  refreshFumbblSkillSettings();
+  return true;
+}
+
 function handleServerPush(cmd: Record<string, unknown>) {
   const id = String(cmd.netCommandId ?? '');
   const g = game.value;
+  if (id === NetCommandId.SERVER_USER_SETTINGS) { refreshFumbblSkillSettings(); return; }
   if (id === NetCommandId.SERVER_SOUND) {
     const sound = cmd.sound as string | null | undefined;
     // Owner 09-14: the server pushes 'touchdown' the instant the score resolves, while the scorer is still walking
@@ -29703,7 +29779,7 @@ function clearStaleReplayBlockSurfaces(): void {
     blockChoiceEpoch++;
   }
   if (dlg !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
-  if (dlg !== 'reRollForTargets') { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
+  if (!isReRollForTargetsDialog(dlg)) { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
 }
 
 function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedReplayBundle): void {
@@ -29906,6 +29982,10 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
 }
 
 export const gameStore = {
+  /** Upstream's "Skill settings": the coach's FUMBBL-stored Whirling Dervish / Dodge on Stumble values (null = none). */
+  fumbblSkillSettings: fumbblSkillSettings as Readonly<typeof fumbblSkillSettings>,
+  fumbblSkillSettingsEditable,
+  saveFumbblSkillSetting,
   spectatorPublishedPosition: spectatorPublication.position,
   /** Owner 10-11: a published position's automatic field flip under Settings > Spectator and replay view. */
   publishedFieldFlip,
@@ -31441,7 +31521,7 @@ export const gameStore = {
   /** Owner 2026-07-05: resolve the BB2025 block PARTIAL re-roll. `kind`: accept (pick a
    *  die), team (re-roll all), brawler (Both-Down), pro / consummate (re-roll ONE die
    *  by `dieIndex`), multiBlockDice (re-roll selected indexes). */
-  resolveBlockPartial(kind: 'accept' | 'declineReroll' | 'team' | 'mascot' | 'mascotTrr' | 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice' | BlockProCompositeKind, dieSelection: number | number[] = 0) {
+  resolveBlockPartial(kind: 'accept' | 'declineReroll' | 'team' | 'mascot' | 'mascotTrr' | 'teamChoice' | 'brawler' | 'pro' | 'consummate' | 'singleBlockDie' | 'hatred' | 'multiBlockDice' | BlockProCompositeKind, dieSelection: number | number[] = 0, teamChoiceSource: string | null = null) {
     if (!state.blockPartial || !localOwnsCurrentBlockDialog()) return;
     const dieIndex = typeof dieSelection === 'number' ? dieSelection : 0;
     let cmd: Record<string, unknown> | null = null;
@@ -31456,6 +31536,14 @@ export const gameStore = {
       // Owner 2026-07-12: distinct mascot sources (upstream ReRollSources names) — mirror the 'team' send.
       case 'mascot': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Team Mascot' }; break;
       case 'mascotTrr': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Mascot TRR' }; break;
+      // Current server: a drive bonus / Leader reroll, or the Mascot falling back to one, as the block dialog offered it
+      // (DialogBlockRollPropertiesHandler: team reroll buttons -> selectTeamReRoll -> sendUseReRoll(BLOCK, source)).
+      case 'teamChoice': {
+        const choice = (state.blockPartial.teamChoices ?? []).find((c) => c.source === teamChoiceSource);
+        if (!choice) return;
+        cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: choice.source };
+        break;
+      }
       case 'brawler': cmd = { netCommandId: NetCommandId.CLIENT_USE_BRAWLER }; break;
       case 'multiBlockDice': {
         const diceCount = state.blockPartial.dice.length;
@@ -31472,14 +31560,16 @@ export const gameStore = {
       case 'hatred': cmd = { netCommandId: NetCommandId.CLIENT_USE_HATRED, playerId: null }; break;
       // Owner 10-10: a Pro the card withheld (server state says spent, see playerProSpent) is never sent.
       case 'pro': if (state.blockPartial.proWithheld) return; cmd = { netCommandId: NetCommandId.CLIENT_USE_PRO_RE_ROLL_FOR_BLOCK, proIndex: dieIndex }; break;
-      // Owner 10-10: Pro with a fallback. Upstream answers every Pro source other than plain PRO through the generic
-      // branch, sendUseReRoll(BLOCK, source) (DialogBlockRollPropertiesHandler.dialogClosed:95-109) - no die index,
-      // which is why the option exists on one-die rolls only (blockProCompositeOptions). Only an OFFERED source is
-      // ever sent; anything else leaves the card up untouched.
-      case 'proTrr': case 'proMascot': case 'proMascotTrr': {
+      // Owner 10-10: Pro with a fallback. Only an OFFERED source is ever sent; anything else leaves the card up untouched.
+      // Upstream sends every Pro source as clientUseProReRollForBlock{proIndex, reRollSource}
+      // (c66198ac4 DialogBlockRollPropertiesHandler.reRollDialogClosed:102-105). The generic clientUseReRoll{block, source}
+      // would be accepted (AbstractStepWithReRoll:48-56) and, when Pro succeeds, write fBlockRoll[-1] (StepBlockRoll:263-275,
+      // dieIndex -1 at :78): the step throws with Pro and the team reroll spent - a wedge. Never sent.
+      case 'proTrr': case 'proMascot': case 'proMascotTrr': case 'proDriveBonus': case 'proMascotDriveBonus': {
         const option = (state.blockPartial.proComposite ?? []).find((o) => o.kind === kind);
         if (!option) return;
-        cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: option.source };
+        if (!Number.isInteger(dieIndex) || dieIndex < 0 || dieIndex >= state.blockPartial.dice.length) return;
+        cmd = { netCommandId: NetCommandId.CLIENT_USE_PRO_RE_ROLL_FOR_BLOCK, proIndex: dieIndex, reRollSource: option.source };
         break;
       }
       case 'consummate': cmd = { netCommandId: NetCommandId.CLIENT_USE_CONSUMMATE_RE_ROLL_FOR_BLOCK, proIndex: dieIndex }; break;
@@ -31487,12 +31577,14 @@ export const gameStore = {
     }
     // Owner 10-13: the dice this coach chose to reroll (the resent card re-tumbles exactly these); other sources are
     // derived from the server's reroll report (Brawler / Hatred / a full reroll).
-    ownBlockRerollIndices = kind === 'pro' || kind === 'consummate' || kind === 'singleBlockDie' ? [dieIndex]
+    // A composite answered with the die index rerolls that one die (c66198ac4 StepBlockRoll:263-275), Pro or fallback.
+    const indexedComposite = BLOCK_PRO_COMPOSITE_KINDS.includes(kind as BlockProCompositeKind);
+    ownBlockRerollIndices = kind === 'pro' || kind === 'consummate' || kind === 'singleBlockDie' || indexedComposite ? [dieIndex]
       : kind === 'multiBlockDice' && Array.isArray(dieSelection) ? [...dieSelection] : null;
     if (cmd) sendCommand(cmd);
     state.blockPartial = null;
     blockChoiceEpoch++; // g313: the NEXT block-choice offer gets a fresh de-dup key even on identical dice
-    log('system', `play: block partial reroll — ${kind}`);
+    log('system', `play: block partial reroll — ${kind === 'teamChoice' ? teamChoiceSource : kind}`);
   },
 
   async connect(params: { url: string; coach: string; password: string; gameId: number; compression?: boolean }, preserveReview = false) {
@@ -33787,12 +33879,22 @@ export const gameStore = {
 
   /** Owner 10-10: Pro with a fallback for ONE multiple-block target - upstream sendBlockOrReRollChoiceForTarget(target,
    *  selectedIndex, source, proIndex 0) (DialogReRollBlockForTargetsProperties.handleReRollUse:368-372 -> proAction
-   *  :316-321; handler :66-69). Sent only for a source that target's row offers (one-die rolls, blockProCompositeOptions). */
-  sendMultiBlockProComposite(targetId: string, kind: BlockProCompositeKind) {
+   *  :316-321; handler :66-69). Sent only for a source that target's row offers (blockProCompositeOptions). */
+  /** Current server: a drive bonus / Leader reroll (or the Mascot with one as fallback) for ONE multiple-block target,
+   *  only as that target's row offers it (upstream DialogReRollBlockForTargetsPropertiesHandler: selectTeamReRoll ->
+   *  sendBlockOrReRollChoiceForTarget(target, selectedIndex, source, proIndex, anyDice)). */
+  sendMultiBlockTeamChoice(targetId: string, source: string) {
+    const row = state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
+    if (!row?.teamChoices.some((c) => c.source === source)) return;
+    gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0);
+  },
+
+  sendMultiBlockProComposite(targetId: string, kind: BlockProCompositeKind, proIndex = 0) {
     const row = state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
     const option = row?.proComposite.find((o) => o.kind === kind);
-    if (!option) return;
-    gameStore.sendMultiBlockChoiceForTarget(targetId, -1, option.source, 0);
+    if (!option || !row || !Number.isInteger(proIndex) || proIndex < 0 || proIndex >= Math.max(1, row.dice.length)) return;
+    // The die index rides in proIndex (StepBlockRollMultiple handleCommand -> roll.setProIndex).
+    gameStore.sendMultiBlockChoiceForTarget(targetId, -1, option.source, proIndex);
   },
 
   /**

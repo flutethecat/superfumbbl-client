@@ -733,7 +733,13 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
       || ![card.fumble, card.loner, card.thresholdless].every((v) => typeof v === 'boolean') || !Array.isArray(card.options)) fail(41);
     // S36: a `modifier-choice` option also carries the received skillArray and its minimumRoll.
     if (card.options.some((o) => !object(o)
-      || !(keys(o, ['label', 'source', 'response', 'role']) || (o.response === 'modifier-choice' && keys(o, ['label', 'source', 'response', 'role', 'skillArray', 'minimumRoll'])
+      || !(keys(o, ['label', 'source', 'response', 'role'])
+        // a current-server Leader / drive bonus team reroll names itself (reRollDecisionProjection teamKind)
+        || (keys(o, ['label', 'source', 'response', 'role', 'teamKind']) && o.teamKind === 'leader')
+        // owner 11-21: an answer spending a drive bonus carries its "i" text (info), the direct one also teamKind
+        || (keys(o, ['label', 'source', 'response', 'role', 'info']) && typeof o.info === 'string')
+        || (keys(o, ['label', 'source', 'response', 'role', 'teamKind', 'info']) && o.teamKind === 'driveBonus' && typeof o.info === 'string')
+        || (o.response === 'modifier-choice' && keys(o, ['label', 'source', 'response', 'role', 'skillArray', 'minimumRoll'])
         && strings(o.skillArray) && finite(o.minimumRoll)))
       || typeof o.label !== 'string' || typeof o.source !== 'string'
       || !oneOf(RE_ROLL_RESPONSES, o.response) || !oneOf(RE_ROLL_OPTION_ROLES, o.role))) fail(42);

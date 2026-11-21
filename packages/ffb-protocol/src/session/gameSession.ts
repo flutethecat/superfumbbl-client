@@ -59,6 +59,83 @@ export function isRecoverableFumbblLobbyStatus(serverStatus: unknown): boolean {
   return String(serverStatus ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === 'gameinuse';
 }
 
+/** Upstream CommonProperty.SETTING_RE_ROLL_BALL_AND_CHAIN (c66198ac4 CommonProperty.java:18): a saved user setting the
+ *  server hands the coach at join in serverUserSettings (userSettingNames / userSettingValues). */
+export const BALL_AND_CHAIN_RE_ROLL_SETTING_KEY = 'setting.reRollBallAndChain';
+/** CommonPropertyValue.SETTING_RE_ROLL_BALL_AND_CHAIN_ALWAYS: ask for the Whirling Dervish / team reroll every time. */
+export const BALL_AND_CHAIN_RE_ROLL_ALWAYS = 'reRollBallAndChainAlways';
+
+/**
+ * The `ballAndChainReRollSetting` a clientMove carries. Upstream's client always sends its saved setting
+ * (MoveLogicModule.sendCommand:282-285 -> ClientCommandMove, JSON key `ballAndChainReRollSetting`), and the BB2025
+ * server asks for a Ball & Chain scatter reroll according to it: Never, TeamMate, NoOpponent, Always (any other
+ * non-empty value asks too). A MISSING value means "never ask" on the current server (c66198ac4 StepMoveBallAndChain
+ * :191, `askForReRoll = StringTool.isProvided(reRollSetting)`) but "ask" on older servers (97d96e790 / 3.3.x:
+ * `askForReRoll = true`, same switch). So: the coach's own server-stored value when it supplied one (the same coach
+ * gets the same behaviour in both clients), else Always, which is today's behaviour on every server.
+ */
+export function ballAndChainReRollSetting(userSettings: ReadonlyMap<string, string>): string {
+  const stored = userSettings.get(BALL_AND_CHAIN_RE_ROLL_SETTING_KEY);
+  return stored && stored.trim() ? stored : BALL_AND_CHAIN_RE_ROLL_ALWAYS;
+}
+
+/** The "Ask for Whirling Dervish" values, in upstream's menu order (c66198ac4 GamePlayMenu.populateMenuMetadata:132-137,
+ *  CommonPropertyValue.java:10-13). */
+export const BALL_AND_CHAIN_RE_ROLL_VALUES = [
+  BALL_AND_CHAIN_RE_ROLL_ALWAYS, 'reRollBallAndChainNoOpponent', 'reRollBallAndChainTeamMate', 'reRollBallAndChainNever',
+] as const;
+
+/** Upstream CommonProperty.SETTING_DODGE_BLOCK, "Ask for Dodge on Stumble" (c66198ac4 CommonProperty.java:19): stored
+ *  remotely only. The server copies the joining coach's stored value into the game state (UtilServerStartGame:73-76,
+ *  GameState.setGameplaySettings) and StepBlockDodge:86-88 asks through DodgeBlockChoiceService.askForDodge. */
+export const DODGE_BLOCK_SETTING_KEY = 'setting.dodgeBlock';
+/** Its values, in upstream's menu order (GamePlayMenu.populateMenuMetadata:139-145, CommonPropertyValue.java:14-17).
+ *  A missing value is Sideline & Chainpush on the server (DodgeBlockChoiceService.askForDodge:35). */
+export const DODGE_BLOCK_VALUES = ['dodgeBlockAlways', 'dodgeBlockWideZone', 'dodgeBlockSituational', 'dodgeBlockNever'] as const;
+export const DODGE_BLOCK_SERVER_DEFAULT = 'dodgeBlockSituational';
+
+/** Upstream CommonProperty._SAVED_USER_SETTINGS (c66198ac4 CommonProperty.java:95-115), by key, in that order: the
+ *  settings upstream's client puts on clientUserSettings (FantasyFootballClient.saveUserSettings:122-132). */
+export const SAVED_USER_SETTING_KEYS: readonly string[] = [
+  'setting.sound.mode', 'setting.pitch.orientation', 'setting.sound.volume', 'setting.icons', 'setting.rightClickEndAction',
+  'setting.automove', 'setting.blitzTargetPanel', 'setting.gazeTargetPanel', 'setting.pitch.customization',
+  'setting.pitch.markings', 'setting.pitch.markings.row', 'setting.pitch.teamLogos', 'setting.pitch.weather',
+  'setting.rangegrid', 'setting.lastChangeLogFingerPrint', 'setting.reRollBallAndChain', 'setting.mark.used.players',
+  'setting.mark.blitzing.player', 'setting.mark.acting.player.action', 'setting.playerMarkingType',
+  'setting.show.autoMarkingDialog', 'setting.swap.team.colors', 'setting.background.chat', 'setting.background.log',
+  'setting.background.frame', 'setting.background.frame.color', 'setting.font.color.text', 'setting.font.color.away',
+  'setting.font.color.home', 'setting.font.color.spec', 'setting.font.color.dev', 'setting.font.color.admin',
+  'setting.font.color.frame', 'setting.font.color.frameShadow', 'setting.font.color.input', 'setting.scaleFactor',
+  'setting.localSettings', 'setting.showCratersAndBloodspots', 'setting.sweet.spot', 'setting.localIconCache',
+  'setting.localIconCache.path', 'setting.font.color.playerMarkerHome', 'setting.font.color.playerMarkerAway',
+  'setting.font.color.fieldMarker', 'setting.log.dir', 'setting.log.mode', 'setting.sketchCursor',
+  'setting.font.color.addPlayerMarkerHome', 'setting.font.color.addPlayerMarkerAway', 'setting.tacklezones.playerMode',
+  'setting.tacklezones.overlap', 'setting.tacklezones.spectatorMode', 'setting.tacklezones.contour', 'setting.tz.color.home',
+  'setting.tz.color.away', 'setting.click.startSketch', 'setting.click.addPoint', 'setting.click.endSketch',
+  'setting.background.mention', 'setting.font.color.mention', 'setting.autocomplete', 'setting.sound.spectatorCaptions',
+  'setting.dialog.keyDelay', DODGE_BLOCK_SETTING_KEY,
+];
+
+/**
+ * The clientUserSettings that stores `key = value` for the coach (ClientCommandUserSettings.toJsonValue: netCommandId,
+ * settingNames[], settingValues[]). The server REPLACES the coach's stored settings with exactly the sent list
+ * (ServerCommandHandlerUserSettings.handleCommand:41-49: delete all, insert each), so every other saved setting the
+ * server handed us in serverUserSettings goes out again unchanged; settings it never stored stay unstored, and its
+ * server.ini `client.*` entries (also in serverUserSettings, UtilServerStartGame.sendUserSettings:99-104) are not user
+ * settings and are never sent. Names follow upstream's _SAVED_USER_SETTINGS order.
+ */
+export function clientUserSettingsCommand(stored: ReadonlyMap<string, string>, key: string, value: string): NetCommand {
+  const settingNames: string[] = [];
+  const settingValues: string[] = [];
+  for (const name of SAVED_USER_SETTING_KEYS) {
+    const v = name === key ? value : stored.get(name);
+    if (v === undefined) continue;
+    settingNames.push(name);
+    settingValues.push(v);
+  }
+  return { netCommandId: NetCommandId.CLIENT_USER_SETTINGS, settingNames, settingValues } as unknown as NetCommand;
+}
+
 /** Upstream christerk/ffb PR #341 (join client identification): `clientJoin` / `clientJoinReplay` carry the FFB protocol
  *  version the client speaks, the client's name and its version (JSON keys `protocolVersion`, `clientName`,
  *  `clientVersion`). The server only logs them; one before the PR reads only the keys it knows, so they are safe on both. */
@@ -153,6 +230,8 @@ export class GameSession {
   private readonly joinGate: JoinGate | null;
   private readonly clientIdentity: ClientIdentitySource | null;
   private lastVersion: ServerCommandVersion | null = null;
+  /** The coach's server-stored user settings (serverUserSettings), name -> value. */
+  private readonly userSettings = new Map<string, string>();
 
   constructor(connectionOptions: FfbConnectionOptions & { joinGate?: JoinGate; clientIdentity?: ClientIdentitySource }) {
     this.joinGate = connectionOptions.joinGate ?? null;
@@ -366,7 +445,32 @@ export class GameSession {
   }
 
   send(command: NetCommand): void {
+    const raw = command as unknown as Record<string, unknown>;
+    if (raw.netCommandId === NetCommandId.CLIENT_MOVE && !('ballAndChainReRollSetting' in raw)) {
+      // Every clientMove carries the Ball & Chain reroll preference, last, as ClientCommandMove.toJsonValue writes it.
+      this.connection.send({ ...raw, ballAndChainReRollSetting: ballAndChainReRollSetting(this.userSettings) } as unknown as NetCommand);
+      return;
+    }
+    if (raw.netCommandId === NetCommandId.CLIENT_USER_SETTINGS) this.noteSavedUserSettings(raw);
     this.connection.send(command);
+  }
+
+  /** The coach's server-stored user settings as this session knows them (serverUserSettings, then every
+   *  clientUserSettings this session sent). */
+  get storedUserSettings(): ReadonlyMap<string, string> {
+    return this.userSettings;
+  }
+
+  /** The server stores exactly what a clientUserSettings carries (ServerCommandHandlerUserSettings), so the saved
+   *  settings are now that list; server.ini `client.*` entries are kept. */
+  private noteSavedUserSettings(raw: Record<string, unknown>): void {
+    const names = Array.isArray(raw.settingNames) ? raw.settingNames : [];
+    const values = Array.isArray(raw.settingValues) ? raw.settingValues : [];
+    for (const key of SAVED_USER_SETTING_KEYS) this.userSettings.delete(key);
+    names.forEach((name, i) => {
+      const value = values[i];
+      if (typeof name === 'string' && typeof value === 'string') this.userSettings.set(name, value);
+    });
   }
 
   close(): void {
@@ -474,6 +578,18 @@ export class GameSession {
       case NetCommandId.SERVER_TALK:
         this.emit('talk', command as ServerCommandTalk);
         break;
+      case NetCommandId.SERVER_USER_SETTINGS: {
+        // ServerCommandUserSettings.toJsonValue: userSettingNames[] / userSettingValues[] (same at 97d96e790 and c66198ac4).
+        const raw = command as unknown as { userSettingNames?: unknown; userSettingValues?: unknown };
+        const names = Array.isArray(raw.userSettingNames) ? raw.userSettingNames : [];
+        const values = Array.isArray(raw.userSettingValues) ? raw.userSettingValues : [];
+        this.userSettings.clear();
+        names.forEach((name, i) => {
+          const value = values[i];
+          if (typeof name === 'string' && typeof value === 'string') this.userSettings.set(name, value);
+        });
+        break;
+      }
       default:
         break;
     }

@@ -20,12 +20,18 @@ const labelBase = (label: string): number | null => {
   if (key.includes('badlyhurt')) return 6;
   if (key.includes('dead')) return 8;
   if (key.includes('injury') || key.includes('hurt')) return 7;
+  // Owner 11-21: a named lasting injury ("BROKEN SHOULDER (-ST)") is a base-7 casualty too.
+  if (casualtyKind(label) === 'lastingInjury') return 7;
   return null;
 };
 const casualtyKind = (value: unknown): 'badlyHurt' | 'seriouslyHurt' | 'seriousInjury' | 'lastingInjury' | 'dead' | null => {
   const key = normalized(value);
   if (key.includes('dead') || key.includes('rip')) return 'dead';
-  if (key.includes('lastinginjury') || /headinjury|smashedknee|brokenarm|dislocated/.test(key)) return 'lastingInjury';
+  // Any lasting injury names its characteristic as a "(-XX)" suffix: BB2025 "Broken Shoulder (-ST)" (c66198ac4, PR #364;
+  // older games and replays keep "Dislocated Shoulder (-ST)"), BB2020 "Neck Injury (-AG)", the casualty card's
+  // "LASTING INJURY (-ST)" (injuryOutcomeProjection.casualtyTierLabel).
+  if (key.includes('lastinginjury') || /headinjury|smashedknee|brokenarm|dislocated/.test(key)
+    || /\(\s*-\s*(?:MA|ST|AG|PA|AV)\s*\)/i.test(String(value ?? ''))) return 'lastingInjury';
   if (key.includes('seriouslyhurt') || key.includes('mng')) return 'seriouslyHurt';
   if (key.includes('seriousinjury') || key.endsWith('ni')) return 'seriousInjury';
   if (key.includes('badlyhurt')) return 'badlyHurt';
@@ -40,7 +46,11 @@ const acceptedOutcomeMatches = (label: string, base: number | null, serious: unk
   if (base !== 7) return true;
   const labelKind = casualtyKind(label);
   const seriousKind = casualtyKind(serious);
-  return labelKind !== null && seriousKind !== null && labelKind === seriousKind;
+  if (labelKind === null || seriousKind === null || labelKind !== seriousKind) return false;
+  // Owner 11-21: a tile that NAMES its lasting injury ("BROKEN ARM (-PA)") matches only that injury, so two lasting
+  // injuries (Broken Shoulder vs Broken Arm) are told apart; the generic "LASTING INJURY (-XX)" tier keeps the kind match.
+  if (labelKind === 'lastingInjury' && !normalized(label).includes('lastinginjury')) return normalized(label) === normalized(serious);
+  return true;
 };
 
 export interface ApothecaryOutcomeCue {

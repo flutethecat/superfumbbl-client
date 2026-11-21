@@ -1,5 +1,6 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { playerById, valuedSkillLabel } from './reRollDecisionProjection';
+import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer } from './teamReRollComposer';
 
 export interface BlockContextProjection {
   attackerId: string | null;
@@ -54,8 +55,39 @@ export const BLOCK_PRO_COMPOSITES = [
   { kind: 'proMascot', source: 'Pro Mascot', label: 'Pro + Mascot', title: 'Pro, then the Team Mascot if the Pro roll fails (no Team Reroll)' },
   { kind: 'proMascotTrr', source: 'Pro Mascot TRR', label: 'Pro + Mascot + RR', title: 'Pro, then the Team Mascot, then a Team Reroll if both fail' },
 ] as const;
-export type BlockProCompositeOption = (typeof BLOCK_PRO_COMPOSITES)[number];
-export type BlockProCompositeKind = BlockProCompositeOption['kind'];
+/** The drive bonus variants exist only on the current server (c66198ac4 ReRollSources.java:42-45). A Leader fallback is
+ *  sent as Pro TRR / Pro Mascot TRR (ReRollSourceComposer.compose maps LEADER to TEAM_RE_ROLL). */
+export type BlockProCompositeKind = (typeof BLOCK_PRO_COMPOSITES)[number]['kind'] | 'proDriveBonus' | 'proMascotDriveBonus';
+export interface BlockProCompositeOption {
+  kind: BlockProCompositeKind; source: string; label: string; title: string;
+  /** Owner 11-21: the "i" text when the fallback spends a drive bonus reroll (driveBonusInfo); the label reads Team Reroll. */
+  info?: string;
+}
+const COMPOSITE_KIND_BY_SOURCE: Readonly<Record<string, BlockProCompositeKind>> = {
+  'Pro TRR': 'proTrr', 'Pro Mascot': 'proMascot', 'Pro Mascot TRR': 'proMascotTrr',
+  'Pro Drive Bonus': 'proDriveBonus', 'Pro Mascot Drive Bonus': 'proMascotDriveBonus',
+};
+export const BLOCK_PRO_COMPOSITE_KINDS: readonly BlockProCompositeKind[] = Object.values(COMPOSITE_KIND_BY_SOURCE);
+
+/** A team reroll answer of a block offered as its own button on the current server: a drive bonus / Leader reroll, or
+ *  the Team Mascot with one of them as fallback (sent as clientUseReRoll{block, source}, like Team ReRoll). */
+export interface BlockTeamChoice {
+  source: string; label: string;
+  /** Owner 11-21: a drive bonus answer reads and looks like the Team reroll; this is its "i" text (driveBonusInfo). */
+  info?: string;
+}
+
+/** Current server (c66198ac4): when the block offers a drive bonus or a Leader reroll they REPLACE the plain Team
+ *  Re-Roll button (ReRollSourceComposer.teamReRollSources:66-84, DialogBlockRollProperties.reRollPanel:196-205), and a
+ *  Mascot falls back to them (AbstractReRollDialogHandler.select). Empty for every other offer (unchanged card). */
+export function blockTeamChoices(rr: readonly string[], driveBonus: () => string): BlockTeamChoice[] {
+  if (!hasDriveBonusOrLeader(rr)) return [];
+  return [...mascotChoices(rr).slice(1), ...directTeamChoices(rr)]
+    .map((c) => {
+      const info = driveBonusInfo(c, driveBonus);
+      return { source: c.source, label: composedChoiceLabel(c, driveBonus), ...(info ? { info } : {}) };
+    });
+}
 
 /** Owner 10-10: the "Pro, then Team Reroll" answers of a BLOCK dialog, offered as upstream's own client offers them
  *  (DialogBlockRollProperties.proMascotPanelSingle:271-296 / determineProReRollSource:760-773, and the per-target
@@ -70,25 +102,34 @@ export type BlockProCompositeKind = BlockProCompositeOption['kind'];
  *     a Mascot (the TRR box is disabled until Mascot is ticked), but the server accepts it independently: with
  *     source `Pro TRR` bb2025 RollMechanic.useReRoll:326-363 runs Pro and on failure goes straight to the team
  *     reroll branch (:354) whether or not a Mascot exists (the Mascot branch only runs for Pro Mascot /
- *     Pro Mascot TRR). In the multiple-block dialog's one-die panel the Mascot box has no listener (:223-233), so
- *     upstream cannot send Pro Mascot TRR from there and neither do we: Pro TRR and Pro Mascot only.
- *  ONE-DIE rolls only. Upstream also shows the boxes on 2 and 3 dice, but its answer for a composite source carries
- *  no usable die index (single block: sendUseReRoll(BLOCK, source), DialogBlockRollPropertiesHandler:108) and the
- *  server then rerolls EVERY die (bb2025 StepBlockRoll:242-278 and StepBlockRollMultiple.roll:401-424 test
- *  `== ReRollSources.PRO` by identity, so a composite falls to the whole-roll branch). A die-select that rerolls
- *  the whole roll is not offered; on one die the two are the same reroll. */
-export function blockProCompositeOptions(dialogId: unknown, roll: Record<string, unknown>): BlockProCompositeOption[] {
+ *     Pro Mascot TRR).
+ *  Offered on 1, 2 and 3 dice (uphill too): the server (c66198ac4, PR #349) takes the composite with the die index
+ *  (clientUseProReRollForBlock{proIndex, reRollSource}, StepBlockRoll:126-138; StepBlockRollMultiple.roll:401-404
+ *  decomposes any Pro source and rerolls roll.getProIndex()), and upstream offers it on every dice count
+ *  (DialogBlockRollProperties.proPanel, DialogReRollBlockForTargetsProperties), the multiple-block row included (its
+ *  fallback question, AbstractReRollDialogHandler, reaches Pro Mascot TRR there too). */
+export function blockProCompositeOptions(dialogId: unknown, roll: Record<string, unknown>, opts: { driveBonus?: () => string } = {}): BlockProCompositeOption[] {
   if (dialogId !== 'blockRollProperties' && dialogId !== 'reRollBlockForTargetsProperties') return [];
   const a2s = (roll.reRollActionToSourceMap && typeof roll.reRollActionToSourceMap === 'object')
     ? (roll.reRollActionToSourceMap as Record<string, unknown>) : {};
-  if (a2s['Single Die Per Activation'] !== 'Pro' || Number(roll.nrOfDice) !== 1) return [];
+  const dice = Math.abs(Number(roll.nrOfDice));
+  if (a2s['Single Die Per Activation'] !== 'Pro' || !(dice === 1 || dice === 2 || dice === 3)) return [];
   const rr = Array.isArray(roll.reRollProperties) ? (roll.reRollProperties as unknown[]).map(String) : [];
+  if (hasDriveBonusOrLeader(rr)) {
+    // Only the current server sends DRIVE_BONUS / LEADER: every answer of upstream's Pro fallback question, named.
+    const driveBonus = opts.driveBonus ?? genericDriveBonusName;
+    return proChoices(rr).slice(1).map((c) => {
+      const label = composedChoiceLabel(c, driveBonus);
+      const info = driveBonusInfo(c, driveBonus);
+      return { kind: COMPOSITE_KIND_BY_SOURCE[c.source]!, source: c.source, label, title: label, ...(info ? { info } : {}) };
+    });
+  }
   const trr = rr.includes('TRR');
   const mascot = rr.includes('MASCOT') && !['BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].some((p) => rr.includes(p));
   const sources = mascot
-    ? (trr ? (dialogId === 'blockRollProperties' ? ['Pro TRR', 'Pro Mascot', 'Pro Mascot TRR'] : ['Pro TRR', 'Pro Mascot']) : ['Pro Mascot'])
+    ? (trr ? ['Pro TRR', 'Pro Mascot', 'Pro Mascot TRR'] : ['Pro Mascot'])
     : trr ? ['Pro TRR'] : [];
-  return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source));
+  return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source)).map((option) => ({ ...option }));
 }
 
 export function buildBlockDecision(game: GameJson | null, dp: Record<string, unknown>, readOnly: boolean) {
@@ -110,6 +151,9 @@ export function buildBlockDecision(game: GameJson | null, dp: Record<string, unk
   const actingId = String(dp.playerId ?? (game?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const actingSkillValues = playerById(game, actingId)?.skillDisplayValuesMap;
   const hasAnyReroll = srcTeam || srcPro || srcBrawler || srcConsummate || !!singleBlockDieSrc || !!multiBlockDiceSrc || !!singleSkullSrc;
+  const choosingTeamId = typeof dp.choosingTeamId === 'string' && dp.choosingTeamId.length > 0 ? dp.choosingTeamId : null;
+  const namedTeam = !readOnly && hasDriveBonusOrLeader(rr);
+  const teamChoices = readOnly ? [] : blockTeamChoices(rr, () => driveBonusName(game, choosingTeamId ?? teamIdOfPlayer(game, actingId)));
   return {
     dice: Array.isArray(dp.blockRoll) ? (dp.blockRoll as unknown[]).map(Number) : [],
     // Owner 10-13: the server-declared chooser owns these dice (home/away dice colour); null when not declared
@@ -128,7 +172,10 @@ export function buildBlockDecision(game: GameJson | null, dp: Record<string, unk
     teamRR: !readOnly && srcTeam,
     // Keep Mascot distinct from TRR and suppress plain TRR when Mascot is available.
     mascot: !readOnly && rr.includes('MASCOT'),
-    mascotTrr: !readOnly && rr.includes('MASCOT') && rr.includes('TRR'),
+    mascotTrr: !readOnly && rr.includes('MASCOT') && rr.includes('TRR') && !namedTeam,
+    /** Current server: a drive bonus / Leader is offered, so the plain Team Re-Roll button is not (teamChoices has them).
+     *  Omitted otherwise (and always on read-only cards), so every other card keeps its exact shape. */
+    ...(namedTeam ? { namedTeam: true as const, teamChoices } : {}),
     pro: !readOnly && srcPro,
     brawler: !readOnly && srcBrawler,
     consummate: !readOnly && srcConsummate,

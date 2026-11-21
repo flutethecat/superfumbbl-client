@@ -173,6 +173,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'pitch.setupRulesCardAt', tab: 'pitch', label: 'settings.ui.setup.setupRulesCardAt', info: 'settings.info.setupRulesCard', group: 'settings.pitch.setupHelpers.setupHelpers' },
   { id: 'pitch.formationsPanelAtSetup', tab: 'pitch', label: 'settings.ui.setup.formationsPanelAtSetup', info: 'settings.info.setupFormations', group: 'settings.pitch.setupHelpers.setupHelpers' },
   { id: 'pitch.zoneHelpersAtSetup', tab: 'pitch', label: 'settings.ui.setup.zoneHelpersAtSetup', info: 'settings.info.setupZones', group: 'settings.pitch.setupHelpers.setupHelpers' },
+  { id: 'skills.askForWhirlingDervish', tab: 'skills', label: 'settings.skillPrompts.ballAndChain', info: 'settings.skillPrompts.ballAndChainInfo', group: 'settings.skillPrompts.legend' },
+  { id: 'skills.askForDodgeOnStumble', tab: 'skills', label: 'settings.skillPrompts.dodgeBlock', info: 'settings.skillPrompts.dodgeBlockInfo', group: 'settings.skillPrompts.legend' },
   { id: 'skills.skillDisplay', tab: 'skills', label: 'settings.display.skillDisplay.skillDisplay', info: 'settings.info.skillDisplay', group: 'settings.display.skillDisplay.skillDisplay' },
   { id: 'skills.pitchIconsShowThe', tab: 'skills', label: 'settings.display.hatred.pitchIconsShowThe', info: 'settings.info.hatred', group: 'settings.display.skillDisplay.skillDisplay' },
   { id: 'skills.actionDecorations', tab: 'skills', label: 'settings.display.skillDisplay.actionDecorations', info: 'settings.info.actionDecorations', group: 'settings.display.skillDisplay.actionDecorations' },

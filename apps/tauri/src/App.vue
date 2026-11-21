@@ -47,7 +47,7 @@ import type { ClientTourHost } from './game/clientTourController';
 import FirstLaunchSetup from './components/FirstLaunchSetup.vue';
 import { completeSetupWizard, setupWizardNeeded } from './game/setupWizard';
 import { openExternal } from './game/openExternal';
-import { fumbblPlayUrl, launchSuspensionBlock, serverVersionBlock } from './game/serverVersionGate';
+import { fumbblPlayUrl, launchSuspensionActive, launchSuspensionBlock, serverVersionBlock } from './game/serverVersionGate';
 import { bareAppVersion, clientVersionBlock, clientVersionBlockStillApplies } from './game/clientVersionGate';
 import { UI_FONTS } from './game/uiFonts';
 import { matchDisplayLabel, measuredRefreshHz, refreshDisplayRate, setDisplayRatePolling, trackDisplayRate } from './game/displayRefreshRate';
@@ -102,7 +102,7 @@ import {
 } from './game/authChallenge';
 import { ui } from './game/ui';
 import { floatAfterLaunch, floatOnOwnMatch } from './game/fumbblFloatLayout';
-import { gameStore } from './game/store';
+import { gameStore, type FumbblSkillSetting } from './game/store';
 import { homeOnGameLoadKey, navigateHomeOnGameLoad } from './game/fumbblHomeOnGameLoad';
 import { gameStatRows, teamLogo } from './game/gameStatRows';
 import {
@@ -448,6 +448,17 @@ async function finishSetupWizard(): Promise<void> {
   }
   if (firstLaunch && !settings.hideTutorialSplash) guideOpen.value = true; // the existing post-first-run path
 }
+/** Settings > Skills > Skill prompts: the value a select shows (B&C unset = Always, what clientMove then carries;
+ *  Dodge unset = '' = "Not set", the server then uses Sideline & chain push). A refused save keeps the stored value. */
+function skillPromptValue(name: FumbblSkillSetting): string {
+  return gameStore.fumbblSkillSettings[name] ?? (name === 'ballAndChain' ? 'reRollBallAndChainAlways' : '');
+}
+function saveSkillPrompt(name: FumbblSkillSetting, event: Event): void {
+  const select = event.target as HTMLSelectElement;
+  gameStore.saveFumbblSkillSetting(name, select.value);
+  select.value = skillPromptValue(name);
+}
+
 function rerunSetupWizard(): void {
   ui.settingsOpen = false;
   ui.setupWizardRerunOpen = true;
@@ -1091,7 +1102,7 @@ let launchSuspensionOffered = false;
 watch([firstOpenGateOpen, launchFlagsSettled], () => {
   if (launchSuspensionOffered || firstOpenGateOpen.value || !launchFlagsSettled.value) return;
   launchSuspensionOffered = true;
-  const suspended = launchSuspensionBlock(!forkFeaturesEnabled());
+  const suspended = launchSuspensionActive() ? launchSuspensionBlock(!forkFeaturesEnabled()) : null;
   if (suspended && !serverVersionBlock.value) serverVersionBlock.value = suspended;
 }, { immediate: true });
 function openFumbblToPlay(): void { void openExternal(fumbblPlayUrl(serverVersionBlock.value?.coach ?? null)); }
@@ -4056,6 +4067,45 @@ onBeforeUnmount(() => {
 
         <!-- ============================ SKILLS ============================ -->
         <section v-if="settingsTab === 'skills'">
+          <!-- Upstream's Game Play > Skill settings (c66198ac4 DialogSkillSettings: Ask for Whirling Dervish, Ask for Dodge
+               on Stumble), stored on the coach's FUMBBL account with clientUserSettings (gameStore.saveFumbblSkillSetting).
+               Saved at once and outside the Settings preview (Cancel does not undo a save); only while seated in a game. -->
+          <fieldset class="settings-group" data-testid="skill-prompt-settings">
+            <legend>{{ $t('settings.skillPrompts.legend') }}</legend>
+            <div class="row" data-setting-id="skills.askForWhirlingDervish">
+              <label class="row-main">
+                <span>{{ $t('settings.skillPrompts.ballAndChain') }}</span>
+                <span class="row-ctl">
+                  <select :value="skillPromptValue('ballAndChain')" :disabled="!gameStore.fumbblSkillSettingsEditable()"
+                    data-testid="skill-prompt-ball-and-chain" @change="saveSkillPrompt('ballAndChain', $event)">
+                    <option value="reRollBallAndChainAlways">{{ $t('settings.skillPrompts.always') }}</option>
+                    <option value="reRollBallAndChainNoOpponent">{{ $t('settings.skillPrompts.whenNotHittingOpponent') }}</option>
+                    <option value="reRollBallAndChainTeamMate">{{ $t('settings.skillPrompts.whenHittingTeammate') }}</option>
+                    <option value="reRollBallAndChainNever">{{ $t('settings.skillPrompts.never') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.skillPrompts.ballAndChainInfo')" :def="$t('settings.skillPrompts.always')" />
+            </div>
+            <div class="row" data-setting-id="skills.askForDodgeOnStumble">
+              <label class="row-main">
+                <span>{{ $t('settings.skillPrompts.dodgeBlock') }}</span>
+                <span class="row-ctl">
+                  <select :value="skillPromptValue('dodgeBlock')" :disabled="!gameStore.fumbblSkillSettingsEditable()"
+                    data-testid="skill-prompt-dodge-block" @change="saveSkillPrompt('dodgeBlock', $event)">
+                    <option v-if="!gameStore.fumbblSkillSettings.dodgeBlock" value="" disabled>{{ $t('settings.skillPrompts.notSet') }}</option>
+                    <option value="dodgeBlockAlways">{{ $t('settings.skillPrompts.always') }}</option>
+                    <option value="dodgeBlockWideZone">{{ $t('settings.skillPrompts.wideZoneAndChainPush') }}</option>
+                    <option value="dodgeBlockSituational">{{ $t('settings.skillPrompts.sidelineAndChainPush') }}</option>
+                    <option value="dodgeBlockNever">{{ $t('settings.skillPrompts.never') }}</option>
+                  </select>
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.skillPrompts.dodgeBlockInfo')" :def="$t('settings.skillPrompts.sidelineAndChainPush')" />
+            </div>
+            <p class="settings-immediate-note" data-testid="skill-prompts-note">{{ $t('settings.skillPrompts.savedToAccount') }}</p>
+          </fieldset>
+
           <fieldset class="settings-group">
             <legend>{{ $t('settings.display.skillDisplay.skillDisplay') }}</legend>
             <!-- B2-17: icons and markings are mutually exclusive display modes -->

@@ -12,6 +12,7 @@ export const DIALOG_IDS = [
   "reRoll",
   "reRollProperties",
   "reRollForTargets",
+  "reRollForTargetsProperties",
   "reRollBlockForTargets",
   "skillUse",
   "progressBar",
@@ -89,6 +90,8 @@ export const DIALOG_IDS = [
   "reRollRegenerationMultiple",
   "puntToCrowd",
   "reRollModifierChoice",
+  "reRollFallback",
+  "skillSettings",
 ] as const;
 
 export type DialogId = (typeof DIALOG_IDS)[number];

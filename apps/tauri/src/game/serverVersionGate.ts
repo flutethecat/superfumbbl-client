@@ -19,8 +19,11 @@ import type { ClientMode, ServerCommandVersion } from '@fumbbl40k/ffb-protocol';
  *  2026-11-21 (owner: "push a kill switch patch to pause support until we're able to fix these"): 3.4.0 is OFF the
  *  list. FUMBBL's live server moved to the released 3.4.0, which carries changes past the 3.4.0 code this client was
  *  vetted against (the reroll dialogs among them). A coach seat on a 3.4.0 server is refused in the public edition
- *  until the client is re-vetted; spectating and replays stay allowed. Put '3.4.0' back here when that work ships. */
-export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1'];
+ *  until the client is re-vetted; spectating and replays stay allowed. Put '3.4.0' back here when that work ships.
+ *
+ *  Lifted in the release that follows 1.0.332: the client was re-vetted against the released 3.4.0 (upstream
+ *  c66198ac4: reworked reroll dialogs, the Ball & Chain reroll preference, Broken Shoulder), so 3.4.0 is approved again. */
+export const APPROVED_FFB_SERVER_VERSIONS: readonly string[] = ['3.3.1', '3.4.0'];
 
 /** The FFB protocol versions this client speaks (the join identification reports the newest). Separate from the
  *  coach-seat approval list above: suspending a server version must not change what the client says it speaks. */
@@ -44,7 +47,7 @@ export interface ServerVersionBlock {
  * edition raises the server-version stop once at launch (launchSuspensionBlock), before any connection; the join gate
  * above still refuses the seat itself. Set back to null in the patch that re-approves the version.
  */
-export const PLAY_SUSPENDED_SERVER_VERSION: string | null = '3.4.0';
+export const PLAY_SUSPENDED_SERVER_VERSION: string | null = null;
 
 /** The stop to show at launch, or null (fork / dev edition, or nothing suspended). `enforced` = the public edition. */
 export function launchSuspensionBlock(
@@ -54,6 +57,16 @@ export function launchSuspensionBlock(
 ): ServerVersionBlock | null {
   if (!enforced || suspended === null || approved.includes(suspended)) return null;
   return { serverVersion: suspended, expectsClient: '', gameId: null, coach: null, approved };
+}
+
+/** The launch stop is a modal over the whole shell that owns the keyboard until closed. Mounted-App tests of other
+ *  features never close it, so under the test runner it stays off unless a test asks for it. */
+let launchSuspensionInTests = false;
+/** @internal Test seam: let the launch stop appear in a mounted-App test. */
+export function enableLaunchSuspensionForTest(on: boolean): void { launchSuspensionInTests = on; }
+export function launchSuspensionActive(): boolean {
+  const mode = (import.meta as { env?: { MODE?: string } }).env?.MODE;
+  return mode !== 'test' || launchSuspensionInTests;
 }
 
 /** The live block (the modal reads it); null = none. */

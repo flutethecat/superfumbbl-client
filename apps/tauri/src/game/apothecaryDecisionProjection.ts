@@ -24,6 +24,10 @@ function apothecarySideLabel(base: number, serious: unknown, raw: number | null,
   const name = seriousInjuryName(serious);
   const tier = base === 6 || base === 8 || (base === 7 && name) ? casualtyTierLabel(name, base) : null;
   if (tier && !(base === 7 && tier.tier === 'BADLY_HURT')) {
+    // Owner 11-21 (UAT: ORIGINAL "LASTING INJURY (-ST)" vs REROLLED "LASTING INJURY (-PA)"): a lasting injury the server
+    // named shows that name ("BROKEN SHOULDER (-ST)", "BROKEN ARM (-PA)", BB2020 "NECK INJURY (-AG)", legacy "DISLOCATED
+    // SHOULDER (-ST)"), as the offer card does; the generic tier only when it gave no name.
+    if (tier.tier === 'LASTING_INJURY' && name.trim()) return name.trim().toUpperCase();
     return (tier.stat ? `${tier.label} (${tier.stat})` : tier.label).toUpperCase();
   }
   return rawMatchesBase && raw !== null ? casualtyRollLabel(raw) : COARSE_INJURY_LABELS[base] ?? 'INJURY';

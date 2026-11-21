@@ -41,6 +41,7 @@ const DIALOG_RAILS: Readonly<Record<string, RailId>> = Object.freeze({
   reRollProperties: 'reroll',
   reRollModifierChoice: 'reroll',
   reRollForTargets: 'reroll',
+  reRollForTargetsProperties: 'reroll',
   reRollBlockForTargets: 'reroll',
   reRollBlockForTargetsProperties: 'reroll',
   reRollRegenerationMultiple: 'reroll',

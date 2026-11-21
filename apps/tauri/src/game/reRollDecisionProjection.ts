@@ -10,6 +10,7 @@ import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 import { t, terms, data } from '../i18n';
 import { serverExplanationLines } from './serverExplanation';
+import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer } from './teamReRollComposer';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -29,7 +30,7 @@ export interface ReRollDecisionProjection extends ReRollPromptPresentation {
 export function buildReRollDecision(game: GameJson, dialog: Record<string, unknown>, rolls: ActionRollProjection, mine = false, suppliedOptions?: ReRollPromptOption[], movement?: ObservedMovementOccurrence | null): ReRollDecisionProjection | null {
   const playerId = String(dialog.playerId ?? '');
   const player = playerById(game, playerId);
-  const offered = suppliedOptions ?? offeredReRollOptions(dialog, player?.skillDisplayValuesMap);
+  const offered = suppliedOptions ?? offeredReRollOptions(dialog, player?.skillDisplayValuesMap, game);
   const modifierChoice = isReRollModifierChoice(dialog);
   // S36 / spec 3.12: on this dialog the server withholds a cancelled Dodge itself (canceledReRollSkills -> ignoreSkills).
   const options = modifierChoice ? [...offered] : withoutCancelledDodgeSkill(offered, dialog, game, movement);
@@ -158,6 +159,19 @@ export function modifierChoiceOptions(dp: Record<string, unknown>): ReRollPrompt
   }));
 }
 
+/** Owner 11-21 ("How about "Use break tackle or reroll?""): the reRollModifierChoice question, short. One optional skill
+ *  (or one skill combination) is named with the same label as its button; several read "a skill"; "or reroll" only
+ *  when the card also offers a reroll. */
+export function modifierChoiceQuestion(dp: Record<string, unknown>): string {
+  const skills = modifierChoiceWireOptions(dp, 'modifierOptions') ?? [];
+  const rerollOffered = offeredReRollOptions(dp).some((option) => option.response !== 'modifier-choice');
+  if (skills.length === 1) {
+    const skill = modifierChoiceLabel(skills[0]!);
+    return rerollOffered ? t('dialogs.reroll.question.useSkillOrReroll', { skill }) : t('dialogs.reroll.question.useSkill', { skill });
+  }
+  return rerollOffered ? t('dialogs.reroll.question.failedSkillOrReroll') : t('dialogs.reroll.question.useASkill');
+}
+
 export function modifierChoiceCombinations(dp: Record<string, unknown>): ModifierChoiceCombination[] {
   if (!isReRollModifierChoice(dp)) return [];
   return (modifierChoiceWireOptions(dp, 'modifierCombinations') ?? [])
@@ -200,6 +214,11 @@ export interface ReRollPromptOption {
   skillArray?: string[];
   /** S36 `modifier-choice` only: the roll the test needs with this option applied (the option's own minimumRoll). */
   minimumRoll?: number;
+  /** A direct Leader or drive bonus team reroll (current server). Leader shows its name; owner 11-21: a drive bonus
+   *  shows the plain team reroll art and label, with an "i" (info). */
+  teamKind?: 'leader' | 'driveBonus';
+  /** Owner 11-21: the "i" text of an answer that spends a drive bonus reroll (teamReRollComposer.driveBonusInfo). */
+  info?: string;
 }
 
 export function skillNameWithValue(displayValue: string | undefined, skillName: string): string {
@@ -410,7 +429,7 @@ export function reRollPromptPresentation(
     ? t('dialogs.reroll.question.rerollDirection')
     // i18n (Astra r1 #8): four whole questions; the action and skill are game terms in the active locale.
     : isReRollModifierChoice(dp) && Array.isArray(dp.modifierOptions) && dp.modifierOptions.length > 0
-      ? t('dialogs.reroll.question.failedSkillOrReroll', { action: terms(action) })
+      ? modifierChoiceQuestion(dp)
     : modifier
       ? t(failed ? 'dialogs.reroll.question.failedOrUse' : 'dialogs.reroll.question.orUse', { action: terms(action), skill: terms(prettySkillName(modifier)) })
       : t(failed ? 'dialogs.reroll.question.failed' : 'dialogs.reroll.question.plain', { action: terms(action) });
@@ -433,6 +452,7 @@ export function reRollPromptPresentation(
 export function offeredReRollOptions(
   dp: Record<string, unknown>,
   skillDisplayValues?: Record<string, unknown>,
+  game?: GameJson | null,
 ): ReRollPromptOption[] {
   // S36: a `reRollModifierChoice` dialog's modifier options come first, in received order (spec 3.3).
   const options: ReRollPromptOption[] = modifierChoiceOptions(dp);
@@ -450,20 +470,32 @@ export function offeredReRollOptions(
   // (upstream bb2025 RollMechanic.useReRoll:288-314) and picks the special source itself, Brilliant Coaching
   // before TRR (findUsedTeamReRollSource:441-458). A "Brilliant Coaching ReRoll" source has no skill behind
   // it, so the server dropped the answer: no re-roll, nothing consumed, the pick-up failure stood.
-  const specialTeamSource = specialTeamLabel ? data('Team ReRoll') : null; // wire value, never localised
-  const hasTeam = rrProps.some((property) =>
-    ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property))
-    || !!dp.teamReRollOption;
+  // A team reroll is offered by TRR alone (or the legacy `reRoll` dialog's teamReRollOption). LONER only adds the Loner
+  // warning, and a legacy drive bonus name without TRR is no offer: upstream shows the team button only with TRR
+  // (97d96e790 DialogReRollProperties.java:149-165; c66198ac4 ReRollSourceComposer.teamReRollSources:66-84), and the
+  // c66198ac4 server ignores a team source the dialog did not offer (OfferedReRollSourceService.isOffered:85-107).
+  const hasTeam = rrProps.includes('TRR') || !!dp.teamReRollOption;
+  const specialTeamSource = specialTeamLabel && hasTeam ? data('Team ReRoll') : null; // wire value, never localised
   if (singleUse) options.push({ label: valuedSkillLabel(singleUse, skillDisplayValues), source: singleUse, response: 'reroll', role: 'source' });
   if (skillName) options.push({ label: valuedSkillLabel(skillName, skillDisplayValues), source: skillName, response: 'skill', role: 'reroll-skill' });
   if (modifyingSkill && modifyingSkill !== skillName) {
     options.push({ label: valuedSkillLabel(modifyingSkill, skillDisplayValues), source: modifyingSkill, response: 'skill', role: 'modifier' });
   }
   if (hasPro) options.push({ get label() { return t('dialogs.reroll.text.pro'); }, source: 'Pro', response: 'reroll', role: 'source' });
-  for (const composite of proCompositeReRollOptions(rrProps)) {
+  const driveBonus = () => driveBonusName(game, teamIdOfPlayer(game, String(dp.playerId ?? '')));
+  for (const composite of proCompositeReRollOptions(rrProps, driveBonus)) {
     options.push({ ...composite, response: 'reroll', role: 'source' });
   }
-  if (specialTeamLabel && specialTeamSource) {
+  if (hasDriveBonusOrLeader(rrProps)) {
+    // Current server (c66198ac4): a drive bonus and a Leader reroll are their own choices and REPLACE the regular team
+    // reroll button (ReRollSourceComposer.teamReRollSources:66-84, DialogReRollProperties:51-57); the Mascot keeps its
+    // fallback answers (AbstractReRollDialogHandler.select). Leader goes out as Team ReRoll (compose :47-48).
+    for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
+      options.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, response: 'reroll', role: 'source',
+        ...(c.team && !c.mascot && c.team !== 'team' ? { teamKind: c.team } : {}),
+        ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+    }
+  } else if (specialTeamLabel && specialTeamSource) {
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
   } else if (hasMascot) {
     options.push({ get label() { return t('dialogs.reroll.text.teamMascotNoReroll'); }, source: 'Team Mascot', response: 'reroll', role: 'source' });
@@ -474,11 +506,15 @@ export function offeredReRollOptions(
   return options;
 }
 
-export function proCompositeReRollOptions(rrProps: string[]): { label: string; source: string }[] {
+export function proCompositeReRollOptions(rrProps: string[], driveBonus: () => string = genericDriveBonusName): { label: string; source: string; info?: string }[] {
   if (!rrProps.includes('PRO')) return [];
+  // Current server: every Pro answer upstream's fallback question can produce (Pro + drive bonus / Leader / Mascot).
+  if (hasDriveBonusOrLeader(rrProps)) {
+    return proChoices(rrProps).slice(1).map((c) => ({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source,
+      ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) }));
+  }
   const hasMascot = rrProps.includes('MASCOT');
-  const hasTeam = rrProps.some((property) =>
-    ['TRR', 'LONER', 'BRILLIANT_COACHING', 'PUMP_UP_THE_CROWD', 'SHOW_STAR'].includes(property));
+  const hasTeam = rrProps.includes('TRR'); // never LONER or a legacy drive bonus name on its own (see offeredReRollOptions)
   const options: { label: string; source: string }[] = [];
   if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamReroll'); }, source: 'Pro TRR' });
   if (hasMascot) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot'); }, source: 'Pro Mascot' });

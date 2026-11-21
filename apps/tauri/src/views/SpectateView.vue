@@ -65,10 +65,12 @@ import { ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, createFailed
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
 import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
-import { multiBlockDieButtonState, multiBlockDieClick, type MultiBlockDieRow } from '../game/multiBlockDieButton';
+import { multiBlockDieButtonState, multiBlockDieClick, type MultiBlockDieArm, type MultiBlockDieRow } from '../game/multiBlockDieButton';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import { createPlayerCardGeometry, isPrimaryCardPointer } from '../game/playerCardGeometry';
 import D6Face from '../components/D6Face.vue';
+import RerollInfoMarker from '../components/RerollInfoMarker.vue';
+import ProTrrBlendIcon from '../components/ProTrrBlendIcon.vue';
 import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
 import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
 import { rankPanelInputPending, rankPanelPhaseToken, storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
@@ -586,6 +588,7 @@ import { flashingReduced, motionReduced } from '../game/accessibilityModes';
 import givethanksRaw from '../assets/givethanks.csv?raw';
 import signSayingsRaw from '../assets/signsayings.csv?raw';
 import { $t, data, lt, terms, useLiveSet } from '../i18n';
+import { reRollActionName } from '../game/reRollDecisionProjection';
 /** i18n live-switch registrations owned by this component (released on unmount; src/i18n LIVE-SWITCH POLICY). */
 const liveSetHere = useLiveSet();
 import { playerStateLabel, playerStateToken } from '../game/playerStateToken';
@@ -2779,7 +2782,7 @@ function diceSideOfServerSide(side: 'home' | 'away' | null | undefined): BlockDi
   return displayDiceSide(side ?? null, gameStore.mySeat.value);
 }
 function blockFaceLabel(v: number): string { return pitchLabel(PitchRenderer.blockFaceLabel(v)); } // Modern localises; the static label stays English for Classic
-const bpDieMode = ref<null | 'pro' | 'consummate' | 'multiBlockDice' | 'singleBlockDie'>(null);
+const bpDieMode = ref<null | 'pro' | 'consummate' | 'multiBlockDice' | 'singleBlockDie' | BlockProCompositeKind>(null);
 const bpSelectedDice = ref(new Set<number>());
 // Owner 09-05: dice TUMBLE — when new block dice land (the roll, and every re-roll) the faces cycle at random
 // for BLOCK_TUMBLE_MS before the real result is revealed; the dice are inert while tumbling.
@@ -3232,11 +3235,15 @@ function clickBlockPartialDie(i: number) {
   if (bpPhase1ReRollOnly.value) return;
   gameStore.resolveBlockPartial('accept', i); // no reroll armed → accept that die
 }
-// Owner 10-10: Pro with a fallback ("Pro + RR" and the mascot variants) - one-die rolls only, so there is no die to
-// choose; the store sends the offered source or nothing.
+// Owner 10-10: Pro with a fallback ("Pro + RR" and the mascot variants). One die: sent at once. 2 or 3 dice
+// (blockProCompositeOptions): arm the die-select like Pro; the clicked die is
+// the proIndex. The store sends the offered source or nothing.
 function useBlockProComposite(kind: BlockProCompositeKind) {
-  if (!blockDialogMine.value || !gameStore.state.blockPartial) return;
-  gameStore.resolveBlockPartial(kind);
+  const bp = gameStore.state.blockPartial;
+  if (!blockDialogMine.value || !bp) return;
+  if (bp.dice.length <= 1) { gameStore.resolveBlockPartial(kind, 0); return; }
+  bpSelectedDice.value = new Set();
+  bpDieMode.value = kind;
 }
 function commitMultiBlockDice() {
   if (!blockDialogMine.value || bpDieMode.value !== 'multiBlockDice' || bpSelectedDice.value.size < 1) return;
@@ -3244,7 +3251,8 @@ function commitMultiBlockDice() {
 }
 // Owner 09-28 (Spec S8): the armed die-select hint names the RULE (Lord of Chaos, Pro, Consummate…), never the
 // internal kind token (bpDieMode) it used to interpolate — see rerollOptionPresentation.ts.
-const bpArmedHintText = computed(() => armedRerollHintText(rerollOptionLabelForKind(bpDieMode.value, blockPartialOptions.value)));
+const bpArmedHintText = computed(() => armedRerollHintText(rerollOptionLabelForKind(bpDieMode.value,
+  [...blockPartialOptions.value, ...(gameStore.state.blockPartial?.proComposite ?? [])])));
 // Owner 09-28 (Spec S8 follow-up): the multi-dice select state sat on its own mutually-exclusive branch with a
 // generic "Select one or more dice." — it never named the source either (e.g. Savage Blow).
 const bpMultiSelectHintText = computed(() => armedRerollHintText(
@@ -3253,7 +3261,7 @@ const bpMultiSelectHintText = computed(() => armedRerollHintText(
 ));
 
 // Resolve synchronous multi-block per target; rerolls re-present before the coach makes the plain die choice.
-const mbrDieMode = ref<{ targetId: string; kind: 'pro' | 'consummate' } | null>(null);
+const mbrDieMode = ref<MultiBlockDieArm | null>(null);
 watch(() => gameStore.state.multiBlockResolution?.seq, () => { mbrDieMode.value = null; }); // a fresh dialog clears the arm
 /** Astra r1 P1: one rule for a multi-block die's read-only / disabled state (an armed Pro / Consummate reroll opens
  *  the opponent's-choice row too) - see multiBlockDieButton.ts. */
@@ -3267,6 +3275,11 @@ function multiBlockPickDie(row: MultiBlockDieRow, dieIndex: number) {
   if (!click) return; // the defender's choice → read-only
   if (click.kind === 'reroll') { // armed Pro/Consummate → re-roll THIS die (sel=-1; the fresh dialog drives the pick)
     gameStore.sendMultiBlockChoiceForTarget(row.targetId, -1, click.source, click.dieIndex);
+    mbrDieMode.value = null;
+    return;
+  }
+  if (click.kind === 'composite') { // armed Pro with a fallback → this die is the proIndex
+    gameStore.sendMultiBlockProComposite(row.targetId, click.composite, click.dieIndex);
     mbrDieMode.value = null;
     return;
   }
@@ -3285,9 +3298,10 @@ function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' 
       break;
   }
 }
-function multiBlockProComposite(targetId: string, kind: BlockProCompositeKind) {
+function multiBlockProComposite(targetId: string, kind: BlockProCompositeKind, diceLen: number) {
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
-  gameStore.sendMultiBlockProComposite(targetId, kind);
+  if (diceLen <= 1) gameStore.sendMultiBlockProComposite(targetId, kind, 0);
+  else mbrDieMode.value = { targetId, kind: 'proComposite', composite: kind };
 }
 // Savage Blow rerolls the whole multi-block pool, so send its source with dieIndex -1.
 function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDice: number) {
@@ -3360,7 +3374,8 @@ const mbrArmedHintText = computed(() => {
   const dm = mbrDieMode.value;
   if (!dm) return null;
   const row = multiBlockRows.value.find((r) => r.targetId === dm.targetId);
-  const label = dm.kind === 'pro' ? 'Pro' : (row?.consummateLabel ?? $t('hud.mbrArmedHintText.consummateProfessional'));
+  const label = dm.kind === 'proComposite' ? (row?.proComposite.find((o) => o.kind === dm.composite)?.label ?? null)
+    : dm.kind === 'pro' ? 'Pro' : (row?.consummateLabel ?? $t('hud.mbrArmedHintText.consummateProfessional'));
   return armedRerollHintText(label);
 });
 
@@ -3536,6 +3551,14 @@ watch(
     }
   },
 );
+/** Release check (owner drive, 3.5.0 server): reRollForTargetsProperties can carry a fully qualified skill class as its
+ *  reRolledAction ("com.fumbbl.ffb.skill.common.FoulAppearance"); the card's title and question show the action the way
+ *  the other reroll cards do (reRollActionName: last segment, spaced; then the coach's game terms). Display only: the
+ *  answer still sends the server's own reRolledAction string (store.resolveReRollForTargets). */
+const reRollForTargetsActionLabel = computed(() => {
+  const action = gameStore.state.reRollForTargets?.reRolledAction;
+  return action ? terms(reRollActionName(action)) : '';
+});
 // Upstream DialogKickSkillHandler.java:25-58 compares the two server-sent landing squares without moving the
 // ball. The renderer shades both inertly and marks only ballCoordinateWithKick with "K".
 watch(
@@ -12653,8 +12676,21 @@ const rerollOptionsShown = computed(() => {
 });
 const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
 /** S36: a single-skill reRollModifierChoice option takes that skill's icon; every other option keys the icon by its source. */
+/** Owner 11-21: "Pro, then Team reroll" (Pro TRR, and Pro Drive Bonus, which is presented as it) gets the blended Pro / Team
+ *  reroll icon (ProTrrBlendIcon) wherever the Pro answer beside it shows the Pro icon. The block card and the Multiple
+ *  Block rows show the Pro icon in the icon skill display only (as their Pro button does); the reroll card whenever the
+ *  Pro icon resolves (as its Pro option does). Wire answers are unchanged. */
+const PRO_TRR_BLEND_SOURCES: ReadonlySet<string> = new Set(['Pro TRR', 'Pro Drive Bonus']);
+function proTrrBlendKind(kind: string): boolean {
+  return (kind === 'proTrr' || kind === 'proDriveBonus') && settings.skillDisplay === 'icons' && !!skillIconUrl('Pro', effectiveIconStyle.value);
+}
+function proTrrBlendSource(source: string): boolean {
+  return PRO_TRR_BLEND_SOURCES.has(source) && !!skillIconUrl('Pro', effectiveIconStyle.value);
+}
 function rerollOptIconSkill(opt: { source: string; skillArray?: string[] }): string {
-  return opt.skillArray?.length === 1 ? opt.skillArray[0]! : opt.source;
+  if (opt.skillArray?.length === 1) return opt.skillArray[0]!;
+  // Owner 11-21: an answer spending a drive bonus looks like its plain team reroll counterpart (Pro Drive Bonus = Pro TRR).
+  return opt.source.endsWith(' Drive Bonus') ? opt.source.replace(/ Drive Bonus$/, ' TRR') : opt.source;
 }
 let unregisterCrosshairStick: (() => void) | null = null;
 let stopCrosshairGateWatch: (() => void) | null = null;
@@ -18016,11 +18052,14 @@ watch(() => [
         <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer' }" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
           <div class="skill-select-list">
-            <button v-for="option in gameStore.state.inducementUse.options"
-              :key="`${option.kind}:${option.value}`" class="skill-select-opt"
-              @click="gameStore.resolveUseInducement(option.kind, option.value)">
-              <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.label) }}</span>
-            </button>
+            <template v-for="option in gameStore.state.inducementUse.options" :key="`${option.kind}:${option.value}`">
+              <button class="skill-select-opt"
+                @click="gameStore.resolveUseInducement(option.kind, option.value)">
+                <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.label) }}</span>
+              </button>
+              <!-- Owner 11-21: a regeneration reroll spending a drive bonus reads as the Team reroll; the "i" names it. -->
+              <RerollInfoMarker v-if="option.info" :text="option.info" />
+            </template>
             <button class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
           </div>
         </div>
@@ -18232,13 +18271,17 @@ watch(() => [
                 {{ TASTY_MORSEL_AVAILABLE_COPY }}
               </div>
               <div class="rr-prompt-line rr-question bl-reroll-row">
-                <button v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source" class="bl-opt"
-                  :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
-                  <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
-                  <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
-                    :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                  <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
-                </button>
+                <template v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source">
+                  <button class="bl-opt"
+                    :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
+                    <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
+                    <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
+                      :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
+                    <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
+                  </button>
+                  <!-- Owner 11-21: a drive bonus answer reads as the Team reroll; the "i" names the bonus. -->
+                  <RerollInfoMarker v-if="opt.info" :text="opt.info" />
+                </template>
                 <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.keepTheRoll')"
                   @click="gameStore.resolveBloodlustReroll(null)">✕</button>
               </div>
@@ -19092,14 +19135,22 @@ watch(() => [
               <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle))" class="bp-opt-label">{{ opt.label }}</span>
             </button>
             <!-- Owner 10-10: Pro with a fallback, as upstream's block dialog offers it (its "ReRoll" / "Mascot" /
-                 "TRR fallback" boxes under the Pro button). One-die rolls only - see blockProCompositeOptions. -->
-            <button v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind" class="bp-opt"
-              :title="opt.title" @click="useBlockProComposite(opt.kind)">
-              <span>{{ opt.label }}</span>
-            </button>
+                 "TRR fallback" boxes under the Pro button). See blockProCompositeOptions. -->
+            <template v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind">
+              <!-- Owner 11-21: Pro + RR (and Pro + drive bonus) is the blended Pro / Team reroll icon; the name rides the title
+                   and the accessible name. -->
+              <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
+                :data-active="bpDieMode === opt.kind" :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
+                @click="useBlockProComposite(opt.kind)">
+                <ProTrrBlendIcon v-if="proTrrBlendKind(opt.kind)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
+                <span v-else>{{ opt.label }}</span>
+              </button>
+              <!-- Owner 11-21: a fallback that spends a drive bonus reads "Team Reroll"; the "i" names the bonus. -->
+              <RerollInfoMarker v-if="opt.info" :text="opt.info" />
+            </template>
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
-            <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot"
+            <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot && !gameStore.state.blockPartial.namedTeam"
               class="bp-team" :title="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
               <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
               <!-- #205: acting coach's team-reroll count, immediately beside the die icon (owner idiom).
@@ -19117,6 +19168,21 @@ watch(() => [
               :title="$t('hud.teamMascotThenTeam')" @click="gameStore.resolveBlockPartial('mascotTrr')">
               <span>{{ $t('hud.mascotRr') }}</span>
             </button>
+            <!-- Current server (c66198ac4): a drive bonus / Leader reroll replaces the plain team button, and the Mascot
+                 falls back to it (upstream ReRollSourceComposer.teamReRollSources + the fallback question). -->
+            <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button (its art, its title),
+                 with an "i" naming the bonus; it still answers Drive Bonus ReRoll. -->
+            <template v-for="c in gameStore.state.blockPartial.teamChoices ?? []" :key="c.source">
+              <button v-if="c.source === 'Drive Bonus ReRoll'" class="bp-team" :title="$t('hud.teamReroll')"
+                @click="gameStore.resolveBlockPartial('teamChoice', 0, c.source)">
+                <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
+              </button>
+              <button v-else class="bp-opt"
+                :title="c.label" @click="gameStore.resolveBlockPartial('teamChoice', 0, c.source)">
+                <span>{{ c.label }}</span>
+              </button>
+              <RerollInfoMarker v-if="c.info" :text="c.info" />
+            </template>
             <!-- Owner 2026-07-12 (bug, upstream-client-verified): o66 uphill phase-1 — the attacker declines the
                  re-roll; upstream's "No Re-Roll" sends sendUseReRoll(BLOCK, null), then the SERVER flips the pick
                  to the defender (DialogBlockRollProperties buttonNoReRoll → the null-source branch). -->
@@ -19180,10 +19246,16 @@ watch(() => [
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
-              <button v-for="opt in row.proComposite" :key="opt.kind" class="bp-opt"
-                :title="opt.title" @click="multiBlockProComposite(row.targetId, opt.kind)">
-                <span>{{ opt.label }}</span>
-              </button>
+              <template v-for="opt in row.proComposite" :key="opt.kind">
+                <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
+                  :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'proComposite' && mbrDieMode?.composite === opt.kind"
+                  :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
+                  @click="multiBlockProComposite(row.targetId, opt.kind, row.dice.length)">
+                  <ProTrrBlendIcon v-if="proTrrBlendKind(opt.kind)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
+                  <span v-else>{{ opt.label }}</span>
+                </button>
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
+              </template>
               <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
@@ -19204,7 +19276,7 @@ watch(() => [
                 <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
                 <span class="bp-sub">{{ $t('hud.mbrRow.all') }}</span>
               </button>
-              <button v-if="row.teamRR && !row.mascot" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+              <button v-if="row.teamRR && !row.mascot && !row.namedTeam" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
                 <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
                 <!-- #205: acting coach's team-reroll count beside the die icon (owner idiom). Display-only;
                      the multiBlockReroll('team') answer path is untouched. -->
@@ -19215,6 +19287,19 @@ watch(() => [
                 <img :src="resourceIcon('team_mascot')" :alt="$t('hud.mbrRow.teamMascot')" />
                 <span class="bp-sub">{{ $t('hud.mbrRow.noTrr') }}</span>
               </button>
+              <!-- Current server: drive bonus / Leader rerolls for this target (and the Mascot falling back to them). -->
+              <template v-for="c in row.teamChoices" :key="c.source">
+                <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button, plus the "i". -->
+                <button v-if="c.source === 'Drive Bonus ReRoll'" class="bp-team" :title="$t('hud.mbrRow.teamReroll')"
+                  @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
+                  <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
+                </button>
+                <button v-else class="bp-opt" :title="c.label"
+                  @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
+                  <span class="bp-opt-label">{{ c.label }}</span>
+                </button>
+                <RerollInfoMarker v-if="c.info" :text="c.info" />
+              </template>
             </div>
           </div>
           <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">{{ mbrArmedHintText }}</div>
@@ -19245,16 +19330,20 @@ watch(() => [
           class="multi-block-resolution reroll-for-targets"
           :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
-          <div class="mbr-title">{{ gameStore.state.reRollForTargets.reRolledAction.toUpperCase() }}</div>
-          <div class="rr-prompt-line rr-question">{{ $t('hud.rerollTheFailedRerolledaction', { reRolledAction: gameStore.state.reRollForTargets.reRolledAction, p1: gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }) }}</div>
+          <div class="mbr-title">{{ reRollForTargetsActionLabel.toLocaleUpperCase() }}</div>
+          <div class="rr-prompt-line rr-question">{{ $t('hud.rerollTheFailedRerolledaction', { reRolledAction: reRollForTargetsActionLabel, p1: gameStore.state.reRollForTargets.targets.length > 1 ? 'rolls' : 'roll' }) }}</div>
           <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">{{ $t('hud.thisPlayerHasLoner') }}</div>
           <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
             <span class="mbr-name">{{ $t('hud.mbrRow.theRollAgainstTarget', { target: t.target }) }}<template v-if="t.minimumRoll != null">{{ $t('hud.mbrRow.needsMinimumroll', { minimumRoll: t.minimumRoll }) }}</template></span>
             <div class="mbr-actions">
-              <button v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source" class="bp-opt"
-                :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
-                <span class="bp-opt-label">{{ opt.label }}</span>
-              </button>
+              <template v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source">
+                <button class="bp-opt"
+                  :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
+                  <span class="bp-opt-label">{{ opt.label }}</span>
+                </button>
+                <!-- Owner 11-21: an answer spending a drive bonus reads as the Team reroll; the "i" names the bonus. -->
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
+              </template>
             </div>
           </div>
           <div class="bp-actions">
@@ -19358,26 +19447,32 @@ watch(() => [
             </div>
             <div class="bp-actions" :class="{ 'pad-list': activeInput === 'controller' && gameStore.state.reRollPrompt.mine }">
               <template v-for="opt in rerollOptionsShown" :key="opt.source">
-                <button v-if="opt.source === 'Team ReRoll'" class="bp-team" data-pad-primary :title="opt.label"
+                <!-- Owner 11-21: the direct drive bonus reroll (teamKind driveBonus) looks exactly like the Team reroll button;
+                     its label already reads "Team reroll" and the "i" after it names the bonus. It still sends Drive Bonus ReRoll. -->
+                <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || opt.teamKind === 'driveBonus'" class="bp-team" data-pad-primary :title="opt.label"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
                   <img :src="resourceIcon('re_roll')" :alt="opt.label" />
-                  <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. -->
-                  <span v-if="rerollPromptTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                  <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. Not on a drive
+                       bonus button: that reroll does not come out of the team reroll count. -->
+                  <span v-if="rerollPromptTeamReRolls !== null && !opt.teamKind" class="rr-trr-num bp-trr-num"
                     :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls })">{{ rerollPromptTeamReRolls }}</span>
                 </button>
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
-                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': !!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle) }"
+                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': proTrrBlendSource(opt.source) || !!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle), 'bp-opt-blend': proTrrBlendSource(opt.source) }"
+                  :aria-label="proTrrBlendSource(opt.source) ? opt.label : undefined"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
                   :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
-                  <img v-if="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)"
+                  <!-- Owner 11-21: Pro, then Team reroll = the blended Pro / Team reroll icon (the Pro option's art + the Team reroll art). -->
+                  <ProTrrBlendIcon v-if="proTrrBlendSource(opt.source)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
+                  <img v-else-if="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)"
                     :src="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)!" :alt="opt.label" />
                   <!-- Owner 11-10 (supersedes S8 for icon buttons): a reroll source with an icon shows the icon only; its name stays in
                        the tooltip and the icon alt. A source without an icon keeps its visible name. -->
-                  <span v-if="!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)" class="bp-opt-label">{{ opt.label }}</span>
+                  <span v-if="!proTrrBlendSource(opt.source) && !skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)" class="bp-opt-label">{{ opt.label }}</span>
                   <!-- S36: a reRollModifierChoice option shows the roll it turns the test into (the option's own minimumRoll). -->
                   <span v-if="opt.response === 'modifier-choice' && opt.minimumRoll != null" class="bp-opt-target">{{ $t('hud.rerollBar.optionNeeds', { roll: opt.minimumRoll }) }}</span>
                   <!-- #205 (Meero audit row): Mascot TRR also consumes the team re-roll pool ⇒ it carries the
@@ -19388,6 +19483,7 @@ watch(() => [
                     <img :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamRerolls')" />{{ rerollPromptTeamReRolls }}
                   </span>
                 </button>
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
               </template>
               <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
                 @click="gameStore.resolveReRoll(null)">✕</button>
@@ -24435,6 +24531,8 @@ watch(() => [
 .bp-opt-label { white-space: normal; text-align: center; line-height: 1.15; max-width: 84px; }
 .bp-opt-icon-label { flex-direction: column; gap: 2px; padding: 4px 6px; }
 .bp-opt-icon-label img { width: 22px; height: 22px; }
+/* Owner 11-21: the blended Pro / Team reroll icon takes the option icon's size (ProTrrBlendIcon sizes its two layers to it). */
+.bp-opt-blend .pt-blend { width: 22px; height: 22px; }
 .bp-opt-icon-label .bp-opt-label { font-size: max(var(--ui-min-text-size, 10px), 0.62rem); }
 .bp-opt[data-active="true"] { border-color: var(--ui-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 33%, transparent); }
 .bp-opt:hover { border-color: #6f9ede; }
@@ -24454,6 +24552,26 @@ watch(() => [
 /* owner o66j #6: the Mascot-alone option carries a small "No TRR" caption so it reads distinctly from the
    Mascot + RR variant (which falls back to a team re-roll if the mascot fails). */
 .bp-mascot { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; }
+/* Owner 11-21 ("the chip icons themselves are quite small, I think we could enlarge them a bit here"): the block card's
+   and the Multiple Block rows' reroll icon buttons grow between their old size and the 60 px dice, to a 44 px touch
+   target. Option icons (Pro, the blended Pro / Team reroll, other skill icons): art 22 -> 32 px, box 36 x 32 -> 44 x 44.
+   Team reroll / Team Mascot art buttons: art 37 -> 44 px (box 41 -> 48). The team reroll count chip scales with them.
+   The reroll card (.reroll-bar) and reRollForTargets keep their sizes. Rows that do not fit wrap (.bp-actions /
+   .mbr-actions flex-wrap); the dice and the card widths are unchanged. */
+.block-partial:not(.reroll-bar) .bp-actions .bp-opt-icon-label,
+.multi-block-resolution:not(.reroll-for-targets) .mbr-actions .bp-opt-icon-label {
+  padding: 5px; /* 32 px art + 2 x 5 px padding + 2 x 1 px border = a 44 x 44 box (no min-size: the larger-targets floor stays the only one) */
+}
+.block-partial:not(.reroll-bar) .bp-actions .bp-opt-icon-label img,
+.multi-block-resolution:not(.reroll-for-targets) .mbr-actions .bp-opt-icon-label img,
+.block-partial:not(.reroll-bar) .bp-actions .bp-opt-blend .pt-blend,
+.multi-block-resolution:not(.reroll-for-targets) .mbr-actions .bp-opt-blend .pt-blend { width: 32px; height: 32px; }
+.block-partial:not(.reroll-bar) .bp-actions .bp-team img,
+.multi-block-resolution:not(.reroll-for-targets) .mbr-actions .bp-team img { width: 44px; height: 44px; }
+.block-partial:not(.reroll-bar) .bp-actions .bp-trr-num,
+.multi-block-resolution:not(.reroll-for-targets) .mbr-actions .bp-trr-num {
+  right: -3px; bottom: -3px; min-width: 16px; font-size: max(var(--ui-min-text-size, 12px), 0.8rem); line-height: 1.35;
+}
 .bp-sub { font-size: max(var(--ui-min-text-size, 12px), 0.6rem); line-height: 1; color: #cfd6e0; letter-spacing: 0.02em; text-shadow: 0 1px 2px #000; }
 .bp-hint { font-size: max(var(--ui-min-text-size, 12px), 0.72rem); color: #cfd6e0; }
 .bp-multi-select { display: flex; align-items: center; gap: 6px; }

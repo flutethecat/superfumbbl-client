@@ -2,7 +2,7 @@
 import { computed, type CSSProperties } from 'vue';
 import type { PlayerSpp } from '../game/logic/playerSpp';
 import PitchConfirmationPanel from './PitchConfirmationPanel.vue';
-import { $t } from '../i18n';
+import { $t, terms } from '../i18n';
 
 export interface ApothecaryResultChoiceView {
   player: string;
@@ -24,6 +24,8 @@ const panelStyle = computed<CSSProperties>(() => ({
   ...props.positionStyle,
 }));
 const seatClass = computed(() => props.choice.mine ? 'seat-local' : 'seat-opposition');
+/** Owner 11-21: an injury name ("BROKEN SHOULDER (-ST)") in the coach's language (game terms; English unchanged). */
+const injuryText = (label: string): string => { const local = terms(label); return local === label ? label : local.toLocaleUpperCase(); };
 defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>();
 </script>
 
@@ -40,12 +42,12 @@ defineEmits<{ choose: [pick: 'old' | 'new']; dragStart: [event: PointerEvent] }>
       <button type="button" class="apo-result original" :disabled="!choice.mine"
         @pointerdown.stop @click.stop="$emit('choose', 'old')">
         <span class="apo-result-label">{{ $t('dialogs.apothecaryResultChoice.original') }}</span>
-        <strong>{{ choice.oldInjury }}</strong>
+        <strong>{{ injuryText(choice.oldInjury) }}</strong>
       </button>
       <button type="button" class="apo-result rerolled" :disabled="!choice.mine"
         @pointerdown.stop @click.stop="$emit('choose', 'new')">
         <span class="apo-result-label">{{ $t('dialogs.apothecaryResultChoice.rerolled') }}</span>
-        <strong>{{ choice.newInjury }}</strong>
+        <strong>{{ injuryText(choice.newInjury) }}</strong>
       </button>
     </div>
     <!-- Owner 11-04: the deciding coach's helper line is gone (the two result buttons say it); the other coach keeps the waiting line. -->

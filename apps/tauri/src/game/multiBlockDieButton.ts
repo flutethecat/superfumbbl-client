@@ -1,3 +1,5 @@
+import type { BlockProCompositeKind } from './blockDecisionProjection';
+
 /** One die button on the Modern multiple-block card (SpectateView `.multi-block-resolution`).
  *
  *  Owner 10-21: a die that is not the viewer's to click is read-only - dimmed, `disabled`, standard cursor (never
@@ -9,10 +11,10 @@ export interface MultiBlockDieRow {
   isOwnChoice: boolean | null;
   pickable: boolean;
 }
-export interface MultiBlockDieArm {
-  targetId: string;
-  kind: 'pro' | 'consummate';
-}
+export type MultiBlockDieArm =
+  | { targetId: string; kind: 'pro' | 'consummate' }
+  /** Pro with a fallback on a 2- or 3-dice row: the clicked die is the proIndex. */
+  | { targetId: string; kind: 'proComposite'; composite: BlockProCompositeKind };
 export interface MultiBlockDieContext {
   /** The multi-block dialog is this seat's to answer. */
   mine: boolean;
@@ -30,6 +32,7 @@ export function multiBlockDieButtonState(row: MultiBlockDieRow, ctx: MultiBlockD
 
 export type MultiBlockDieClick =
   | { kind: 'reroll'; source: 'Pro' | 'Consummate Professional'; dieIndex: number }
+  | { kind: 'composite'; composite: BlockProCompositeKind; dieIndex: number }
   | { kind: 'pick'; dieIndex: number }
   | null;
 
@@ -37,6 +40,7 @@ export type MultiBlockDieClick =
 export function multiBlockDieClick(row: MultiBlockDieRow, dieIndex: number, ctx: MultiBlockDieContext): MultiBlockDieClick {
   if (!ctx.mine || ctx.tumbling) return null;
   if (ctx.armed && ctx.armed.targetId === row.targetId) {
+    if (ctx.armed.kind === 'proComposite') return { kind: 'composite', composite: ctx.armed.composite, dieIndex };
     return { kind: 'reroll', source: ctx.armed.kind === 'pro' ? 'Pro' : 'Consummate Professional', dieIndex };
   }
   if (row.isOwnChoice !== true || !row.pickable) return null; // the defender's choice: read-only

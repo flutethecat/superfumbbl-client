@@ -11,6 +11,8 @@ import { breatheFireOutcome, breatheFirePassed } from './breatheFireOutcome';
 import { casualtyTierLabel } from './injuryOutcomeProjection';
 import { FIELD_DIRECTION_ABBR, isFieldDirection } from './logDirection';
 import { tEnglish } from '../i18n';
+import { seriousInjury as upstreamSeriousInjury } from './upstreamLog/model';
+import { UPSTREAM_LOG_TABLES } from './upstreamLog/tables.generated';
 import { BB2025_INDUCEMENT_METADATA } from './inducementCatalog';
 import { inducementChipLabel } from './logic/coachPanelChips';
 import { isGateRerollSource, isHandoffCatch, jumpKindFor, latchLogActionContext, logActionPlate, pendingRerollApplies, type LogActionPlate } from './logActionPlates';
@@ -1565,9 +1567,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
     // Owner 09-06: the casualty line reads "<Player> is <Casualty Result>!" — the wire's result name in title case
     // with its tag intact ("Seriously Hurt (MNG)", "Smashed Knee", "Serious Injury (NI)"), never the
     // "seriously injured: seriously hurt ( m n g)" spell-out.
-    const casualtyLine = cr
-      ? `${name} is ${r.seriousInjury ? casualtyResultLabel(r.seriousInjury) : titleCase(outcome ?? 'a casualty')}!`
-      : '';
+    const casualtyLine = cr ? casualtyOutcomeText(name, r.seriousInjury, outcome, g) : '';
     parts.push(`Injury: ${d6Pair(ir)}${injuryMods}`);
     const body = parts.join(attributedId ? ' | ' : '; ');
     const head = ar && !attributedId
@@ -1861,6 +1861,24 @@ function titleCase(text: string): string {
 
 /** Owner 09-06: the casualty result for the log line — words title-cased, any "(TAG)" kept verbatim (MNG / -MA),
  *  NI keeps its stat-down tag. "SeriouslyHurt (MNG)" -> "Seriously Hurt (MNG)"; "SmashedKnee" -> "Smashed Knee". */
+/** The casualty outcome line "<Player> ...!". Owner 11-21 (UAT, "Human Lineman 2 is Broken Shoulder (-ST)!"): a lasting
+ *  injury reads as a sentence in upstream's own words, the SeriousInjury description its log prints
+ *  (tables.generated seriousInjuries[name].description: "suffered a broken shoulder (-1 ST)", BB2020 "suffered a neck
+ *  injury (-1 AG)", legacy "suffered a dislocated shoulder (-1 ST)"). Every other result keeps the owner 09-06 form
+ *  "<Player> is <Casualty Result>!" ("is Seriously Hurt (MNG)!", "is Badly Hurt!", "is Dead (RIP)!"), as does a name
+ *  this ruleset's table does not know. */
+function casualtyOutcomeText(name: string, seriousInjury: unknown, outcome: string | null | undefined, game: GameJson | null): string {
+  if (seriousInjury) {
+    // this game's ruleset first, then any ruleset (a replay or a stored game can carry another ruleset's name)
+    const key = String(seriousInjury);
+    const description = (upstreamSeriousInjury(game, key) ?? (['BB2025', 'BB2020'] as const)
+      .map((rules) => UPSTREAM_LOG_TABLES[rules].seriousInjuries[key]).find(Boolean))?.description;
+    if (typeof description === 'string' && /^suffered\b/i.test(description)) return `${name} ${description}!`;
+    return `${name} is ${casualtyResultLabel(seriousInjury)}!`;
+  }
+  return `${name} is ${titleCase(outcome ?? 'a casualty')}!`;
+}
+
 function casualtyResultLabel(value: unknown): string {
   const raw = String(value);
   if (/\(\s*N\s*I\s*\)/i.test(raw)) {
@@ -2284,7 +2302,7 @@ function graphicalInjury(r: Report, game: GameJson | null, head: string, headInd
     const outcomeText = base === 9 && !cr
       ? `${name} is placed in the reserves!` // a crowd push the injury roll leaves unhurt (PlayerState RESERVE)
       : cr
-      ? `${name} is ${r.seriousInjury ? casualtyResultLabel(r.seriousInjury) : titleCase(outcome ?? 'a casualty')}!`
+      ? casualtyOutcomeText(name, r.seriousInjury, outcome, game)
       : injuryEffectSentence(r.injury, name) === `${name} is injured!` && outcome
         ? `${name} is ${titleCase(outcome)}!`
         : injuryEffectSentence(r.injury, name) ?? (outcome ? `${name} is ${outcome}!` : '');

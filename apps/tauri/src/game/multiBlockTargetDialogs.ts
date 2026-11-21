@@ -1,5 +1,7 @@
 import { NetCommandId } from '@fumbbl40k/ffb-protocol';
 import { reRollSourceName } from './reRollDecisionProjection';
+import { composedChoiceLabel, directTeamChoices, driveBonusInfo, genericDriveBonusName, mascotChoices, proChoices } from './teamReRollComposer';
+import { terms } from '../i18n';
 
 /**
  * BB2025 Multiple Block dialogs answered per target.
@@ -62,6 +64,8 @@ export interface ReRollForTargetsTarget {
 export interface ReRollForTargetsOption {
   label: string;
   source: string;
+  /** Owner 11-21: the "i" text of an answer that spends a drive bonus reroll (it reads and looks like the Team reroll). */
+  info?: string;
 }
 
 /** Targets the coach may reroll against: the dialog's targets filtered by reRollAvailableFor, in the dialog's order
@@ -101,6 +105,45 @@ export function reRollForTargetsOptions(
   }
   const rrSkill = reRollSourceName(dp.skill);
   if (rrSkill && !out.some((o) => o.source === rrSkill)) out.push({ label: rrSkill, source: rrSkill });
+  return out;
+}
+
+export const RE_ROLL_FOR_TARGETS_PROPERTIES = 'reRollForTargetsProperties';
+
+/**
+ * reRollForTargetsProperties (current server c66198ac4, PR #349; DialogReRollForTargetsPropertiesParameter.toJsonValue):
+ * the reRollForTargets keys plus `reRollProperties` (bb2025 AbstractStepModifierMultipleBlock.createDialogParameter:23-36:
+ * findTeamReRollProperties, PRO when Pro is usable, LONER for a Loner). Raised for BB2025 Dauntless and Foul Appearance
+ * in a Multiple Block. Buttons per target in upstream's order (DialogReRollForTargetsProperties:76-104): the team
+ * options (ReRollSourceComposer.teamReRollSources(includeMascot = true): Mascot, drive bonus, Leader, else Team
+ * Re-Roll, only with TRR), Pro (PRO property), the single-use source, the single-die skill (consummateOption), the
+ * reroll skill. Pro and the Mascot go through the fallback question (DialogReRollForTargetsPropertiesHandler:46-56 ->
+ * AbstractReRollDialogHandler); each composed answer is its own button here. Answer: clientUseReRollForTarget
+ * {reRolledAction, reRollSource, playerId: target} (sendChoice :59-62).
+ */
+export function reRollForTargetsPropertiesOptions(
+  dp: Record<string, unknown> | null | undefined,
+  hasSkill: (skill: string) => boolean,
+  driveBonus: () => string = genericDriveBonusName,
+): ReRollForTargetsOption[] {
+  if (!dp) return [];
+  const rr = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
+  const out: ReRollForTargetsOption[] = [];
+  const composed = [...mascotChoices(rr), ...directTeamChoices(rr), ...(rr.includes('PRO') ? proChoices(rr) : [])];
+  for (const c of composed) {
+    out.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source,
+      ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+  }
+  // The label is the skill's name in the coach's language (terms); the source stays the exact wire name.
+  const named = (source: string): ReRollForTargetsOption => ({ get label() { return terms(source); }, source });
+  const singleUse = reRollSourceName(dp.reRollSourceSingleUse);
+  if (singleUse && !out.some((o) => o.source === singleUse)) out.push(named(singleUse));
+  if (dp.consummateOption === true) {
+    const skill = SINGLE_DIE_SKILLS.find((name) => hasSkill(name));
+    if (skill && !out.some((o) => o.source === skill)) out.push(named(skill));
+  }
+  const rrSkill = reRollSourceName(dp.skill);
+  if (rrSkill && !out.some((o) => o.source === rrSkill)) out.push(named(rrSkill));
   return out;
 }
 

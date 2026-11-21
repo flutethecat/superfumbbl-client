@@ -4,6 +4,7 @@ import {
   type DecisionAuthority,
 } from './inducementPurchase';
 import type { InducementType } from './railRegistryKeys.generated';
+import { composedChoiceLabel, directTeamChoices, driveBonusInfo, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices } from './teamReRollComposer';
 
 export interface RegenerationReRollOptionsWire {
   reRollProperties?: readonly string[];
@@ -24,7 +25,9 @@ export type RegenerationElectionOffer =
 export type RegenerationElectionChoice =
   | { kind: 'decline' }
   | { kind: 'inducement'; playerId: string }
-  | { kind: 'reRoll'; playerId: string; reRollSource: string };
+  /** `label`: set for the current server's named team answers (a drive bonus / Leader / Mascot fallback); else the
+   *  source is shown as it is today. */
+  | { kind: 'reRoll'; playerId: string; reRollSource: string; label?: string; info?: string };
 
 export type RegenerationElectionCommand =
   | {
@@ -67,6 +70,7 @@ function teamReRollSource(first: RegenerationReRollOptionsWire | undefined): str
  */
 export function regenerationElectionChoices(
   offer: RegenerationElectionOffer,
+  driveBonus?: () => string,
 ): RegenerationElectionChoice[] {
   if (offer.kind === 'inducement') {
     return [
@@ -86,6 +90,22 @@ export function regenerationElectionChoices(
     const canActuallyReRoll = ['TRR', 'MASCOT', 'PRO'].some((property) => offered.has(property))
       || Boolean(option.skill);
     if (!canActuallyReRoll) return;
+    const rowProperties = [...offered];
+    if (hasDriveBonusOrLeader(rowProperties)) {
+      // Current server (c66198ac4 DialogReRollRegenerationMultiple:122-123 + handler :47, selectTeamReRoll per target):
+      // this row's own team options (Mascot, drive bonus, Leader; no plain team reroll beside them), Pro with its
+      // fallbacks, then the skill. Every answer of the fallback question is its own choice.
+      const name = driveBonus ?? genericDriveBonusName;
+      // Owner 11-21: a drive bonus answer reads as the Team reroll; its "i" text names the bonus (driveBonusInfo).
+      const push = (c: ReturnType<typeof proChoices>[number]) => {
+        const info = driveBonusInfo(c, name);
+        choices.push({ kind: 'reRoll', playerId, reRollSource: c.source, label: composedChoiceLabel(c, name), ...(info ? { info } : {}) });
+      };
+      [...mascotChoices(rowProperties), ...directTeamChoices(rowProperties)].forEach(push);
+      if (offered.has('PRO')) proChoices(rowProperties).forEach(push);
+      if (option.skill) choices.push({ kind: 'reRoll', playerId, reRollSource: option.skill });
+      return;
+    }
     if (mascot) {
       choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team Mascot' });
       if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Mascot TRR' });

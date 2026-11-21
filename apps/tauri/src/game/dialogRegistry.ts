@@ -29,6 +29,8 @@ export const DIALOG_REGISTRY = {
   reRoll: d('existing-dialog', 'DialogReRollHandler'),
   reRollProperties: d('existing-dialog', 'DialogReRollPropertiesHandler'),
   reRollForTargets: d('existing-dialog', 'DialogReRollForTargetsHandler'),
+  // c66198ac4 (PR #349): BB2025 Dauntless / Foul Appearance in a Multiple Block; the reRollForTargets card (store.ts).
+  reRollForTargetsProperties: d('existing-dialog', 'DialogReRollForTargetsPropertiesHandler'),
   reRollBlockForTargets: d('unhandled', 'DialogReRollBlockForTargetsHandler'),
   skillUse: d('existing-dialog', 'DialogSkillUseHandler'),
   progressBar: d('client-local-only', 'DialogManager client UI'),
@@ -109,6 +111,9 @@ export const DIALOG_REGISTRY = {
   // S36 (staged): upstream master e7f9858a1 BB2025 agility re-roll prompt with optional modifier skills; surfaced on the
   // existing re-roll card (store.ts surfaceReRollPrompt), answered with clientReRollModifierChoice / clientUseSkill / clientUseReRoll.
   reRollModifierChoice: d('existing-dialog', 'DialogReRollModifierChoiceHandler'),
+  // c66198ac4: Java-client-local dialogs; no server sends them (AbstractReRollDialogHandler, DialogSkillSettings).
+  reRollFallback: d('client-local-only', 'AbstractReRollDialogHandler / DialogReRollFallback'),
+  skillSettings: d('client-local-only', 'DialogSkillSettings'),
 } satisfies Record<DialogId, DialogDescriptor>;
 
 export function dialogDescriptor(value: string): DialogDescriptor | null {

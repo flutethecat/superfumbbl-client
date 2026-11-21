@@ -7,12 +7,13 @@
 export interface PadRerollOption { source: string }
 
 /** The team-pool sources (everything else on the card is a skill / modifier option). */
-export const TEAM_REROLL_SOURCES: ReadonlySet<string> = new Set(['Team ReRoll', 'Mascot TRR', 'Team Mascot']);
+/** Owner 11-21: a direct drive bonus reroll is presented as the Team reroll, so the pad treats it as one too. */
+export const TEAM_REROLL_SOURCES: ReadonlySet<string> = new Set(['Team ReRoll', 'Drive Bonus ReRoll', 'Mascot TRR', 'Team Mascot']);
 
 /** Team Reroll first, every other option in the server's order. */
 export function padRerollOrder<T extends PadRerollOption>(options: readonly T[]): T[] {
-  const team = options.filter((o) => o.source === 'Team ReRoll');
-  return [...team, ...options.filter((o) => o.source !== 'Team ReRoll')];
+  const first = (o: PadRerollOption) => o.source === 'Team ReRoll' || o.source === 'Drive Bonus ReRoll';
+  return [...options.filter(first), ...options.filter((o) => !first(o))];
 }
 
 /** The source Y takes: the only skill reroll offered, else null. */
