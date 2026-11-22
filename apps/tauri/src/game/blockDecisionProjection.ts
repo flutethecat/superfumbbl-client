@@ -1,6 +1,6 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { playerById, valuedSkillLabel } from './reRollDecisionProjection';
-import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
 
 export interface BlockContextProjection {
   attackerId: string | null;
@@ -60,8 +60,11 @@ export const BLOCK_PRO_COMPOSITES = [
 export type BlockProCompositeKind = (typeof BLOCK_PRO_COMPOSITES)[number]['kind'] | 'proDriveBonus' | 'proMascotDriveBonus';
 export interface BlockProCompositeOption {
   kind: BlockProCompositeKind; source: string; label: string; title: string;
-  /** Owner 11-21: the "i" text when the fallback spends a drive bonus reroll (driveBonusInfo); the label reads Team Reroll. */
+  /** Owner 11-21: the corner badge (teamPartBadge): tooltip, and the drive bonus tag or the Leader skill icon. */
   info?: string;
+  badgeTag?: string;
+  badgeSkill?: 'Leader';
+  badgeName?: string;
 }
 const COMPOSITE_KIND_BY_SOURCE: Readonly<Record<string, BlockProCompositeKind>> = {
   'Pro TRR': 'proTrr', 'Pro Mascot': 'proMascot', 'Pro Mascot TRR': 'proMascotTrr',
@@ -73,8 +76,11 @@ export const BLOCK_PRO_COMPOSITE_KINDS: readonly BlockProCompositeKind[] = Objec
  *  the Team Mascot with one of them as fallback (sent as clientUseReRoll{block, source}, like Team ReRoll). */
 export interface BlockTeamChoice {
   source: string; label: string;
-  /** Owner 11-21: a drive bonus answer reads and looks like the Team reroll; this is its "i" text (driveBonusInfo). */
+  /** Owner 11-21: a drive bonus / Leader answer looks like the Team reroll; its corner badge (teamPartBadge). */
   info?: string;
+  badgeTag?: string;
+  badgeSkill?: 'Leader';
+  badgeName?: string;
 }
 
 /** Current server (c66198ac4): when the block offers a drive bonus or a Leader reroll they REPLACE the plain Team
@@ -84,8 +90,7 @@ export function blockTeamChoices(rr: readonly string[], driveBonus: () => string
   if (!hasDriveBonusOrLeader(rr)) return [];
   return [...mascotChoices(rr).slice(1), ...directTeamChoices(rr)]
     .map((c) => {
-      const info = driveBonusInfo(c, driveBonus);
-      return { source: c.source, label: composedChoiceLabel(c, driveBonus), ...(info ? { info } : {}) };
+      return { source: c.source, label: composedChoiceLabel(c, driveBonus), ...teamPartBadge(c, driveBonus) };
     });
 }
 
@@ -120,8 +125,7 @@ export function blockProCompositeOptions(dialogId: unknown, roll: Record<string,
     const driveBonus = opts.driveBonus ?? genericDriveBonusName;
     return proChoices(rr).slice(1).map((c) => {
       const label = composedChoiceLabel(c, driveBonus);
-      const info = driveBonusInfo(c, driveBonus);
-      return { kind: COMPOSITE_KIND_BY_SOURCE[c.source]!, source: c.source, label, title: label, ...(info ? { info } : {}) };
+      return { kind: COMPOSITE_KIND_BY_SOURCE[c.source]!, source: c.source, label, title: label, ...teamPartBadge(c, driveBonus) };
     });
   }
   const trr = rr.includes('TRR');

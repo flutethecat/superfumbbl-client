@@ -16,7 +16,10 @@
 //  - with the marker focused, Enter / Space toggle the tooltip and stop there: they never become the card's confirm.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
-const props = defineProps<{ text: string }>();
+/** `tag`: a short text badge ("BCR"); `icon`: an image badge (the Leader skill icon); neither = the plain "i".
+ *  Owner 11-21: it is drawn as a CORNER BADGE over the top-right of the answer button it belongs to (the caller wraps both
+ *  in `.rr-badged`); it stays a sibling of the button, so a press on it never reaches the button. */
+const props = defineProps<{ text: string; tag?: string; icon?: string }>();
 
 const el = ref<HTMLElement | null>(null);
 const hovered = ref(false);
@@ -106,11 +109,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <span ref="el" class="rr-info" tabindex="0" role="note" :aria-label="props.text" data-testid="reroll-info-marker"
+  <span ref="el" class="rr-info" :class="{ 'rr-info-tag': !!props.tag && !props.icon, 'rr-info-icon': !!props.icon }" tabindex="0" role="note"
+    :aria-label="props.text" data-testid="reroll-info-marker"
     @pointerenter="show('hover')" @pointerleave="hovered = false" @focus="show('focus')" @blur="focused = false"
     @pointerdown.stop @mousedown.stop @touchstart.stop.passive
     @click.stop.prevent="toggle()" @keydown="onOwnKey">
-    <span aria-hidden="true">i</span>
+    <img v-if="props.icon" :src="props.icon" alt="" aria-hidden="true" draggable="false" />
+    <span v-else aria-hidden="true">{{ props.tag || 'i' }}</span>
     <Teleport to="body">
       <span v-if="shown" class="rr-info-tip" role="tooltip" data-testid="reroll-info-tip" :data-below="pos.below"
         :style="{ left: `${pos.left}px`, top: `${pos.top}px` }">{{ props.text }}</span>
@@ -126,6 +131,18 @@ onBeforeUnmount(() => {
   font: italic 700 10px/1 Georgia, 'Times New Roman', serif; cursor: help; user-select: none;
 }
 .rr-info:hover, .rr-info:focus-visible { opacity: 1; }
+/* Owner 11-21: the corner badge (inside `.rr-badged`, SpectateView): over the top-right corner of its button, out of
+   the row's layout. The tag respects the minimum text size like the team reroll count chip. */
+:global(.rr-badged > .rr-info) {
+  position: absolute; top: -6px; right: -6px; z-index: 3; margin: 0;
+  background: #0b0b0be6; color: #f4f1e8; border-color: #ffffff59; opacity: 1;
+}
+.rr-info-tag {
+  width: auto; min-width: 14px; height: auto; padding: 1px 3px; border-radius: 4px;
+  font: 800 max(var(--ui-min-text-size, 9px), 0.56rem)/1.15 system-ui, sans-serif; font-style: normal; letter-spacing: 0.02em;
+}
+.rr-info-icon { width: 18px; height: 18px; padding: 0; border-radius: 4px; overflow: hidden; }
+.rr-info-icon img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 .rr-info:focus-visible { outline: 2px solid var(--accent, #e8c547); outline-offset: 1px; }
 </style>
 

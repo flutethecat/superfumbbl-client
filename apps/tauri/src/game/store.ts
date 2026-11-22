@@ -39,7 +39,7 @@ import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, 
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
 import { BLOCK_PRO_COMPOSITE_KINDS, blockProCompositeOptions, blockTeamChoices, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption, type BlockTeamChoice } from './blockDecisionProjection';
-import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, hasDriveBonusOrLeader, mascotChoices, teamIdOfPlayer } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, driveBonusName, hasDriveBonusOrLeader, mascotChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
 import { allBlockDiceIndices, blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
 import { LONER_RETUMBLE_DELAY_MS } from './lonerCueLayout';
@@ -852,7 +852,7 @@ const legacyState = reactive({
     player: string;
     reRolledAction: string;
     targets: { targetId: string; target: string; minimumRoll: number | null }[];
-    options: { label: string; source: string; info?: string }[];
+    options: { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
     loner: boolean;
     seq: number;
     instanceKey: string | null;
@@ -1145,7 +1145,7 @@ const legacyState = reactive({
     prompt: string;
     declineLabel: string;
     /** `info`: owner 11-21, the "i" text of a regeneration answer that spends a drive bonus reroll. */
-    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string }[];
+    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
     seq: number;
   } | null,
   /** Display-only Fireball 4+ chips retained until the server closes the wizard dialog. */
@@ -1483,7 +1483,7 @@ const legacyState = reactive({
   bloodlust: null as {
     stage: 'reroll' | 'decision' | 'bite';
     playerId: string; vampire: string; seq: number;
-    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[];
+    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
     /** the failed d6 that triggered this reroll offer (owner W37 mock: shown alone on its own card line). */
     roll?: number;
     changeToMove?: boolean; action?: string;
@@ -2258,6 +2258,34 @@ function rockThrowResolving(): boolean {
   if (decision === 'release') rockThrowResolveStartedAt = null;
   return decision === 'hold';
 }
+// Owner 11-21 (turn splash case 1): "Just want the splash to not land over the fireball". A Fireball cast at the END of
+// a turn (upstream StepEndFeeding:100-110, END_OF_OWN_TURN / END_OF_OPPONENT_TURN) reaches us as the spellFireball
+// animation, its injuries and the turnEnd within one burst, so the splash armed at the turnEnd used to start over the
+// blast. The window opens at the animation and closes once the fireball beat (FIREBALL_ANIMATION_MS, the reports held
+// behind it) and every injury it caused have gone idle; the same hard cap as the rock keeps it fail-open. Presentation
+// only: nothing is sent, the model and every dialog stay live. Zap / Lightning are not held (their art has no beat).
+const SPELL_RESOLVE_CAP_MS = 9000;
+let spellResolveStartedAt: number | null = null;
+function noteSpellResolving(): void {
+  if (!playback.catchingUp) spellResolveStartedAt = Date.now();
+}
+function spellResolving(): boolean {
+  if (spellResolveStartedAt === null) return false;
+  const decision = rockThrowResolveDecision({
+    waitedMs: Date.now() - spellResolveStartedAt,
+    active: pendingFireballBeats > 0 || injuryQueue.length > 0 || injuryPlaying || !!state.injurySplash,
+    minimumMs: presentationMs(300), // the gap before a held injury reaches the queue
+    capMs: presentationMs(SPELL_RESOLVE_CAP_MS),
+  });
+  if (decision === 'release') spellResolveStartedAt = null;
+  return decision === 'hold';
+}
+/** A turn splash waits for a resolving Throw a Rock or end-of-turn spell (owner 10-04 / 11-21). */
+function turnSplashHeldByResolution(): boolean {
+  const rock = rockThrowResolving();
+  const spell = spellResolving();
+  return rock || spell;
+}
 
 /** Owner 10-05: did a block just finish (its defender cleared by the server this frame) with the attacker or the
  *  defender no longer on their feet? Base states: 1 standing, 2 moving; anything else on either player (prone,
@@ -2330,7 +2358,7 @@ function showTurnover(
       ballCarrierInEndzone: ballCarrierInScoringEndzone(current),
     });
     if (!fireAllowed) { turnoverTimer = null; return; }
-    if (rockThrowResolving()) { turnoverTimer = scheduleGameTimeout(tick, 150); return; } // owner 10-04: the rock reads first
+    if (turnSplashHeldByResolution()) { turnoverTimer = scheduleGameTimeout(tick, 150); return; } // owner 10-04 / 11-21: the rock, the end-of-turn Fireball read first
     const waited = Date.now() - started;
     const sendOffCardUp = !!state.sendOffResult || !!state.sendOffWaiting; // owner 11-16: the splash follows the send-off card
     if (turnoverSplashReady(waited, settled(), minimumDelayMs, sendOffCardUp)) { fire(); return; } // item4: + ball-at-rest, same 3000ms cap
@@ -2402,7 +2430,8 @@ function showTurnStart(side: 'home' | 'away') {
     // Owner 10-04: a Throw a Rock still resolving holds the splash (the handle stays set, so the window stays owned).
     // Astra pass 3 (10-04): the drain hold is an absolute deadline taken at arm time - extend it while waiting and
     // reserve the full visible hold when the splash finally appears (no-op in play mode).
-    if (rockThrowResolving()) { holdPlayback(150 + holdMs); turnStartTimer = scheduleGameTimeout(fireTurnStart, 150); return; }
+    // Owner 11-21: an end-of-turn Fireball (its beat and injuries) holds it the same way.
+    if (turnSplashHeldByResolution()) { holdPlayback(150 + holdMs); turnStartTimer = scheduleGameTimeout(fireTurnStart, 150); return; }
     holdPlayback(holdMs);
     turnStartTimer = null; // #172: same reason as the turnover handle — a fired handle left set pins the window
     state.turnStart = { side, coach, teamName, logo, seq: (state.turnStart?.seq ?? 0) + 1 };
@@ -12045,6 +12074,7 @@ function applyFrameContents(frame: QueuedFrame) {
         state.fireballAnim = { square: [x as number, y as number], seq, sound: 'fireball' };
         if (!soundCueActive) playSound('fireball');
         enqueueFireballBeat(seq);
+        noteSpellResolving(); // owner 11-21: a turn splash waits for this Fireball (turn splash case 1)
       }
     }
     // Client-side sounds upstream (AnimationSequenceSpecialEffect / AnimationSequenceChained), never on the wire:
@@ -15123,6 +15153,7 @@ function resetPlayback() {
   lastSurfacedBlockDice = null;
   lastMultiBlockDialog = null;
   rockThrowResolveStartedAt = null;
+  spellResolveStartedAt = null; // owner 11-21: the end-of-turn Fireball hold never crosses a reset / seek / snapshot
   bombFlightHoldUntil = 0;
   landingRerollHoldUntil = 0; // owner 10-19: the Swoop landing reroll hold never crosses a reset / seek / snapshot
   landingRerollTimer = null;
@@ -21552,8 +21583,16 @@ export function installSwoopCommandTestHarness(
 }
 
 /** @internal Fireball wire/presentation integration seam over the production applier and FIFO. */
-export function installFireballAnimationTestHarness(fixture: GameJson): {
+export function installFireballAnimationTestHarness(fixture: GameJson, options?: {
+  /** Owner 11-21 (turn splash case 1): a spectator seat (play inactive), or a replay catch-up (fast-forward). */
+  spectator?: boolean; catchingUp?: boolean;
+}): {
   apply(command: Record<string, unknown>): void;
+  /** Owner 11-21: the turn splashes this seam can raise. */
+  turnStart(): typeof state.turnStart;
+  turnover(): typeof state.turnover;
+  /** A replay seek / join catch-up starting or ending. */
+  setCatchingUp(on: boolean): void;
   cue(): typeof state.fireballAnim;
   injury(): typeof state.injurySplash;
   armour(): typeof state.armorDice;
@@ -21578,8 +21617,12 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
   injuryPlaying = false; injuryPresentingSet.clear();
   pendingFireballBeats = 0;
   game.value = fixture; declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); declarationIntent = null; // owner 10-15 latches never leak across tests
-  play.active = true;
-  play.coach = String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
+  play.active = !options?.spectator;
+  play.coach = options?.spectator ? 'spectator' : String((fixture.teamHome as { coach?: string }).coach ?? 'home-coach');
+  const priorCatchingUp = playback.catchingUp;
+  playback.catchingUp = !!options?.catchingUp;
+  spellResolveStartedAt = null; rockThrowResolveStartedAt = null;
+  state.turnStart = null; state.turnover = null;
   soundCueActive = true;
   state.fireballAnim = null;
   state.injurySplash = null;
@@ -21598,6 +21641,9 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
         },
       });
     },
+    turnStart: () => state.turnStart,
+    turnover: () => state.turnover,
+    setCatchingUp: (on) => { playback.catchingUp = on; },
     cue: () => state.fireballAnim,
     injury: () => state.injurySplash,
     armour: () => state.armorDice,
@@ -21610,6 +21656,11 @@ export function installFireballAnimationTestHarness(fixture: GameJson): {
       injuryQueue.length = 0;
       injuryPlaying = false; injuryPresentingSet.clear();
       pendingFireballBeats = 0;
+      spellResolveStartedAt = null; rockThrowResolveStartedAt = null;
+      turnStartTimer = null; turnStartClearTimer = null; turnoverTimer = null; turnoverClearTimer = null; // cleared above
+      state.turnStart = null; state.turnover = null;
+      playback.catchingUp = priorCatchingUp;
+      playback.holdUntil = 0;
       warnedAnimationTypes.clear();
       for (const type of priorWarned) warnedAnimationTypes.add(type);
       state.log = state.log.slice(0, priorLogLength);
@@ -25803,8 +25854,8 @@ function maybeSurfaceDefenderAction(g: GameJson) {
 
 
 // Reused by the unified bloodlust card; source is the exact CLIENT_USE_RE_ROLL wire value.
-export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[] {
-  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string }[] = [];
+export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] {
+  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] = [];
   const singleUse = singleUseReRollName(dp);
   const skill = reRollSkillName(dp);
   const rrProps = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
@@ -25825,7 +25876,7 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
     // Current server: drive bonus / Leader replace the regular team button; the Mascot keeps its fallbacks (as offeredReRollOptions).
     for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
       opts.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, kind: 'team',
-        ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+        ...teamPartBadge(c, driveBonus) });
     }
   } else if (specialTeamLabel && hasTeam) {
     opts.push({ label: specialTeamLabel, source: 'Team ReRoll', kind: 'team' });
@@ -26104,7 +26155,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
             label: choice.kind === 'reRoll'
               ? `${playerName(g, choice.playerId)} — ${choice.label ?? choice.reRollSource}`
               : playerName(g, choice.playerId),
-            ...(choice.kind === 'reRoll' && choice.info ? { info: choice.info } : {}),
+            ...(choice.kind === 'reRoll' && choice.info ? { info: choice.info, badgeTag: choice.badgeTag, badgeSkill: choice.badgeSkill, badgeName: choice.badgeName } : {}),
           }));
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
@@ -31053,7 +31104,11 @@ export const gameStore = {
     } else if (selected?.response === 'skill') {
       log('system', `play: skill ${selected.source} used (${playerName(game.value, p.playerId)})`);
     } else {
-      log('system', `play: reroll ${source ? (selected?.label ?? source) + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`); // owner 09-19: the option's label — the wire source is 'Team ReRoll' for Brilliant Coaching too
+      // Owner 09-19: the option's label (the wire source is 'Team ReRoll' for Brilliant Coaching too). Owner 11-21: a drive
+      // bonus answer reads "Team Reroll" on the card, so the line names the bonus: "reroll Team Reroll (Brilliant Coaching)
+      // used"; composites likewise. Leader keeps its own label ("Leader Reroll").
+      const usedLabel = selected ? (selected.badgeTag && selected.badgeName ? `${selected.label} (${selected.badgeName})` : selected.label) : source;
+      log('system', `play: reroll ${source ? usedLabel + ' used' : 'declined'} (${playerName(game.value, p.playerId)})`);
     }
     state.reRollPrompt = null;
   },

@@ -724,6 +724,16 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
       || !numbers(blockCard.dice) || !finite(blockCard.nrOfDice)
       || !bools.every((k) => typeof blockCard[k] === 'boolean') || !labels.every((k) => nullableString(blockCard[k]))) fail(40);
   }
+  const teamRerollOptionShape = (o: Record<string, unknown>): boolean => {
+    const base = ['label', 'source', 'response', 'role'];
+    const extra = Object.keys(o).filter((k) => !base.includes(k));
+    if (!base.every((k) => k in o) || extra.some((k) => !['teamKind', 'info', 'badgeTag', 'badgeSkill', 'badgeName'].includes(k))) return false;
+    if ('teamKind' in o && o.teamKind !== 'leader' && o.teamKind !== 'driveBonus') return false;
+    const badged = 'info' in o;
+    if (badged !== ('badgeName' in o) || (badged && !('badgeTag' in o) === !('badgeSkill' in o))) return false;
+    return (!badged || (typeof o.info === 'string' && typeof o.badgeName === 'string'))
+      && (!('badgeTag' in o) || typeof o.badgeTag === 'string') && (!('badgeSkill' in o) || o.badgeSkill === 'Leader');
+  };
   const card = p.reRollCard;
   if (card !== null) {
     const required = ['playerId', 'reRolledAction', 'label', 'options', 'title', 'question', 'messages', 'fumble', 'loner', 'thresholdless'];
@@ -734,11 +744,9 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
     // S36: a `modifier-choice` option also carries the received skillArray and its minimumRoll.
     if (card.options.some((o) => !object(o)
       || !(keys(o, ['label', 'source', 'response', 'role'])
-        // a current-server Leader / drive bonus team reroll names itself (reRollDecisionProjection teamKind)
-        || (keys(o, ['label', 'source', 'response', 'role', 'teamKind']) && o.teamKind === 'leader')
-        // owner 11-21: an answer spending a drive bonus carries its "i" text (info), the direct one also teamKind
-        || (keys(o, ['label', 'source', 'response', 'role', 'info']) && typeof o.info === 'string')
-        || (keys(o, ['label', 'source', 'response', 'role', 'teamKind', 'info']) && o.teamKind === 'driveBonus' && typeof o.info === 'string')
+        // a current-server Leader / drive bonus team reroll (reRollDecisionProjection teamKind) and, owner 11-21, its corner
+        // badge (teamPartBadge: info + badgeName + the drive bonus tag or the Leader skill icon)
+        || teamRerollOptionShape(o)
         || (o.response === 'modifier-choice' && keys(o, ['label', 'source', 'response', 'role', 'skillArray', 'minimumRoll'])
         && strings(o.skillArray) && finite(o.minimumRoll)))
       || typeof o.label !== 'string' || typeof o.source !== 'string'

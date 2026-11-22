@@ -10,7 +10,7 @@ import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 import { t, terms, data } from '../i18n';
 import { serverExplanationLines } from './serverExplanation';
-import { composedChoiceLabel, directTeamChoices, driveBonusInfo, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -217,8 +217,12 @@ export interface ReRollPromptOption {
   /** A direct Leader or drive bonus team reroll (current server). Leader shows its name; owner 11-21: a drive bonus
    *  shows the plain team reroll art and label, with an "i" (info). */
   teamKind?: 'leader' | 'driveBonus';
-  /** Owner 11-21: the "i" text of an answer that spends a drive bonus reroll (teamReRollComposer.driveBonusInfo). */
+  /** Owner 11-21: the corner badge of an answer presented as the Team reroll (teamReRollComposer.teamPartBadge): its
+   *  tooltip, and the drive bonus tag ("BCR") or the Leader skill icon. */
   info?: string;
+  badgeTag?: string;
+  badgeSkill?: 'Leader';
+  badgeName?: string;
 }
 
 export function skillNameWithValue(displayValue: string | undefined, skillName: string): string {
@@ -493,7 +497,7 @@ export function offeredReRollOptions(
     for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
       options.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, response: 'reroll', role: 'source',
         ...(c.team && !c.mascot && c.team !== 'team' ? { teamKind: c.team } : {}),
-        ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+        ...teamPartBadge(c, driveBonus) });
     }
   } else if (specialTeamLabel && specialTeamSource) {
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
@@ -506,12 +510,12 @@ export function offeredReRollOptions(
   return options;
 }
 
-export function proCompositeReRollOptions(rrProps: string[], driveBonus: () => string = genericDriveBonusName): { label: string; source: string; info?: string }[] {
+export function proCompositeReRollOptions(rrProps: string[], driveBonus: () => string = genericDriveBonusName): { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] {
   if (!rrProps.includes('PRO')) return [];
   // Current server: every Pro answer upstream's fallback question can produce (Pro + drive bonus / Leader / Mascot).
   if (hasDriveBonusOrLeader(rrProps)) {
     return proChoices(rrProps).slice(1).map((c) => ({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source,
-      ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) }));
+      ...teamPartBadge(c, driveBonus) }));
   }
   const hasMascot = rrProps.includes('MASCOT');
   const hasTeam = rrProps.includes('TRR'); // never LONER or a legacy drive bonus name on its own (see offeredReRollOptions)

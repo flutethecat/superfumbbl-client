@@ -157,6 +157,7 @@ import {
 } from './d6';
 import { ACTION_DIE_TUMBLE_MS, nextTumbleFace, type ActionDiceLayer, type ActionDieFaceSource, type ActionDieSlot } from './actionDice3d';
 import { presentationMs, setPresentationMode as configurePresentationMode, type PresentationMode } from './presentationTiming';
+import { panGlideStep } from './panGlide';
 import { SQUARE_MARK_LABEL_MAX_CHARS, playerMarkLabelScale, shapePlayerMarkLabel, shapeSquareMarkLabel } from './markLabels';
 import { SPIKE_CURSOR, SPIKE_CURSOR_PRIMED } from './cursors';
 import { compensateUiZoom, rebaseCameraTransform, viewCenterWorld, type CameraView, type WorldPoint } from './uiZoomCamera';
@@ -5798,17 +5799,17 @@ export class PitchRenderer {
     // Owner 2026-07-04: smooth WASD camera GLIDE. The world eases toward the held
     // pan direction's velocity and decelerates to a stop on release — replacing the
     // old instant 45px tile-shift per keypress.
-    app.ticker.add(() => {
+    app.ticker.add((ticker) => {
       // Settings reflow (11-03): the edge-of-screen pan rides the same glide at its own speed, added to the keys'.
-      const targetX = this.panDir.x * this.panSpeedPx + this.edgePanDir.x * this.edgePanSpeedPx; // px/frame at full glide (Settings > Controls, 09-05)
+      const targetX = this.panDir.x * this.panSpeedPx + this.edgePanDir.x * this.edgePanSpeedPx; // px per 60-fps frame at full glide (Settings > Controls, 09-05)
       const targetY = this.panDir.y * this.panSpeedPx + this.edgePanDir.y * this.edgePanSpeedPx;
-      this.panVel.x += (targetX - this.panVel.x) * 0.18; // ease-in / decelerate
-      this.panVel.y += (targetY - this.panVel.y) * 0.18;
-      if (Math.abs(this.panVel.x) < 0.05) this.panVel.x = 0;
-      if (Math.abs(this.panVel.y) < 0.05) this.panVel.y = 0;
+      // Frame-rate independent (panGlide.ts, contributed): ease-in / decelerate 0.18 per 60-fps frame, move vel * dt.
+      const step = panGlideStep(this.panVel, { x: targetX, y: targetY }, ticker?.deltaTime);
+      this.panVel.x = step.vel.x;
+      this.panVel.y = step.vel.y;
       if (this.panVel.x !== 0 || this.panVel.y !== 0) {
-        this.world.position.x += this.panVel.x;
-        this.world.position.y += this.panVel.y;
+        this.world.position.x += step.dx;
+        this.world.position.y += step.dy;
         this.clampCamera(); // FC: WASD glide also blocks at the pitch edge
       }
     });
@@ -12642,7 +12643,8 @@ export class PitchRenderer {
    *  velocity and glides to a stop when the direction returns to 0 (key release). */
   private panDir = { x: 0, y: 0 };
   private panVel = { x: 0, y: 0 };
-  /** Owner 09-05: WASD glide speed in screen px per frame (Settings > Controls; 9 = the original). */
+  /** Owner 09-05: WASD glide speed in screen px per 60-fps frame (Settings > Controls; 9 = the original). The glide is
+   *  frame-rate independent (panGlide.ts), so a 120 Hz or a dropped-frame display covers the same distance per second. */
   private panSpeedPx = 9;
   setPanSpeed(pxPerFrame: number): void { this.panSpeedPx = Math.min(30, Math.max(2, pxPerFrame || 9)); }
   /** Owner 10-10 (Astra P3): the 10-08 "the camera works through the turnover splash" release came in with controller

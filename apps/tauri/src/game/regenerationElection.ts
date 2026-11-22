@@ -4,7 +4,7 @@ import {
   type DecisionAuthority,
 } from './inducementPurchase';
 import type { InducementType } from './railRegistryKeys.generated';
-import { composedChoiceLabel, directTeamChoices, driveBonusInfo, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamPartBadge } from './teamReRollComposer';
 
 export interface RegenerationReRollOptionsWire {
   reRollProperties?: readonly string[];
@@ -27,7 +27,7 @@ export type RegenerationElectionChoice =
   | { kind: 'inducement'; playerId: string }
   /** `label`: set for the current server's named team answers (a drive bonus / Leader / Mascot fallback); else the
    *  source is shown as it is today. */
-  | { kind: 'reRoll'; playerId: string; reRollSource: string; label?: string; info?: string };
+  | { kind: 'reRoll'; playerId: string; reRollSource: string; label?: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string };
 
 export type RegenerationElectionCommand =
   | {
@@ -98,8 +98,7 @@ export function regenerationElectionChoices(
       const name = driveBonus ?? genericDriveBonusName;
       // Owner 11-21: a drive bonus answer reads as the Team reroll; its "i" text names the bonus (driveBonusInfo).
       const push = (c: ReturnType<typeof proChoices>[number]) => {
-        const info = driveBonusInfo(c, name);
-        choices.push({ kind: 'reRoll', playerId, reRollSource: c.source, label: composedChoiceLabel(c, name), ...(info ? { info } : {}) });
+        choices.push({ kind: 'reRoll', playerId, reRollSource: c.source, label: composedChoiceLabel(c, name), ...teamPartBadge(c, name) });
       };
       [...mascotChoices(rowProperties), ...directTeamChoices(rowProperties)].forEach(push);
       if (offered.has('PRO')) proChoices(rowProperties).forEach(push);

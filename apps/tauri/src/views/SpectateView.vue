@@ -12688,9 +12688,19 @@ function proTrrBlendSource(source: string): boolean {
   return PRO_TRR_BLEND_SOURCES.has(source) && !!skillIconUrl('Pro', effectiveIconStyle.value);
 }
 function rerollOptIconSkill(opt: { source: string; skillArray?: string[] }): string {
-  if (opt.skillArray?.length === 1) return opt.skillArray[0]!;
-  // Owner 11-21: an answer spending a drive bonus looks like its plain team reroll counterpart (Pro Drive Bonus = Pro TRR).
-  return opt.source.endsWith(' Drive Bonus') ? opt.source.replace(/ Drive Bonus$/, ' TRR') : opt.source;
+  return opt.skillArray?.length === 1 ? opt.skillArray[0]! : opt.source;
+}
+/** Owner 11-21: team-reroll-family sources have no skill icon; a skill-icon lookup of them would draw the generated
+ *  initials badge (the owner's "TRR" glyph). The Team Mascot alone keeps its own art (as on the block card); the other
+ *  composites keep their visible name. Pro TRR / Pro Drive Bonus draw the blend (proTrrBlendSource). */
+const TEAM_FAMILY_SOURCES: ReadonlySet<string> = new Set([
+  'Team ReRoll', 'Drive Bonus ReRoll', 'Team Mascot', 'Mascot TRR', 'Mascot Drive Bonus',
+  'Pro TRR', 'Pro Drive Bonus', 'Pro Mascot', 'Pro Mascot TRR', 'Pro Mascot Drive Bonus',
+]);
+function rerollOptIcon(opt: { source: string; skillArray?: string[] }): string | null {
+  if (opt.source === 'Team Mascot') return resourceIcon('team_mascot');
+  if (TEAM_FAMILY_SOURCES.has(opt.source)) return null;
+  return skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle.value) || null;
 }
 let unregisterCrosshairStick: (() => void) | null = null;
 let stopCrosshairGateWatch: (() => void) | null = null;
@@ -18052,14 +18062,14 @@ watch(() => [
         <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer' }" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
           <div class="skill-select-list">
-            <template v-for="option in gameStore.state.inducementUse.options" :key="`${option.kind}:${option.value}`">
+            <span class="rr-badged" v-for="option in gameStore.state.inducementUse.options" :key="`${option.kind}:${option.value}`">
               <button class="skill-select-opt"
                 @click="gameStore.resolveUseInducement(option.kind, option.value)">
                 <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.label) }}</span>
               </button>
               <!-- Owner 11-21: a regeneration reroll spending a drive bonus reads as the Team reroll; the "i" names it. -->
-              <RerollInfoMarker v-if="option.info" :text="option.info" />
-            </template>
+              <RerollInfoMarker v-if="option.info" :text="option.info" :tag="option.badgeTag" :icon="option.badgeSkill ? skillIconUrl(option.badgeSkill, effectiveIconStyle) : undefined" />
+            </span>
             <button class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
           </div>
         </div>
@@ -18271,17 +18281,17 @@ watch(() => [
                 {{ TASTY_MORSEL_AVAILABLE_COPY }}
               </div>
               <div class="rr-prompt-line rr-question bl-reroll-row">
-                <template v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source">
+                <span class="rr-badged" v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source">
                   <button class="bl-opt"
                     :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
                     <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
                     <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
                       :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                    <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
+                    <span>{{ (opt.badgeSkill === 'Leader' && opt.source === 'Team ReRoll' ? $t('dialogs.reroll.text.teamReroll') : opt.label).replaceAll('reroll', 'Reroll') }}</span>
                   </button>
                   <!-- Owner 11-21: a drive bonus answer reads as the Team reroll; the "i" names the bonus. -->
-                  <RerollInfoMarker v-if="opt.info" :text="opt.info" />
-                </template>
+                  <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+                </span>
                 <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.keepTheRoll')"
                   @click="gameStore.resolveBloodlustReroll(null)">✕</button>
               </div>
@@ -19136,7 +19146,7 @@ watch(() => [
             </button>
             <!-- Owner 10-10: Pro with a fallback, as upstream's block dialog offers it (its "ReRoll" / "Mascot" /
                  "TRR fallback" boxes under the Pro button). See blockProCompositeOptions. -->
-            <template v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind">
+            <span class="rr-badged" v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind">
               <!-- Owner 11-21: Pro + RR (and Pro + drive bonus) is the blended Pro / Team reroll icon; the name rides the title
                    and the accessible name. -->
               <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
@@ -19146,8 +19156,8 @@ watch(() => [
                 <span v-else>{{ opt.label }}</span>
               </button>
               <!-- Owner 11-21: a fallback that spends a drive bonus reads "Team Reroll"; the "i" names the bonus. -->
-              <RerollInfoMarker v-if="opt.info" :text="opt.info" />
-            </template>
+              <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+            </span>
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
             <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot && !gameStore.state.blockPartial.namedTeam"
@@ -19172,17 +19182,18 @@ watch(() => [
                  falls back to it (upstream ReRollSourceComposer.teamReRollSources + the fallback question). -->
             <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button (its art, its title),
                  with an "i" naming the bonus; it still answers Drive Bonus ReRoll. -->
-            <template v-for="c in gameStore.state.blockPartial.teamChoices ?? []" :key="c.source">
-              <button v-if="c.source === 'Drive Bonus ReRoll'" class="bp-team" :title="$t('hud.teamReroll')"
+            <span class="rr-badged" v-for="c in gameStore.state.blockPartial.teamChoices ?? []" :key="c.source">
+              <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" class="bp-team"
+                :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })"
                 @click="gameStore.resolveBlockPartial('teamChoice', 0, c.source)">
-                <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
+                <img :src="resourceIcon('re_roll')" :alt="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" />
               </button>
               <button v-else class="bp-opt"
                 :title="c.label" @click="gameStore.resolveBlockPartial('teamChoice', 0, c.source)">
                 <span>{{ c.label }}</span>
               </button>
-              <RerollInfoMarker v-if="c.info" :text="c.info" />
-            </template>
+              <RerollInfoMarker v-if="c.info" :text="c.info" :tag="c.badgeTag" :icon="c.badgeSkill ? skillIconUrl(c.badgeSkill, effectiveIconStyle) : undefined" />
+            </span>
             <!-- Owner 2026-07-12 (bug, upstream-client-verified): o66 uphill phase-1 — the attacker declines the
                  re-roll; upstream's "No Re-Roll" sends sendUseReRoll(BLOCK, null), then the SERVER flips the pick
                  to the defender (DialogBlockRollProperties buttonNoReRoll → the null-source branch). -->
@@ -19246,7 +19257,7 @@ watch(() => [
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
-              <template v-for="opt in row.proComposite" :key="opt.kind">
+              <span class="rr-badged" v-for="opt in row.proComposite" :key="opt.kind">
                 <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
                   :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'proComposite' && mbrDieMode?.composite === opt.kind"
                   :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
@@ -19254,8 +19265,8 @@ watch(() => [
                   <ProTrrBlendIcon v-if="proTrrBlendKind(opt.kind)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
                   <span v-else>{{ opt.label }}</span>
                 </button>
-                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
-              </template>
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
               <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
@@ -19288,18 +19299,19 @@ watch(() => [
                 <span class="bp-sub">{{ $t('hud.mbrRow.noTrr') }}</span>
               </button>
               <!-- Current server: drive bonus / Leader rerolls for this target (and the Mascot falling back to them). -->
-              <template v-for="c in row.teamChoices" :key="c.source">
+              <span class="rr-badged" v-for="c in row.teamChoices" :key="c.source">
                 <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button, plus the "i". -->
-                <button v-if="c.source === 'Drive Bonus ReRoll'" class="bp-team" :title="$t('hud.mbrRow.teamReroll')"
+                <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" class="bp-team"
+                  :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })"
                   @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
-                  <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
+                  <img :src="resourceIcon('re_roll')" :alt="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" />
                 </button>
                 <button v-else class="bp-opt" :title="c.label"
                   @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
                   <span class="bp-opt-label">{{ c.label }}</span>
                 </button>
-                <RerollInfoMarker v-if="c.info" :text="c.info" />
-              </template>
+                <RerollInfoMarker v-if="c.info" :text="c.info" :tag="c.badgeTag" :icon="c.badgeSkill ? skillIconUrl(c.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
             </div>
           </div>
           <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">{{ mbrArmedHintText }}</div>
@@ -19336,14 +19348,14 @@ watch(() => [
           <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
             <span class="mbr-name">{{ $t('hud.mbrRow.theRollAgainstTarget', { target: t.target }) }}<template v-if="t.minimumRoll != null">{{ $t('hud.mbrRow.needsMinimumroll', { minimumRoll: t.minimumRoll }) }}</template></span>
             <div class="mbr-actions">
-              <template v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source">
+              <span class="rr-badged" v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source">
                 <button class="bp-opt"
                   :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
-                  <span class="bp-opt-label">{{ opt.label }}</span>
+                  <span class="bp-opt-label">{{ opt.badgeSkill === 'Leader' && opt.source === 'Team ReRoll' ? $t('dialogs.reroll.text.teamReroll') : opt.label }}</span>
                 </button>
-                <!-- Owner 11-21: an answer spending a drive bonus reads as the Team reroll; the "i" names the bonus. -->
-                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
-              </template>
+                <!-- Owner 11-21: an answer spending a drive bonus / Leader reads as the Team reroll; the badge names it. -->
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
             </div>
           </div>
           <div class="bp-actions">
@@ -19446,13 +19458,17 @@ watch(() => [
               <span v-if="gameStore.state.reRollPrompt.loner" class="rr-loner-line">{{ rerollLonerCopy }}</span>
             </div>
             <div class="bp-actions" :class="{ 'pad-list': activeInput === 'controller' && gameStore.state.reRollPrompt.mine }">
-              <template v-for="opt in rerollOptionsShown" :key="opt.source">
+              <span class="rr-badged" v-for="opt in rerollOptionsShown" :key="opt.source">
                 <!-- Owner 11-21: the direct drive bonus reroll (teamKind driveBonus) looks exactly like the Team reroll button;
                      its label already reads "Team reroll" and the "i" after it names the bonus. It still sends Drive Bonus ReRoll. -->
-                <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || opt.teamKind === 'driveBonus'" class="bp-team" data-pad-primary :title="opt.label"
+                <!-- Owner 11-21: a Leader reroll (teamKind leader) too: the Team reroll art with the Leader icon badge. The cause of
+                     the owner's "TRR" glyph: this choice fell through to the skill-icon branch below, whose icon lookup of
+                     "Team ReRoll" resolved to the generated initials badge. -->
+                <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || !!opt.teamKind" class="bp-team" data-pad-primary
+                  :title="opt.teamKind ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName ?? '' }) : opt.label"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
-                  <img :src="resourceIcon('re_roll')" :alt="opt.label" />
+                  <img :src="resourceIcon('re_roll')" :alt="opt.teamKind ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName ?? '' }) : opt.label" />
                   <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. Not on a drive
                        bonus button: that reroll does not come out of the team reroll count. -->
                   <span v-if="rerollPromptTeamReRolls !== null && !opt.teamKind" class="rr-trr-num bp-trr-num"
@@ -19460,7 +19476,7 @@ watch(() => [
                 </button>
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
-                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': proTrrBlendSource(opt.source) || !!skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle), 'bp-opt-blend': proTrrBlendSource(opt.source) }"
+                <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': proTrrBlendSource(opt.source) || !!rerollOptIcon(opt), 'bp-opt-blend': proTrrBlendSource(opt.source) }"
                   :aria-label="proTrrBlendSource(opt.source) ? opt.label : undefined"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
                   :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
@@ -19468,11 +19484,10 @@ watch(() => [
                   @click="gameStore.resolveReRoll(opt.source)">
                   <!-- Owner 11-21: Pro, then Team reroll = the blended Pro / Team reroll icon (the Pro option's art + the Team reroll art). -->
                   <ProTrrBlendIcon v-if="proTrrBlendSource(opt.source)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
-                  <img v-else-if="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)"
-                    :src="skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)!" :alt="opt.label" />
+                  <img v-else-if="rerollOptIcon(opt)" :src="rerollOptIcon(opt)!" :alt="opt.label" />
                   <!-- Owner 11-10 (supersedes S8 for icon buttons): a reroll source with an icon shows the icon only; its name stays in
                        the tooltip and the icon alt. A source without an icon keeps its visible name. -->
-                  <span v-if="!proTrrBlendSource(opt.source) && !skillIconUrl(rerollOptIconSkill(opt), effectiveIconStyle)" class="bp-opt-label">{{ opt.label }}</span>
+                  <span v-if="!proTrrBlendSource(opt.source) && !rerollOptIcon(opt)" class="bp-opt-label">{{ opt.label }}</span>
                   <!-- S36: a reRollModifierChoice option shows the roll it turns the test into (the option's own minimumRoll). -->
                   <span v-if="opt.response === 'modifier-choice' && opt.minimumRoll != null" class="bp-opt-target">{{ $t('hud.rerollBar.optionNeeds', { roll: opt.minimumRoll }) }}</span>
                   <!-- #205 (Meero audit row): Mascot TRR also consumes the team re-roll pool ⇒ it carries the
@@ -19483,8 +19498,8 @@ watch(() => [
                     <img :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamRerolls')" />{{ rerollPromptTeamReRolls }}
                   </span>
                 </button>
-                <RerollInfoMarker v-if="opt.info" :text="opt.info" />
-              </template>
+                <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
               <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
                 @click="gameStore.resolveReRoll(null)">✕</button>
             </div>
@@ -24048,6 +24063,13 @@ watch(() => [
 /* Controller support P2b: the reroll card reads as a focused LIST in controller mode; glyph hints. */
 .bp-actions.pad-list { flex-direction: column; align-items: stretch; }
 .bp-actions.pad-list > button { justify-content: flex-start; }
+/* Owner 11-21: an answer and its corner badge (RerollInfoMarker) share this positioned box; the badge is absolute, so the
+   row's layout is the button's alone. In the controller list the box stretches like a button. */
+.rr-badged { position: relative; display: inline-flex; align-items: center; }
+.bp-actions.pad-list > .rr-badged { display: flex; }
+.bp-actions.pad-list > .rr-badged > button { flex: 1; justify-content: flex-start; }
+.skill-select-list > .rr-badged { display: flex; }
+.skill-select-list > .rr-badged > button { flex: 1; }
 .setup-pad-hints { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 4px 0; font-size: 0.8rem; opacity: 0.9; }
 .setup-pad-hints > span { display: inline-flex; align-items: center; gap: 3px; }
 .end-turn-glyph { margin-left: 6px; }
@@ -24346,6 +24368,16 @@ watch(() => [
 .reroll-bar .bp-hint { color: var(--ui-heading); font-weight: 700; }
 .rr-decline-chip { color: #e56a6a; font-weight: 900; min-width: 32px; }
 .rr-decline-chip:hover { border-color: #e56a6a; }
+/* Owner 11-21 ("These icons still look quite small though, I think we could go up 20-30%?"): the generic reroll card's
+   answer buttons, about +25% (whole pixels, no larger than the block card's 44 / 32 px): Team reroll art 37 -> 46 px,
+   option icons (skills, Pro, the blend, the Team Mascot) 22 -> 28 px in a 34 -> 40 px box, the decline X 32 -> 40 px (by
+   padding and size, no new min-size: the larger-targets floor stays the only one). The count chip scales with them. */
+.block-partial.reroll-bar .bp-actions .bp-team img { width: 46px; height: 46px; }
+.block-partial.reroll-bar .bp-actions .bp-opt-icon-label { padding: 5px 5px; }
+.block-partial.reroll-bar .bp-actions .bp-opt-icon-label img,
+.block-partial.reroll-bar .bp-actions .bp-opt-blend .pt-blend { width: 28px; height: 28px; }
+.block-partial.reroll-bar .bp-actions .rr-decline-chip { padding: 8px 12px; font-size: 1.1rem; }
+.block-partial.reroll-bar .bp-actions .bp-trr-num { right: -3px; bottom: -3px; min-width: 15px; font-size: max(var(--ui-min-text-size, 12px), 0.78rem); }
 /* Owner 2026-07-08 (rev 7): SPECTATOR view — the surface is read-only (inert
    cursor, no hover affordance); the coach's PICK glows activation-gold, the same
    read as a player becoming the active selection. */

@@ -1,6 +1,6 @@
 import { NetCommandId } from '@fumbbl40k/ffb-protocol';
 import { reRollSourceName } from './reRollDecisionProjection';
-import { composedChoiceLabel, directTeamChoices, driveBonusInfo, genericDriveBonusName, mascotChoices, proChoices } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, genericDriveBonusName, mascotChoices, proChoices, teamPartBadge } from './teamReRollComposer';
 import { terms } from '../i18n';
 
 /**
@@ -64,8 +64,11 @@ export interface ReRollForTargetsTarget {
 export interface ReRollForTargetsOption {
   label: string;
   source: string;
-  /** Owner 11-21: the "i" text of an answer that spends a drive bonus reroll (it reads and looks like the Team reroll). */
+  /** Owner 11-21: the corner badge (teamPartBadge): tooltip, and the drive bonus tag or the Leader skill icon. */
   info?: string;
+  badgeTag?: string;
+  badgeSkill?: 'Leader';
+  badgeName?: string;
 }
 
 /** Targets the coach may reroll against: the dialog's targets filtered by reRollAvailableFor, in the dialog's order
@@ -132,7 +135,7 @@ export function reRollForTargetsPropertiesOptions(
   const composed = [...mascotChoices(rr), ...directTeamChoices(rr), ...(rr.includes('PRO') ? proChoices(rr) : [])];
   for (const c of composed) {
     out.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source,
-      ...(c.team === 'driveBonus' ? { get info() { return driveBonusInfo(c, driveBonus)!; } } : {}) });
+      ...teamPartBadge(c, driveBonus) });
   }
   // The label is the skill's name in the coach's language (terms); the source stays the exact wire name.
   const named = (source: string): ReRollForTargetsOption => ({ get label() { return terms(source); }, source });

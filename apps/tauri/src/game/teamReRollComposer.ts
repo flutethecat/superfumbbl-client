@@ -1,5 +1,5 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
-import { t } from '../i18n';
+import { t, terms } from '../i18n';
 
 /**
  * Team reroll choices and their composed wire sources, ported from upstream FFB at c66198ac4 (PR #349 / #367):
@@ -137,6 +137,28 @@ export function driveBonusInfo(c: Pick<ComposedReRollChoice, 'team'>, driveBonus
   return name === genericDriveBonusName()
     ? t('dialogs.reroll.text.usesADriveBonusReroll')
     : t('dialogs.reroll.text.usesNamedReroll', { bonus: name });
+}
+
+/** Owner 11-21: the 3-character corner tag of a drive bonus ("BCR" / "PCR" / "SSR", "DBR" when it cannot be named),
+ *  from the same name driveBonusName gives (the bonus the server consumes first). */
+export function driveBonusTag(name: string): string {
+  if (name === t('dialogs.reroll.specialTeamLabel.brilliantCoaching')) return t('dialogs.reroll.tag.brilliantCoaching');
+  if (name === t('dialogs.reroll.specialTeamLabel.pumpUpTheCrowd')) return t('dialogs.reroll.tag.pumpUpTheCrowd');
+  if (name === t('dialogs.reroll.specialTeamLabel.starOfTheShow')) return t('dialogs.reroll.tag.starOfTheShow');
+  return t('dialogs.reroll.tag.driveBonus');
+}
+
+/** Owner 11-21: the corner badge of an answer presented as the Team reroll. A drive bonus part (direct, Pro then, Mascot
+ *  then) carries its tag and "Uses <bonus> reroll!"; a Leader part (direct or Pro then; Mascot composites keep their
+ *  form) carries the Leader skill icon and "Uses the Leader reroll!". Empty for every other answer. */
+export function teamPartBadge(c: Pick<ComposedReRollChoice, 'team' | 'mascot'>, driveBonus: () => string = genericDriveBonusName):
+  { info: string; badgeTag: string; badgeName: string } | { info: string; badgeSkill: 'Leader'; badgeName: string } | Record<string, never> {
+  if (c.team === 'driveBonus') {
+    const name = driveBonus();
+    return { info: driveBonusInfo(c, driveBonus)!, badgeTag: driveBonusTag(name), badgeName: name };
+  }
+  if (c.team === 'leader' && !c.mascot) return { info: t('dialogs.reroll.text.usesLeaderReroll'), badgeSkill: 'Leader', badgeName: terms('Leader') };
+  return {};
 }
 
 /** The team owning a player (null when unknown). */

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by Tauri into the macOS app bundle's Info.plist (it reads an Info.plist next to tauri.conf.json); no effect on
+     Windows or Linux. FUMBBL's game socket is plain ws:// (fumbbl.com:22223 has no TLS), which App Transport Security
+     blocks in a release app. Allow insecure loads for fumbbl.com and its subdomains only, plus local network hosts. -->
+<plist version="1.0">
+<dict>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>fumbbl.com</key>
+      <dict>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
