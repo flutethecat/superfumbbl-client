@@ -889,7 +889,7 @@ const formatters: Record<string, (report: Report, game: GameJson | null, context
   // #132 (owner gap-triage ③): NAME the specific negatrait (report.confusionSkill = the skill's display
   // name — Really Stupid / Bone Head / Take Root / Wild Animal / Animal Savagery / Unchannelled Fury) instead
   // of the generic "overcomes confusion", and surface a FAIL explicitly (#83 template — a failed gated-roll
-  // must not vanish). One ReportConfusionRoll covers all 6 negatraits (wire CONFUSION_SKILL name-enum).
+  // must not vanish). One ReportConfusionRoll covers these 6 negatraits (wire CONFUSION_SKILL name-enum); Bloodlust is its own bloodLustRoll.
   confusionRoll: (r, g) => {
     const trait = r.confusionSkill ? String(r.confusionSkill) : 'a negative trait';
     const min = r.minimumRoll != null ? ` (${d6(r.minimumRoll, 'target')}+)` : '';

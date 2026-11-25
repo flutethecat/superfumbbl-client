@@ -12,7 +12,7 @@ import { injuryPresentation, armourPresentation, skipsArmourDiceOnCasualty, type
 import { rerollPresentation, isFailedLonerGateReport, lonerGatedUse } from './rerollPresentation';
 export { reportedAutomaticRerollSkill } from './rerollPresentation';
 import { presentStages } from './replay/presentationStages';
-import { actionRollPresentation, dodgeUsedBreakTackle, type ActionRollCue } from './actionRollPresentation';
+import { actionRollPresentation, dodgeUsedBreakTackle, hidesPassedNegatraitRoll, type ActionRollCue } from './actionRollPresentation';
 import { skillUsePresentation } from './skillUsePresentation';
 import { LiveSpectateTransport } from './replay/liveSpectateTransport';
 import { SpectatorPublication, type SpectatorPublishedPosition } from './replay/spectatorPublication';
@@ -1240,7 +1240,7 @@ const legacyState = reactive({
   vampireBite: null as { playerId: string; square: [number, number]; seq: number } | null,
   /** Owner 07-08: FALLS OVER toast (failed Dodge dropDodge / Rush dropGfi) — the fall is the cue, independent of armour. */
   fallOver: null as { square: [number, number]; seq: number } | null,
-  /** #132 (07-22): NEGATRAIT confusion-roll cue — one `confusionRoll` report serves all 6 negatraits (`trait` = wire confusionSkill); effect is server-model-carried (⚖). Over-token toast per #83 "a failed gated-roll must not vanish". `hasTarget` (Animal Savagery only, owner 08-17): set ONLY when a same-batch `animalSavagery` report names the attacker — server-sent, never client-derived; absent means the batch didn't carry the distinction (e.g. multi-target choice dialog interrupts the message). */
+  /** #132 (07-22): NEGATRAIT confusion-roll cue — one `confusionRoll` report serves the 6 confusion negatraits (`trait` = wire confusionSkill; Bloodlust has its own `bloodLustRoll`, whose failure rides this cue too); effect is server-model-carried (⚖). Over-token toast per #83 "a failed gated-roll must not vanish". `hasTarget` (Animal Savagery only, owner 08-17): set ONLY when a same-batch `animalSavagery` report names the attacker — server-sent, never client-derived; absent means the batch didn't carry the distinction (e.g. multi-target choice dialog interrupts the message). */
   negatraitCue: null as { playerId: string; trait: string; successful: boolean; roll?: number; needed?: number; hasTarget?: boolean; seq: number } | null,
   /** Kick-off EVENT splash — banner + name + 2d6 (img null for Weather Change, which the weather dice follow). */
   kickoffCine: null as { result: string; roll: number[]; img: string | null; outcome?: KickoffOutcome | null } | null,
@@ -7142,6 +7142,7 @@ async function pauseSpectatorView(): Promise<void> {
       let lonerAtUse: LonerOriginalAtUse | null = null;
       const lonerUse = lonerGatedUse(reports);
       let reportIndex = -1;
+      let hiddenRerolledResult = false; // owner 11-24: this frame's rerolled result was a hidden passed negatrait roll
       for (const report of reports) {
         reportIndex++;
         const pid = String(report.playerId ?? '');
@@ -7159,7 +7160,9 @@ async function pauseSpectatorView(): Promise<void> {
         }
         noteRerollableRoll(pid, roll); // owner 10-20 (Astra r3): the roll a reroll offer would be for
         if (roll?.die && lonerGateDieHidden(report)) roll.die = null; // owner 10-20: the Loner check is no action die
-        if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
+        // owner 11-24: a hidden passed negatrait roll joins neither batch - no die, no cue, no beat
+        if (roll && hidesPassedNegatraitRoll(settings.hidePassedNegatraitRolls, report)) { if (roll.reRolled) hiddenRerolledResult = true; }
+        else if (roll) (roll.reRolled ? rerolledRolls : firstRolls).push(roll);
         if (dodgeUsedBreakTackle(report) && coordinate && coordinate[0]! >= 0 && coordinate[0]! < 26 && coordinate[1]! >= 0 && coordinate[1]! < 15) { // owner 09-14: Break Tackle toast on review too
           const name = playerName(position.model, pid);
           state.skillUsed = { playerId: pid, skill: 'Break Tackle', square: [coordinate[0]!, coordinate[1]!], name, toast: $t('store.transport.nameUsesBreakTackle', { name }), seq: (state.skillUsed?.seq ?? 0) + 1 };
@@ -7178,7 +7181,9 @@ async function pauseSpectatorView(): Promise<void> {
       };
       const hasFail = firstRolls.some((roll) => roll.die?.failed || roll.modal?.ok === false || roll.trait?.successful === false);
       const failBeat = hasFail ? presentationMs(FAIL_BEAT_MS) : 0;
-      const resultBeat = reroll ? presentationMs(reroll.proFailed ? REROLL_SPLASH_HOLD_MS : rerollSplashWanted(reroll.isTeam, reroll.raw) ? REROLL_BEAT_MS : 300) : 0;
+      // owner 11-24 (Sol): no visible rerolled result left (it was a hidden passed negatrait roll) - no result beat to wait
+      const resultBeat = !reroll || (hiddenRerolledResult && rerolledRolls.length === 0 && !reroll.lonerFailed && !reroll.proFailed) ? 0
+        : presentationMs(reroll.proFailed ? REROLL_SPLASH_HOLD_MS : rerollSplashWanted(reroll.isTeam, reroll.raw) ? REROLL_BEAT_MS : 300);
       // owner 10-20: a failed Loner - the original die re-tumbles where a rerolled result would land (resultBeat), then
       // the pill comes up once it has landed and the toast has cleared (never before)
       const lonerOriginal = reroll?.lonerFailed ? lonerOriginalFor(lonerAtUse, position.model, reroll.lonerPid ?? reroll.pid) : null;
@@ -12364,6 +12369,8 @@ function applyFrameContents(frame: QueuedFrame) {
     let lonerAtUse: LonerOriginalAtUse | null = null;
     const lonerUse = lonerGatedUse(reports);
     let reportIndex = -1;
+    let hiddenRerolledResult = false; // owner 11-24: this frame's rerolled result was a hidden passed negatrait roll
+    let visibleRerolledResult = false; // Sol r2: a rerolled result the frame still presents, by any channel
     for (const report of reports) {
       reportIndex++;
       const pid = report.playerId;
@@ -12388,7 +12395,12 @@ function applyFrameContents(frame: QueuedFrame) {
       if (isActionRoll) {
         const cue = actionRollPresentation(report, reports, game.value, raw, !play.active || !myPlayIds(game.value).has(String(pid)), pendingActionReroll);
         noteRerollableRoll(String(pid ?? ''), cue); // owner 10-20 (Astra r3): the roll a reroll offer would be for
-        if (cue?.trait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
+        // owner 11-24: a hidden passed negatrait roll raises no cue and queues no die (so no beat / pin either)
+        const hiddenNegatrait = hidesPassedNegatraitRoll(settings.hidePassedNegatraitRolls, report);
+        if (hiddenNegatrait && cue?.reRolled) hiddenRerolledResult = true;
+        // Sol r2: any other rerolled result of the frame (die, pass / catch modal, cue) is visible and keeps the beat
+        else if (cue?.reRolled) visibleRerolledResult = true;
+        if (cue?.trait && !hiddenNegatrait) state.negatraitCue = { ...cue.trait, seq: (state.negatraitCue?.seq ?? 0) + 1 };
         if (cue?.modal) {
           const modal = cue.modal;
           // Astra r1 (a8a250fd1): the offer hold is checked when the die is PUBLISHED (a kick-off die waits behind the
@@ -12421,7 +12433,7 @@ function applyFrameContents(frame: QueuedFrame) {
           }
         }
         // owner 10-20: a failed Loner gate's roll is the Loner check, not the action's - never an on-pitch die (Modern)
-        if (cue?.die && !lonerGateDieHidden(report)) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
+        if (cue?.die && !lonerGateDieHidden(report) && !hiddenNegatrait) (cue.reRolled ? reRolledRolls : firstRolls).push(cue.die);
         // Owner 09-14: Break Tackle gets the same skill-use toast as every other skill (icon pop + "<name> uses
         // Break Tackle!") — keyed off the successful dodge's modifier, since upstream sends no skillUse report for it.
         if (dodgeUsedBreakTackle(report) && raw && raw[0] >= 0 && raw[0] < 26 && raw[1] >= 0 && raw[1] < 15) {
@@ -12580,7 +12592,10 @@ function applyFrameContents(frame: QueuedFrame) {
           captainAfterShown(shownAt); // owner 10-20 / Astra P2-1: the captain follows the rerolled die's display
           repumpPlaybackAfterHoldChange();
         };
-        holdPlayback(rescuedMove ? rescuedHold : moveReroll ? failBeat + presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs) : failBeat + resultBeat);
+        // owner 11-24 (Sol): no visible rerolled result left (a hidden passed negatrait roll) - the frames behind wait for
+        // the failed die's beat only; the reroll toast and any captain splash keep their own timers
+        const resultHold = hiddenRerolledResult && !visibleRerolledResult && reRolledRolls.length === 0 && !rr.lonerFailed ? 0 : resultBeat;
+        holdPlayback(rescuedMove ? rescuedHold : moveReroll ? failBeat + presentationMs(FAILED_MOVE_ROLL_HOLD.rerolledReadMs) : failBeat + resultHold);
         if (landingRerolled) armLandingRerollHold(failBeat + resultBeat + presentationMs(REROLL_RESULT_PIN_TAIL_MS));
         if (rerollSplashWanted(rr.isTeam, rr.raw)) rerollStageTimers.push(scheduleGameTimeout(() => showRerollSplash(rr.pid, rr.source, rr.isTeam, rr.raw, rr.proRescuedBy), failBeat));
         // B2 / R1: the rerolled die's read is anchored on ITS show. The waiter is registered by the publication hook,
@@ -19189,10 +19204,15 @@ export function installSkillUseClearTestHarness(
   setCoach(coach: string): void;
   /** @internal test-only: reinject a captured card (stale UI reference across a dialog transition). */
   forceCard(card: typeof state.skillChoice): void;
+  /** @internal test-only (owner 11-24): the drain hold deadline the action-roll beats raise (playback.holdUntil). */
+  holdUntil(): number;
+  /** @internal test-only (owner 11-24): the acting player has rendered a step this activation (step-2+ roll beats). */
+  markActivationStepped(playerId: string): void;
   dispose(): void;
 } {
   const priorGame = game.value;
   const priorSession = session;
+  const priorActivation = presentation.activation;
   const priorPlay = { ...play };
   const priorChoice = state.skillChoice;
   const priorSkillUsed = state.skillUsed;
@@ -19265,9 +19285,12 @@ export function installSkillUseClearTestHarness(
     setPlayActive(on) { play.active = on; },
     setCoach(coach) { play.coach = coach; },
     forceCard(card) { state.skillChoice = card; },
+    holdUntil: () => playback.holdUntil,
+    markActivationStepped(playerId) { presentation.activation = playerId; },
     dispose() {
       session = priorSession;
       game.value = priorGame;
+      presentation.activation = priorActivation;
       play.active = priorPlay.active;
       play.coach = priorPlay.coach;
       play.autoPregame = priorPlay.autoPregame;

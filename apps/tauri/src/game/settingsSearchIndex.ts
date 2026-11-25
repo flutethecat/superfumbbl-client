@@ -140,6 +140,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'pitch.pickMeUp', tab: 'pitch', label: 'settings.general.auras.pickMeUp', info: 'settings.info.auraPickMeUp', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
   { id: 'pitch.showBlockDiceOn', tab: 'pitch', label: 'settings.ui.hudLayout.showBlockDiceOn', info: 'settings.info.preClickBlockDice', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
   { id: 'pitch.skipArmourRollsIf', tab: 'pitch', label: 'settings.ui.hudLayout.skipArmourRollsIf', info: 'settings.ui.hudLayout.whenAKnockdownEnds', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
+  { id: 'pitch.hidePassedNegatraitRolls', tab: 'pitch', label: 'settings.ui.hudLayout.hidePassedNegatraitRolls', info: 'settings.info.hidePassedNegatraitRolls', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
   { id: 'pitch.movementAnimation', tab: 'pitch', label: 'settings.display.movementAnimation.movementAnimation', info: 'settings.info.moveStyle', group: 'settings.display.movementAnimation.movementAnimation' },
   { id: 'pitch.movementSpeed', tab: 'pitch', label: 'settings.display.movementAnimation.movementSpeed', info: 'settings.info.moveSpeed', group: 'settings.display.movementAnimation.movementAnimation' },
   { id: 'pitch.animatePlayerWalkCycles', tab: 'pitch', label: 'settings.display.playerSprites.animatePlayerWalkCycles', info: 'settings.info.walkAnimation', group: 'settings.display.movementAnimation.movementAnimation' },

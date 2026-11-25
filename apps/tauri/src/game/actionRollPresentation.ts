@@ -67,6 +67,16 @@ export function dodgeUsedBreakTackle(report: Readonly<Record<string, unknown>>):
     && dieCauseFromRollModifiers(report.rollModifiers) === 'breakTackle';
 }
 
+/** Owner 11-24 (Settings "Hide passed negatrait rolls"): the server reported this negatrait roll PASSED and the coach
+ *  hides passed negatrait rolls - none of its on-pitch surfaces (die + tag, negatrait cue, beats) is presented. Two
+ *  reports: the confusion roll (Bone Head, Really Stupid, Take Root, Wild Animal, Unchannelled Fury, Animal Savagery)
+ *  and Bloodlust's own bloodLustRoll (ffb-server BloodLustBehaviour, every ruleset).
+ *  Display only: a failed roll, a roll with no server verdict, every other report and the game log are untouched. */
+export function hidesPassedNegatraitRoll(enabled: boolean, report: Readonly<Record<string, unknown>>): boolean {
+  const id = String(report.reportId);
+  return enabled && (id === 'confusionRoll' || id === 'bloodLustRoll') && report.successful === true;
+}
+
 export interface ActionDieCue { square: [number, number]; value: number; cause?: string; failed?: boolean; needed?: number; rerollSkill?: string; rerollTeam?: boolean; opponentRerollPending?: boolean; rerollOfferPending?: boolean; awaitsArrival?: boolean;
   /** Astra 10-10: this roll is NOT failed (no FAILED stamp), yet the server may hold a reroll offer open for it - a
    *  Breathe Fire "no effect" / "placed prone". The die then takes the reroll-offer lifecycle a failed die has (held

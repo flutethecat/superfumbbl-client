@@ -17,7 +17,7 @@ export const BUG_REPORT_SETTINGS_KEYS = [
   // figures / animation
   'spriteSet', 'walkAnimation', 'walkFps', 'walkFaceCamera', 'uniformFigures', 'uniformFiguresEw', 'oneSpritePerPosition',
   'moveStyle', 'moveSpeedMs', 'blockTumbleMs', 'bloodSplatters', 'actionDecorations', 'cinematicMode', 'casualtySplash',
-  'clickDismissCinematics', 'skipArmourDiceOnCasualty',
+  'clickDismissCinematics', 'skipArmourDiceOnCasualty', 'hidePassedNegatraitRolls',
   // dice
   'blockDice3d', 'showBlockDice', 'blockDiceFamily', 'blockDiceSurface', 'preClickBlockDice', 'd6FaceVariant',
   // pitch overlays / skills

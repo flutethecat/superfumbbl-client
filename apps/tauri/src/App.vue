@@ -3683,6 +3683,16 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.ui.hudLayout.whenAKnockdownEnds')" :def="$t('settings.info.valueOff')" />
             </div>
+            <!-- Owner 11-24: a PASSED negatrait roll (confusionRoll / bloodLustRoll report) shows nothing on the pitch; failures and the log stay. -->
+            <div class="row" data-setting-id="pitch.hidePassedNegatraitRolls">
+              <label class="row-main">
+                <span>{{ $t('settings.ui.hudLayout.hidePassedNegatraitRolls') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.hidePassedNegatraitRolls" type="checkbox" data-testid="hide-passed-negatrait-rolls" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.hidePassedNegatraitRolls')" :def="$t('settings.info.valueOff')" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
