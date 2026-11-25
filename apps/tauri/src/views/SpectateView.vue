@@ -2509,6 +2509,8 @@ watch(spriteSet, (set) => { settings.spriteSet = set; renderer?.setSpriteSet(set
 // walkers drop to the placeholder tier) - mirrored from the slot assignments.
 const spritePackSelected = computed(() => !!(settings.assetPackAssignments.playerSprites || settings.assetPackAssignments.walkSheets));
 watch(spritePackSelected, (on) => { if (renderer) { renderer.selectedSpritePack = on; renderer.refresh(); } });
+// Perf (11-20): cached player-card portraits follow every settings change (art, sprites, colours, ...).
+watch(settings, () => renderer?.flushPortraitCache(), { deep: true });
 // Walk-sheet settings bridge (spec walk-sheet-integration v6 C.5 + owner 09-04 face-camera): module-level
 // setters in ffb-pitch; runs immediately so persisted values apply before the first token build.
 watchEffect(() => {
