@@ -116,6 +116,7 @@ import ActionCenter from '../components/ActionCenter.vue';
 import TouchQuickMenu, { type TouchQuickItem } from '../components/TouchQuickMenu.vue';
 import { actionCenterMode, touchEndControl } from '../game/actionCenterModel';
 import { touchModeActive } from '../game/touchModeRuntime';
+import { createFireballHoverHandler, watchFireballPickSeed } from '../game/fireballPickSeed';
 import { opponentTapDeclares, secondTapCommits, touchCancelPreStep, touchCancelVisible, touchMoveRollFree, type TouchMoveRisk } from '../game/touchCancel';
 import { createTouchStageHolder, touchStageContext, touchStageKey, type TouchStage } from '../game/touchStage';
 import { createTouchConfirmDispatcher, createTouchPreviewCoordinator, type TouchPreviewKind } from '../game/touchPreview';
@@ -221,6 +222,12 @@ function replayDecisionSurfaces(): void {
 }
 // ORDER 66 (A.2/A.3): flag-gated interaction — action menu (③) + move-square overlay/step (①②) + block target.
 import { onPlayerClick as o66PlayerClick, actionSurfaceLock, refusedEndRearmsSurface, confirmationOutlivedPhase, hitAndRunInstructionVisible, handOffToAnyPlayerActive, declaredActionEndConfirmKind, plottedRouteCancelConfirmKind, confirmationOutlivedActivation, canFreeSelectPass, escCascadeDecision, passTargetInTemplate, selectedActingRightClick, actingRightClickWithRoute, withPlottedRouteCancelRow, CANCEL_PLOTTED_ROUTE_LABEL, offPitchRightClickRoute, ttmTargetInTemplate, passAtRestArmRequired, passActionIdentity, projectSubmittedPassPresentation, ttmActivationKey, ttmCancellationDecision, type EndActivationConfirmKind, endActivationConfirmDecision, type EndActivationOrigin, type SubmittedPassBridge, bombPlayerClickRoute, bombTileClickRoute } from '../game/logic/order66Interaction';
+import { followToastDodgeY, type PillRect } from '../game/logic/followToastDodge';
+/** The head-mounted toast's CSS translateY (-60%): the share of its height that sits above its anchor. */
+const FOLLOW_TOAST_ABOVE_FRACTION = 0.6;
+/** The armour dice drawn over a below-dice injury pill (renderer: dice ~17 px tall, 18 px above the pill anchor at unit
+ *  camera scale): the follow / stay toast keeps this much clear above such a pill. Scaled by the camera. */
+const ARMOUR_DICE_CLEARANCE_PX = 30;
 import { actingHasBlocked, storedBlitzRouteDisposition, storedBlitzRouteOutlived, endActivationPromptKind, endRowClearsArmsBeforeEnding, movementSurfaceReselectsActing, isBlitzMovementState, requiresBlitzEndConfirmation, friendlyActivationSwitchDisposition, onSquareClick as o66SquareClick, passFamilyTileRoute, reactingMovePlanClick, swoopCoordinateSquares, blitzTerminalShouldTryHold, blitzAdjacentTerminalDecision, tileClickDuringChooserHold, playerClickDuringChooserHold, activationUntouched, blitzEndRefunds } from '../game/logic/order66Interaction';
 import { receivedTransitionClearsSelection, receivedTurnEndedForMySeat, selectionAfterTargetConfirm } from '../game/logic/selectionClearOnTransition';
 import { syncTtmPassRailSurface, useTtmPassRailBoundaries } from '../game/logic/ttmPassRailLifecycle';
@@ -423,7 +430,7 @@ const o66PendingPass = ref<[number, number] | null>(null);
 // After the passer confirms locally, keep one visual-only bridge until the server echoes game.passCoordinate.
 // The echoed coordinate then becomes the cue's sole source for every client (passer, opponent, spectator).
 const o66SubmittedPassDestination = ref<SubmittedPassBridge | null>(null);
-const o66PendingThrowKind = ref<'pass' | 'bomb' | 'fireball' | 'throwTeamMate' | null>(null);
+const o66PendingThrowKind = ref<'pass' | 'bomb' | 'throwTeamMate' | null>(null);
 // Owner 08-12: the pass range template renders in EXACTLY three cases (positive allow-list) — ① free-select, ②
 // the "Show pass template" menu item (#250, sets this flag), ③ a pass target armed. Everything else suppresses it.
 const passTemplateForced = ref(false); // case ②; cleared when the activation ends
@@ -1985,12 +1992,24 @@ watch(
 // bomb coordinate, else the reported interceptor's square). Server-derived from the model; clears with the dialog. Review
 // 11-12: only once that dialog is PRESENTED (the asked coach's card or every other seat's pill) AND the bomb's flight
 // has landed (the tag's own presented flight; no bomb throw in the air) - a spectator's card can arm mid-flight.
+/** The 3x3 blast of the previewed (hover) or cast Fireball square, on the pitch only (StepWizard's area). */
+const fireballBlastSquares = computed<[number, number][] | null>(() => {
+  const preview = gameStore.state.wizardTargetPreview;
+  if (!preview) return null;
+  const [cx, cy] = preview.square;
+  const out: [number, number][] = [];
+  for (let x = cx - 1; x <= cx + 1; x++) {
+    for (let y = cy - 1; y <= cy + 1; y++) if (x >= 0 && x <= 25 && y >= 0 && y <= 14) out.push([x, y]);
+  }
+  return out;
+});
 const kaboomDecorationShown = computed(() => isKaboomSkill(gameStore.state.skillChoice?.skill)
   && kaboomDecorationReady(gameStore.interceptionTag.value, gameStore.state.throwAnim?.kind));
 watch(
   () => [rendererReady.value, kaboomBlastShown(gameStore.state.skillChoice?.skill, gameStore.game.value,
-    gameStore.interceptionTag.value, gameStore.state.throwAnim?.kind)] as const,
-  ([, squares]) => renderer?.setBlastArea(squares.length > 0 ? squares : null),
+    gameStore.interceptionTag.value, gameStore.state.throwAnim?.kind), fireballBlastSquares.value] as const,
+  // Owner 11-21: the Fireball preview's 3x3 shares the Kaboom! blast outline (never both at once; Kaboom! wins).
+  ([, squares, fireball]) => renderer?.setBlastArea(squares.length > 0 ? squares : fireball),
 );
 // Owner 11-12: the interceptor tag ("Intercepted" / "Deflected" / "Missed") hangs over the reported player's head for as
 // long as the store keeps it (released on a server signal, read floor 450 ms). Head-tracked per frame like the stun tag.
@@ -2366,12 +2385,16 @@ const reportHost: BugReportHost = {
       homeTurn: g?.turnDataHome?.turnNr ?? null,
       awayTurn: g?.turnDataAway?.turnNr ?? null,
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null,
+      ...(moveStopReportEvidence ? { moveStoppedEarly: moveStopReportEvidence } : {}), // move batching decision 12
     };
   },
 };
 
+/** Move batching decision 12: the stopped-early evidence of the ONE report opened from the banner (cleared on close). */
+let moveStopReportEvidence: Record<string, unknown> | null = null;
 /** Report entry (quick bar, Esc menu, hotkey): the dialog captures the window first, then opens (BugReportModal). */
 function openReport() {
+  moveStopReportEvidence = null; // move batching (review finding 7): an ordinary report never carries stopped-early evidence
   reportModal.value?.openReport();
 }
 /** Owner 10-15: the declaration watcher's Report - the same dialog, its description prefilled. */
@@ -2397,14 +2420,27 @@ function acknowledgeMatchBetaNotice() {
 }
 // Owner 10-15 declaration watcher: "Report" opens the bug report prefilled with the occurrence; either answer closes it.
 const switchWatcherCard = computed(() => (props.mode === 'play' && gameStore.isPlaying.value ? gameStore.state.switchWatcherCard : null));
+// Move batching decision 12: the non-blocking "Move stopped early. Report this?" banner (seated coach only). Report opens
+// the EXISTING bug report prefilled with the evidence (also in the report's context); the store clears it at the end of
+// the coach's turn. It never holds a frame or a click on the pitch.
+const moveStopBanner = computed(() => (props.mode === 'play' && gameStore.isPlaying.value ? gameStore.state.moveStopReport : null));
+function reportMoveStop() {
+  const banner = gameStore.state.moveStopReport;
+  if (!banner) return;
+  moveStopReportEvidence = banner.evidence;
+  gameStore.dismissMoveStopReport();
+  openReportPrefilled(banner.report);
+}
 function answerSwitchWatcherCard(index: number) {
   const card = gameStore.state.switchWatcherCard;
   gameStore.dismissSwitchWatcherCard();
+  moveStopReportEvidence = null; // move batching (review finding 7): a watcher report carries no stopped-early evidence
   if (index === 0 && card) openReportPrefilled(card.report);
 }
 
 watch(reportOpen, (open) => {
   ui.reportOpen = open; // App.vue's dev console stands down under the report (Astra P2)
+  if (!open) moveStopReportEvidence = null; // move batching (review finding 7): the evidence belongs to that one report
   // Owner 10-13: the open report owns the keyboard. A pan key held as it opens would otherwise glide forever (its
   // keyup is swallowed by the modal), so drop every held pan key now. Focus moves into the report and Tab stays there
   // (BugReportModal does both, game/reportModalKeys.ts).
@@ -2685,6 +2721,8 @@ watch(
 );
 // Owner 2026-07-04f: FLAT (non-isometric) render toggle
 watch(() => settings.flatRender, (flat) => renderer?.setFlatMode(flat));
+// Owner 11-25: the classic (1.0.335) north-south perspective - same redraw + camera reset path as the flat toggle.
+watch(() => settings.classicNsPerspective, (on) => renderer?.setClassicNsPerspective(on));
 // Owner 09-10: uniform figures is per orientation — the effective flag follows the pitch orientation.
 /** Owner 10-12: the pitch view as it is DRAWN (renderer.onProjectionApplied). A flip or an orientation switch asked
  *  for while something is in flight is applied a moment later, so anything in the DOM that depends on which way the
@@ -3268,7 +3306,41 @@ watch(() => gameStore.state.multiBlockResolution?.seq, () => { mbrDieMode.value 
 function mbrDieState(row: MultiBlockDieRow & { tumbleKey: string }): { readonly: boolean; disabled: boolean } {
   return multiBlockDieButtonState(row, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrRowTumble(row) });
 }
+// ---------------------------------------------------------------------------------------------------------------------
+// Owner 11-25: the Multiple Block card's submit latch. Its answers (a die, Brawler, Hatred, Pro / Consummate on one die, a
+// Pro composite on one die, the all-dice reroll, a team / Mascot / drive bonus / Leader reroll) each send a command the
+// server answers by republishing the card; until then a second press (a double click, or another row's action) would
+// send a second command. The latch is taken only when a send actually goes out (the store's gameplay send counter moved;
+// a refused send takes none), refuses AND disables every control of the card while held, and fails open: released by
+// the next applied server frame, a dialog change (gameStore.dialogOccurrence), or a 4 s watchdog. Arming a multi-die Pro /
+// Consummate / Pro composite sends nothing and takes no latch.
+// ---------------------------------------------------------------------------------------------------------------------
+const mbrLatch = ref<{ frame: number; occurrence: number } | null>(null);
+const mbrLatched = computed(() => !!mbrLatch.value && gameStore.state.appliedFrameSeq === mbrLatch.value.frame
+  && gameStore.dialogOccurrence() === mbrLatch.value.occurrence && !!gameStore.state.multiBlockResolution);
+const MBR_LATCH_WATCHDOG_MS = 4000;
+let mbrLatchWatchdog: ReturnType<typeof setTimeout> | null = null;
+function releaseMbrLatch(): void {
+  mbrLatch.value = null;
+  if (mbrLatchWatchdog) { clearTimeout(mbrLatchWatchdog); mbrLatchWatchdog = null; }
+}
+watch(mbrLatched, (held) => { if (!held && mbrLatch.value) releaseMbrLatch(); });
+onBeforeUnmount(releaseMbrLatch);
+/** One Multiple Block answer: refused while the latch holds; takes it when the command went out. */
+function mbrSubmit(send: () => void): void {
+  if (mbrLatched.value) return;
+  const before = gameStore.gameplaySendCount();
+  const occurrence = gameStore.dialogOccurrence();
+  send();
+  if (gameStore.gameplaySendCount() === before) return;
+  releaseMbrLatch();
+  mbrLatch.value = { frame: gameStore.state.appliedFrameSeq, occurrence };
+  mbrLatchWatchdog = setTimeout(() => { mbrLatchWatchdog = null; mbrLatch.value = null; }, MBR_LATCH_WATCHDOG_MS);
+}
 function multiBlockPickDie(row: MultiBlockDieRow, dieIndex: number) {
+  mbrSubmit(() => multiBlockPickDieNow(row, dieIndex));
+}
+function multiBlockPickDieNow(row: MultiBlockDieRow, dieIndex: number) {
   if (!gameStore.state.multiBlockResolution) return;
   // owner 10-13: a rerolled target's dice are inert while they tumble
   const click = multiBlockDieClick(row, dieIndex, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrTumbles.value[row.targetId] });
@@ -3287,6 +3359,9 @@ function multiBlockPickDie(row: MultiBlockDieRow, dieIndex: number) {
 }
 // A per-target re-roll button. team/mascot/brawler fire immediately; Pro/Consummate arm a die-select (unless 1 die).
 function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' | 'pro' | 'consummate', diceLen: number) {
+  mbrSubmit(() => multiBlockRerollNow(targetId, kind, diceLen));
+}
+function multiBlockRerollNow(targetId: string, kind: 'team' | 'mascot' | 'brawler' | 'pro' | 'consummate', diceLen: number) {
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
   switch (kind) {
     case 'team': gameStore.sendMultiBlockChoiceForTarget(targetId, -1, 'Team ReRoll', 0); break;
@@ -3299,9 +3374,10 @@ function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' 
   }
 }
 function multiBlockProComposite(targetId: string, kind: BlockProCompositeKind, diceLen: number) {
+  if (mbrLatched.value) return;
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
-  if (diceLen <= 1) gameStore.sendMultiBlockProComposite(targetId, kind, 0);
-  else mbrDieMode.value = { targetId, kind: 'proComposite', composite: kind };
+  if (diceLen <= 1) mbrSubmit(() => gameStore.sendMultiBlockProComposite(targetId, kind, 0)); // the one-die send takes the latch
+  else mbrDieMode.value = { targetId, kind: 'proComposite', composite: kind }; // arming sends nothing, takes no latch
 }
 // Savage Blow rerolls the whole multi-block pool, so send its source with dieIndex -1.
 function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDice: number) {
@@ -3311,7 +3387,7 @@ function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDi
   //   rerolls all nrOfDice with no index set. Omitting the 5th arg ⇒ empty index set ⇒ ZERO dice rerolled (a no-op).
   //   Enumerate EVERY die index [0..nrOfDice-1] to reroll the WHOLE pool. (wire key `reRolledDice`, server :437.)
   const allDice = Array.from({ length: nrOfDice }, (_, i) => i);
-  gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0, allDice);
+  mbrSubmit(() => gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0, allDice)); // takes the latch
 }
 // Owner 10-13: Multiple Block card - a per-target reroll re-tumbles that target's rerolled dice (row.rerolledDice), with
 // the first roll's tumble length; the row's dice stay inert until they settle. A target's first roll does not tumble.
@@ -3540,15 +3616,17 @@ watch(
     const sp = gameStore.state.squarePick;
     if (!renderer) return;
     const zapSelected = !!gameStore.state.wizardTargetConfirm && sp?.kind === 'wizard' && sp.skill === 'Zap';
-    renderer.setTargetSelectPick(zapSelected ? null : sp?.squares ?? null, zapSelected ? undefined : sp?.skill);
-    const preview = gameStore.state.wizardTargetPreview;
-    renderer.setO66PassRolls(preview
-      ? new Map(preview.playerSquares.map((square) => [`${square[0]},${square[1]}`, 4]))
-      : null);
-    if ((!sp || sp.kind !== 'wizard' || sp.skill !== 'Fireball') && o66PendingThrowKind.value === 'fireball') {
-      o66PendingPass.value = null;
-      o66PendingThrowKind.value = null;
-    }
+    // Owner 11-21: the Fireball square is chosen like a throw target - no field of markers. The whole pitch takes the
+    // click (setTilePick with no eligible set draws no reticle); legality is checked where the click lands
+    // (store.resolveSquarePick / previewFireballSquare, isWizardTargetLegal), and the square under the pointer previews.
+    // The parked-pointer preview seed is its own watcher (watchFireballPickSeed, below): it must not run on a preview change.
+    if (sp?.kind === 'wizard' && sp.skill === 'Fireball') renderer.setTilePick(true, null);
+    else renderer.setTargetSelectPick(zapSelected ? null : sp?.squares ?? null, zapSelected ? undefined : sp?.skill);
+    // Owner 11-22: the previewed square carries the red kick-off reticle; each player in its blast wears a "🔥 4+" tag.
+    // Sol (Fireball aim review): only a HOVER (uncommitted) preview aims; the cast's committed preview clears it at once.
+    const preview = gameStore.state.wizardTargetPreview?.hover ? gameStore.state.wizardTargetPreview : null;
+    renderer.setFireballAim(preview?.square ?? null, preview?.playerSquares ?? []);
+    renderer.setO66PassRolls(null);
   },
 );
 /** Release check (owner drive, 3.5.0 server): reRollForTargetsProperties can carry a fully qualified skill class as its
@@ -3559,6 +3637,24 @@ const reRollForTargetsActionLabel = computed(() => {
   const action = gameStore.state.reRollForTargets?.reRolledAction;
   return action ? terms(reRollActionName(action)) : '';
 });
+/** Owner 11-21: the pointer (or the pad crosshair) over the pitch while the Fireball square is chosen. A touch tap
+ *  previews through previewFireballSquare(c, 'touch') in the tap path; this feed is the pointer's (Fireball round 4). */
+const fireballHover = createFireballHoverHandler({
+  pick: () => gameStore.state.squarePick,
+  preview: (square, source) => gameStore.previewFireballSquare(square, source),
+});
+// Release review (Sol, P2) + Fireball round 3: a pointer or pad crosshair already parked on the pitch previews its
+// square when the Fireball pick arms; only the pick arming runs it, so a touch preview survives (game/fireballPickSeed).
+watchFireballPickSeed({
+  pick: () => gameStore.state.squarePick,
+  hovered: () => renderer?.getHoveredSquare() ?? null,
+  preview: (square) => fireballHover(square),
+});
+/** The Fireball preview on screen is exactly `square`'s (a hover / tap preview, not yet cast). */
+function fireballPreviewShows(square: [number, number]): boolean {
+  const p = gameStore.state.wizardTargetPreview;
+  return !!p?.hover && p.square[0] === square[0] && p.square[1] === square[1];
+}
 // Upstream DialogKickSkillHandler.java:25-58 compares the two server-sent landing squares without moving the
 // ball. The renderer shades both inertly and marks only ballCoordinateWithKick with "K".
 watch(
@@ -4065,9 +4161,9 @@ watch(() => gameStore.state.tentaclesCue?.seq, (seq) => {
   tentaclesCuePos.ready = false;
   const cue = gameStore.state.tentaclesCue;
   if (!cue || seq == null) return;
-  // the Tentacles icon still fades over the holder (both outcomes), at the holder's live square
+  // the skill's icon (Tentacles, or Shadowing since 11-24) still fades over the holder (both outcomes), at the holder's live square
   const live = gameStore.game.value?.fieldModel.playerDataArray.find((d) => d.playerId === cue.holderId)?.playerCoordinate;
-  renderer?.playSkillIconFade(live && live[0] >= 0 && live[0] < 26 && live[1] >= 0 && live[1] < 15 ? [live[0], live[1]] : cue.square, 'Tentacles');
+  renderer?.playSkillIconFade(live && live[0] >= 0 && live[0] < 26 && live[1] >= 0 && live[1] < 15 ? [live[0], live[1]] : cue.square, cue.skill);
   const follow = () => {
     if (gameStore.state.tentaclesCue?.seq !== seq) { tentaclesCuePos.ready = false; return; }
     const p = renderer?.playerScreenPos(cue.holderId);
@@ -5782,6 +5878,10 @@ watch(
 // gold aura) stay visible. Tracked per-frame while visible so camera glides/zooms
 // don't detach it; clamped with the context menu's bottom-safe convention.
 const followupPos = anchorRef<{ x: number; y: number } | null>(null);
+/** Owner 11-24: the passive follow / stay toast's own element, measured each frame so it can dodge the injury pills. */
+const followupPassiveEl = ref<HTMLElement | null>(null);
+/** The dodge's last answer for the toast on screen (by its seq): keeps the toast on the side it took (followToastDodgeY). */
+let followupDodge: { seq: number; y: number | null } = { seq: -1, y: null };
 let followupRaf = 0;
 function trackFollowupChip() {
   cancelAnimationFrame(followupRaf);
@@ -5789,7 +5889,7 @@ function trackFollowupChip() {
     const choice = gameStore.state.followupChoice;
     const passive = gameStore.state.followupIndicator;
     const host = pitchHost.value;
-    if ((!choice && !passive) || !renderer || !host) { followupPos.value = null; return; }
+    if ((!choice && !passive) || !renderer || !host) { followupPos.value = null; followupDodge = { seq: -1, y: null }; return; } // Sol r3: no toast, no side memory
     const BOTTOM_SAFE = 72;
     if (!choice && passive) {
       // Owner 2026-07-06: the PASSIVE "stays / follows up" toast mounts to the HEAD of
@@ -5797,10 +5897,24 @@ function trackFollowupChip() {
       // head (template applies translate(-50%,-100%)), tracked per-frame at any zoom.
       const p = renderer.headToCanvas(passive.square, false, 22); // owner 08-18: bottom edge tight to the head
       if (p && reactivePromptHeld.value !== 'followup') {
-        followupPos.value = {
-          x: Math.min(Math.max(p.x, 60), Math.max(host.clientWidth - 60, 60)),
-          y: Math.min(Math.max(p.y, 40), host.clientHeight - BOTTOM_SAFE),
-        };
+        const x = Math.min(Math.max(p.x, 60), Math.max(host.clientWidth - 60, 60));
+        const maxY = host.clientHeight - BOTTOM_SAFE;
+        let y = Math.min(Math.max(p.y, 40), maxY);
+        // Owner 11-24: the toast dodges the injury pills (a follow-up lands on the square the injury happened on, where
+        // the pill sits): the result stays readable, the toast moves above or below it (followToastDodgeY).
+        const el = followupPassiveEl.value;
+        const pillEls = el ? host.querySelectorAll<HTMLElement>('.ko-toast') : null;
+        if (el && pillEls && pillEls.length > 0) {
+          const hostRect = host.getBoundingClientRect();
+          const pills: PillRect[] = Array.from(pillEls, (pill) => {
+            const r = pill.getBoundingClientRect();
+            return { left: r.left - hostRect.left, top: r.top - hostRect.top, right: r.right - hostRect.left, bottom: r.bottom - hostRect.top, belowDice: pill.dataset.below === 'true' };
+          });
+          y = followToastDodgeY({ x, y, width: el.offsetWidth, height: el.offsetHeight, aboveFraction: FOLLOW_TOAST_ABOVE_FRACTION }, pills, { minY: 40, maxY }, ARMOUR_DICE_CLEARANCE_PX * renderer.cameraScale(),
+            followupDodge.seq === passive.seq ? followupDodge.y : null);
+        }
+        followupDodge = { seq: passive.seq, y }; // Sol r3: every frame's real position, with or without a pill in the way
+        followupPos.value = { x, y };
       }
     } else {
       // Interactive Follow up / Stay chip: keep it OFFSET beside the square so the
@@ -7388,6 +7502,16 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
     renderer.setO66PassRolls(null);
     return;
   }
+  // Owner 11-25 (bluxxt_the_new g1967504, "Couldn't bite the thrall"): while the server waits for a player pick in a
+  // Pass or Hand-off (the Bloodlust bite after the throw), the target squares stay off. The pick's own watcher turns
+  // them off when it arrives; the next server frame (a turn-clock flag in that game) re-armed them here, and a tap on
+  // the Thrall - who stands on a pass square - was then read as a pass-square tap, so the bite could not be sent.
+  if (serverPickHoldsThrowSurface()) {
+    renderer.setTilePick(false);
+    renderer.setO66MoveRolls(null);
+    renderer.setO66PassRolls(null);
+    return;
+  }
   const pendingPunt = o66PendingPunt.value;
   const puntStillOffered = !!currentGame && deriveClientState(currentGame, o66Ctx()) === 'PUNT'
     && isPuntTargeting(currentGame) && !!pendingPunt
@@ -8062,8 +8186,7 @@ watch([
 ], () => {
   if (!renderer) return;
   const g = gameStore.game.value;
-  const pendingTo = o66PendingThrowKind.value === 'fireball' ? null : o66PendingPass.value;
-  const to = o66PassDestination.value ?? pendingTo;
+  const to = o66PassDestination.value ?? o66PendingPass.value;
   const throwerId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
   const from = o66SubmittedPassProjection.value
     ? o66SubmittedPassProjection.value.origin
@@ -8303,8 +8426,7 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
   const step = () => {
     const host = pitchHost.value;
     let sq: [number, number] | null = null;
-    let label = o66PendingThrowKind.value === 'fireball' ? '🔥'
-      : o66PendingThrowKind.value === 'bomb' ? '💣' : '🏈';
+    let label = o66PendingThrowKind.value === 'bomb' ? '💣' : '🏈';
     const agLabel = aggroCueLabel();
     if (o66PendingPunt.value) { sq = o66PendingPunt.value; label = $t('hud.step.puntScatterPreview'); }
     else if (o66PassDestination.value) sq = o66PassDestination.value;
@@ -8317,8 +8439,7 @@ watch([o66PassDestination, o66PendingPass, o66PendingThrowKind, o66PendingPunt, 
     const p = renderer.squareToCanvas(sq);
     const g = gameStore.game.value;
     const clientState = g ? deriveClientState(g, o66Ctx()) : '';
-    const throwDestination = !!o66PassDestination.value
-      || (!!o66PendingPass.value && o66PendingThrowKind.value !== 'fireball');
+    const throwDestination = !!o66PassDestination.value || !!o66PendingPass.value;
     const throwerId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
     // Astra 10-15: a confirmed walk-then-pass keeps its submitted throw origin while the thrower walks (as the preview
     // watcher above does), so the Pass number and its DP part describe the square the ball is thrown from.
@@ -10500,9 +10621,19 @@ function placeCtxMenu(items: MenuItem[], x: number, y: number, playerId = '') {
 /** Owner o66r: FUMBBL-client behaviour — for a passer AT REST that has declared Pass, "Show pass template"
  *  surfaces the throwing-RANGE template (amber rings) + the walk reach, so a click on a range square throws.
  *  Arms the same overlay the PASS watch does, but on demand from the context menu. */
+/** Owner 11-25: a server player pick (a `pchoice:` prompt such as the Bloodlust bite) is waiting while the acting
+ *  player is in a Pass or Hand-off. The throw / hand-off target squares are not armed over it. Pass and Hand-off only
+ *  for now (owner: "we can add more later for the other picks"). */
+function serverPickHoldsThrowSurface(): boolean {
+  const g = gameStore.game.value;
+  if (!g || !gameStore.isPlaying.value || !gameStore.state.playerPick?.key.startsWith('pchoice:')) return false;
+  const st = deriveClientState(g, o66Ctx());
+  return st === 'PASS' || st === 'HAND_OVER';
+}
 function o66ArmPassTemplate(actingId: string) {
   const g = gameStore.game.value;
   if (!renderer || !g) return;
+  if (serverPickHoldsThrowSurface()) return; // owner 11-25: never over a waiting server pick
   renderer.selectPlayer(actingId);
   const hailMaryPass = isHailMaryPassAction(g);
   const st = deriveClientState(g, o66Ctx());
@@ -10781,20 +10912,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
   // users to declare a target". While the server waits in selectBlitzTarget for MY blitzer, a right-click anywhere on
   // the pitch is the cancel: gameStore.endActivation() sends the self-target (the same wire the End Activation button
   // uses there; a declared-but-unactivated blitz is refunded). Runs before any menu so it cannot also open one.
-  if (contextGame && String(contextGame.turnMode ?? '') === 'selectBlitzTarget' && actingId && gameStore.iControl(actingId)
-      && deriveClientState(contextGame, o66Ctx()) === 'SELECT_BLITZ_TARGET') {
-    // Owner 10-02 (S95): the store's Blitz guard dropped this as an unconfirmed end ("Blitz end blocked"), so the
-    // right-click did nothing. This gesture IS the owner-ruled cancel, and at this step the server keeps its own
-    // safeguard (StepSelectBlitzTarget: a self-target after the blitzer has acted raises its confirm-end dialog;
-    // before that it just cancels the target selection) - so it carries the confirmation token.
-    const cancels = endCancelsNothingElseUnanswered();
-    const sentBefore = gameStore.gameplaySendCount();
-    gameStore.endActivation({ blitzConfirmed: true });
-    clearO66Arms();
-    ctxMenu.visible = false;
-    cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
-    return;
-  }
+  if (cancelSelectBlitzTargetGesture()) { ctxMenu.visible = false; return; }
   // StepInitBlocking accepts CLIENT_ACTING_PLAYER{null} while waiting for Fury's
   // optional second target. Consume right-click here so it cannot also open a menu.
   if (furySecondBlockTargeting.value) {
@@ -10907,57 +11025,7 @@ function openContextMenu(target: ContextTarget, x: number, y: number) {
     // pending 2-click target), CLEAR it and keep the player selected (so they can re-plan). If NOTHING is planned,
     // DESELECT the player. A right-click ON a player still opens the action menu; left-click re-plans (onTilePick).
     if (!target.playerId) {
-      const gRc = gameStore.game.value;
-      const ttmKey = ttmActivationKey(gRc);
-      const actingId = String((gRc?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
-      const ttmCancel = ttmCancellationDecision({
-        isPlaying: gameStore.isPlaying.value,
-        myTurn: gameStore.myTurn.value,
-        controlsActingPlayer: !!actingId && gameStore.iControl(actingId),
-        activationKey: ttmKey,
-        cancelledKeys: ttmCancelledActivationKeys,
-        hasLocalTarget: !!o66ThrownMate.value || !!o66PendingPass.value,
-      });
-      if (ttmCancel === 'cancel-and-end' && ttmKey) {
-        ttmCancelledActivationKeys.add(ttmKey);
-        clearTtmTargetingSurface(); // retire ruler/destination immediately even if the ownership rail refuses
-        const cancels = endCancelsNothingElseUnanswered();
-        const sentBefore = gameStore.gameplaySendCount();
-        gameStore.endActivation(); // exact clientActingPlayer(null); one attempt per stable activation key
-        cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
-        return;
-      }
-      if (ttmCancel === 'already-cancelled') return;
-      const hasPlan = o66HasPlan()
-        || !!gameStore.armedGazeVictimId(); // owner 10-08: a right-click disarms the gaze victim, the activation stays
-      if (hasPlan) {
-        const cancelDeclaredFoul = !!o66PendingFoul.value
-          && !!gRc
-          && deriveClientState(gRc, o66Ctx()) === 'FOUL';
-        // Owner 10-07: cancelling a declared Foul asks first ("Cancel Foul"). The arms stay while the prompt is open, so
-        // Go back leaves the nomination exactly as it was; confirming clears them and sends the same endActivation.
-        if (cancelDeclaredFoul) { requestEndActivation(); return; }
-        clearO66Arms();
-        playCancelCue();
-      } else {
-        // #231 (owner-fg 07-29): a right-click DURING A BLITZ activation must CONFIRM before ending — a stray
-        //   right-click on empty was silently firing endActivation and burning the once-per-turn blitz. Gate ONLY
-        //   the blitz case behind the shared "End your blitz?" confirm (confirmEndActivation mirrors the direct branch below);
-        //   every other activation keeps the direct deselect/end.
-        const rcState = gRc ? deriveClientState(gRc, o66Ctx()) : '';
-        // Owner 10-04 (g1949714): Hand-off and Pass join them - a right-click that missed the receiver's token
-        // ended the hand-off with the ball in hand.
-        // Owner 10-07: a declared Foul joins them.
-        if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || declaredActionEndConfirmKind(rcState) || gameStore.state.gazeIntent) {
-          requestEndActivation();
-          return;
-        }
-        // Owner 2026-07-13: no plan pending → DESELECT. In o66 a left-click auto-declared Move (activating the
-        // player server-side), so the renderer-local clearSelection alone is a no-op — the real deselect is the
-        // implicit end-activation (store.ts endActivation, which backs the "End Move" menu). Safe no-op when
-        // nothing is active. This is what arms right-click-empty to actually clear the on-select state.
-        deselectByClickOff();
-      }
+      cancelGestureOnEmptyPitch();
       return;
     }
     openO66Menu(target, x, y);
@@ -11154,7 +11222,7 @@ watch(() => settings.reduceFlashing, (on) => renderer?.setReduceFlashing(on));
 
 /** Shared rail 5 nominate/confirm arm; changing the square or action re-nominates. TTM uses the same selector,
  * destination cue, confirm gesture, and teardown as a regular throw while retaining its exact upstream sender. */
-function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' | 'fireball' | 'throwTeamMate', fromConfirm = false): void {
+function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' | 'throwTeamMate', fromConfirm = false): void {
   if (o66PendingThrowKind.value === kind && o66PendingPass.value
     && o66PendingPass.value[0] === square[0] && o66PendingPass.value[1] === square[1]) {
     if (!fromConfirm && !touchSecondTapCommits()) return; // touch mode: only Confirm throws
@@ -11170,7 +11238,6 @@ function nominateOrConfirmThrow(square: [number, number], kind: 'pass' | 'bomb' 
       clearTtmTargetingSurface();
       return;
     } else if (kind === 'bomb') gameStore.sendBombTarget(square);
-    else if (kind === 'fireball') gameStore.resolveSquarePick(square);
     else if (!commitPlannedPassFromDestination(null, square, null)) sendDirectPassWithBridge(square);
     o66PendingPass.value = null;
     o66PendingThrowKind.value = null;
@@ -11887,6 +11954,9 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       else popup.visible = false;
       return;
     case 'ask-end-activation':
+      // Level 1 = a plotted Foul's "Cancel Foul" card (the right-click asks the same one). Level 3 = ending the
+      // activation: owner 11-23, exactly the right-click cancel (same cards, same wire, none where it has none).
+      if (decision.level === 3) { endActivationByEscape(); return; }
       askEndActivation(decision.confirmKind);
       return;
     case 'cancel-hit-and-run':
@@ -12197,6 +12267,13 @@ const touchStages = createTouchStageHolder(touchStageKeyNow, (stage) => {
   if (stage) touchNotes.note('stage');
 }, () => gameStore.gameplaySendCount());
 watch(touchStageKeyNow, () => touchStages.sync());
+// Release review (Sol, P2): a staged Fireball square dies with its preview (the preview moved or cleared).
+watch(() => gameStore.state.wizardTargetPreview?.seq ?? null, () => {
+  const staged = touchStages.current();
+  if (staged?.kind !== 'fireball') return;
+  const at = staged.target.split('@')[1]?.split(',').map(Number);
+  if (!at || at.length !== 2 || !fireballPreviewShows([at[0]!, at[1]!])) touchStages.clear();
+});
 /** Round-2 findings 3 / 6: ONE current preview (game/touchPreview.ts). Every preview the view creates is reported
  *  (synchronously, inside the tap that made it); the newest is current and every unrelated one is retired. */
 const touchPreviewCurrent = ref<TouchPreviewKind | null>(null);
@@ -12675,6 +12752,16 @@ const rerollOptionsShown = computed(() => {
   return activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(options) : options;
 });
 const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
+/** Owner 11-25: a card offering the Mascot buttons now also offers the plain Team reroll. Its controller default stays
+ *  the 1.0.335 one: that card had no data-pad-primary control, so the default was its first answer in the shown order
+ *  (padRerollOrder in controller mode). That answer is marked here; null on every other card (the base rule applies). */
+const rerollBaseDefaultSource = computed<string | null>(() => {
+  const options = gameStore.state.reRollPrompt?.options ?? [];
+  if (!options.some((o) => o.source === 'Team Mascot') || !options.some((o) => o.source === 'Team ReRoll' && !o.teamKind)) return null;
+  const base = options.filter((o) => !(o.source === 'Team ReRoll' && !o.teamKind));
+  const shown = activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(base) : base;
+  return shown[0]?.source ?? null;
+});
 /** S36: a single-skill reRollModifierChoice option takes that skill's icon; every other option keys the icon by its source. */
 /** Owner 11-21: "Pro, then Team reroll" (Pro TRR, and Pro Drive Bonus, which is presented as it) gets the blended Pro / Team
  *  reroll icon (ProTrrBlendIcon) wherever the Pro answer beside it shows the Pro icon. The block card and the Multiple
@@ -13020,12 +13107,14 @@ onMounted(async () => {
   const pendingSquarePick = gameStore.state.squarePick;
   const zapSelected = !!gameStore.state.wizardTargetConfirm
     && pendingSquarePick?.kind === 'wizard' && pendingSquarePick.skill === 'Zap';
-  renderer.setTargetSelectPick(zapSelected ? null : pendingSquarePick?.squares ?? null,
+  // Owner 11-22: a view that mounts with the Fireball pick already open (reload, rejoin) arms it the way the pick
+  // watcher does - the whole pitch, no reticles. It used to draw the old field of crosshairs here.
+  if (pendingSquarePick?.kind === 'wizard' && pendingSquarePick.skill === 'Fireball') renderer.setTilePick(true, null);
+  else renderer.setTargetSelectPick(zapSelected ? null : pendingSquarePick?.squares ?? null,
     zapSelected ? undefined : pendingSquarePick?.skill);
-  const wizardPreview = gameStore.state.wizardTargetPreview;
-  renderer.setO66PassRolls(wizardPreview
-    ? new Map(wizardPreview.playerSquares.map((square) => [`${square[0]},${square[1]}`, 4]))
-    : null);
+  const wizardPreview = gameStore.state.wizardTargetPreview?.hover ? gameStore.state.wizardTargetPreview : null; // hover only (Sol)
+  renderer.setFireballAim(wizardPreview?.square ?? null, wizardPreview?.playerSquares ?? []);
+  renderer.setO66PassRolls(null);
   const pendingKickSkill = gameStore.state.kickSkill;
   renderer.setKickSkillCandidates(pendingKickSkill?.ballCoordinate ?? null, pendingKickSkill?.ballCoordinateWithKick ?? null);
   trackKickElection();
@@ -13068,6 +13157,10 @@ onMounted(async () => {
   renderer.setTackleZoneMode(settings.tackleZoneMode);
   renderer.setSpectatorTackleZones(spectatorTackleZones.value, rendererSpectatorTackleZoneMode.value); // owner 10-12: spectate / replay only
   renderer.showDefaultSkills = settings.showDefaultSkills;
+  // Owner 11-25 (JLeav, replay of g1948438): the skill display (icons or markings, their positions, the per-player
+  // maps) was only pushed by watchers, so a renderer mounted over a game that was already loaded (replay, a mode
+  // switch) kept the renderer's defaults - icons on, mark labels at the feet - until something else changed.
+  applyMarkings();
   renderer.showPositionRings = settings.showPositionRings;
   // owner 2026-07-08: block-dice preview toggle — arm for the active player if on
   updateBlockPreview(); // owner 2026-07-07: action/target-gated block-dice preview
@@ -13106,6 +13199,7 @@ onMounted(async () => {
   renderer.setStandStyle(settings.stadiumStands); // owner 09-25: stand art choice
   renderer.setPitchOrientation(settings.pitchOrientation); // B8-8
   renderer.setFlatMode(settings.flatRender); // owner 2026-07-04f: flat (non-iso) mode
+  renderer.setClassicNsPerspective(settings.classicNsPerspective); // owner 11-25: classic N-S perspective (opt-in)
   renderer.setUniformFigures(uniformFiguresEffective.value); // owner 09-09: one figure scale + softer far edge (per orientation 09-10)
   renderer.setDugoutCounts(settings.dugoutCounts); // owner 10-06: before the first draw (no app yet -> no redraw)
   renderer.stadiumEnabled = settings.showStadium; // owner 08-19: applied pre-first-draw, no redraw needed
@@ -13287,11 +13381,16 @@ onMounted(async () => {
           // the click). A declared Blitz / Foul routes to its own End confirmation (the orchestrator-sanctioned path) but
           // remembers no switch; anything else is feedback only. The opt-in deferred two-click switch below (owner 10-05,
           // default off) keeps its explicit second click as the confirmation.
-          if (ix.disposition === 'end' && !settings.deferFriendlySwitchEnd) {
-            if (requiresBlitzEndConfirmation(clickState)
-                || (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings))) { requestEndActivation(); return; }
+          // Owner 11-23 (RickWreckless g1966709: a click on a teammate to read his card ended a Blitz that had moved and
+          // blocked): a Blitz that HAS acted is treated like any other acted player - the click sends nothing, with or
+          // without the End Blitz card (switched off, that card's gesture goes straight out), and under the deferred
+          // two-click switch too (Sol r1: the store refuses an unconfirmed Blitz end, which left the surface torn
+          // down). The clicked teammate's card still opens (the coach clicked to read it). A Foul keeps its card.
+          if (ix.disposition === 'end' && (!settings.deferFriendlySwitchEnd || requiresBlitzEndConfirmation(clickState))) {
+            if (clickState === 'FOUL' && endActivationConfirmEnabled('foul', settings)) { requestEndActivation(); return; }
             renderer?.selectPlayer(clickActingId);
             showMidActivationToast(g, clickActingId);
+            autoShowPopup(ix.playerId);
             return;
           }
           if (requiresBlitzEndConfirmation(clickState)) { o66SwitchAfterEnd.value = { fromId: clickActingId, toId: ix.playerId }; requestEndActivation(); return; }
@@ -14066,13 +14165,23 @@ onMounted(async () => {
     // Legacy server-armed picks (Trickster / unknown-call coordinate) take precedence — dialog-driven.
     if (gameStore.state.squarePick) {
       if (gameStore.state.squarePick.kind === 'wizard' && gameStore.state.squarePick.skill === 'Fireball') {
-        // Round-2 finding 2: touch mode stages the Fireball square against this pick occurrence; Confirm sends exactly
-        // resolveSquarePick(square) (the pass rail's Confirm needs an acting player, which a wizard has not).
+        // Owner 11-21: one click on a legal square casts, as upstream's ClientStateWizard.clickOnField ->
+        // WizardLogicModule.handleClick sends sendWizardSpell at once (bb2025 asks first when its own players are hit:
+        // the store's friendly-fire card). An illegal square sends nothing (resolveSquarePick re-checks legality).
+        // Round-2 finding 2: touch mode has no hover, so the first tap previews (blast, victims' chips, cue) and stages
+        // the square against this pick occurrence; only Confirm casts (the bomb throw's touch idiom). An illegal tap
+        // previews nothing and stages nothing.
         const fireballPick = gameStore.state.squarePick;
-        if (touchStageTap({ kind: 'fireball', target: `${fireballPick.seq}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
-          revalidate: () => gameStore.state.squarePick === fireballPick,
-          commit: () => gameStore.resolveSquarePick(c) })) return;
-        nominateOrConfirmThrow(c, 'fireball');
+        if (touchModeActive.value) {
+          // Release review (Sol, P2): an illegal tap clears the preview AND the staged square; Confirm also re-checks
+          // that the preview on screen is still this square's (fireballPreviewShows).
+          if (!gameStore.previewFireballSquare(c, 'touch')) { touchStages.clear(); return; }
+          touchStageTap({ kind: 'fireball', target: `${fireballPick.seq}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
+            revalidate: () => gameStore.state.squarePick === fireballPick && fireballPreviewShows(c),
+            commit: () => gameStore.resolveSquarePick(c) });
+          return;
+        }
+        gameStore.resolveSquarePick(c);
       } else {
         const pick = gameStore.state.squarePick;
         if (touchStageTap({ kind: 'squarePick', target: `${pick.seq}@${c[0]},${c[1]}`, label: $t('hud.confirm'),
@@ -14412,7 +14521,7 @@ onMounted(async () => {
   };
   renderer.setPassRuler(hailMaryPassRulerFrom(), null);
   // FUMBBL Controls (owner 11-03): the Automove hover path, and the Right Click section's behaviour (both layers).
-  renderer.onHoverSquare = (coord) => fumbblHover(coord as [number, number] | null);
+  renderer.onHoverSquare = (coord) => { fireballHover(coord as [number, number] | null); fumbblHover(coord as [number, number] | null); };
   renderer.onRightClick = (x, y) => pitchRightClick(x, y);
   renderer.oneClickActionTargets = () => fumbblControls(); // rig g1100 #1: one click throws / hands off (no card)
   // path-planning clicks shouldn't leave a stale stats card behind
@@ -15623,7 +15732,12 @@ const endGamePhaseLabel = computed(() => END_GAME_PHASE_LABELS[gameStore.state.e
 watch(gameOver, (over) => {
   if (over) gameStore.state.activePlayerId = null;
 });
-watch(finalPresentationReady, (ready) => renderer?.setBoardCleared(ready));
+/** Owner 11-25: REPLAY only. "Back to replay" on the end-game pane hides the report and leaves the coach in the replay at
+ *  the final position (transport usable); see backToReplay / showReplayResult below. Client-only: nothing is sent. */
+const replayReportDismissed = ref(false);
+// The board clears with the final presentation (owner 2026-07-15); a replay coach who stepped back into the replay from
+// the report sees the final position instead of an empty pitch.
+watch(() => finalPresentationReady.value && !replayReportDismissed.value, (cleared) => renderer?.setBoardCleared(cleared));
 
 // Owner 09-25: the end-game projections live in game/postGameProjection.ts (shared with the cached Details popup).
 const endGamePublic = computed(() => (gameOver.value ? postGamePublic(gameStore.game.value) : null));
@@ -15950,10 +16064,50 @@ const assignScreenActive = computed(() => gameStore.isPlaying.value
   && gameStore.state.endGame.phase === 'assignTouchdowns');
 // Owner 08-19: the one endgame surface — the settled FINAL panel (all seats, existing gates), or the
 // spectate seat's earlier MVP-pending presentation (result card + placeholder + exit pair).
-const finalPostGameVisible = computed(() => !!postGame.value && !postGameDismissed.value
+const postGameReportReady = computed(() => !!postGame.value
   && !gameStore.state.playerPick && !mvpScreenActive.value && !assignScreenActive.value && !!gameStore.state.endGameSettled);
+const finalPostGameVisible = computed(() => postGameReportReady.value && !postGameDismissed.value && !replayReportDismissed.value);
+// Owner 11-25 (replay "Back to replay"): the dismissal lasts while the coach roams the replay. The report returns when the
+// replay reaches the end of the game again (the report becomes ready again, or the cursor arrives at the last command),
+// from the Turns list's "Show result" entry, and the dismissal never outlives the replay / game it was made in.
+function backToReplay(): void {
+  if (props.mode === 'replay') replayReportDismissed.value = true;
+}
+/** The Turns list's "Show result" entry (owner 11-25): to the end of the game with the report up. The dismissal clears
+ *  only once the replay is actually at the end: a seek cannot start while a command is presenting (the controller
+ *  rejects it; the Turns list is disabled then), and then nothing changes. At the end with the report up: a no-op. */
+function showReplayResult(): void {
+  if (props.mode !== 'replay' || !gameStore.replay.active) return;
+  const { phase, cursor, total } = gameStore.replay.status;
+  if (cursor < total) {
+    if (phase !== 'ready') return;
+    try { gameStore.replaySeek(total); } catch (error) { console.warn('[replay] Show result: seek to the end failed', error); return; }
+    if (gameStore.replay.status.cursor !== total) return;
+  }
+  replayReportDismissed.value = false;
+}
+// Review 11-25 (note A): the dismissal exists only inside a replay.
+watch(() => props.mode === 'replay' && gameStore.replay.active, (inReplay) => {
+  if (!inReplay) { replayReportDismissed.value = false; replayReportSeen.value = false; }
+});
+/** The Turns list's "Show result" entry: offered when the replay ends with an end-game report (the store reads that from the
+ *  end-game handler over the folded stream), and in any case once a report has been shown in this replay session, so
+ *  Back to replay never strands the coach without a way back. Never on a replay that shows no report. */
+const replayReportSeen = ref(false);
+const replayHasResult = computed(() => props.mode === 'replay' && (gameStore.replay.hasResult || replayReportSeen.value));
+// Review 11-25 (Sol minor): the replay exit bar's pad scope stands down while the report's Dice pane or the roster
+// pop-out is over it, so controller A can never press Return to Menu behind them.
+const pgDiceOpen = ref(false);
+const replayExitPadBlocked = computed(() => pgDiceOpen.value || rosterPopoutOpen.value);
+watch(postGameReportReady, (ready, was) => { if (ready && !was) replayReportDismissed.value = false; });
+watch(() => gameStore.replay.status.cursor, (cursor, was) => {
+  if (cursor !== was && cursor >= gameStore.replay.status.total) replayReportDismissed.value = false;
+});
+watch(() => gameStore.replay.sessionKey, () => { replayReportDismissed.value = false; replayReportSeen.value = false; });
+watch(() => gameStore.game.value?.gameId, () => { replayReportDismissed.value = false; });
 const pgSurface = computed(() => finalPostGameVisible.value ? postGame.value
   : spectatorMvpPendingActive.value ? endGamePublic.value : null);
+watch(() => !!pgSurface.value, (up) => { if (!up) pgDiceOpen.value = false; });
 // Owner 09-25: the pane's input — the settled game JSON + both sides' dice tallies + the end-report feed. The
 // same shape the Details cache stores (portraits are captured at settle time; live ones come from the renderer).
 const liveSnapshot = computed<PostGameSnapshot | null>(() => {
@@ -15984,7 +16138,10 @@ function capturePostGame(): void {
     defectors: snap.defectors ? [...snap.defectors] : null,
   }).catch((error: unknown) => console.warn('[postGame] cache write failed', error));
 }
-watch(finalPostGameVisible, (on) => { if (on) capturePostGame(); });
+watch(finalPostGameVisible, (on) => {
+  if (on) capturePostGame();
+  if (on && props.mode === 'replay' && gameStore.replay.active) replayReportSeen.value = true;
+});
 // Owner 09-06: while ANY end-game surface is up (result window / MVP nominate), the log panel and the chat toasts
 // ride ABOVE it (z 57) and stay interactive in every mode — they sat under the full-screen overlay before.
 const endGameFront = computed(() => !!pgSurface.value || mvpScreenActive.value || assignScreenActive.value);
@@ -16388,6 +16545,105 @@ function o66HasPlan(): boolean {
   return !!o66PendingMove.value || !!o66PendingPass.value || !!o66PendingPunt.value || !!o66PendingHandOff.value
     || !!o66PendingFoul.value || !!o66ThrownMate.value || !!o66PendingBlock.value || !!o66AggroStage.value;
 }
+const BLITZ_TARGET_CANCEL_REPEAT_MS = 1500;
+let blitzTargetCancelSent: { actingId: string; at: number; sends: number } = { actingId: '', at: 0, sends: -1 };
+/** The "Choose a blitz target" cancel (owner 10-01 S64, 10-02 S95): while the server waits in selectBlitzTarget for MY
+ *  blitzer, the cancel gesture sends the self-target with the confirmation token (the server keeps its own safeguard
+ *  for a blitzer that has acted). True when this gesture was that cancel. Shared by right-click and Escape. */
+function cancelSelectBlitzTargetGesture(): boolean {
+  const g = gameStore.game.value;
+  const actingId = String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!g || String(g.turnMode ?? '') !== 'selectBlitzTarget' || !actingId || !gameStore.iControl(actingId)
+      || deriveClientState(g, o66Ctx()) !== 'SELECT_BLITZ_TARGET') return false;
+  // Sol r1 (P2): this cancel is a self-target, outside the store's one-cancel latch, so a second quick press would send
+  // it again before the server answers. A repeat is the same blitzer with NOTHING sent since that cancel (Sol r3: a
+  // fresh declaration of the same player sends first, so its cancel is never taken for a repeat); the window is the
+  // watchdog (fail open).
+  const now = performance.now();
+  if (blitzTargetCancelSent.actingId === actingId && blitzTargetCancelSent.sends === gameStore.gameplaySendCount()
+      && now - blitzTargetCancelSent.at < BLITZ_TARGET_CANCEL_REPEAT_MS) return true;
+  const cancels = endCancelsNothingElseUnanswered();
+  const sentBefore = gameStore.gameplaySendCount();
+  gameStore.endActivation({ blitzConfirmed: true });
+  clearO66Arms();
+  cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
+  blitzTargetCancelSent = { actingId, at: now, sends: gameStore.gameplaySendCount() };
+  return true;
+}
+/** The cancel gesture on empty pitch (a right-click on grass; owner 11-23: Escape's end step too, so both raise the
+ *  same cards and send the same wire): a plan in progress is cleared, otherwise the activation is ended - through
+ *  its confirmation card where one exists (Blitz, Punt, ball actions, Foul, Gaze), directly everywhere else. */
+function cancelGestureOnEmptyPitch(): void {
+  const gRc = gameStore.game.value;
+  const ttmKey = ttmActivationKey(gRc);
+  const actingId = String((gRc?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  const ttmCancel = ttmCancellationDecision({
+    isPlaying: gameStore.isPlaying.value,
+    myTurn: gameStore.myTurn.value,
+    controlsActingPlayer: !!actingId && gameStore.iControl(actingId),
+    activationKey: ttmKey,
+    cancelledKeys: ttmCancelledActivationKeys,
+    hasLocalTarget: !!o66ThrownMate.value || !!o66PendingPass.value,
+  });
+  if (ttmCancel === 'cancel-and-end' && ttmKey) {
+    ttmCancelledActivationKeys.add(ttmKey);
+    clearTtmTargetingSurface(); // retire ruler/destination immediately even if the ownership rail refuses
+    const cancels = endCancelsNothingElseUnanswered();
+    const sentBefore = gameStore.gameplaySendCount();
+    gameStore.endActivation(); // exact clientActingPlayer(null); one attempt per stable activation key
+    cancelCueIfSent(cancels, sentBefore); // Astra 10-19 (P2): a refused end stays silent
+    return;
+  }
+  if (ttmCancel === 'already-cancelled') return;
+  const hasPlan = o66HasPlan()
+    || !!gameStore.armedGazeVictimId(); // owner 10-08: a right-click disarms the gaze victim, the activation stays
+  if (hasPlan) {
+    const cancelDeclaredFoul = !!o66PendingFoul.value
+      && !!gRc
+      && deriveClientState(gRc, o66Ctx()) === 'FOUL';
+    // Owner 10-07: cancelling a declared Foul asks first ("Cancel Foul"). The arms stay while the prompt is open, so
+    // Go back leaves the nomination exactly as it was; confirming clears them and sends the same endActivation.
+    if (cancelDeclaredFoul) { requestEndActivation(); return; }
+    clearO66Arms();
+    playCancelCue();
+  } else {
+    // #231 (owner-fg 07-29): a right-click DURING A BLITZ activation must CONFIRM before ending — a stray
+    //   right-click on empty was silently firing endActivation and burning the once-per-turn blitz. Gate ONLY
+    //   the blitz case behind the shared "End your blitz?" confirm (confirmEndActivation mirrors the direct branch below);
+    //   every other activation keeps the direct deselect/end.
+    const rcState = gRc ? deriveClientState(gRc, o66Ctx()) : '';
+    // Owner 10-04 (g1949714): Hand-off and Pass join them - a right-click that missed the receiver's token
+    // ended the hand-off with the ball in hand.
+    // Owner 10-07: a declared Foul joins them.
+    if (requiresBlitzEndConfirmation(rcState) || rcState === 'PUNT' || declaredActionEndConfirmKind(rcState) || gameStore.state.gazeIntent) {
+      requestEndActivation();
+      return;
+    }
+    // Owner 2026-07-13: no plan pending → DESELECT. In o66 a left-click auto-declared Move (activating the
+    // player server-side), so the renderer-local clearSelection alone is a no-op — the real deselect is the
+    // implicit end-activation (store.ts endActivation, which backs the "End Move" menu). Safe no-op when
+    // nothing is active. This is what arms right-click-empty to actually clear the on-select state.
+    deselectByClickOff();
+  }
+}
+/** Owner 11-23 ("ensure that Esc hits the same modals as a right-click cancel"): Escape's end-activation step is the
+ *  right-click cancel, step for step: the blitz-target cancel, Fury's second target, then the empty-pitch gesture. */
+function endActivationByEscape(): void {
+  // Sol r1 (P1): the right-click is swallowed while MY acting player's walk is still on screen or its plan is still
+  // sending steps (owner 10-04) - so is Escape, through the same gate (it fails open on a stalled token).
+  const actingId = String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (gameStore.isPlaying.value && actingId && gameStore.iControl(actingId) && renderer) {
+    const seen = renderer.movementOnScreen(actingId);
+    if (o66RightClickGate.swallow(actingId, { inFlight: seen.inFlight || gameStore.isPlanWalking(actingId), progress: seen.progress }, performance.now())) return;
+  }
+  // The right-click's order (Sol r3 P1): the blitz-target cancel and Fury's second target come BEFORE the dialog gate -
+  // the server's selectBlitzTarget dialog is itself a decision surface, and would otherwise swallow its own cancel.
+  if (cancelSelectBlitzTargetGesture()) { ctxMenu.visible = false; return; }
+  if (furySecondBlockTargeting.value) { gameStore.endActivation(); ctxMenu.visible = false; return; }
+  if (gameStore.interactiveDecisionSurfaceOpenExceptKickEmPicker()) return; // a dialog owns the gesture, as for right-click
+  cancelGestureOnEmptyPitch();
+}
+
 /** Owner 2026-07-13: the right-click-on-grass DESELECT (no plan pending). In o66 a left-click auto-declared Move, so the
  *  real deselect is the implicit end-activation (a safe no-op when nothing is active). Shared with the pad's B. */
 function deselectByClickOff(): void {
@@ -16937,7 +17193,8 @@ watch(() => [
           :camera-scale="() => renderer?.cameraScale() ?? 1"
           :to-square="telestratorSquareAt" :square-center="telestratorSquareCenter"
         />
-        <ReplayControls v-if="props.mode === 'replay' || gameStore.spectatorReview.value.active" :review="gameStore.spectatorReview.value.controls" />
+        <ReplayControls v-if="props.mode === 'replay' || gameStore.spectatorReview.value.active" :review="gameStore.spectatorReview.value.controls"
+          :result-entry="replayHasResult" @show-result="showReplayResult" />
         <!-- BB2-style HUD (owner 2026-07-02): coach corners + center cluster -->
         <div v-if="homePanel && !inducePhaseOpen" class="coach-panel home ui-panel" :class="{ 'ui-customizing': settings.uiCustomize, 'ui-resizing': panelScaleResizeActive['coach-home'] }"
           :data-playing="homePanel.playing" :style="customPanelStyle('coach-home')">
@@ -17186,6 +17443,17 @@ watch(() => [
         </div>
         <!-- Owner 10-10 / 10-11: "Player portraits off" / "Player portraits on". Same slot and look as the
              interceptor-wait line (one row lower when both are up); never takes a click. -->
+        <!-- Move batching decision 12: "Move stopped early. Report this?" - non-blocking, one row below the lines above. -->
+        <div v-if="moveStopBanner && !reportOpen" class="chat-toast-stack move-stop-banner" data-testid="move-stop-banner" role="status"
+          :style="{ top: ((centerPanelBox?.bottom ?? 0) + 8 + (interceptWaitText ? 48 : 0) + (playerCardsNotice ? 48 : 0)) + 'px', left: '50%', transform: 'translateX(-50%)' }">
+          <div class="chat-toast move-stop-toast">
+            <span class="chat-toast-text">{{ moveStopBanner.text }}</span>
+            <span class="move-stop-actions">
+              <button type="button" class="move-stop-btn primary" data-testid="move-stop-report" @click.stop="reportMoveStop">{{ $t('hud.report') }}</button>
+              <button type="button" class="move-stop-btn" data-testid="move-stop-dismiss" @click.stop="gameStore.dismissMoveStopReport()">{{ $t('hud.notNow') }}</button>
+            </span>
+          </div>
+        </div>
         <div v-if="playerCardsNotice" class="chat-toast-stack" data-testid="player-cards-notice" role="status"
           :style="{ top: ((centerPanelBox?.bottom ?? 0) + (interceptWaitText ? 56 : 8)) + 'px', left: '50%', transform: 'translateX(-50%)', pointerEvents: 'none' }">
           <div class="chat-toast">
@@ -17469,13 +17737,19 @@ watch(() => [
              MVP-pending), finalPostGameVisible opens the Stats/MVP window once the server's data settles. -->
         <PostGamePanel v-if="pgSurface && liveSnapshot" :snapshot="liveSnapshot" :show-stats="finalPostGameVisible" :mvp-roll="mvpRoll"
           v-model:phase="postGamePhase" :default-roster-side="gameStore.myTeamIsHome.value ? 'home' : 'away'" :local-side="gameStore.blockPresentationSeat.value" :portrait-for="pgRosterPortrait"
-          :skill-mode="skillMode" :icon-style="effectiveIconStyle">
+          :skill-mode="skillMode" :icon-style="effectiveIconStyle" @dice-open="pgDiceOpen = $event">
           <template #exit>
             <!-- Owner 08-19: the spectate seat's exit pair — appears with the MVP stage and REMAINS once the final panel
                  lands. Routes via the blade shell (never the deprecated legacy browser overlay). -->
             <div v-if="spectatorExitVisible" class="pg-window pg-exit">
               <button type="button" class="pg-action" @click="onEndGameExit('menu')">{{ $t('hud.returnToMenu') }}</button>
               <button type="button" class="pg-action pg-action-primary" @click="onEndGameExit('browser')">{{ $t('hud.spectateAnotherGame') }}</button>
+            </div>
+            <!-- Owner 11-25: the REPLAY seat's bar adds "Back to replay" AFTER Return to Menu (pad default focus stays on Return
+                 to Menu): it hides the report and leaves the coach in the replay at the final position. Client-only. -->
+            <div v-else-if="mode === 'replay'" v-pad-focus="{ priority: PAD_FOCUS_PRIORITY.info, disabled: replayExitPadBlocked }" class="pg-window pg-exit" data-testid="pg-exit-replay">
+              <button type="button" class="pg-action" @click="onEndGameExit('menu')">{{ $t('hud.returnToMenu') }}</button>
+              <button type="button" class="pg-action" data-testid="pg-back-to-replay" @click="backToReplay">{{ $t('hud.backToReplay') }}</button>
             </div>
             <!-- Owner 09-23: the play seat's Return to Menu sits centred under the tab card (was header-right since 09-15). -->
             <div v-else-if="mode !== 'spectate'" class="pg-window pg-exit">
@@ -18058,8 +18332,10 @@ watch(() => [
           </div>
         </div>
 
-        <!-- Upstream DialogUseInducement: every server-offered inducement/card plus decline. -->
-        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer' }" class="yesno-card select-skill-card">
+        <!-- Upstream DialogUseInducement: every server-offered inducement/card plus decline. Fireball round 4: while a
+             wizard square pick is armed the card is a pitch scope (as the pick bars are): A and the stick stay with the
+             pad crosshair to aim and cast, B still reaches its Cancel. -->
+        <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer', pitch: gameStore.state.squarePick?.kind === 'wizard' }" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
           <div class="skill-select-list">
             <span class="rr-badged" v-for="option in gameStore.state.inducementUse.options" :key="`${option.kind}:${option.value}`">
@@ -18853,7 +19129,8 @@ watch(() => [
         <!-- Owner 2026-07-06: the passive toast mounts to the player's HEAD — centred
              over it and sitting just above (translate -50%,-100%) so it's clear who
              is staying / following. -->
-        <div v-else-if="gameStore.state.followupIndicator && followupPos" class="followup-chip passive head-mounted"
+        <div v-else-if="gameStore.state.followupIndicator && followupPos" ref="followupPassiveEl" class="followup-chip passive head-mounted"
+          data-testid="followup-passive-toast"
           :style="{ left: followupPos.x + 'px', top: followupPos.y + 'px' }">
           <div class="fu-title">
             {{ gameStore.state.followupIndicator.playerName }}
@@ -18896,7 +19173,7 @@ watch(() => [
         <template v-for="view in injuryPillViews" :key="view.key">
         <div v-if="koToastPositions[view.key]" class="ko-toast"
           :class="{ 'is-casualty': view.casualty, 'is-reserves': view.reserves }"
-          :data-side="view.pill.side"
+          :data-side="view.pill.side" :data-below="koToastPositions[view.key]!.below ? 'true' : 'false'"
           :style="{ left: koToastPositions[view.key]!.x + 'px', top: (koToastPositions[view.key]!.y - (koToastPositions[view.key]!.below ? 0 : 58)) + 'px' }">
           <!-- Owner 2026-07-08: a CASUALTY names the specific injury (server-resolved result);
                KO keeps the compact K.O. + name. -->
@@ -19178,6 +19455,16 @@ watch(() => [
               :title="$t('hud.teamMascotThenTeam')" @click="gameStore.resolveBlockPartial('mascotTrr')">
               <span>{{ $t('hud.mascotRr') }}</span>
             </button>
+            <!-- Owner 11-25 (supersedes 07-12): the plain Team reroll beside the Mascot buttons when TRR is offered too
+                 (mascotTrr = MASCOT + TRR), as upstream's block dialog offers it (DialogBlockRollProperties :196-205,
+                 teamReRollSources(includeMascot = true)). AFTER them, so the card's default control (the first enabled one,
+                 cardFocus defaultControl) stays what it was in 1.0.335. Same answer as the Team reroll button above. -->
+            <button v-if="gameStore.state.blockPartial.teamRR && gameStore.state.blockPartial.mascotTrr" class="bp-team bp-team-beside-mascot"
+              :title="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
+              <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
+              <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                :title="$t('hud.teamRerollsAvailableBlockpartialteamrero', { blockPartialTeamReRolls })">{{ blockPartialTeamReRolls }}</span>
+            </button>
             <!-- Current server (c66198ac4): a drive bonus / Leader reroll replaces the plain team button, and the Mascot
                  falls back to it (upstream ReRollSourceComposer.teamReRollSources + the fallback question). -->
             <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button (its art, its title),
@@ -19231,7 +19518,7 @@ watch(() => [
                 :class="{ 'bp-die-tumbling': !!mbrRowTumble(row)?.tumbling.includes(i), 'mbr-picked': row.selectedIndex === i }"
                 :data-armed="mbrDieMode?.targetId === row.targetId"
                 :data-readonly="mbrDieState(row).readonly"
-                :disabled="mbrDieState(row).disabled"
+                :disabled="mbrDieState(row).disabled || mbrLatched"
                 :title="mbrDieMode?.targetId === row.targetId ? $t('hud.mbrRow.rerollThisDie') : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + $t('hud.mbrRow.notSelectableInThis'))"
                 @click="multiBlockPickDie(row, i)">
                 <img :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />
@@ -19242,23 +19529,23 @@ watch(() => [
                  text (icon rides above it when icons are enabled) — same rule as the single-block blockPartial
                  options. Team Re-roll and Team Mascot below keep their existing art + count chip / caption. -->
             <div v-if="multiBlockDialogMine" class="mbr-actions">
-              <button v-if="row.brawler" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
+              <button v-if="row.brawler" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" :alt="$t('hud.mbrRow.brawler')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.brawler') }}</span>
               </button>
               <!-- Hatred (Single Skull → Hatred, upstream Hatred.java): fires immediately like Brawler above —
                    answered CLIENT_USE_HATRED via sendMultiBlockHatred, not the generic reRollSource path. -->
-              <button v-if="row.singleSkullLabel" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="gameStore.sendMultiBlockHatred(row.targetId)">
+              <button v-if="row.singleSkullLabel" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="mbrSubmit(() => gameStore.sendMultiBlockHatred(row.targetId))">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)" :src="skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)!" :alt="row.singleSkullLabel" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle))" class="bp-opt-label">{{ row.singleSkullLabel }}</span>
               </button>
-              <button v-if="row.pro" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
+              <button v-if="row.pro" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
                 :title="$t('hud.mbrRow.pro')" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
               <span class="rr-badged" v-for="opt in row.proComposite" :key="opt.kind">
-                <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
+                <button :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
                   :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'proComposite' && mbrDieMode?.composite === opt.kind"
                   :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
                   @click="multiBlockProComposite(row.targetId, opt.kind, row.dice.length)">
@@ -19267,7 +19554,7 @@ watch(() => [
                 </button>
                 <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
               </span>
-              <button v-if="row.consummate" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
+              <button v-if="row.consummate" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle))" class="bp-opt-label">{{ row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional') }}</span>
@@ -19278,7 +19565,7 @@ watch(() => [
                    Tarkin 8dde2dec); reuses the send via multiBlockRerollAllDice (source verbatim, zero new wire).
                    Owner 09-28 (Spec S8): the source's NAME is visible text too — the "ALL" badge alone did not
                    name the rule, only the icon and hover title did. -->
-              <button v-if="row.multiBlockDiceLabel" class="bp-opt bp-savage bp-opt-icon-label"
+              <button v-if="row.multiBlockDiceLabel" :disabled="mbrLatched" class="bp-opt bp-savage bp-opt-icon-label"
                 :title="$t('hud.mbrRow.multiblockdicelabelRerollAllDice', { multiBlockDiceLabel: row.multiBlockDiceLabel })"
                 @click="multiBlockRerollAllDice(row.targetId, row.multiBlockDice, row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)"
@@ -19287,27 +19574,34 @@ watch(() => [
                 <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
                 <span class="bp-sub">{{ $t('hud.mbrRow.all') }}</span>
               </button>
-              <button v-if="row.teamRR && !row.mascot && !row.namedTeam" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+              <button v-if="row.teamRR && !row.mascot && !row.namedTeam" :disabled="mbrLatched" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
                 <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
                 <!-- #205: acting coach's team-reroll count beside the die icon (owner idiom). Display-only;
                      the multiBlockReroll('team') answer path is untouched. -->
                 <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                   :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
               </button>
-              <button v-if="row.mascot" class="bp-team bp-mascot" :title="$t('hud.mbrRow.teamMascotNoReroll')" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
+              <button v-if="row.mascot" :disabled="mbrLatched" class="bp-team bp-mascot" :title="$t('hud.mbrRow.teamMascotNoReroll')" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
                 <img :src="resourceIcon('team_mascot')" :alt="$t('hud.mbrRow.teamMascot')" />
                 <span class="bp-sub">{{ $t('hud.mbrRow.noTrr') }}</span>
+              </button>
+              <!-- Owner 11-25: the plain Team reroll beside the row's Mascot when TRR is offered too (upstream
+                   DialogReRollBlockForTargetsProperties :84-90), AFTER it so the card's default control is unchanged. -->
+              <button v-if="row.mascot && row.trr && !row.namedTeam" :disabled="mbrLatched" class="bp-team bp-team-beside-mascot" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+                <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
+                <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                  :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
               </button>
               <!-- Current server: drive bonus / Leader rerolls for this target (and the Mascot falling back to them). -->
               <span class="rr-badged" v-for="c in row.teamChoices" :key="c.source">
                 <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button, plus the "i". -->
-                <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" class="bp-team"
+                <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" :disabled="mbrLatched" class="bp-team"
                   :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })"
-                  @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
+                  @click="mbrSubmit(() => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
                   <img :src="resourceIcon('re_roll')" :alt="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" />
                 </button>
-                <button v-else class="bp-opt" :title="c.label"
-                  @click="gameStore.sendMultiBlockTeamChoice(row.targetId, c.source)">
+                <button :disabled="mbrLatched" v-else class="bp-opt" :title="c.label"
+                  @click="mbrSubmit(() => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
                   <span class="bp-opt-label">{{ c.label }}</span>
                 </button>
                 <RerollInfoMarker v-if="c.info" :text="c.info" :tag="c.badgeTag" :icon="c.badgeSkill ? skillIconUrl(c.badgeSkill, effectiveIconStyle) : undefined" />
@@ -19464,7 +19758,10 @@ watch(() => [
                 <!-- Owner 11-21: a Leader reroll (teamKind leader) too: the Team reroll art with the Leader icon badge. The cause of
                      the owner's "TRR" glyph: this choice fell through to the skill-icon branch below, whose icon lookup of
                      "Team ReRoll" resolved to the generated initials badge. -->
-                <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || !!opt.teamKind" class="bp-team" data-pad-primary
+                <!-- Owner 11-25: beside the Mascot buttons the plain Team reroll is NOT the controller default: the card keeps its
+                     1.0.335 default (rerollBaseDefaultSource). Everywhere else it is, as before. -->
+                <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || !!opt.teamKind" class="bp-team"
+                  :data-pad-primary="rerollBaseDefaultSource === null ? '' : undefined"
                   :title="opt.teamKind ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName ?? '' }) : opt.label"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
@@ -19479,6 +19776,7 @@ watch(() => [
                 <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': proTrrBlendSource(opt.source) || !!rerollOptIcon(opt), 'bp-opt-blend': proTrrBlendSource(opt.source) }"
                   :aria-label="proTrrBlendSource(opt.source) ? opt.label : undefined"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
+                  :data-pad-primary="opt.source === rerollBaseDefaultSource ? '' : undefined"
                   :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
                   @click="gameStore.resolveReRoll(opt.source)">
@@ -22555,6 +22853,7 @@ watch(() => [
    animates only scale and would otherwise drop the translate). */
 /* Owner 2026-07-06: ~1/3 smaller + shifted DOWN (translate Y -100% -> -60%) so it sits
    closer to the head. */
+/* The -60% here is FOLLOW_TOAST_ABOVE_FRACTION in the view script (the pill dodge measures with it): change both. */
 .followup-chip.head-mounted { transform: translate(-50%, -60%); animation: fu-head-pop var(--p-200) ease-out; padding: 5px 7px; }
 .followup-chip.head-mounted .fu-title { font-size: max(var(--ui-min-text-size, 12px), 10px); letter-spacing: 0.02em; }
 .reactive-decision-pill {
@@ -23431,6 +23730,11 @@ watch(() => [
 }
 .chat-toast:hover { border-color: #6f9ede; background: linear-gradient(180deg, #303640f0, #0d1014f0); }
 .chat-toast-sender { font-weight: 800; color: #78a7ef; letter-spacing: 0.03em; }
+/* Move batching decision 12: the stopped-early banner (the toast look, amber edge, two small buttons). */
+.move-stop-toast { cursor: default; border-left-color: #c9a227; flex-direction: row; align-items: center; gap: 10px; }
+.move-stop-actions { display: inline-flex; gap: 6px; flex: none; }
+.move-stop-btn { font: inherit; font-size: 0.85em; padding: 2px 8px; border-radius: 3px; border: 1px solid #5a6270; background: #1b1f25; color: #e5e1d7; cursor: pointer; }
+.move-stop-btn.primary { border-color: #c9a227; color: #f2d36b; }
 .chat-toast-text {
   color: #e5e1d7;
   line-height: 1.3;

@@ -17,6 +17,7 @@ const spec = (row: string, variant: string, captionKey: string): PreviewSpec => 
 export const SETTING_PREVIEW_SPECS = {
   pitchOrientation: [spec('pitch', 'ns', 'settings.info.preview.northSouth'), spec('pitch', 'ew', 'settings.info.preview.eastWest')],
   flatRender: [spec('flat', 'iso', 'settings.info.preview.isometric'), spec('flat', 'flat', 'settings.info.preview.flat')],
+  classicNsPerspective: [spec('nsview', 'straight', 'settings.info.preview.straightView'), spec('nsview', 'classic', 'settings.info.preview.classicView')],
   hudStyle: [spec('hud', 'minimalist', 'settings.info.preview.minimalist'), spec('hud', 'chrome', 'settings.info.preview.chrome')],
   logStyle: [spec('log', 'text', 'settings.info.preview.text'), spec('log', 'graphical', 'settings.info.preview.graphical'), spec('log', 'fumbbl', 'settings.info.preview.fumbbl')],
   logDice: [spec('logdice', 'icons', 'settings.info.preview.diceIcons'), spec('logdice', 'numbers', 'settings.info.preview.numbers')],

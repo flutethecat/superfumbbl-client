@@ -292,6 +292,14 @@ export interface ReplayAdapter<State> {
   renderOnce(state: Readonly<State>, cursor: number): void;
   /** Conservative retained-size estimate used to cap turn snapshots. */
   estimateStateBytes?(state: Readonly<State>): number;
+  /** Owner 11-25: follows the stream as prepare folds it (each command with the model after it) and says, at the end,
+   *  whether the replay ends with an end-game report to show. */
+  resultTracker?(): ReplayResultTracker<State>;
+}
+
+export interface ReplayResultTracker<State> {
+  step(state: Readonly<State>, command: Readonly<ReplayCommand>, inputEnded: boolean): void;
+  ready(): boolean;
 }
 
 export interface ReplayKeyframe<State> {
@@ -358,11 +366,13 @@ export interface PreparedReplay<State> {
   readonly turns: readonly number[];
   readonly turnMarkers: readonly ReplayTurnMarker[];
   readonly current: State;
+  /** The folded stream ends with an end-game report (adapter resultTracker); false when the adapter does not say. */
+  readonly endsWithResult?: boolean;
 }
 
 /** Owner 09-25: named jump points beyond the turn list — the inducement phase (first inducement dialog the
- *  replay carries) and the end of the game (the last command; the end-game pane settles there). */
-export interface ReplayChapter { id: 'inducements' | 'end'; label: string; cursor: number }
+ *  replay carries). Owner 11-25: the "End of game" chapter is gone; the list's last entry, "Show result", replaces it. */
+export interface ReplayChapter { id: 'inducements'; label: string; cursor: number }
 const INDUCEMENT_DIALOGS = new Set(['buyInducements', 'buyPrayersAndInducements', 'pettyCash', 'buyCards', 'buyCardsAndInducements']);
 /** The cursor (index + 1) where the inducement purchases are FINAL: the first turn-mode change after the last
  *  inducement dialog the replay raised (both teams' sets are in the model there), or null without such a dialog. */
@@ -386,7 +396,6 @@ export function replayChapters(commands: readonly ReplayCommand[]): ReplayChapte
   const chapters: ReplayChapter[] = [];
   const inducements = inducementChapterCursor(commands);
   if (inducements != null) chapters.push({ id: 'inducements', get label() { return t('replay.text.inducements'); }, cursor: inducements });
-  if (commands.length > 0) chapters.push({ id: 'end', get label() { return t('replay.text.endOfGame'); }, cursor: commands.length });
   return chapters;
 }
 
@@ -463,6 +472,7 @@ export class ReplayController<State> {
   private turns: readonly number[] = [0];
   private turnMarkers: readonly ReplayTurnMarker[] = [];
   private activations: readonly number[] = [];
+  private endsWithResult = false;
   private disposed = false;
   private cancelPresentation: (() => void) | null = null;
   private statusValue: ReplayStatus = {
@@ -507,6 +517,7 @@ export class ReplayController<State> {
       turns: this.turns,
       turnMarkers: this.turnMarkers,
       current: this.current!,
+      endsWithResult: this.endsWithResult,
     };
     this.commands = [];
     this.keyframes = [];
@@ -529,6 +540,7 @@ export class ReplayController<State> {
     this.turns = prepared.turns;
     this.turnMarkers = prepared.turnMarkers;
     this.current = prepared.current;
+    this.endsWithResult = prepared.endsWithResult ?? false;
     this.activations = activationCursors(this.commands);
     const epoch = this.statusValue.epoch + 1;
     this.adapter.resetPresentation(epoch);
@@ -571,9 +583,11 @@ export class ReplayController<State> {
       ];
       const turns = [0];
       const turnMarkers: UnlabelledReplayTurnMarker[] = [];
+      const result = this.adapter.resultTracker?.() ?? null;
       this.commands.forEach((command, index) => {
         const beforeTurn = this.adapter.turnPosition?.(working) ?? null;
         this.adapter.apply(working, command);
+        result?.step(working, command, index === this.commands.length - 1);
         const cursor = index + 1;
         if (this.adapter.isTurnEnd(command)) {
           if (keyframes.length >= MAX_REPLAY_KEYFRAMES) {
@@ -594,6 +608,7 @@ export class ReplayController<State> {
         }
       });
       this.keyframes = keyframes;
+      this.endsWithResult = result?.ready() ?? false;
       this.turns = [...new Set(turns)].sort((left, right) => left - right);
       this.turnMarkers = labelReplayTurnMarkers(turnMarkers);
       this.current = this.adapter.cloneState(keyframes[0]!.state);

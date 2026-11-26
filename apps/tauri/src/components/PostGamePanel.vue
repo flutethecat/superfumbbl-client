@@ -96,6 +96,10 @@ function onBlockFaceImageError(value: number): void {
   if (art?.pack) markBlockDiePackFaceFailed(art.url);
 }
 watch(() => props.showStats, (on) => { if (!on) diceModalOpen.value = false; }); // owner 09-17: the Dice pane closes with the end screen
+/** Review 11-25: whether the Dice pane is up, so the host can keep a pad scope on the exit bar from acting behind it. */
+const emit = defineEmits<{ diceOpen: [open: boolean] }>();
+watch(() => diceModalOpen.value && props.showStats, (open) => emit('diceOpen', open));
+onBeforeUnmount(() => { if (diceModalOpen.value) emit('diceOpen', false); });
 
 /** Owner 09-14: a CONCESSION hands the winner two MVPs and every one shows. Owner 10-12: ONE CARD PER AWARD, not per
  *  player ("display that MVP twice ... no need to dedupe"): a player the server awarded twice gets two identical cards,

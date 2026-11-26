@@ -70,6 +70,7 @@ import {
   applyModelChangeList,
   clientUserSettingsCommand,
   isRecoverableFumbblLobbyStatus,
+  effectiveMovement,
   playerHasSkill,
   pushbackPayload,
   type GameJson,
@@ -111,7 +112,7 @@ onSoundError(({ soundId, src, code, message }) => {
 });
 import { settings } from './settings';
 import { inputControlLayer } from './controlLayerSwitch';
-import { effectiveForkHost } from './forkAccess';
+import { effectiveForkHost, isOfficialFumbblHost } from './forkAccess';
 import { wireLogFileName } from './wireLogName';
 import { FORK_EDITION } from './edition';
 import { validateOfficialPlayerSnapshot } from './fumbblPlayerIdentity';
@@ -148,6 +149,8 @@ import {
   type ApothecaryAuthorityContext,
   type ApothecaryType,
 } from './logic/apothecaryOffer';
+import { isBatchingRulesVersion, nextSegment, predictRoute, type OpponentFact, type RoutePrediction, type Segment } from './logic/moveSegments'; // move batching, safe runs
+import { hasTackleZones } from '@fumbbl40k/ffb-pitch/src/playerState';
 import { holdsBall, type HoldsBallFieldModel } from './logic/holdsBall'; // #233: pure UtilPlayer.hasBall port (Echo item-① tooth imports it)
 import { deriveClientState, type ClientStateContext } from './logic/clientStateMachine';
 import { armedGazeVictim, canConfirmGazeAtCurrentPosition, canNominateGazeVictim, declaredGazeTargetId, gazeConfirmRefusalReason, matchesDeclaredGazeTarget, type GazeIntent } from './logic/gazeMovementState';
@@ -207,7 +210,7 @@ import {
   wizardSpellOfferFromSnapshot,
   wizardTargetRuleFor,
   wizardTargetSquares,
-  wizardTargetsOnlyOwnPlayers,
+  wizardOwnPlayersAffected,
   wizardZapRequiredRoll,
   type WizardSpell,
   type WizardSpellOffer,
@@ -662,7 +665,10 @@ const legacyState = reactive({
   movementIntent: null as
     | { playerId: string; from: [number, number]; to: [number, number]; movementUsedBefore: number | null; awaitsRoll: boolean; rollRequirements: PlanResolution[]; failureConfirmed: boolean; latencyObserved: boolean; sentAt: number; expectedRttMs: number; occurrenceId: number; seq: number;
         /** Owner 10-17 (pipelined first step): sent before the server offered the square; awaitsRoll is a stand-in until refreshMovementIntentRolls binds the offer. */
-        rollsUnknown?: boolean }
+        rollsUnknown?: boolean;
+        /** Move batching: the whole accepted ARRAY (more than one square; `to` is its first square). Every edge of
+         *  from -> path[0] -> ... -> path[last] is the coach's own sent step. */
+        path?: [number, number][] }
     | null,
   /** A failed movement roll and its reroll settlement are authoritative presentation fences. The model has
    * already applied `coordinate`; Modern must retire any older cursor/tween for this exact movement occurrence
@@ -695,6 +701,10 @@ const legacyState = reactive({
   /** Owner 10-15 declaration watcher: the "Unexpected player switch" card (once per game; Report prefills the bug
    *  report with the occurrence). Null = nothing to ask. */
   switchWatcherCard: null as { title: string; text: string; report: string } | null,
+  /** Move batching decision 12: the non-blocking "Move stopped early. Report this?" banner. `report` prefills the
+   *  existing bug report (with the evidence); `evidence` also rides the report's context. Cleared at the end of the
+   *  coach's turn. Null = nothing to show. */
+  moveStopReport: null as { text: string; report: string; evidence: Record<string, unknown>; turnKey: string; seq: number } | null,
   /** Owner 10-15 (Astra r7): bumped whenever the pending-cancel state changes, so the view's movement surface (which
    *  stands down while our cancel is unanswered) re-derives the moment a No on confirmEndAction re-opens it. */
   cancelRevision: 0,
@@ -821,6 +831,8 @@ const legacyState = reactive({
     blockerId: string;
     rolls: { targetId: string; dice: number[]; nrOfDice: number; isOwnChoice: boolean | null; selectedIndex: number;
              pickable: boolean; teamRR: boolean; mascot: boolean; pro: boolean; brawler: boolean; consummate: boolean; consummateLabel: string | null;
+             /** Owner 11-25: the TRR property itself (teamRR is TRR or MASCOT): the plain Team reroll beside the Mascot. */
+             trr: boolean;
              /** Current server: drive bonus / Leader replace the plain team reroll; teamChoices carries them (blockTeamChoices). */
              namedTeam: boolean; teamChoices: BlockTeamChoice[];
              /** Owner 10-10: Pro-with-fallback answers for this target (blockProCompositeOptions); empty when not offered. */
@@ -1148,11 +1160,15 @@ const legacyState = reactive({
     options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
     seq: number;
   } | null,
-  /** Display-only Fireball 4+ chips retained until the server closes the wizard dialog. */
+  /** Display-only Fireball 4+ chips retained until the server closes the wizard dialog. Owner 11-21: also the HOVER
+   *  preview while the Fireball square is being chosen (`hover`: the square under the pointer, nothing sent). */
   wizardTargetPreview: null as {
     square: [number, number];
     playerSquares: [number, number][];
     seq: number;
+    hover?: boolean;
+    /** Fireball round 4: the input that made the preview. A pointer's hover-clear never clears a touch preview. */
+    source?: 'pointer' | 'touch';
   } | null,
   /** Locally staged Zap target. Selection is reversible; only explicit confirmation emits clientWizardSpell. */
   wizardTargetConfirm: null as {
@@ -1524,7 +1540,7 @@ const legacyState = reactive({
    *  showToast slot the next frame's toasts overwrite) - green "<Holder> holds <Mover> in place with their tentacles!"
    *  when held, red "<Holder> fails to hold <Mover> with their tentacles!" when the mover gets away. Raised from the
    *  server's tentaclesShadowingRoll {skill:'Tentacles'} report; not seat-gated; Modern view only; never a latch. */
-  tentaclesCue: null as { holderId: string; holderName: string; moverId: string; moverName: string; held: boolean; square: [number, number]; text: string; seq: number } | null,
+  tentaclesCue: null as { skill: 'Tentacles' | 'Shadowing'; holderId: string; holderName: string; moverId: string; moverName: string; held: boolean; square: [number, number]; text: string; seq: number } | null,
   rerollSplash: null as { side: 'home' | 'away'; coach: string; logo: string | null; source: string; isTeam: boolean; seq: number; text?: string; playerId?: string; /** skill icon to show instead of the TRR icon when skill icons are on (Leader) */ skill?: string; /** Owner 10-26: a title line above the text (the modifier-pass splash: the skill's name) */ title?: string; /** Owner 10-15: a WORKING Team Mascot (successful mascotUsed) - the toast shows the Mascot inducement icon instead of the TRR icon */ mascot?: boolean } | null,
   /** Owner 10-09: "The Apothecary fixes up <Player> and they return to the bench!" - the server resolved the
    *  treatment itself. Its OWN rail (same toast look, its own position), so it can neither replace nor be replaced
@@ -2847,22 +2863,43 @@ function showLonerFailedSplash(playerId: string, roll: number | null = null) {
 /** Owner 10-21: the Tentacles outcome pill's read (presentationMs-scaled), cleared by its own timer only. */
 const TENTACLES_CUE_HOLD_MS = 3000;
 let tentaclesCueClearTimer: ReturnType<typeof setTimeout> | null = null;
+/** Owner 11-24 (Sol r1): Tentacles and Shadowing share the one pill. A pill of the OTHER skill that arrives while one
+ *  is still inside its minimum read waits for that read to finish instead of erasing it (a failed Tentacles roll is
+ *  often followed at once by the same move's Shadowing roll). The wait is a plain timer: bounded, nothing latched. */
+const SKILL_CUE_MIN_READ_MS = 1200;
+let tentaclesCueShownAt = 0;
+let tentaclesCueDeferTimer: ReturnType<typeof setTimeout> | null = null;
 function clearTentaclesCue(): void {
   if (tentaclesCueClearTimer) cancelGameTimeout(tentaclesCueClearTimer);
+  if (tentaclesCueDeferTimer) cancelGameTimeout(tentaclesCueDeferTimer);
   tentaclesCueClearTimer = null;
+  tentaclesCueDeferTimer = null;
   state.tentaclesCue = null;
 }
 /** Raise a fresh Tentacles pill (a reroll's report raises another). The clear is per cue: a timer only clears the cue
  *  whose seq it was scheduled for. Never during catch-up. */
-function showTentaclesCue(g: GameJson, holderId: string, moverId: string, held: boolean, square: [number, number]): void {
+function showTentaclesCue(g: GameJson, holderId: string, moverId: string, held: boolean, square: [number, number], skill: 'Tentacles' | 'Shadowing' = 'Tentacles'): void {
   if (playback.catchingUp) return;
+  if (tentaclesCueDeferTimer) { cancelGameTimeout(tentaclesCueDeferTimer); tentaclesCueDeferTimer = null; } // the newest roll wins the wait
+  const live = state.tentaclesCue;
+  const readLeft = live && live.skill !== skill ? presentationMs(SKILL_CUE_MIN_READ_MS) - (Date.now() - tentaclesCueShownAt) : 0;
+  if (readLeft > 0) {
+    tentaclesCueDeferTimer = scheduleGameTimeout(() => {
+      tentaclesCueDeferTimer = null;
+      showTentaclesCue(g, holderId, moverId, held, square, skill);
+    }, readLeft);
+    return;
+  }
   if (tentaclesCueClearTimer) cancelGameTimeout(tentaclesCueClearTimer);
+  tentaclesCueShownAt = Date.now();
   const holderName = playerName(g, holderId);
   const moverName = playerName(g, moverId);
   const seq = (state.tentaclesCue?.seq ?? 0) + 1;
   state.tentaclesCue = {
-    holderId, holderName, moverId, moverName, held, square: [square[0], square[1]], seq,
-    text: held ? $t('store.text.holdernameHoldsMovernameIn', { holderName, moverName }) : $t('store.text.holdernameFailsToHold', { holderName, moverName }),
+    skill, holderId, holderName, moverId, moverName, held, square: [square[0], square[1]], seq,
+    text: skill === 'Shadowing'
+      ? (held ? $t('store.text.holdernameShadowsMovername', { holderName, moverName }) : $t('store.text.holdernameFailsToShadow', { holderName, moverName }))
+      : (held ? $t('store.text.holdernameHoldsMovernameIn', { holderName, moverName }) : $t('store.text.holdernameFailsToHold', { holderName, moverName })),
   };
   tentaclesCueClearTimer = scheduleGameTimeout(() => {
     if (state.tentaclesCue?.seq === seq) state.tentaclesCue = null;
@@ -4937,6 +4974,17 @@ function passiveDialogOccurrence(dialog: object): number {
   let occurrence = passiveDialogOccurrences.get(raw);
   if (occurrence === undefined) { occurrence = ++passiveDialogOccurrenceSeq; passiveDialogOccurrences.set(raw, occurrence); }
   return occurrence;
+}
+/** Owner 11-25: the occurrence of the server dialog the model holds now (one number per dialog OBJECT, the passive skill
+ *  card's numbering), 0 when there is none. Used by the Multiple Block card's submit latch to release on a dialog change.
+ *  Contract, INTERACTIVE (coach seat) paths only: a gameSetDialogParameter frame (each wire command is parsed afresh), a
+ *  snapshot adoption or in-place resync and a replay model adoption or seek (structuredClone) all install a new object;
+ *  frames that leave the dialog standing mutate the model in place and keep it; a client re-render never touches it.
+ *  Spectator checkpoint paths do NOT follow it (a reduction clones the model on every non-clock event, a cached
+ *  checkpoint republished as-is keeps its number); no spectator consumer reads it. */
+function currentDialogOccurrence(): number {
+  const dialog = game.value?.dialogParameter;
+  return dialog && typeof dialog === 'object' ? passiveDialogOccurrence(dialog) : 0;
 }
 type PassiveSkillCard = NonNullable<typeof state.skillChoice>;
 let deferredPassiveSkillCard: {
@@ -7704,6 +7752,9 @@ const replay = reactive({
   loading: false,
   source: null as 'server' | 'file' | null,
   sessionKey: '',
+  /** Owner 11-25: the loaded replay ends with an end-game report (the end-game handler's readiness over the folded
+   *  stream): the Turns list offers "Show result" then (and after a report has been shown in this replay session). */
+  hasResult: false,
   snapRenderEpoch: 0,
   playing: false,
   speed: REAL_TIME_REPLAY_SPEED as ReplaySpeed,
@@ -8020,7 +8071,27 @@ function clearCatchupTransients(): void {
 
 // Apply models immediately; drain immutable presentation snapshots serially without blocking applyFrame.
 type MoveStyle = 'walk' | 'hop' | 'trail' | 'slide' | 'hoptrail';
-type PlanResolution = 'gfi' | 'dodge' | 'pickup';
+// 'trapdoor' (move batching decision 13): entering a server-sent trapdoor square rolls a D6 (falls through on a 1).
+type PlanResolution = 'gfi' | 'dodge' | 'pickup' | 'trapdoor';
+/** Move batching decision 13 (server-derived law): the trapdoors the SERVER sent (fieldModel.trapDoors, synced by
+ *  modelChangeProcessor), as coordinates. Never a client guess. */
+function serverTrapdoorSquares(g: GameJson | null | undefined): [number, number][] {
+  const out: [number, number][] = [];
+  for (const raw of ((g?.fieldModel as { trapDoors?: unknown[] } | undefined)?.trapDoors ?? [])) {
+    const c = Array.isArray(raw) ? raw : (raw as { coordinate?: unknown } | null | undefined)?.coordinate;
+    if (Array.isArray(c) && Number.isFinite(Number(c[0])) && Number.isFinite(Number(c[1]))) out.push([Number(c[0]), Number(c[1])]);
+  }
+  return out;
+}
+/** One movement-roll report normalised for the planner and the presentation (spec 11.5): `trapDoor` reports carry
+ *  `escaped`, not `successful` / `reRolled`. null = not a movement roll. */
+function movementRollOutcome(report: Readonly<Record<string, unknown>>): { kind: PlanResolution; successful: boolean | null; reRolled: boolean } | null {
+  const id = String(report.reportId ?? '');
+  if (id === 'trapDoor') return { kind: 'trapdoor', successful: typeof report.escaped === 'boolean' ? report.escaped : null, reRolled: false };
+  const kind = id === 'goForItRoll' ? 'gfi' : id === 'dodgeRoll' ? 'dodge' : id === 'pickUpRoll' ? 'pickup' : null;
+  if (!kind) return null;
+  return { kind, successful: typeof report.successful === 'boolean' ? report.successful : null, reRolled: report.reRolled === true };
+}
 
 /** One immutable server-confirmed adjacent movement edge. Ownership and action
  *  flavor are deliberately not gates: Move, Blitz and free follow-ups for either
@@ -8046,7 +8117,7 @@ export function isConfirmedAdjacentMovementDelta(input: {
 
 type PresentationEvent =
   // a single on-pitch walk square: draw player `playerId` from `from`→`to` (snapshot), tile-paced.
-  | { kind: 'step'; playerId: string; from: [number, number]; to: [number, number]; style: MoveStyle; stepIndex: number; stepCount: number; movementUsedBefore: number; movementUsedAfter: number; rollRequirements: Set<PlanResolution>; rollBeatMs: number; occurrenceId?: number; sound?: string; number?: number | null }
+  | { kind: 'step'; playerId: string; from: [number, number]; to: [number, number]; style: MoveStyle; stepIndex: number; stepCount: number; movementUsedBefore: number; movementUsedAfter: number; rollRequirements: Set<PlanResolution>; rollBeatMs: number; occurrenceId?: number; sound?: string; number?: number | null; plannerArraySendSeq?: number; localIntent?: boolean }
   // D1 RESULT prompt held BEHIND its context — rides the FIFO so context-gating needs no extra logic; `arm` (captured at enqueue) runs when drained.
   | { kind: 'prompt'; label: string; arm: () => void }
   // #78: store-paced HOLD (~300ms family) for a pickup / catch / bounce hop (no renderer anim to gate on). ⚠ NOT-a-step spares it from COLLAPSE only, never a flush (SR-115: trigger ≠ disposition — a flush that runs has always discarded beats; FLUSH_DISPOSITION records it).
@@ -8085,7 +8156,7 @@ const FLUSH_DISPOSITION: Record<PresentationEvent['kind'], 'discard' | 'preserve
 const presentation = {
   queue: [] as PresentationEvent[],
   // the on-screen event + its gate release (onAnimDone or the cap); #174 `requeue` = put BACK at queue front instead of letting a flush consume it (KA-2).
-  presenting: null as { kind: 'walk' | 'rollBeat' | 'throw' | 'kickDescend' | 'cine' | 'beat'; id: string; seq?: number; occurrenceId?: number; pendingRolls?: Set<PlanResolution>; release: (cancelled?: boolean) => void; requeue?: PresentationEvent } | null,
+  presenting: null as { kind: 'walk' | 'rollBeat' | 'throw' | 'kickDescend' | 'cine' | 'beat'; id: string; seq?: number; occurrenceId?: number; pendingRolls?: Set<PlanResolution>; localIntent?: boolean; dropNumber?: boolean; release: (cancelled?: boolean) => void; requeue?: PresentationEvent } | null,
   running: false,        // pumpPresentation loop guard (single async drain)
   stepRun: new Map<string, number>(),      // per-player running stepIndex within a contiguous move-run
   lastTo: new Map<string, [number, number]>(), // per-player last `to`, to detect a fresh (non-contiguous) run
@@ -8521,23 +8592,29 @@ function presentEvent(ev: PresentationEvent): Promise<void> {
         resolve();
         return;
       }
+      if (beat.dropNumber) ev.number = null; // kept past its activation end: no trail digit
       void presentConfirmedStep().then(resolve);
     };
     const cap = scheduleGameTimeout(release, ev.rollBeatMs);
-    presentation.presenting = {
+    // localIntent / dropNumber live on this beat object only, which is dropped when the beat releases, cancels or caps
+    const beat: NonNullable<typeof presentation.presenting> = {
       kind: 'rollBeat', id: ev.playerId, seq: pendingStep.seq, occurrenceId: ev.occurrenceId,
-      pendingRolls: ev.rollRequirements, release,
+      pendingRolls: ev.rollRequirements, localIntent: ev.localIntent === true, release,
     };
+    presentation.presenting = beat;
   });
 }
 
 /** #67 D2 §4 COLLAPSE: drop leading `step` events (end-state already on the model) but STOP at the first prompt (DD-2 decision barrier); the last dropped step still paints its `to` (#60 SC-3 terminal cue). */
 function collapsePresentation(): boolean {
   // #67 speedup fix (opponent-blitz bounce): count STEP events ONLY — prompt piles (blockRoll re-sends) inflated the depth → spurious perpetual collapse ("sped up like crazy"). A decision is not decoration.
-  const stepDepth = presentation.queue.reduce((n, e) => n + (e.kind === 'step' ? 1 : 0), 0);
+  // Move batching decision 7: the walk steps of an accepted planner array are EXEMPT (tagged plannerArraySendSeq): a
+  // long legal run walks every square; the planner's own send backpressure keeps that queue bounded.
+  const stepDepth = presentation.queue.reduce((n, e) => n + (e.kind === 'step' && e.plannerArraySendSeq === undefined ? 1 : 0), 0);
   if (stepDepth <= PRESENTATION_COLLAPSE_DEPTH) return false;
   let lastStep: Extract<PresentationEvent, { kind: 'step' }> | null = null;
   while (presentation.queue.length > 0 && presentation.queue[0]!.kind === 'step'
+      && presentation.queue[0]!.plannerArraySendSeq === undefined
       && presentation.queue[0]!.rollRequirements.size === 0) {
     lastStep = presentation.queue.shift() as Extract<PresentationEvent, { kind: 'step' }>;
   }
@@ -8554,6 +8631,7 @@ function flushStalePresentation(): void {
   const kept = presentation.queue.filter((e) => FLUSH_DISPOSITION[e.kind] === 'preserve');
   presentation.queue.length = 0;
   presentation.queue.push(...kept);
+  if (stale > 0) plannerQueueWake(); // decision 7: flushed steps left the queue
   // #174 KA-2: the force-release must NOT open a barrier gated on an EXTERNAL still-running animation (that drains the splashes mid-arc) — a gate carrying `requeue` is released but its event goes BACK to the queue front. resetPresentation keeps the unscoped release deliberately (teardown releases everything).
   // Owner 10-08 (Astra P2): a kick-off catch die that is on screen keeps the rest of its read beat - force-releasing it
   // here cut the die (and let the preserved bounce follow at once) whenever a new activation's first step arrived
@@ -8588,6 +8666,7 @@ function retirePresentationActivation(): void {
  *  events (kick arcs, cines, prompts, beats) retain their existing ownership and continue to drain. */
 function discardConfirmedMovementPresentation(): void {
   presentation.queue = presentation.queue.filter((event) => event.kind !== 'step');
+  plannerQueueWake(); // decision 7: cancelled steps left the queue
   if (presentation.presenting?.kind === 'walk' || presentation.presenting?.kind === 'rollBeat') {
     presentation.presenting.release(presentation.presenting.kind === 'rollBeat');
   }
@@ -8611,11 +8690,30 @@ function syncConfirmedMovementPresentationCapability(): void {
 /** row-teleport: a genuine activation end arrived (received turnEnd). Retire NOW if the drain is idle; otherwise
  *  latch it so pumpPresentation retires at the TRUE end of the run — the tail steps of the ending turn are still
  *  queued at that point (applyFrame never awaits the drain, CD-0) and must keep their contiguity ledger. */
-function requestPresentationRetire(): void {
+function requestPresentationRetire(keepRollBeat = false): void {
   presentation.retireOnDrain = true;
-  if (presentation.presenting?.kind === 'rollBeat') presentation.presenting.release(true);
+  if (presentation.presenting?.kind === 'rollBeat' && !keepRollBeat) presentation.presenting.release(true);
   if (!presentation.running && presentation.queue.length === 0) retirePresentationActivation();
   else void pumpPresentation();
+}
+
+/** Owner 11-23 review: the local intent's roll beat is on screen and this same frame reports every roll it waits on as
+ *  passed. The roll settlement later in the frame releases the beat and its tile presents, so retirement keeps it. */
+function localRollBeatPassesInFrame(reports: readonly Record<string, unknown>[]): boolean {
+  const beat = presentation.presenting;
+  const intent = state.movementIntent;
+  // ownership rides the beat: an earlier passed roll of the same square (Dodge before Rush) already cleared the intent
+  if (beat?.kind !== 'rollBeat' || !beat.pendingRolls || !beat.localIntent) return false;
+  if (intent?.playerId === beat.id && intent.occurrenceId === beat.occurrenceId && intent.failureConfirmed) return false;
+  const owned = reports.filter((report) => String(report.playerId ?? '') === beat.id);
+  if (owned.some((report) => report.successful === false || movementRollOutcome(report)?.successful === false)) return false;
+  const passed = new Set<PlanResolution>();
+  for (const report of owned) {
+    for (const rescued of modifierRescueKinds(report)) passed.add(rescued);
+    const outcome = movementRollOutcome(report); // one normaliser for every movement roll, the trapdoor's escaped flag included
+    if (outcome?.successful === true) passed.add(outcome.kind);
+  }
+  return [...beat.pendingRolls].every((roll) => passed.has(roll));
 }
 
 /** row-teleport residual (retire-gap): the APPLIED model's acting player is the server's own activation marker, so
@@ -8625,10 +8723,18 @@ function requestPresentationRetire(): void {
  *  still queued at this point (applyFrame never awaits the drain, CD-0) and must keep their contiguity ledger.
  *  Empty id ('' = no acting player) is a real end-of-activation signal here, not an "unrecognised" reading — the
  *  guard below only compares once an activation is actually presenting. */
-function retirePresentationOnActingChange(appliedActingPlayerId: string): void {
+function retirePresentationOnActingChange(appliedActingPlayerId: string, reports: readonly Record<string, unknown>[] = []): void {
   if (presentation.activation === null) return;
   if (appliedActingPlayerId === presentation.activation) return;
-  requestPresentationRetire();
+  const keepBeat = localRollBeatPassesInFrame(reports);
+  if (keepBeat && presentation.presenting) presentation.presenting.dropNumber = true;
+  // Owner 11-23 review: the activation end cleared the renderer's trail numbers; the coach's own steps still queued
+  // for that activation draw without one (their own localIntent flag, so a settled intent does not matter).
+  const retiring = presentation.activation;
+  for (const event of presentation.queue) {
+    if (event.kind === 'step' && (event.localIntent || event.plannerArraySendSeq !== undefined) && event.playerId === retiring) event.number = null;
+  }
+  requestPresentationRetire(keepBeat);
 }
 
 /** row-teleport residual (retire-gap): a relocation that enqueues NO step — a leap (Chebyshev > 1, so the per-square
@@ -8656,6 +8762,7 @@ async function pumpPresentation(): Promise<void> {
       if (collapsePresentation() && presentation.queue.length === 0) break;
       const ev = presentation.queue.shift();
       if (!ev) break;
+      if (ev.kind === 'step') plannerQueueWake(); // decision 7: a walk step left the queue
       await presentEvent(ev);
       refreshHighKickAnswerGate(); // owner 11-13: a retired kick-off card / flight may be what the High Kick waits on
     }
@@ -8670,6 +8777,7 @@ async function pumpPresentation(): Promise<void> {
 function onPresentationDrainIdle(): void {
   presentation.running = false;
   presentation.presenting = null;
+  plannerQueueWake(); // decision 7: the queue drained (a held planner send re-runs its checks)
   // An empty queue is not an activation end: preserve the run ledger so a later adjacent tile continues its
   // numbering. The renderer cursor is shorter-lived, however. Once the delivered tile and model agree below,
   // release that cursor so a terminal safe square cannot pin every later authoritative token update.
@@ -8770,9 +8878,23 @@ function enqueueMoveStep(
     rollRequirements: new Set(rollRequirements),
     rollBeatMs: movementRollBeatMs(expectedRttMs),
     occurrenceId: resolvedOccurrenceId,
+    localIntent: occurrenceId !== undefined, // the coach's own sent square (only a matching local intent passes one)
     number, // #119: own-side received-frame count (or null for an opponent move) — drain-independent, frozen here
+    ...plannerArrayStepTag(playerId, to),
   });
   void pumpPresentation();
+}
+/** Move batching decision 7: a confirmed step that belongs to the live plan's outstanding ARRAY (more than one square)
+ *  is tagged with its sendSeq, which exempts it from the backlog collapse. */
+function plannerArrayStepTag(playerId: string, to: [number, number]): { plannerArraySendSeq?: number } {
+  const p = plannerPlan;
+  const s = p?.playerId === playerId ? p.send : null;
+  if (!p || !s || s.toIdx === s.fromIdx) return {};
+  for (let i = s.fromIdx; i <= s.toIdx; i++) {
+    const r = p.route[i];
+    if (r && r[0] === to[0] && r[1] === to[1]) return { plannerArraySendSeq: s.sendSeq };
+  }
+  return {};
 }
 
 /** #78: enqueue a store-paced BEAT (pickup/catch/bounce read-time) on the SAME #67 FIFO — lands AFTER the move steps. o66-play only; spectate keeps its own pacing. */
@@ -9410,6 +9532,7 @@ function resetPresentation(): void {
     presentation.presenting = null;
   }
   presentation.running = false;
+  plannerQueueWake(); // decision 7: a reset emptied the queue
   retirePresentationActivation(); // teardown = the terminal activation retirement (also drops the retire latch)
   presentation.recvActivation = null;
   presentation.recvCount.clear();
@@ -9586,6 +9709,8 @@ function movementRollResolutions(g: GameJson, playerId: string, to: [number, num
   // loose ball therefore owns a Pick Up result before the planner may submit the following square.
   if (!!g.fieldModel.ballInPlay && g.fieldModel.ballMoving === true && !!ball
       && ball[0] === to[0] && ball[1] === to[1]) resolutions.add('pickup');
+  // Decision 13: a server-sent trapdoor on the entered square owes its D6 before the next square may leave.
+  if (serverTrapdoorSquares(g).some((t) => t[0] === to[0] && t[1] === to[1])) resolutions.add('trapdoor');
   return resolutions;
 }
 
@@ -9605,11 +9730,8 @@ function observeMovementIntentEcho(playerId: string, to: [number, number]): void
 function confirmFailedMovementIntent(reports: readonly Record<string, unknown>[]): void {
   const intent = state.movementIntent;
   if (!intent?.awaitsRoll) return;
-  const failed = reports.find((report) => {
-    const id = String(report.reportId ?? '');
-    return (id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll')
-      && report.successful === false && String(report.playerId ?? '') === intent.playerId;
-  });
+  const failed = reports.find((report) => movementRollOutcome(report)?.successful === false
+    && String(report.playerId ?? '') === intent.playerId);
   if (!failed || intent.failureConfirmed) return;
   const sample = Math.max(1, Date.now() - intent.sentAt);
   movementRttEwmaMs = Math.min(500, Math.max(20, movementRttEwmaMs * 0.75 + sample * 0.25));
@@ -9626,8 +9748,7 @@ function confirmFailedMovementIntent(reports: readonly Record<string, unknown>[]
 }
 
 function movementRollReport(report: Readonly<Record<string, unknown>>): boolean {
-  const id = String(report.reportId ?? '');
-  return id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll';
+  return movementRollOutcome(report) !== null; // spec 11.5: a trapdoor roll is a movement roll too
 }
 
 /** Passive receive-side counterpart to the local movement intent. Opponent and live-spectator walks have no
@@ -9638,7 +9759,7 @@ function confirmFailedReceivedMovement(
 ): void {
   if (playback.catchingUp) return;
   for (const report of reports) {
-    if (!movementRollReport(report) || report.successful !== false) continue;
+    if (movementRollOutcome(report)?.successful !== false) continue;
     const playerId = String(report.playerId ?? '');
     const occurrence = receivedMovementOccurrences.get(playerId);
     if (!occurrence || occurrence.gameId !== currentGameId()) continue;
@@ -9664,7 +9785,7 @@ function settleReceivedMovementAfterFrame(
     if (occurrence.gameId !== currentGameId()) { receivedMovementOccurrences.delete(playerId); continue; }
     const rolls = reports.filter((report) => movementRollReport(report)
       && String(report.playerId ?? '') === playerId);
-    const successful = rolls.some((report) => report.successful === true);
+    const successful = rolls.some((report) => movementRollOutcome(report)?.successful === true);
     const rerollResolved = rolls.some((report) => report.reRolled === true);
     const fell = reports.some((report) => {
       if (String(report.reportId ?? '') !== 'injury'
@@ -9693,6 +9814,77 @@ function failedMovementDestination(playerId: string): [number, number] | null {
     ? [intent.to[0], intent.to[1]] : null;
 }
 
+/** Set by applyFrame after this frame's turnover arming step (a failed roll or an own-team knockdown armed it). */
+let turnoverArmedInFrame = false;
+/** Owner 11-23 review: authoritative evidence that `playerId`'s move failed - a failed roll or an injury of the player in
+ *  `reports`, a recorded failed receive occurrence, or the player no longer standing. */
+function movementFailureEvidence(reports: readonly Record<string, unknown>[], playerId: string): boolean {
+  const occurrence = receivedMovementOccurrences.get(playerId);
+  if (occurrence?.failed && occurrence.gameId === currentGameId()) return true;
+  const data = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
+  const base = data ? playerStateBase(data.playerState) : null;
+  if (base !== null && base !== 0x01 && base !== 0x02) return true;
+  return reports.some((report) => String(report.playerId ?? report.defenderId ?? report.actingPlayerId ?? '') === playerId
+    && (report.successful === false || String(report.reportId ?? '') === 'injury'));
+}
+
+/** Move batching: `from -> to` is one step of the local intent's own accepted ARRAY (from, path[0], ..., path[last]). */
+function intentArrayEdge(intent: NonNullable<typeof state.movementIntent>, from: readonly number[], to: readonly number[]): boolean {
+  const path = intent.path;
+  if (!path) return false;
+  for (let i = 0; i < path.length; i++) {
+    const a = i === 0 ? intent.from : path[i - 1]!;
+    const b = path[i]!;
+    if (a[0] === from[0] && a[1] === from[1] && b[0] === to[0] && b[1] === to[1]) return true;
+  }
+  return false;
+}
+/** Owner 11-23 (option A): the local run is still being drawn and every sent square was answered. True only when the
+ *  intent's own square was echoed (a step of that occurrence is queued or on screen), nothing of it failed, and the
+ *  player's last queued (or presenting) step ends on the model's square. Anything else keeps the snapping fence. */
+function successfulRunStillPresenting(intent: NonNullable<typeof state.movementIntent>, reports: readonly Record<string, unknown>[]): boolean {
+  if (playback.catchingUp || intent.failureConfirmed) return false;
+  if (deferredFailedFence?.playerId === intent.playerId || state.failedActionHold?.playerId === intent.playerId) return false;
+  if (turnoverArmedInFrame || movementFailureEvidence(reports, intent.playerId)) return false;
+  const queued = presentation.queue.filter((event): event is Extract<PresentationEvent, { kind: 'step' }> =>
+    event.kind === 'step' && event.playerId === intent.playerId);
+  const presenting = presentation.presenting;
+  const shown = state.presentationStep;
+  const onScreen = (presenting?.kind === 'walk' || presenting?.kind === 'rollBeat') && presenting.id === intent.playerId
+    && shown?.playerId === intent.playerId && shown.seq === presenting.seq ? shown : null;
+  const steps: { from: [number, number]; to: [number, number]; occurrenceId?: number }[] = onScreen ? [onScreen, ...queued] : queued;
+  const last = steps[steps.length - 1];
+  // Move batching: an ARRAY intent names only its first square; its other squares echo as steps of their own
+  // occurrences. Review (devcut 334a, Sol P2 1): every QUEUED step must be the coach's own, from ANY segment of this
+  // activation still drawing (a pickup segment, a dodge head before the array): its own-intent flag, its planner-array
+  // tag (set when it echoed for the plan's outstanding array), or an edge of this array. The model stands where that
+  // drawing ends.
+  if (intent.path) {
+    const model = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === intent.playerId)
+      ?.playerCoordinate as [number, number] | null | undefined;
+    return !!last && queued.every((event) => event.localIntent === true || event.plannerArraySendSeq !== undefined
+        || intentArrayEdge(intent, event.from, event.to))
+      && !!model && model[0] === last.to[0] && model[1] === last.to[1];
+  }
+  if (!last || last.occurrenceId === undefined || last.occurrenceId > intent.occurrenceId) return false;
+  const echoed = steps.some((step) => step.occurrenceId === intent.occurrenceId
+    && step.to[0] === intent.to[0] && step.to[1] === intent.to[1]);
+  if (!echoed) return false;
+  const model = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === intent.playerId)
+    ?.playerCoordinate as [number, number] | null | undefined;
+  return !!model && model[0] === last.to[0] && model[1] === last.to[1]
+    && model[0] === intent.to[0] && model[1] === intent.to[1];
+}
+
+/** Owner 11-23: the local run outlives its activation; retire it when the FIFO drains. The activation end already
+ *  cleared its trail numbers in the renderer, so its remaining tiles carry none (number null = no digit). Only this
+ *  local path does this; opponent and spectator runs keep their numbers. */
+function keepLocalRunDrawing(playerId: string): void {
+  presentation.retireOnDrain = true;
+  for (const event of presentation.queue) if (event.kind === 'step' && event.playerId === playerId) event.number = null;
+  if (state.presentationStep?.playerId === playerId) state.presentationStep.number = null;
+}
+
 /** Retire the local movement transaction only after the authoritative outcome has settled. The first failed
  * dodge/rush/pickup deliberately keeps the intent alive so the token stays on the attempted square while the reroll
  * election is open. A successful result, the resulting fall/injury, an activation change, or turnEnd closes the
@@ -9704,11 +9896,8 @@ function settleMovementIntentAfterFrame(
   if (!intent) return;
   const owns = (report: Record<string, unknown>): boolean =>
     String(report.playerId ?? report.defenderId ?? '') === intent.playerId;
-  const rollSettled = reports.some((report) => {
-    const id = String(report.reportId ?? '');
-    return owns(report) && (((id === 'dodgeRoll' || id === 'goForItRoll' || id === 'pickUpRoll') && report.successful === true)
-      || isModifierRescueReport(report)); // owner 10-26 (g1075): the modifier makes the failed roll pass
-  });
+  const rollSettled = reports.some((report) => owns(report) && (movementRollOutcome(report)?.successful === true
+      || isModifierRescueReport(report))); // owner 10-26 (g1075): the modifier makes the failed roll pass
   const fell = reports.some((report) => {
     if (String(report.reportId ?? '') !== 'injury' || !owns(report)) return false;
     const injuryType = injuryTypeName(report.injuryType).toLowerCase();
@@ -9732,7 +9921,10 @@ function settleMovementIntentAfterFrame(
   const failedOccurrence = !!(intent.failureConfirmed || currentSameOccurrence?.failureConfirmed);
   if (ownsCurrentOccurrence
       && ((failedOccurrence && (rerollResult || rollSettled || fell || turnEnded)) || activationEnded)) {
-    fenceMovementPresentation(intent.playerId, intent.occurrenceId, 'resolved');
+    // Owner 11-23 (g1966709, own touchdown run): a successful activation end lets the queued run finish drawing and
+    // retires it on drain; the fence (drop queue + snap) stays for failed, unanswered or diverged moves.
+    if (!failedOccurrence && activationEnded && successfulRunStillPresenting(intent, reports)) keepLocalRunDrawing(intent.playerId);
+    else fenceMovementPresentation(intent.playerId, intent.occurrenceId, 'resolved');
   }
   if ((rollSettled || fell || turnEnded || activationEnded) && ownsCurrentOccurrence) {
     state.movementIntent = null;
@@ -9742,7 +9934,7 @@ function settleMovementIntentAfterFrame(
 /** opts.rollsUnknown (owner 10-17, pipelined first step): the server has not offered the square yet, so its rolls are
  *  unknown; the intent is published as awaiting a roll (no first-stride anticipation: roll first, then the walk) until
  *  refreshMovementIntentRolls binds the real requirements from the echo. */
-function publishMovementIntent(playerId: string, from: [number, number], to: [number, number], opts: { rollsUnknown?: boolean } = {}): void {
+function publishMovementIntent(playerId: string, from: [number, number], to: [number, number], opts: { rollsUnknown?: boolean; path?: [number, number][] } = {}): void {
   if (Math.max(Math.abs(from[0] - to[0]), Math.abs(from[1] - to[1])) !== 1) return;
   const rawCurrentMove = (game.value?.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove;
   const currentMove = typeof rawCurrentMove === 'number' && Number.isFinite(rawCurrentMove)
@@ -9756,6 +9948,7 @@ function publishMovementIntent(playerId: string, from: [number, number], to: [nu
     awaitsRoll: opts.rollsUnknown === true || rollRequirements.length > 0,
     rollRequirements,
     ...(opts.rollsUnknown === true ? { rollsUnknown: true } : {}),
+    ...(opts.path && opts.path.length > 1 ? { path: opts.path.map((c): [number, number] => [c[0], c[1]]) } : {}),
     failureConfirmed: false,
     latencyObserved: false,
     sentAt: Date.now(),
@@ -9807,9 +10000,12 @@ function frameOfferRollsBeforeArrival(cmd: Record<string, unknown> | undefined, 
 }
 /** Astra r2: the offer's Dodge / Rush joined with a Pick-up the pre-declaration intent already knew (the ball sat on
  *  the square); null when no offer is known at all. */
-function pipelinedStepRolls(known: readonly PlanResolution[], offered: PlanResolution[] | null): PlanResolution[] | null {
+/** @internal exported for the move-batching tests (review finding 5). */
+export function pipelinedStepRolls(known: readonly PlanResolution[], offered: PlanResolution[] | null): PlanResolution[] | null {
   if (!offered) return null;
-  return known.includes('pickup') && !offered.includes('pickup') ? [...offered, 'pickup'] : offered;
+  // Spec 11.5 (review finding 5): the offer replaces only Dodge / Rush; a known Pick-up AND a known trapdoor entry stay.
+  const kept = known.filter((k) => (k === 'pickup' || k === 'trapdoor') && !offered.includes(k));
+  return kept.length ? [...offered, ...kept] : offered;
 }
 function offeredRollResolutions(playerId: string, from: [number, number], to: [number, number]): PlanResolution[] | null {
   const occurrence = moveOfferOccurrences.get(moveOfferTargetKey(to));
@@ -10127,10 +10323,45 @@ const PCHOICE_HEADERS: Record<string, string> = {
 };
 /** #240: successful leaps armed from the server's pre-move `actingPlayer.leaping` flag, awaiting their leapRoll confirmation. */
 const leapMovesAwaitingReport = new Set<string>();
-/** Command-scoped wizard election retained while the client changes from dialog selection to pitch targeting. */
+/** The wizard election of ONE wizardSpell dialog occurrence, retained while the client changes from dialog selection to
+ *  pitch targeting. */
 let liveWizardSpellOffer: WizardSpellOffer | null = null;
 let liveWizardSpell: WizardSpell | null = null;
 let liveWizardSpellAwaitingServer = false;
+/** The server dialog OBJECT the election belongs to (raw). Object identity is the model's occurrence boundary: a sync
+ *  that leaves the dialog standing keeps the object; a gameSetDialogParameter (a new or re-sent dialog, a reconnect
+ *  snapshot) brings a new one. */
+let liveWizardSpellDialog: object | null = null;
+/** Release review (Sol, P1): exactly ONE clientWizardSpell per wizardSpell OCCURRENCE - a cast, or the null cancel.
+ *  Every answer goes through here (mouse, touch, controller, keyboard; Cancel, Fireball, Zap Confirm): a second answer
+ *  before the server closes or replaces the dialog is refused (a double click sent two casts; Cancel then a click sent
+ *  the cancel AND a cast). Released only on server evidence: the dialog closed or the turn mode left 'wizard'
+ *  (armServerCoordinatePicks -> clearWizardSpellElection), a new dialog object (resolvePlayFollowups: a new or re-sent
+ *  occurrence, a reconnect snapshot), or a game reset. Never by a timer: upstream hides DialogWizardSpell on the answer
+ *  and shows it again only when the server sets the dialog again; an unrelated sync is not an offer. On a send the
+ *  occurrence's pick surfaces retire at once. */
+/** The election still belongs to the live dialog: the same server dialog object it was offered from. */
+function wizardOccurrenceLive(): boolean {
+  const dialog = game.value?.dialogParameter as object | null | undefined;
+  return !!dialog && liveWizardSpellDialog !== null && toRaw(dialog) === liveWizardSpellDialog;
+}
+function wizardAnswerOpen(): boolean {
+  return !liveWizardSpellAwaitingServer;
+}
+function sendWizardAnswer(command: Record<string, unknown>): boolean {
+  if (!wizardAnswerOpen()) {
+    log('system', 'play: wizard spell already answered - waiting for the server');
+    return false;
+  }
+  const sent = sendCommand(command);
+  if (!sent) return false;
+  liveWizardSpellAwaitingServer = true;
+  if (state.squarePick?.kind === 'wizard') state.squarePick = null;
+  if (state.inducementUse?.key.startsWith('wizardSpell:')) state.inducementUse = null;
+  if (state.yesNo?.key.startsWith('wizardFriendlyFire:')) clearYesNo();
+  state.wizardTargetConfirm = null;
+  return true;
+}
 /** Command-scoped multi-Regeneration election and its exact display-value lookup. */
 let liveRegenerationOffer: RegenerationElectionOffer | null = null;
 /** The exact server dialog objects the opponent-block / reroll-for-targets surfaces were armed from (instance refs for
@@ -10374,7 +10605,8 @@ function armServerCoordinatePicks(): void {
   const isSafeHands = String(game.value.turnMode ?? '') === 'safePairOfHands';
   const isWizard = String(game.value.turnMode ?? '') === 'wizard'
     && String((game.value.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '') === 'wizardSpell'
-    && liveWizardSpellOffer != null && liveWizardSpell != null;
+    && liveWizardSpellOffer != null && liveWizardSpell != null
+    && !liveWizardSpellAwaitingServer; // an answered occurrence offers no pick (sendWizardAnswer retired it)
   const raidingDialog = game.value.dialogParameter as {
     dialogId?: string; playerChoiceMode?: string;
   } | null;
@@ -10669,6 +10901,7 @@ function applyFrameContents(frame: QueuedFrame) {
   // Settlement later in this frame may run after the planner has already published the following square's
   // intent. Capture the occurrence that actually existed when this server frame arrived.
   const movementIntentAtFrameStart = state.movementIntent;
+  turnoverArmedInFrame = false;
   const dialogAtFrameStart = game.value.dialogParameter as Record<string, unknown> | null | undefined;
   const pastriesOfferAtFrameStart = pastriesOfferOf(game.value); // owner 10-26: the frame that closes it may be a decline
   // The choice frame normally clears the block dialog before presentation can render the selected die.
@@ -10804,7 +11037,8 @@ function applyFrameContents(frame: QueuedFrame) {
     // retire-gap hook 1: read the acting marker off the APPLIED model (this frame's truth) — before the per-square
     // walk detection below, so a frame that both ends one activation and opens another retires the old snapshot
     // first and the new player's step then starts a genuinely fresh run.
-    retirePresentationOnActingChange(String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''));
+    retirePresentationOnActingChange(String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''),
+      (cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? []);
     // #185/#174 W5↔W8: a later authoritative ball coordinate still supersedes a presented descend, but a live
     // kickArc owns retirement. Deferring keeps W8's cine hold armed until the ball honestly lands; descendSettled
     // then fires at true arc end, while only a later aimArmed can clear settled and permit another replay. With no
@@ -10880,15 +11114,28 @@ function applyFrameContents(frame: QueuedFrame) {
     const onP = (s: [number, number] | null | undefined): s is [number, number] =>
       !!s && s[0] >= 0 && s[0] < 26 && s[1] >= 0 && s[1] < 15;
     const actingId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+    const frameReports = (cmd.reportList as { reports?: Record<string, unknown>[] } | undefined)?.reports ?? [];
     for (const d of game.value.fieldModel.playerDataArray) {
       const b = preCoords.get(d.playerId);
       const a = d.playerCoordinate as [number, number] | undefined;
       if (onP(b) && onP(a) && (b[0] !== a[0] || b[1] !== a[1]) &&
           Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) === 1) {
+        // Owner 11-23 review: the echo of the coach's last sent square can arrive in the frame that clears the actor.
+        // That terminal step still belongs to the ending activation when nothing in the frame says the move failed.
+        // Review (devcut 334a, Sol P2 2): a square of the live plan's outstanding ARRAY is the coach's own step whatever
+        // happened to the intent (a passed head roll settles and clears it before the array ends): ownership rides the
+        // plan's array, as it rides the beat for a single square.
+        const intentOwnsStep = movementIntentAtFrameStart?.playerId === d.playerId && !movementIntentAtFrameStart.failureConfirmed
+          && ((movementIntentAtFrameStart.to[0] === a[0] && movementIntentAtFrameStart.to[1] === a[1]
+            && movementIntentAtFrameStart.from[0] === b[0] && movementIntentAtFrameStart.from[1] === b[1])
+            || intentArrayEdge(movementIntentAtFrameStart, b, a)); // move batching: any step of the sent array
+        const terminalOwnEcho = actingId !== d.playerId && preActingId === d.playerId
+          && (intentOwnsStep || plannerArrayStepTag(d.playerId, a).plannerArraySendSeq !== undefined)
+          && !movementFailureEvidence(frameReports, d.playerId);
         if (isConfirmedAdjacentMovementDelta({
           order66: confirmedStepPresentation,
           catchingUp: playback.catchingUp,
-          actingPlayerId: actingId,
+          actingPlayerId: terminalOwnEcho ? d.playerId : actingId,
           playerId: d.playerId,
           from: b,
           to: a,
@@ -11837,6 +12084,24 @@ function applyFrameContents(frame: QueuedFrame) {
       const c = holderId ? g.fieldModel.playerDataArray.find((d) => d.playerId === holderId)?.playerCoordinate : undefined;
       const holderSq: [number, number] | null = c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
       if (holderSq && moverId && moverId !== holderId) showTentaclesCue(g, holderId, moverId, held, holderSq);
+    }
+    // Owner 11-24: SHADOWING - the same report with skill 'Shadowing' (defenderId = the SHADOWER, the mover is the acting
+    // player; it arrives alone in its frame, no skillUse). Both outcomes get the same pill below the shadower:
+    // "<Shadower> shadows <Mover>!" / "<Shadower> fails to shadow <Mover>!". `successful` is the shadower's result in
+    // BB2020 / BB2025; BB2016 (replays) rolls the MOVER's escape instead (upstream bb2016 ShadowingBehaviour:95-106:
+    // successful = escaped), the same inversion as Tentacles, so tentaclesRollHeld reads it. The LAST such roll in a
+    // frame is the outcome (a batched reroll). Presentation only.
+    const shadowing = reports.filter((r) => String(r.reportId) === 'tentaclesShadowingRoll'
+      && String((r as { skill?: unknown }).skill ?? '') === 'Shadowing' && typeof (r as { successful?: unknown }).successful === 'boolean').at(-1);
+    if (shadowing) {
+      const g = game.value;
+      const shadowerId = String((shadowing as { defenderId?: unknown }).defenderId ?? '');
+      const moverId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+      const c = shadowerId ? g.fieldModel.playerDataArray.find((d) => d.playerId === shadowerId)?.playerCoordinate : undefined;
+      const shadowerSq: [number, number] | null = c && c[0] >= 0 && c[0] < 26 && c[1] >= 0 && c[1] < 15 ? [c[0], c[1]] : null;
+      if (shadowerSq && moverId && moverId !== shadowerId) {
+        showTentaclesCue(g, shadowerId, moverId, tentaclesRollHeld((shadowing as { successful?: unknown }).successful, g), shadowerSq, 'Shadowing');
+      }
     }
   }
   // Owner 09-10: FOUL APPEARANCE — ReportFoulAppearanceRoll{playerId = the ATTACKER rolling to overcome it, defenderId =
@@ -13259,6 +13524,7 @@ function applyFrameContents(frame: QueuedFrame) {
       // The per-report rules, the knockdown arming and the drive-boundary disarm: turnPresentation.ts turnoverArmStep.
       const step = turnoverArmStep({ turnoverArmed, turnoverAfterInjury: turnoverArmedAfterInjury, ...turnoverArmExtra }, playingPlayerIds, reports, game.value.turnMode);
       if (step.knockedDown) logMatch('system', `↩ turnover armed — active-team knockdown (${playerName(game.value, step.knockedDown)})`); // #11 diag
+      turnoverArmedInFrame = !turnoverArmed && step.context.turnoverArmed; // armed by THIS frame's reports
       turnoverArmed = step.context.turnoverArmed;
       turnoverArmedAfterInjury = step.context.turnoverAfterInjury;
       turnoverArmExtra = turnoverArmExtraOf(step.context); // Sol r2 #1 / r3 #2: spans the dialog's frames
@@ -13432,6 +13698,7 @@ function applyFrameContents(frame: QueuedFrame) {
     }
     // ORDER 66 (#6.4): advance/flush the planner command-queue AFTER the model + follow-ups + setup are fully applied for this command (leg-2a: evaluate terminals only after a complete apply). `cmd` carries this frame's resolution reports (leg-2a resolution-wait). No-op when no plan runs.
     plannerOnModelApplied(cmd);
+    plannerMoveStopBannerOnModelApplied(); // decision 12: the stopped-early banner ends with the coach's turn
     foulChoiceHoldOnModelApplied(); // S42: retire a stale Foul / Chainsaw chooser hold
     consumeDeclarationIntent(); // Sol r5: an applied model that shows the requested declaration has answered it
     blitzBlockChoiceOnModelApplied(); // Owner 09-28 (S6 follow-up): retire a stale NO-PLAN blitz-commit hold (plan-owned holds are the planner's own job, just above)
@@ -13764,6 +14031,8 @@ function convertGazeToMove(playerId: string, route: [number, number][]): boolean
     state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
     return false;
   };
+  // Review r3 C: no action change while this player's planned run is still being walked.
+  if (plannerArrayBarsTerminal(playerId)) return refused('Not changed to a Move: the planned run is still being walked. Nothing was sent.');
   if (!game.value || gazeToMovePending || !gazeWalkNeedsConversion(playerId)) {
     return refused(gazeToMovePending
       ? 'The change to a Move is already with the server — nothing more was sent.'
@@ -15159,6 +15428,7 @@ const playbackResetRev = ref(0);
 function resetPlayback() {
   playbackResetRev.value += 1;
   movementAwaitingEcho = null; // review fix (1a98974d8 P1): a sent square's echo latch never crosses a reset
+  arrayCutShort = null; // move batching: a reconnect snapshot is authoritative; the cut / unknown-outcome guard ends
   // Owner 10-13 (Astra): the block reroll re-tumble state never crosses a reset (disconnect, reconnect, a fresh game or
   // seat: SERVER_GAME_STATE resets here), so a die chosen before it cannot steer a later observed reroll.
   ownBlockRerollIndices = null;
@@ -15260,6 +15530,7 @@ function resetPlayback() {
   maximumCarnageInstanceKey = ''; maximumCarnageConfirmedInstanceKey = ''; state.maximumCarnageTargeting = false; state.actionNotice = null; clearBlockWatch(); releaseChainsawDeclare(); chainsawBlockSent = null; // g315 / row #334: fresh game — clear action notices + their state-entry key, then the block debounce/watchdog
   srvActingId = null; srvActingAction = null; // g330: fresh game — reset the receive-time acting-player mirror
   state.switchWatcherCard = null; // Astra r12: an unanswered watcher card never carries into another game
+  state.moveStopReport = null; // move batching: a stopped-early banner never carries into another game
   declarationAwaitingEcho = false; declarationAwaitingEchoFor = null; cancelInFlight = false; serverClearedActor = false; actorClearWaiters.clear(); noteDeclarationLatchChange();
   pendingWideRailDeclare = null; acknowledgedWideRailDeclare = null; completedWideRailDeclare = null; releasedDeclaration = null;
   deferredStandUpWideRail = null; // client-owned activation elections never cross connection/game boundaries
@@ -15340,7 +15611,7 @@ function clearCinematics(hardGameBoundary = false) {
   }
   state.pregameWait = null; state.selectSkill = null; state.selectWeather = null; state.selectPosition = null; state.inducementUse = null;
   retireUseInducement();
-  liveWizardSpellOffer = null; liveWizardSpell = null; liveWizardSpellAwaitingServer = false;
+  liveWizardSpellOffer = null; liveWizardSpell = null; liveWizardSpellAwaitingServer = false; liveWizardSpellDialog = null;
   state.wizardTargetPreview = null;
   state.wizardTargetConfirm = null;
   liveRegenerationOffer = null; liveRegenerationChoices.clear();
@@ -15445,7 +15716,7 @@ function clearCollapsedReplayPresentation(preserveConnection = false): void {
   turnStartClearTimer = null;
   turnToastTimer = null;
   rerollSplashClearTimer = null;
-  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; tentaclesCueDeferTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   pendingKickoffVictimSplash = null;
   pendingWinnerKickoff = null;
@@ -15519,7 +15790,7 @@ function clearLeaveGameResidualState(): void {
   turnStartTimer = null;
   turnStartClearTimer = null;
   rerollSplashClearTimer = null;
-  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
+  lonerFailedCueClearTimer = null; state.lonerFailedCue = null; tentaclesCueClearTimer = null; tentaclesCueDeferTimer = null; state.tentaclesCue = null; rerollableRollByPlayer.clear();
   clearApothecaryFixUps();
   rerollStageTimers = [];
   injuryPlaying = false; injuryPresentingSet.clear();
@@ -16136,13 +16407,11 @@ function advanceDeferredStandUpWideRail(): void {
   }
 }
 
-const PLAN_RESOLUTION_REPORT: Record<string, PlanResolution> = {
-  goForItRoll: 'gfi', dodgeRoll: 'dodge', pickUpRoll: 'pickup',
-};
 /** Owner 10-26 (g1075): the roll kind a modifier `skillUse` (modifierRescue.ts) rescues when `failed` (the player's
  *  last failed roll of the square) is one of its kinds; null for every other report. */
 export function modifierRescuedRoll(report: Record<string, unknown>, playerId: string, failed: PlanResolution | null): PlanResolution | null {
   if (!failed || String(report.playerId ?? '') !== playerId) return null;
+  if (failed === 'trapdoor') return null; // no modifier rescues a trapdoor roll
   return modifierRescueKinds(report).includes(failed) ? failed : null;
 }
 
@@ -16153,11 +16422,11 @@ function settleMovementRollPresentation(reports: readonly Record<string, unknown
   for (const report of reports) {
     // Owner 10-26 (g1075): a modifier skillUse makes the held failed roll pass - its kind settles like a success.
     for (const rescued of modifierRescueKinds(report)) settleMovementRollKind(String(report.playerId), rescued);
-    if (report.successful !== true) continue;
-    const resolution = PLAN_RESOLUTION_REPORT[String(report.reportId ?? '')];
+    const outcome = movementRollOutcome(report); // spec 11.5: a trapdoor escape settles its beat like a success
+    if (outcome?.successful !== true) continue;
     const playerId = String(report.playerId ?? '');
-    if (!resolution || !playerId) continue;
-    settleMovementRollKind(playerId, resolution);
+    if (!playerId) continue;
+    settleMovementRollKind(playerId, outcome.kind);
   }
 }
 function settleMovementRollKind(playerId: string, resolution: PlanResolution): void {
@@ -16546,7 +16815,55 @@ export function throwMateCommand(
   return { netCommandId: NetCommandId.CLIENT_THROW_TEAM_MATE, actingPlayerId, ...target, kicked };
 }
 
-// Planner advances from server model echoes, sends one square at a time, and fires the terminal action only after required outcomes resolve.
+// Planner advances from server model echoes and fires the terminal action only after required outcomes resolve. Move
+// batching (spec-move-batching-safe-runs-2026-11-22, rev 4 + owner ruling 13): in BB2025 a send is a SEGMENT
+// [fromIdx..toIdx] chosen by logic/moveSegments.ts (a roll-free run, or one roll square alone); everywhere else, and for
+// every roll square, a segment is one square, byte-identical to the per-square walk.
+/** Spec 11.2: one roll the outstanding send owes. Head obligations sit at `fromIdx`, an endpoint obligation (pickup /
+ *  trapdoor at the end of a longer array) at `toIdx`. `activation` (with its `skill`): an activation roll the FIRST send
+ *  of a BB2025-eligible activation owes on its head (Animal Savagery, Bone Head, Really Stupid, Take Root, Unchannelled
+ *  Fury: confusionRoll; Bloodlust: bloodLustRoll). It rides beside, never instead of, the failedGate / spentMove /
+ *  blitzBloodlustFailed handling: a failure keeps those paths in charge, a success (first roll or reroll) settles it, and
+ *  so does the server walking the player onto the head (the activation steps run before MOVE, so a player that moved
+ *  was not stopped by them, including a skill the server did not roll). */
+type PlanObligationKind = PlanResolution | 'activation';
+interface PlanObligation { idx: number; kind: PlanObligationKind; state: 'pending' | 'succeeded' | 'failed' | 'abandoned'; skill?: string }
+/** Spec 11.2: the outstanding send. `echoedSteps` counts the player's coordinate changes since the send that matched the
+ *  next expected route square IN ORDER (repeated squares and routes back through the start never complete early). */
+interface PlannerSend {
+  sendSeq: number;
+  fromIdx: number;
+  toIdx: number;
+  baselineCoord: [number, number];
+  /** The acting player's currentMove when the send left (evidence; the step count itself is echoedSteps). */
+  baselineMoveCount: number;
+  echoedSteps: number;
+  /** The last coordinate this send observed for the player (a change from it is one step). */
+  lastSeen: [number, number];
+  obligations: PlanObligation[];
+  /** The send went out on the BB2025-eligible path (spec 11.6), whatever its length: unpredicted-roll detection and
+   *  activation obligations apply to it. False = the unchanged per-square path (BB2020 / BB2016, excluded movement). */
+  batchEligible: boolean;
+  /** Review r2 finding 3: the server's end-of-move frame (StepEndMoving's rebuild) arrived after every square echoed;
+   *  an eligible send completes only then (see plannerEndOfMoveFrame). */
+  endOfMoveSeen: boolean;
+  /** Review r2 finding 4: movement-roll reports this send already took (`commandNr:index`): a duplicate DELIVERY is
+   *  skipped, a new attempt (another report) updates its obligation. Arrays only (a single square is the base path). */
+  seenRollReports: Set<string>;
+  /** Review r3 F1: the frame that brought the array's LAST square emptied the move offer (StepMove's refresh with no
+   *  square to add: no next move possible), so StepEndMoving has nothing to rebuild and may emit no frame at all. */
+  emptyOfferAtEnd: boolean;
+  /** Round 7: the frame that brought the LATEST echoed square refreshed the move offer AFTER the player's coordinate
+   *  change (StepMove.java:128 runs only when the server's remaining stack is empty: the server ends the move on that
+   *  square). False for every square the server will walk past. */
+  stepFrameRefreshed: boolean;
+  /** Round 7: terminal-refresh frames (plannerTerminalRefresh) applied since the latest echoed square. The 3.5.0 server
+   *  sends ONE per square it walks past (StepInitMoving.java:369, the next square's recompute); two in a row mean its
+   *  StepInitMoving rejected the next square (:371-374) and StepEndMoving rebuilt (:281). */
+  refreshesSinceStep: number;
+}
+/** Spec 11.6: the send capability the planner presents beside a command (never on the wire). */
+interface PlannerSendCapability { planSeq: number; sendSeq: number; fromIdx: number; toIdx: number }
 // 'gaze' (owner 11-18): walk the planned route under the already-declared gazeMove, then the one CLIENT_GAZE at the
 // armed victim (plannerStart / plannerFireAct / plannedGazeRefusal).
 type PlanActKind = 'pass' | 'foul' | 'handOver' | 'throwTeamMate' | 'kickTeamMate' | 'block' | 'blitz' | 'move' | 'blitzWalk' | 'gaze';
@@ -16560,6 +16877,23 @@ interface PlannerPlan {
   route: [number, number][];                   // waypoints, excludes the start square
   sentIdx: number;                             // #76: index of the last route square SENT (per-square walk); -1 before the walk starts
   squareResolutions: Set<PlanResolution>[];    // #104: per-route-square flagged rolls (index i = the roll owed by the step INTO route[i]); each resolves on its own sync
+  /** Move batching (spec 11.2): index of the outstanding array's HEAD (== sentIdx for an array of one). */
+  sentFromIdx: number;
+  /** Move batching (spec 11.2): the outstanding send, null before the walk starts. */
+  send: PlannerSend | null;
+  /** Next sendSeq (monotonic per plan). */
+  sendSeqNext: number;
+  /** Move batching (spec 12.1): the route prediction record the current segment was cut from (null = none yet). */
+  prediction: RoutePrediction | null;
+  /** The player had to stand up when the plan started (prone): its first send is one square (spec 11.1.7). */
+  startedProne: boolean;
+  /** Decision 7: the next send is held because the walk presentation queue is too deep; the queue wake re-runs it. */
+  queueHeld: boolean;
+  /** Spec 11.4: a movement roll reported for the player that bound to no obligation of a longer array. */
+  unpredictedRoll: Record<string, unknown> | null;
+  /** Review r3 C: a coach cancel requested while an ARRAY was outstanding. It takes effect when the array resolves or
+   *  is cut (nothing more is sent); turn end, reconnect and server-driven ends are never deferred. */
+  cancelRequested?: { reason: string | LocalText; quiet: boolean } | null;
   /** A successful re-roll can return the server to move selection without applying the attempted coordinate.
    *  In that exact case the same still-offered destination must be sent once more before the route can continue. */
   retryResolvedIdx: number | null;
@@ -16626,7 +16960,8 @@ interface PlannerPlan {
    *  failed `bloodLustRoll` for the plan's player before any step left, cleared by a successful (re)roll. */
   blitzBloodlustFailed?: boolean;
   /** Exact target-add occurrence consumed by each sent edge. A same-origin reroll retry must consume a newer
-   *  server republish of that target, never the surviving entry from the prior roll generation. */
+   *  server republish of that target, never the surviving entry from the prior roll generation. Move batching: keyed
+   *  by sendSeq (the HEAD's offer occurrence of that send). */
   sentOfferRevisions: number[];
   /** Owner 10-17: the first square went out behind the declaration, before the server offered it. Its Dodge / Rush /
    *  Pick-up values are unknown until the echo publishes the offer; plannerAdvance refreshes squareResolutions[0]
@@ -16735,7 +17070,26 @@ type MovementAwaitingEcho = {
   /** the planner plan that sent EVERY one of them (its own confirmed move-then-act), or null (a manual step, an
    *  earlier plan, or a mix) */
   planSeq: number | null;
+  /** Move batching: a sent command carried more than one square. The latch then holds, INDEPENDENTLY of any plan (a
+   *  cancelled plan does not hand back transport ownership), until every square has echoed (currentMove progress), the
+   *  server's terminal refresh proved the run stopped short (`terminalStop`), the activation / turn / game changed, or
+   *  the fail-open watchdog: no progress for MOVEMENT_LATCH_FAILOPEN_MS. */
+  batched?: boolean;
+  terminalStop?: boolean;
+  progressSteps?: number;
+  progressAt?: number;
+  /** Round 7 (movementLatchOnFrame): steps seen by the frame hook, whether the frame that brought the latest step
+   *  refreshed the offer after the move (the server's stack ended there), and rebuild-only frames since that step. */
+  frameSteps?: number;
+  stepFrameRefreshed?: boolean;
+  refreshesSinceStep?: number;
 };
+/** Latches fail open: an array latch that sees no movement progress for this long releases (owner law). */
+const MOVEMENT_LATCH_FAILOPEN_MS = 8000;
+/** Move batching (review finding 1 / r2 finding 1): the player whose last ARRAY the server proved cut short this turn,
+ *  or whose array latch expired with the outcome unknown (cleared by the player's next movement send, a turn change, a
+ *  reconnect); a Blitz block is then refused unless the blitzer stands beside the target in the current model. */
+let arrayCutShort: { playerId: string; turnKey: string } | null = null;
 let movementAwaitingEcho: MovementAwaitingEcho | null = null;
 /** Set by the planner around its own square sends (round-2 P2): marks the latch as that plan's. */
 let plannerOwnSendSeq: number | null = null;
@@ -16748,11 +17102,13 @@ function noteMovementSent(cmd: Record<string, unknown>): void {
   const playerId = String(cmd.actingPlayerId ?? '');
   if (!g || !playerId) return;
   const squares = Math.max(1, Array.isArray(cmd.coordinatesTo) ? cmd.coordinatesTo.length : 1);
+  if (arrayCutShort?.playerId === playerId) arrayCutShort = null;
   const open = unechoedMovement(playerId);
   if (open) { // still unresolved: count the further squares from the same baseline
     open.squares += squares;
     if (open.planSeq !== plannerOwnSendSeq) open.planSeq = null;
     open.sentAt = Date.now();
+    if (squares > 1) { open.batched = true; open.terminalStop = false; open.progressAt = Date.now(); }
     return;
   }
   const acting = g.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
@@ -16761,6 +17117,7 @@ function noteMovementSent(cmd: Record<string, unknown>): void {
     playerId, currentMove: Number(acting?.playerId === playerId ? acting?.currentMove ?? 0 : 0),
     from: JSON.stringify(data?.playerCoordinate ?? null), gameId: currentGameId(), turnKey: currentTurnKey(g), sentAt: Date.now(),
     squares, planSeq: plannerOwnSendSeq,
+    ...(squares > 1 ? { batched: true, terminalStop: false, progressSteps: 0, progressAt: Date.now() } : {}),
   };
 }
 /** The unresolved sent movement of `playerId`'s activation, or null (see movementAwaitingEcho). Clears itself on an
@@ -16777,6 +17134,24 @@ function unechoedMovement(playerId: string): MovementAwaitingEcho | null {
   if (latch.playerId !== playerId) return null;
   const data = g.fieldModel.playerDataArray.find((d) => d.playerId === playerId);
   const moved = Number(acting?.currentMove ?? 0) !== latch.currentMove || JSON.stringify(data?.playerCoordinate ?? null) !== latch.from;
+  if (latch.batched) {
+    // Move batching (spec 10 blitz life cycle; review finding 1): an array latch is owned by the transport, not the plan.
+    const steps = Number(acting?.currentMove ?? 0) - latch.currentMove;
+    if (steps !== latch.progressSteps) { latch.progressSteps = steps; latch.progressAt = Date.now(); }
+    const echoedAll = steps >= latch.squares && g.dialogParameter == null;
+    if (echoedAll || latch.terminalStop) { movementAwaitingEcho = null; return null; }
+    if (Date.now() - (latch.progressAt ?? latch.sentAt) > MOVEMENT_LATCH_FAILOPEN_MS) {
+      // Review r2 finding 1: time alone never grants an unrestricted attack. The latch fails open (nothing wedges) into
+      // "outcome unknown": the plan, if any, retires, and a Blitz block is allowed only from a square beside the target
+      // in the CURRENT model (the cut-short guard), until the player's next movement send, a turn change or a reconnect.
+      movementAwaitingEcho = null;
+      arrayCutShort = { playerId: latch.playerId, turnKey: latch.turnKey };
+      const unknown = plannerPlan?.playerId === latch.playerId ? plannerPlan : null;
+      if (unknown) { plannerRetireQuietly('the outcome of the sent run is unknown (no server answer)'); plannerDropOwnSendIntent(unknown, unknown.send); }
+      return null;
+    }
+    return latch;
+  }
   if (moved && g.dialogParameter == null) { movementAwaitingEcho = null; return null; }
   return latch;
 }
@@ -16816,6 +17191,9 @@ function blitzBlockRefusedNoMove(attackerId: string): boolean {
 function holdBlitzBlockChoice(blitzerId: string, targetId: string, requestEveryAlternative = false): boolean {
   const g = game.value;
   if (!g || state.blitzBlockChoice) return false;
+  // Review r4 1a: no attack chooser while the blitzer's array is outstanding (the coach clicks again once it resolves,
+  // as a planned block waits for it).
+  if (plannerArrayBarsTerminal(blitzerId)) { log('system', 'play: the planned run is still being walked - choose the attack once it ends'); return false; }
   // P0 g1963245: no chooser for a Blitz block that cannot be made (every offer on the card would be refused).
   if (!blitzBlockMoveAvailable(g, blitzerId)) return false;
   // Owner 09-28 (Sol review round 3, item 2): the acting action is recorded AT ARM TIME — Classic's SAME call site
@@ -17182,6 +17560,7 @@ function plannerActive(): boolean { return plannerPlan != null; }
 function plannerSet(next: PlannerPlan | null): void {
   if (plannerPlan === next) return;
   plannerClearLashWake(); // a lash-resend wake belongs to the plan that armed it
+  consumedPlannerSends.clear(); // spent capabilities are keyed by planSeq; a new (or no) plan can present none of them
   plannerPlan = next;
   state.plannerRevision += 1;
 }
@@ -17196,16 +17575,26 @@ function plannerArmAbort(silenceRearm = false) {
     // Astra 10-10: a Blitz plan parked on the server's selectBlitzTarget is NOT answering a prompt of its own - nobody
     // promised it a target. It is retired with a notice instead of waiting, silently, for as long as the dialog is up.
     // The client-prompt hold comes first: time the coach spends on OUR prompt is never server silence, whatever the plan waits on.
-    if (plannerPlan && plannerClientPromptHold) { plannerArmAbort(); return; }
+    // Review r4 1d: a LOCALLY opened card (the end-activation prompt, an attack chooser) never extends the watchdog of an
+    // outstanding ARRAY: the release stays time-bounded. A server dialog keeps rearming as before.
+    const localOnlyOverArray = plannerArrayOutstanding(plannerPlan) && !liveUnansweredServerDecision();
+      if (plannerPlan && plannerClientPromptHold && !localOnlyOverArray) { plannerArmAbort(); return; }
     // Likewise the time server frames spend queued behind a movement-roll presentation hold (owner 10-09): the server
     // HAS answered, this client is still showing it. The last queued frame's apply restarts the silence window.
     // Confirmation (ii): it pauses the SILENCE window only (silenceRearm keeps the 30 s origin of the plan's last own
     // send): a backlog that never empties cannot keep a dead plan alive past the absolute cap.
     if (plannerPlan && presentationHoldBlocksActions() && Date.now() < plannerAbortSince + PLANNER_ABORT_CAP_MS) { plannerArmAbort(true); return; }
     if (plannerPlan && plannerBlitzAwaitingTarget(plannerPlan, game.value)) { plannerFlush('no blitz target was selected'); return; }
-    if (plannerPlan && plannerPromptPending()) { plannerArmAbort(); return; }
+    if (plannerPlan && plannerPromptPending() && !localOnlyOverArray) { plannerArmAbort(); return; }
+    // Review r4 1e: the plan watchdog ending an unresolved ARRAY leaves its outcome unknown, exactly as the transport
+    // latch's own expiry does: a Blitz block then needs the blitzer beside the target in the current model.
+    if (plannerPlan && plannerArrayOutstanding(plannerPlan) && game.value) {
+      arrayCutShort = { playerId: plannerPlan.playerId, turnKey: currentTurnKey(game.value) };
+    }
     if (plannerPlan?.failedGate) { plannerRetireQuietly(`the ${plannerPlan.failedGate} roll failed`); return; }
-    plannerFlush('the server did not respond');
+    const timedOut = plannerPlan;
+    plannerFlush(lt('store.text.planCanceledServerSilent'));
+    if (timedOut) plannerDropOwnSendIntent(timedOut, timedOut.send); // outcome unknown: no frame will settle its intent
   }, delay);
 }
 /** An applied server frame proves the link is alive: restart the silence window of an ALREADY armed watchdog. */
@@ -17215,7 +17604,358 @@ function plannerClearAbort() { if (plannerAbortTimer) { cancelGameTimeout(planne
  *  roll by letting the activation go on (an Animal Savagery lash-out that does not end it) means that roll did not end
  *  this plan - so a send drops `failedGate`, and a LATER lost activation or timeout warns as usual. */
 function plannerSentCommand(p: { failedGate: string | null }) { p.failedGate = null; plannerArmAbort(); }
-const PLAN_RESOLUTION_LABEL: Record<PlanResolution, string> = { gfi: 'rush', dodge: 'dodge', pickup: 'pick-up' };
+// ---- Move batching, safe runs (spec-move-batching-safe-runs-2026-11-22, rev 4 + owner ruling 13) ----------------
+/** Spec 11.6: the live plan's send capability, set ONLY around the planner's own segment send (plannerSendSegment /
+ *  sendPipelinedFirstStep). It travels beside the command, never on the wire. */
+let plannerSendCapability: PlannerSendCapability | null = null;
+/** Capabilities the transport accepted (`planSeq:sendSeq`): a second presentation is refused (spec 11.6). */
+const consumedPlannerSends = new Set<string>();
+const plannerCapabilityKey = (c: PlannerSendCapability): string => `${c.planSeq}:${c.sendSeq}`;
+/** Spec 11.6 (a): plan kinds whose walk may batch. `block` never walks; KTM batches its walk leg only. */
+const BATCH_PLAN_KINDS: ReadonlySet<PlanActKind> = new Set<PlanActKind>(['move', 'blitz', 'blitzWalk', 'pass', 'handOver', 'foul', 'gaze', 'throwTeamMate', 'kickTeamMate']);
+/** Spec 11.6 (b): the DECLARED server action (PlayerAction json names) the walk runs under. Not listed (one square):
+ *  puntMove, standUp, standUpBlitz and every other action the MOVE-state fallback keeps alive. */
+const BATCH_DECLARED_ACTIONS: ReadonlySet<string> = new Set([
+  'move', 'blitzMove', 'passMove', 'handOverMove', 'foulMove', 'gazeMove', 'throwTeamMateMove', 'kickTeamMateMove',
+  'secureTheBall', 'kickEmBlitz',
+]);
+/** Decision 9: the raw rulesVersion option of the loaded game. */
+function batchingRulesActive(g: GameJson): boolean {
+  const raw = g.gameOptions?.gameOptionArray?.find((option) => option?.gameOptionId === 'rulesVersion')?.gameOptionValue;
+  return isBatchingRulesVersion(raw);
+}
+/** Spec 11.6 + 12.3: may this plan's next send carry more than one square? `pipelined`: the first segment rides behind
+ *  the plan's own transport-accepted, still-unechoed Move declaration (12.3). The prone first send is cut by the
+ *  segment function (firstSendProne). */
+function plannerBatchEligible(p: PlannerPlan, g: GameJson, opts: { pipelined?: boolean } = {}): boolean {
+  if (plannerPlan !== p || !batchingRulesActive(g)) return false;
+  if (p.onTheBallMode !== null || String(g.turnMode ?? '') !== 'regular') return false; // kick-off Charge (turnMode blitz) excluded
+  if (!BATCH_PLAN_KINDS.has(p.actKind)) return false;
+  const declared = opts.pipelined
+    ? (declarationAwaitingEcho && declarationAwaitingEchoFor === p.playerId && p.actKind === 'move' && p.declare === 'move' ? String(declarationAwaitingEchoAction ?? '') : '')
+    : (plannerActingId() === p.playerId ? plannerActingAction() : '');
+  if (!BATCH_DECLARED_ACTIONS.has(declared)) return false;
+  if (!opts.pipelined && isJumping()) return false;
+  if (movesRandomly(g, p.playerId) || plannerPinned(p.playerId)) return false; // Ball & Chain; rooted / chomped
+  return true;
+}
+function plannerRosterPlayer(g: GameJson, playerId: string) {
+  return g.teamHome.playerArray.find((pl) => pl.playerId === playerId) ?? g.teamAway.playerArray.find((pl) => pl.playerId === playerId) ?? null;
+}
+const onPitchSquare = (c: unknown): c is [number, number] => Array.isArray(c) && Number(c[0]) >= 0 && Number(c[0]) <= 25 && Number(c[1]) >= 0 && Number(c[1]) <= 14;
+/** Spec 12.1 / 14: the opposing players the prediction reads (their tackle zones), from the applied model. */
+function plannerOpponentFacts(g: GameJson, playerId: string): OpponentFact[] {
+  const moverHome = g.teamHome.playerArray.some((pl) => pl.playerId === playerId);
+  const opposing = new Set((moverHome ? g.teamAway : g.teamHome).playerArray.map((pl) => pl.playerId));
+  const out: OpponentFact[] = [];
+  for (const d of g.fieldModel.playerDataArray) {
+    if (!opposing.has(d.playerId) || !onPitchSquare(d.playerCoordinate)) continue;
+    out.push({
+      coordinate: [Number(d.playerCoordinate[0]), Number(d.playerCoordinate[1])],
+      hasTacklezones: hasTackleZones(Number(d.playerState ?? 0)),
+    });
+  }
+  return out;
+}
+/** Spec 12.1: the prediction record for route[baseIdx..] from `origin`, from the CURRENT model (made right before every
+ *  send, so a held send or a re-segment after a completed send always sees the live board). null = facts missing. */
+function plannerPredict(p: PlannerPlan, g: GameJson, baseIdx: number, origin: [number, number]): RoutePrediction | null {
+  const rp = plannerRosterPlayer(g, p.playerId);
+  if (!rp) return null;
+  const ma = Number(effectiveMovement(rp));
+  if (!Number.isFinite(ma) || ma < 0) return null;
+  const acting = g.actingPlayer as { playerId?: string | null; currentMove?: unknown; usedSkills?: unknown[] | null } | undefined;
+  const movementUsedRaw = acting?.playerId === p.playerId ? Number(acting?.currentMove ?? 0) : 0;
+  const movementUsed = Number.isFinite(movementUsedRaw) ? Math.max(0, movementUsedRaw) : 0;
+  const prone = (plannerBase(p.playerId) ?? 0) === 0x03 && !playerHasSkill(rp, 'Jump Up');
+  const norm = (v: unknown) => String(v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const usedSkills = new Set([...(((rp as { usedSkills?: unknown[] | null }).usedSkills) ?? []), ...((acting?.playerId === p.playerId ? acting?.usedSkills : null) ?? [])].map(norm));
+  return predictRoute({
+    actorId: p.playerId,
+    modelRevision: lastAppliedCommandNr,
+    origin,
+    route: p.route,
+    routeBaseIdx: baseIdx,
+    effectiveMA: ma,
+    movementUsed,
+    prone,
+    standUpCharged: prone && movementUsed > 0,
+    extraRushAllowance: (playerHasSkill(rp, 'Sprint') ? 1 : 0) + (playerHasSkill(rp, 'Burst of Speed') && !usedSkills.has('burstofspeed') ? 1 : 0),
+    moverIgnoresTacklezones: incorporealIsActive(g, p.playerId),
+    opponents: plannerOpponentFacts(g, p.playerId),
+  });
+}
+/** Decisions 3-5 / spec 12.5: the squares an array must END on, refreshed from the model at every segmenting. */
+function plannerEndpoints(g: GameJson, playerId: string): { ball: [number, number] | null; trapdoors: [number, number][]; endZoneX: number | null } {
+  const fm = g.fieldModel;
+  const ball = fm.ballCoordinate as [number, number] | undefined;
+  const loose = !!fm.ballInPlay && fm.ballMoving === true && onPitchSquare(ball); // possession semantics (StepPickUp 272-279)
+  const carrier = holdsBall(fm as unknown as HoldsBallFieldModel, playerId);
+  const moverHome = g.teamHome.playerArray.some((pl) => pl.playerId === playerId);
+  return { ball: loose ? [ball![0], ball![1]] : null, trapdoors: serverTrapdoorSquares(g), endZoneX: carrier ? (moverHome ? 25 : 0) : null };
+}
+/** The rolls an array that ENDS on `square` owes there (pickup on a loose ball, a server-sent trapdoor). */
+function plannerEndpointKinds(g: GameJson, square: [number, number]): PlanResolution[] {
+  const out: PlanResolution[] = [];
+  const fm = g.fieldModel;
+  const ball = fm.ballCoordinate as [number, number] | undefined;
+  if (!!fm.ballInPlay && fm.ballMoving === true && !!ball && ball[0] === square[0] && ball[1] === square[1]) out.push('pickup');
+  if (serverTrapdoorSquares(g).some((t) => t[0] === square[0] && t[1] === square[1])) out.push('trapdoor');
+  return out;
+}
+/** Spec 12.1 head precedence: the server's offer for route[idx], for this exact actor / origin / action occurrence. */
+function plannerHeadOffer(p: PlannerPlan, idx: number): { dodge: boolean; rush: boolean } | null {
+  const sq = p.route[idx];
+  const offer = sq ? currentMoveOffer(p.playerId, sq) : null;
+  return offer ? { dodge: offer.minimumRollDodge > 0, rush: offer.minimumRollGfi > 0 } : null;
+}
+/** The next segment of the live plan from `fromIdx`, the player standing on `origin`. Re-predicts from the current
+ *  model every time (12.1 validity); not eligible -> one square, exactly today's send. */
+function plannerChooseSegment(p: PlannerPlan, g: GameJson, fromIdx: number, origin: [number, number], opts: { pipelined?: boolean } = {}): Segment & { eligible: boolean } {
+  const eligible = plannerBatchEligible(p, g, opts);
+  if (!eligible) return { fromIdx, toIdx: fromIdx, eligible };
+  const prediction = plannerPredict(p, g, fromIdx, origin);
+  p.prediction = prediction;
+  return {
+    ...nextSegment({
+      route: p.route, fromIdx, origin, eligible,
+      firstSendProne: p.startedProne && p.sendSeqNext === 0,
+      headOffer: opts.pipelined ? null : plannerHeadOffer(p, fromIdx),
+      prediction,
+      endpoints: plannerEndpoints(g, p.playerId),
+    }),
+    eligible,
+  };
+}
+/** Spec 11.2: the obligations of a send [fromIdx..toIdx]. `headKinds` = the head square's rolls (offer, pickup,
+ *  trapdoor). In a longer array the head can owe only Dodge / Rush (an endpoint ends its array) and the endpoint's
+ *  pickup / trapdoor sit at toIdx. */
+function plannerSendObligations(p: PlannerPlan, g: GameJson, seg: Segment, headKinds: Iterable<PlanResolution>, eligible = false): PlanObligation[] {
+  const out: PlanObligation[] = [];
+  for (const kind of headKinds) {
+    if (seg.toIdx === seg.fromIdx || kind === 'dodge' || kind === 'gfi') out.push({ idx: seg.fromIdx, kind, state: 'pending' });
+  }
+  if (seg.toIdx > seg.fromIdx) for (const kind of plannerEndpointKinds(g, p.route[seg.toIdx]!)) out.push({ idx: seg.toIdx, kind, state: 'pending' });
+  if (eligible && seg.toIdx > seg.fromIdx) out.push(...plannerActivationObligations(p, g, seg.fromIdx)); // r3 A: arrays only
+  return out;
+}
+/** Spec 11.2: the activation rolls bb2025 ActivationSequenceBuilder runs on the first command of a Move-type activation
+ *  (Animal Savagery, Bone Head, Really Stupid, Take Root, Unchannelled Fury, Bloodlust), each only while the skill is
+ *  unused this activation (actingPlayerMarkSkillUsed). Blitz activations roll them on the target selection
+ *  (SelectBlitzTarget), never on the walk. Only the first send of the plan owes them. */
+const ACTIVATION_ROLL_SKILLS = ['Animal Savagery', 'Bone Head', 'Really Stupid', 'Take Root', 'Unchannelled Fury', 'Bloodlust'];
+const activationSkillKey = (name: unknown): string => String(name ?? '').toLowerCase().replace(/[^a-z]/g, '');
+function plannerActivationObligations(p: PlannerPlan, g: GameJson, headIdx: number): PlanObligation[] {
+  if (p.sendSeqNext !== 0 || p.actKind === 'blitz' || p.actKind === 'blitzWalk') return [];
+  const rp = plannerRosterPlayer(g, p.playerId);
+  if (!rp) return [];
+  const acting = g.actingPlayer as { playerId?: string | null; usedSkills?: unknown[] | null } | undefined;
+  const used = new Set(((acting?.playerId === p.playerId ? acting?.usedSkills : null) ?? []).map(activationSkillKey));
+  return ACTIVATION_ROLL_SKILLS
+    .filter((skill) => playerHasSkill(rp, skill) && !used.has(activationSkillKey(skill)))
+    .map((skill) => ({ idx: headIdx, kind: 'activation' as const, state: 'pending' as const, skill }));
+}
+/** The activation obligation a confusionRoll / bloodLustRoll report settles (live = pending or failed), or null. */
+function plannerActivationObligationFor(s: PlannerSend, report: Readonly<Record<string, unknown>>): PlanObligation | null {
+  const id = String(report.reportId ?? '');
+  const skill = id === 'bloodLustRoll' ? 'bloodlust' : id === 'confusionRoll' ? activationSkillKey(report.confusionSkill) : null;
+  if (skill === null) return null;
+  return s.obligations.find((o) => o.kind === 'activation' && (o.state === 'pending' || o.state === 'failed')
+    && (activationSkillKey(o.skill) === skill || (!skill && id === 'confusionRoll'))) ?? null;
+}
+/** Decision 7: walk steps waiting in the presentation queue (the one on screen is not waiting). */
+function presentationStepsWaiting(): number {
+  return presentation.queue.reduce((n, e) => n + (e.kind === 'step' ? 1 : 0), 0);
+}
+/** Decision 7: hold a send that would push the walk queue past the collapse depth; a segment longer than the depth goes
+ *  only on an EMPTY queue. Never a second, shorter array. */
+function plannerQueueGuardHolds(p: PlannerPlan, seg: Segment): boolean {
+  const squares = seg.toIdx - seg.fromIdx + 1;
+  if (squares <= 1) { p.queueHeld = false; return false; } // a single square is today's send, never held
+  const waiting = presentationStepsWaiting();
+  const holds = waiting > 0 && waiting + squares > PRESENTATION_COLLAPSE_DEPTH;
+  p.queueHeld = holds;
+  return holds;
+}
+/** Decision 7 wake: a walk step left the presentation queue (drain, cancel, reset). Re-runs the live plan's send check,
+ *  idempotently, with every other guard re-checked; a no-op unless a send is held on the queue. */
+let plannerQueueWakeRunning = false;
+function plannerQueueWake(): void {
+  if (!plannerPlan?.queueHeld || plannerQueueWakeRunning) return;
+  plannerQueueWakeRunning = true;
+  try { plannerAdvance(); } finally { plannerQueueWakeRunning = false; }
+}
+/** Spec 11.6 / 12.4: send `seg` of the live plan through the existing sender branch with the plan's capability. */
+function plannerSendSegment(p: PlannerPlan, seg: Segment, minimumOfferRevision = -1): boolean {
+  const path = p.route.slice(seg.fromIdx, seg.toIdx + 1).map((c) => [c[0], c[1]] as [number, number]);
+  const prior = plannerSendCapability;
+  plannerSendCapability = { planSeq: p.seq, sendSeq: p.sendSeqNext, fromIdx: seg.fromIdx, toIdx: seg.toIdx };
+  try {
+    return plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
+      ? gameStore.o66BlitzMove(p.playerId, path, minimumOfferRevision)
+      : gameStore.o66Move(p.playerId, path, minimumOfferRevision)));
+  } finally { plannerSendCapability = prior; }
+}
+/** Spec 12.4: the sender branch is running the live plan's own segment send for `playerId`. */
+function plannerContinuationFor(playerId: string): boolean {
+  const cap = plannerSendCapability;
+  return !!cap && plannerPlan?.seq === cap.planSeq && plannerPlan.playerId === playerId;
+}
+/** Commit an ACCEPTED send as the plan's outstanding send. */
+function plannerCommitSend(p: PlannerPlan, seg: Segment, origin: [number, number], obligations: PlanObligation[], offerRevision: number, batchEligible = false): void {
+  if (p.send) for (const o of p.send.obligations) if (o.state === 'pending' || o.state === 'failed') o.state = 'abandoned';
+  const sendSeq = p.sendSeqNext++;
+  p.send = {
+    sendSeq, fromIdx: seg.fromIdx, toIdx: seg.toIdx,
+    baselineCoord: [origin[0], origin[1]],
+    baselineMoveCount: Number((game.value?.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove ?? 0) || 0,
+    echoedSteps: 0, lastSeen: [origin[0], origin[1]], obligations, batchEligible, endOfMoveSeen: false, seenRollReports: new Set(), emptyOfferAtEnd: false,
+    stepFrameRefreshed: false, refreshesSinceStep: 0,
+  };
+  p.sentFromIdx = seg.fromIdx;
+  p.sentIdx = seg.toIdx;
+  p.sentOfferRevisions[sendSeq] = offerRevision;
+  p.queueHeld = false;
+}
+/** Spec 11.2 step progress: one observed coordinate of the plan's player. */
+function plannerObserveCoordinate(p: PlannerPlan, c: [number, number]): void {
+  const s = p.send;
+  if (!s || (c[0] === s.lastSeen[0] && c[1] === s.lastSeen[1])) return;
+  s.lastSeen = [c[0], c[1]];
+  const expected = p.route[s.fromIdx + s.echoedSteps];
+  if (s.echoedSteps < s.toIdx - s.fromIdx + 1 && expected && expected[0] === c[0] && expected[1] === c[1]) s.echoedSteps += 1;
+}
+/** Every coordinate change of the plan's player in `cmd` (wire order), then the applied coordinate. */
+function plannerObserveSteps(p: PlannerPlan, cmd?: Record<string, unknown>): void {
+  if (!p.send) return;
+  const changes = ((cmd?.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray ?? []) as { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[];
+  const before = p.send.echoedSteps;
+  for (const change of changes) {
+    if (String(change.modelChangeId ?? '') !== 'fieldModelSetPlayerCoordinate' || String(change.modelChangeKey ?? '') !== p.playerId) continue;
+    const v = change.modelChangeValue;
+    if (Array.isArray(v) && v.length >= 2) plannerObserveCoordinate(p, [Number(v[0]), Number(v[1])]);
+  }
+  // Review r3 F1: THIS frame brought the array's last square and left the move offer empty (StepMove's refresh on the
+  // last square cleared it and added none: UtilServerPlayerMove.updateMoveSquares adds only while a next move is
+  // possible). StepEndMoving then has nothing to clear or add (FieldModel.clearMoveSquares removes existing squares
+  // only), and an empty sync is not sent (UtilServerGame.syncGameModel). That frame is the end-of-move evidence.
+  const s = p.send;
+  if (plannerSendIsArray(s) && before < sendSquares(s) && s.echoedSteps >= sendSquares(s)
+      && !changes.some((c) => String(c.modelChangeId ?? '') === 'fieldModelAddMoveSquare')
+      && ((game.value?.fieldModel.moveSquareArray ?? []) as unknown[]).length === 0) s.emptyOfferAtEnd = true;
+  const at = plannerCoord(p.playerId);
+  if (at) plannerObserveCoordinate(p, at);
+  // Round 7: what this frame says about where the server's walk of the array stands (see plannerStoppedShortFrame).
+  if (cmd) {
+    if (s.echoedSteps > before) { s.stepFrameRefreshed = moveSquaresRefreshedAfterStep(cmd, p.playerId); s.refreshesSinceStep = 0; }
+    else if (at && plannerTerminalRefresh(cmd, at)) s.refreshesSinceStep += 1;
+  }
+  // Spec 11.2 / review r2 finding 2: the activation steps run before MOVE, so ordered arrival at the head proves the
+  // server continued past every one of them: pending (passed, or not rolled) AND failed ones (a failed Animal Savagery that
+  // lashed out at a TEAMMATE keeps the move stack, AnimalSavageryBehaviour.java:218). Activation-ending failures never
+  // produce that arrival and keep their failedGate / spentMove handling.
+  if (p.send.echoedSteps >= 1) for (const o of p.send.obligations) if (o.kind === 'activation' && (o.state === 'pending' || o.state === 'failed')) o.state = 'succeeded';
+}
+const sendSquares = (s: PlannerSend): number => s.toIdx - s.fromIdx + 1;
+/** Round 7: `cmd` moved `playerId` and THEN changed the move offer (a remove or add after the coordinate change, in wire
+ *  order): StepMove's own refresh (bb2025 StepMove.java:115 position, :128 refresh), which runs only when no square is
+ *  left in the server's stack. The 3.5.0 recompute for the NEXT square (StepInitMoving.java:369) is synced in a frame of
+ *  its own BEFORE that square's coordinate frame (StepExecutor.java:119 syncs per step); a delivery that merged it into
+ *  the coordinate frame would put it ahead of the coordinate change. Not robust to a frame with TWO mover coordinates
+ *  (true after the first coordinate's refresh even if another coordinate follows); no known producer sends one. */
+function moveSquaresRefreshedAfterStep(cmd: Record<string, unknown>, playerId: string): boolean {
+  const changes = ((cmd.modelChangeList as { modelChangeArray?: unknown } | undefined)?.modelChangeArray ?? []) as { modelChangeId?: unknown; modelChangeKey?: unknown }[];
+  let moved = false;
+  for (const change of changes) {
+    const id = String(change.modelChangeId ?? '');
+    if (id === 'fieldModelSetPlayerCoordinate' && String(change.modelChangeKey ?? '') === playerId) moved = true;
+    else if (moved && (id === 'fieldModelAddMoveSquare' || id === 'fieldModelRemoveMoveSquare')) return true;
+  }
+  return false;
+}
+/** Spec 11.2: every head obligation succeeded. */
+function plannerHeadSettled(s: PlannerSend): boolean {
+  return s.obligations.every((o) => o.idx !== s.fromIdx || o.state === 'succeeded');
+}
+/** Spec 11.2 array complete: every square echoed in order, the player ON route[toIdx], every obligation succeeded, and
+ *  (review r2 finding 3) for a BB2025-eligible send the server's end-of-move frame after it (plannerEndOfMoveFrame). */
+function plannerSendComplete(p: PlannerPlan, s: PlannerSend): boolean {
+  // Review r3 A: a single square completes exactly as at base (arrival + its rolls), with ONE deliberate exception (spec
+  // 11.5, review r4 finding 2): a server-sent trapdoor on the square is an owed roll in every ruleset, so a single square
+  // onto a trapdoor waits for its trapDoor result where base continued on arrival. Only an ARRAY waits for the server's
+  // end-of-move evidence: its rebuild frame, or (F1) the last square's frame that emptied the offer (nothing to rebuild).
+  return plannerSendWalked(p, s) && (!plannerSendIsArray(s) || s.endOfMoveSeen || s.emptyOfferAtEnd);
+}
+/** A BB2025-eligible send of more than one square (the only kind that waits for end-of-move evidence). */
+function plannerSendIsArray(s: PlannerSend): boolean {
+  return s.batchEligible && sendSquares(s) > 1;
+}
+/** Review r3 C: the plan's ARRAY is still outstanding (not walked in full with its end-of-move evidence). */
+function plannerArrayOutstanding(p: PlannerPlan | null): boolean {
+  const s = p?.send;
+  return !!p && !!s && p.phase === 'moving' && plannerSendIsArray(s) && !plannerSendComplete(p, s);
+}
+/** Review r3 C: a coach cancel while the plan's array is outstanding is recorded, not applied: it takes effect when the
+ *  array resolves or is cut. True = deferred (the caller does nothing more). */
+function plannerDeferCancel(reason: string | LocalText, quiet: boolean): boolean {
+  const p = plannerPlan;
+  if (!p || !plannerArrayOutstanding(p)) return false;
+  p.cancelRequested = { reason, quiet };
+  log('system', 'play: cancel recorded - it takes effect when the planned run the server is walking ends');
+  return true;
+}
+/** Review r3 C: terminal commands (block, Kick 'Em, foul, pass, hand-off, gaze, team-mate throw / pick-up) never leave
+ *  for a player whose ARRAY is outstanding: the transport latch of a sent array (fails open by its watchdog), or the live
+ *  plan's unresolved array. */
+const ARRAY_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
+  NetCommandId.CLIENT_BLOCK, NetCommandId.CLIENT_FOUL, NetCommandId.CLIENT_PASS, NetCommandId.CLIENT_HAND_OVER,
+  NetCommandId.CLIENT_GAZE, NetCommandId.CLIENT_THROW_TEAM_MATE, NetCommandId.CLIENT_KICK_TEAM_MATE,
+]);
+/** Review r4 1b: the clientUseSkill elections that commit an act for the acting player on their own. bb2025
+ *  StepInitMoving.java:294-317 (and StepEndMoving.java:177-181): a used skill with canAddBlockDie (only Gored By The
+ *  Bull, skill/mixed/special/GoredByTheBull.java) dispatches PlayerAction.BLITZ, i.e. the block; StepInitMoving.java:
+ *  324-333: canCarryPartner (I'll Carry You, skill/bb2025/special/IllCarryYou.java) pushes a Move + IllCarryYou sequence.
+ *  Every other clientUseSkill (rerolls, dialog answers, skill elections) is untouched. */
+const ARRAY_TERMINAL_SKILLS: ReadonlySet<string> = new Set(['Gored By The Bull', "I'll Carry You"]);
+function plannerArrayBarsTerminal(playerId: string): boolean {
+  if (!playerId) return false;
+  if (plannerPlan?.playerId === playerId && plannerArrayOutstanding(plannerPlan)) return true;
+  return unechoedMovement(playerId)?.batched === true;
+}
+/** Every square echoed in order, the player on route[toIdx], every obligation succeeded (no end-of-move proof). */
+function plannerSendWalked(p: PlannerPlan, s: PlannerSend): boolean {
+  const at = plannerCoord(p.playerId);
+  const end = p.route[s.toIdx];
+  return s.echoedSteps >= sendSquares(s) && !!at && !!end && at[0] === end[0] && at[1] === end[1]
+    && s.obligations.every((o) => o.state === 'succeeded');
+}
+/** Review r2 finding 3: the authoritative END-OF-MOVE frame of a send. Server order (bb2025 generator Move.java 37-75,
+ *  StepExecutor.java 119 syncs after EVERY step; confirmed on local captures live-1918327 #1537-1541, g1918815
+ *  #3530-3532 / #3534-3539, g1918820 #1392-1396, corpus-blitz4 #57-58, and the committed g1951080 #2703-2705):
+ *   (a) one square, no roll:  [StepMove: coordinate + move-square refresh] -> [StepEndMoving: clear + rebuild]
+ *   (b) one square, rush / dodge: [StepMove: coordinate + refresh] -> [GO_FOR_IT / MOVE_DODGE: report] (-> reroll
+ *       dialog / result frames) -> [StepEndMoving: clear + rebuild]
+ *   (c) an array: [StepMove: coordinate] per square, the LAST one also refreshes (fMoveStackSize == 0) ->
+ *       [StepEndMoving: clear + rebuild]. Round 7 (live rig 2026-11-24, fork jar on the 3.5.0 line): that server also
+ *       sends a rebuild-only frame BEFORE every square after the first (StepInitMoving.java:369 recomputes the offer
+ *       for the actual position at the head of each square), i.e. after every square it walks past. Such a frame is
+ *       never an end: completion still needs every square echoed first, and plannerStoppedShortFrame needs the server's
+ *       own end-of-stack evidence. The 3.4.0 server (StepInitMoving without :369) sends only the end rebuild.
+ *   (d) an array ending on a pickup / trapdoor: ... last [StepMove] -> [PICK_UP / TRAP_DOOR: report (+ ball)] ->
+ *       [StepEndMoving: clear + rebuild]
+ *   (e) a move that ends the activation (no next move possible) or scores: NO rebuild; StepEndMoving pushes
+ *       EndPlayerAction (actor cleared) or the touchdown ends the turn. The evidence is that activation / turn end
+ *       (handled in plannerAdvance), never a rebuild.
+ *  The rebuild is a distinct frame (FieldModel.clearMoveSquares + add emit remove / add even when identical), with no
+ *  report and no coordinate change: exactly plannerTerminalRefresh from the player's current square. In the captures it
+ *  follows the last square's frame in the same server millisecond (gameTime +1). */
+function plannerEndOfMoveFrame(p: PlannerPlan, s: PlannerSend, cmd: Record<string, unknown> | undefined): boolean {
+  if (!plannerSendIsArray(s) || s.echoedSteps < sendSquares(s)) return false;
+  const at = plannerCoord(p.playerId);
+  const end = p.route[s.toIdx];
+  return !!at && !!end && at[0] === end[0] && at[1] === end[1] && plannerTerminalRefresh(cmd, at);
+}
+const PLAN_RESOLUTION_LABEL: Record<PlanResolution, string> = { gfi: 'rush', dodge: 'dodge', pickup: 'pick-up', trapdoor: 'trapdoor roll' };
 /** Owner 09-15: the plan ended on a server-resolved outcome (a failed roll → fall / turnover). No ⚠, no notice —
  *  the roll's own presentation and the turnover splash already say what happened. */
 function plannerRetireQuietly(reason: string) {
@@ -17342,6 +18082,16 @@ function plannerBlitzMoveReady(p: PlannerPlan, g: GameJson): boolean {
 function plannerBlitzAwaitingTarget(p: PlannerPlan, g: GameJson | null): boolean {
   return (p.actKind === 'blitz' || p.actKind === 'blitzWalk') && p.declare === 'blitzMove'
     && p.phase === 'declaring' && String(g?.turnMode ?? '') === 'selectBlitzTarget';
+}
+/** Review r5 2: a server decision is still open and unanswered: a live, non-stale dialog this client has not answered
+ *  (the same tests plannerPromptPending applies; an answered dialog stays in the model until the server hides it), or the
+ *  server waiting on the opponent. */
+function liveUnansweredServerDecision(): boolean {
+  const g = game.value;
+  if (!g) return false;
+  const dialogId = String((g.dialogParameter as { dialogId?: unknown } | null | undefined)?.dialogId ?? '');
+  if (g.dialogParameter && !staleDialogOutlivedPhase(dialogId, g.turnMode, g) && !dialogAlreadyAnswered()) return true;
+  return (g as Record<string, unknown>).waitingForOpponent === true;
 }
 function plannerPromptPending(opts: { ignoreKickEmPicker?: boolean } = {}): boolean {
   // Hold the planner on model-level dialogs/pushback; UI surfaces arm after model application.
@@ -17475,6 +18225,12 @@ function plannerStart(input: {
     return false;
   }
   const carriedFoulChoice = actKind === 'foul' ? liveFoulChoice(game.value)?.usingChainsaw : undefined; // S42: survives its own re-plan
+  // Review r3 C: a plan whose array is still being walked is not superseded; the new plan is refused (nothing is sent).
+  if (plannerPlan && plannerArrayOutstanding(plannerPlan)) {
+    plannerDeferCancel('superseded by a new plan', false);
+    log('system', 'ignored: a planned run is still being walked; plan again once it ends');
+    return false;
+  }
   if (plannerPlan) plannerFlush('superseded by a new plan');
   const route = (input.route ?? []).map((c) => [c[0], c[1]] as [number, number]);
   const moving = route.length > 0;
@@ -17551,6 +18307,8 @@ function plannerStart(input: {
   plannerSet({
     seq: ++plannerSeq, playerId, actKind, moving, declare, declareOnly: input.declareOnly === true,
     route, sentIdx: -1, squareResolutions, retryResolvedIdx: null, spentMove: null, opponentPromptOverSend: false, failedRoll: null,
+    sentFromIdx: -1, send: null, sendSeqNext: 0, prediction: null, queueHeld: false, unpredictedRoll: null,
+    startedProne: (plannerBase(playerId) ?? 0) === 0x03,
     failedGate: lastFailedGate && lastFailedGate.playerId === playerId && lastFailedGate.turnKey === currentTurnKey(game.value) ? lastFailedGate.skill : null,
     startedPinned, sentOfferRevisions: [],
     targetCoordinate: input.targetCoordinate ?? null, targetPlayerId: input.targetPlayerId ?? null,
@@ -17573,10 +18331,11 @@ function plannerStart(input: {
 }
 /** Owner 10-17: send the plan's first square right behind its declaration instead of waiting for the echo. Only a
  *  plain walk (actKind 'move' declared as Move) whose declaration is in flight for this player, with no dialog up, in
- *  a regular / blitz turn, and only the first (adjacent) square of the planned route: the planner's own pre-declaration
- *  resolution of that square stands until the echo refreshes it. The server validates the move; a refused declaration
- *  leaves the move unanswered and the plan's silence watchdog retires it (fail open). Everything after the first
- *  square is unchanged: one square per server echo. */
+ *  a regular / blitz turn, and only from the first (adjacent) square of the planned route: the planner's own
+ *  pre-declaration resolution of that square stands until the echo refreshes it. The server validates the move; a
+ *  refused declaration leaves the move unanswered and the plan's silence watchdog retires it (fail open). Move batching
+ *  (decision 6, spec 12.3): in BB2025 it carries the whole first SEGMENT (the head must be one step away); the head's
+ *  rolls stay unknown until the echo binds them (plannerBindPipelinedFirst), endpoint obligations are kept. */
 function sendPipelinedFirstStep(): void {
   const p = plannerPlan;
   const g = game.value;
@@ -17588,19 +18347,27 @@ function sendPipelinedFirstStep(): void {
   const from = g.fieldModel.playerDataArray.find((d) => d.playerId === p.playerId)?.playerCoordinate;
   const first = p.route[0];
   if (!from || !first || Math.max(Math.abs(first[0] - from[0]), Math.abs(first[1] - from[1])) !== 1) return;
+  const origin: [number, number] = [from[0], from[1]];
+  const seg = plannerChooseSegment(p, g, 0, origin, { pipelined: true });
+  if (plannerQueueGuardHolds(p, seg)) return; // decision 7: the echo-driven first send follows once the queue drains
+  const path = p.route.slice(seg.fromIdx, seg.toIdx + 1).map((c) => [c[0], c[1]] as [number, number]);
   pipelinedFirstStepSend = true;
+  const priorCapability = plannerSendCapability;
+  plannerSendCapability = { planSeq: p.seq, sendSeq: p.sendSeqNext, fromIdx: seg.fromIdx, toIdx: seg.toIdx };
   let accepted = false;
-  try { accepted = plannerSendsOwnSquare(p.seq, () => sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: [from[0], from[1]], coordinatesTo: [[first[0], first[1]]] })); }
-  finally { pipelinedFirstStepSend = false; }
+  try { accepted = plannerSendsOwnSquare(p.seq, () => sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: origin, coordinatesTo: path })); }
+  finally { pipelinedFirstStepSend = false; plannerSendCapability = priorCapability; }
   if (!accepted) return; // refused locally: the ordinary echo-driven first step follows as before
-  publishMovementIntent(p.playerId, [from[0], from[1]], first, { rollsUnknown: true });
+  publishMovementIntent(p.playerId, origin, first, { rollsUnknown: true, path });
   p.phase = 'moving';
-  p.sentIdx = 0;
-  p.sentOfferRevisions[0] = -1; // no offer yet: the echo's refreshed offer is the floor for the next square
+  // The head's Dodge / Rush are unknown until the echo (plannerBindPipelinedFirst); a pickup / trapdoor the plan already
+  // knew on the head (an array of one) or on the endpoint is owed from now on.
+  const headKnown = [...(p.squareResolutions[0] ?? [])].filter((k) => k === 'pickup' || k === 'trapdoor');
+  plannerCommitSend(p, seg, origin, plannerSendObligations(p, g, seg, headKnown, seg.eligible), -1, seg.eligible); // no offer yet: the echo's refreshed offer is the floor
   p.pipelinedFirst = true;
   p.pipelinedFrom = [from[0], from[1]];
   plannerSentCommand(p); // the same bookkeeping as the echo-driven first step (silence watchdog, sent marker)
-  log('system', `play: STEP ${playerName(g, p.playerId)} - 1 sq, sent with the declaration (server resolves)`);
+  log('system', `play: STEP ${playerName(g, p.playerId)} - ${path.length} sq, sent with the declaration (server resolves)`);
 }
 
 /** Owner 10-13: why a walk-then-pass plan must NOT throw from the square it actually reached (null = throw).
@@ -17685,6 +18452,9 @@ function plannerTerminalOwnershipLost(p: NonNullable<typeof plannerPlan>): boole
 /** Send the trailing act command (leg 3) and retire the plan — the derived act state / server resolution is the ack; we never hang on full resolution (opponent-side interception resolves independently). */
 function plannerFireAct() {
   const p = plannerPlan; if (!p) return;
+  // Review r4 1a / 1c: never a terminal leg (nor a walk-only plan's clear) while the plan's ARRAY is unresolved: that is
+  // plannerAdvance's job once the array completes (it also applies a deferred cancel first).
+  if (plannerArrayOutstanding(p)) return;
   // #99-b: a WALK-ONLY plan (pure Move / bare blitz Walk) has NO act leg — the per-square walk IS the whole plan; once the final square settles, just retire. (o66Move/o66BlitzMove multi-square delegate here purely to get #76's per-square drip so the server rolls each TZ-exit dodge/GFI — a batched clientMove skips them = the #99 bug.)
   if (p.actKind === 'move' || p.actKind === 'blitzWalk') { plannerSet(null); plannerClearAbort(); return; }
   // Review 11-18: the act is the plan's player's, on the plan's own activation, from the plan's final square. Checked on
@@ -17882,29 +18652,31 @@ function plannerAdvance() {
             return;
           }
         }
-        // Send one live-coordinate move/blitzMove square per server echo; Blitz must retain blitzMove for its block.
+        // Send the first live-coordinate move/blitzMove SEGMENT (one square outside BB2025 batching); Blitz must retain
+        // blitzMove for its block. The blitz gates above stay on the HEAD of this first segment.
         if (p.moving) {
-          const first: [number, number][] = [p.route[0]!];
+          const first: [number, number] = p.route[0]!;
           // A declaration acknowledgement and the refreshed MoveSquare list can arrive in adjacent model
           // frames. Never ask either sender to speculate across that seam; wait for the server to publish the
           // exact first square and let the next applied frame resume this same plan.
-          const firstOffer = currentMoveOffer(p.playerId, first[0]!);
+          const firstOffer = currentMoveOffer(p.playerId, first);
           if (!firstOffer) return;
-          if (!moveSquareInfo(g).has(`${first[0]![0]},${first[0]![1]}`)) return;
+          if (!moveSquareInfo(g).has(`${first[0]},${first[1]}`)) return;
+          const origin = plannerCoord(p.playerId);
+          if (!origin) return;
+          const seg = plannerChooseSegment(p, g, 0, origin);
+          if (plannerQueueGuardHolds(p, seg)) return; // decision 7: the presentation-queue wake re-runs this send
           // The declaration acknowledgement owns the authoritative first-step roll values. Refresh here rather
           // than trusting the pre-declaration planning snapshot.
-          p.squareResolutions[0] = plannerSquareResolutions(g, first[0]!);
-          const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
-            ? gameStore.o66BlitzMove(p.playerId, first)
-            : gameStore.o66Move(p.playerId, first)));
+          p.squareResolutions[0] = plannerSquareResolutions(g, first);
+          const accepted = plannerSendSegment(p, seg);
           // A refused send has no server echo to wait for. Keep the declaring index intact and retry when another
           // authoritative frame calls plannerAdvance. Review 11-18 (latches fail open): the abort-only watchdog stays
           // armed, bounded by the silence window and the cap since the plan's last own send, so a refused send with no
           // later frame retires the plan instead of leaving it (and "a move is already in progress") forever.
           if (!accepted) { plannerArmAbort(true); return; }
           p.phase = 'moving';
-          p.sentIdx = 0;
-          p.sentOfferRevisions[0] = firstOffer.revision;
+          plannerCommitSend(p, seg, origin, plannerSendObligations(p, g, seg, p.squareResolutions[0], seg.eligible), firstOffer.revision, seg.eligible);
           plannerSentCommand(p);
         }
         else { p.phase = 'acting'; plannerSentCommand(p); plannerFireAct(); }
@@ -17927,6 +18699,13 @@ function plannerAdvance() {
       if (p.pipelinedFirst && actingId !== p.playerId && declarationAwaitingEcho && declarationAwaitingEchoFor === p.playerId) return;
       if (p.pipelinedFirst && actingId === p.playerId) return; // the offer is not published yet; plannerBindPipelinedFirst binds it on the frame that brings it
       if (actingId !== p.playerId) {
+        // Review r2 finding 3 (e): the eligible send walked in full and the move itself ended the activation (no next move
+        // possible); that is its end-of-move evidence. A walk-only plan is complete; nothing is sent.
+        const walkedSend = p.send && plannerSendIsArray(p.send) && plannerSendWalked(p, p.send) ? p.send : null;
+        if (walkedSend && (p.actKind === 'move' || p.actKind === 'blitzWalk') && walkedSend.toIdx === p.route.length - 1 && !p.unpredictedRoll) {
+          plannerRetireQuietly('the walk ended the activation');
+          return;
+        }
         if (p.failedRoll) plannerRetireQuietly(`the ${PLAN_RESOLUTION_LABEL[p.failedRoll]} failed`); // the fall/turnover tells the story
         else if (p.failedGate) plannerRetireQuietly(`the ${p.failedGate} roll failed`);
         else plannerFlush('lost the activation during the walk');
@@ -17937,18 +18716,23 @@ function plannerAdvance() {
         else plannerFlush('the move action ended');
         return;
       }
+      const s = p.send;
+      if (!s) { plannerFlush('the walk lost its sent step'); return; } // every moving plan has an outstanding send
+      plannerObserveSteps(p);
       const coord = plannerCoord(p.playerId);
-      // Advance after the coordinate echo and successful required rolls; MOVING can persist for the activation.
-      const atSent = !!coord && !!p.route[p.sentIdx] && coord[0] === p.route[p.sentIdx]![0] && coord[1] === p.route[p.sentIdx]![1];
-      const curRolls = p.squareResolutions[p.sentIdx];
-      if (!atSent) {
+      const head = s.fromIdx;
+      // Advance after the coordinate echoes and successful required rolls; MOVING can persist for the activation.
+      // Spec 11.2: the HEAD is reached once the first square of the outstanding array has echoed in order.
+      if (s.echoedSteps === 0) {
         // Captured fork wire (g907 cmd99..102): a failed Dodge followed by a successful re-roll reports success,
         // clears the dialog, and republishes the attempted destination, but does not emit a coordinate change.
         // Upstream has returned to move selection and expects the client to submit that SAME destination once.
-        // Keep it strictly server-bounded: only a successful re-roll can arm this path, every owed roll must be
+        // Keep it strictly server-bounded: only a successful re-roll can arm this path, every owed HEAD roll must be
         // resolved, the destination must be freshly offered, and clearing the marker before send prevents a
         // duplicate applied frame from issuing it twice. A refused transport re-arms for the next model frame.
-        const rescuedByReRoll = p.retryResolvedIdx === p.sentIdx && (!curRolls || curRolls.size === 0);
+        // Move batching (spec 11.3): the resend is the HEAD ALONE, a new send; the rest of the route is re-segmented
+        // from head + 1 once it completes. An endpoint obligation of the old array never blocks it (it is abandoned).
+        const rescuedByReRoll = p.retryResolvedIdx === head && plannerHeadSettled(s);
         // A FINAL failed Bloodlust roll spends the move command without moving the player (PlannerPlan.spentMove). The
         // server says the failure is final in the model itself: bb2025 BloodLustBehaviour:78/102 sets sufferingBloodLust
         // in the same step execution that drops the move stack (:124); until then (the reroll offer is open, or an
@@ -17961,14 +18745,14 @@ function plannerAdvance() {
         // player's current square, in a frame after the mark (bb2025 StepEndMoving:278-284). Wakes: every applied
         // frame, and releaseRerollResultPin for the staged rerolled die. Without a clear the plan sat for
         // PLANNER_ABORT_MS (the 10-08 stall).
-        const spent = p.spentMove?.idx === p.sentIdx ? p.spentMove : null;
+        const spent = p.spentMove?.idx === head ? p.spentMove : null;
         const spentFinal = !!spent && spent.cause === 'bloodlust' && (g.actingPlayer as { sufferingBloodlust?: unknown } | undefined)?.sufferingBloodlust === true;
         if (spentFinal && !rescuedByReRoll) {
           // Astra 10-08: an ACCEPTED reroll that fails again is staged (splash, then the rerolled die); the roll beat
           // stays, the plan ends only after that result has been shown.
           if (state.rerollResultPending) return;
-          const spentTarget = p.route[p.sentIdx];
-          const priorRevision = Math.max(p.sentOfferRevisions[p.sentIdx] ?? -1, spent!.offerFloor);
+          const spentTarget = p.route[head];
+          const priorRevision = Math.max(p.sentOfferRevisions[s.sendSeq] ?? -1, spent!.offerFloor);
           if (!spentTarget || !currentMoveOffer(p.playerId, spentTarget, priorRevision)) return;
           if (!moveSquareInfo(g).has(`${spentTarget[0]},${spentTarget[1]}`)) return;
           plannerEndForBloodlustReplan(p, spentTarget);
@@ -17998,58 +18782,73 @@ function plannerAdvance() {
               return;
             }
           }
-          const retry = p.route[p.sentIdx];
-          const priorRevision = Math.max(p.sentOfferRevisions[p.sentIdx] ?? -1, !rescuedByReRoll && spent ? spent.offerFloor : -1);
+          const retry = p.route[head];
+          const priorRevision = Math.max(p.sentOfferRevisions[s.sendSeq] ?? -1, !rescuedByReRoll && spent ? spent.offerFloor : -1);
           const retryOffer = retry ? currentMoveOffer(p.playerId, retry, priorRevision) : null;
           if (!retryOffer) return;
           // The live offer must be the very one StepEndMoving published: a newer generation needs its own proof.
           if (lash && retryOffer.revision !== lash.readyRevision) return;
-          if (!retry || !moveSquareInfo(g).has(`${retry[0]},${retry[1]}`)) return;
-          const wasRescued = p.retryResolvedIdx === p.sentIdx;
+          if (!retry || !coord || !moveSquareInfo(g).has(`${retry[0]},${retry[1]}`)) return;
+          const wasRescued = p.retryResolvedIdx === head;
           p.retryResolvedIdx = null;
           p.spentMove = null; // cleared before the send: a duplicate applied frame cannot issue it twice
-          // The spent move never rolled its square: bind the owed Dodge/Rush/Pickup results from the fresh offer.
-          if (!rescuedByReRoll) p.squareResolutions[p.sentIdx] = plannerSquareResolutions(g, retry);
-          const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
-            ? gameStore.o66BlitzMove(p.playerId, [retry], priorRevision)
-            : gameStore.o66Move(p.playerId, [retry], priorRevision)));
+          const retrySeg = { fromIdx: head, toIdx: head };
+          const accepted = plannerSendSegment(p, retrySeg, priorRevision);
           if (!accepted) {
-            if (wasRescued) p.retryResolvedIdx = p.sentIdx;
+            if (wasRescued) p.retryResolvedIdx = head;
             if (lash) p.spentMove = spent;
             plannerArmAbort(true); // review 11-18: bounded, abort-only (see the declaring branch)
             return;
           }
-          p.sentOfferRevisions[p.sentIdx] = retryOffer.revision;
+          // A rescued head keeps its settled rolls; the spent move never rolled its square: bind the owed
+          // Dodge/Rush/Pickup results from the fresh offer.
+          const retryObligations = rescuedByReRoll
+            ? s.obligations.filter((o) => o.idx === head).map((o) => ({ ...o }))
+            : plannerSendObligations(p, g, retrySeg, plannerSquareResolutions(g, retry));
+          if (!rescuedByReRoll) p.squareResolutions[head] = plannerSquareResolutions(g, retry);
+          plannerCommitSend(p, retrySeg, coord, retryObligations, retryOffer.revision, s.batchEligible);
           plannerSentCommand(p);
         }
-        return; // still walking to the last-sent square
+        return; // still walking to the head of the last send
       }
-      if (p.retryResolvedIdx === p.sentIdx) p.retryResolvedIdx = null; // a late authoritative echo won the race
-      if (p.spentMove?.idx === p.sentIdx) p.spentMove = null; // the server moved the player after all
-      if (curRolls && curRolls.size > 0) return; // arrived, but this square's flagged roll(s) haven't all resolved-successful yet
-      if (p.sentIdx < p.route.length - 1) {
-        // reached square N, its rolls resolved → send square N+1 (single square, live coordinateFrom). Idempotent:
-        // keyed on reaching route[sentIdx], so a duplicate echo at the same reached square re-sends nothing (sentIdx
-        // already points past it, coord != route[sentIdx+1] yet).
-        const nextIdx = p.sentIdx + 1;
-        const next: [number, number][] = [p.route[nextIdx]!];
+      if (p.retryResolvedIdx === head) p.retryResolvedIdx = null; // a late authoritative echo won the race
+      if (p.spentMove?.idx === head) p.spentMove = null; // the server moved the player after all
+      // Spec 11.2: still walking the array (progress), or a roll owed on it is not resolved-successful yet. A failed
+      // roll waits for its reroll or for the turnover / removal / activation-lost retirement.
+      if (!plannerSendComplete(p, s)) return;
+      // Review r3 C: a cancel the coach asked for while this array was outstanding takes effect now; nothing more is sent.
+      if (p.cancelRequested) {
+        const cancel = p.cancelRequested;
+        p.cancelRequested = null;
+        if (cancel.quiet) plannerRetireQuietly(String(cancel.reason)); else plannerFlush(cancel.reason);
+        return;
+      }
+      // Spec 11.4: a roll the client did not predict was reported on this array; the server is waiting now. End here,
+      // never send on into it (the banner was raised when the roll came in).
+      if (p.unpredictedRoll) { plannerRetireQuietly('the server rolled for a square the plan did not predict'); return; }
+      if (s.toIdx < p.route.length - 1) {
+        // reached the end of the array, its rolls resolved → send the next SEGMENT (live coordinateFrom). Idempotent:
+        // keyed on the outstanding send completing, so a duplicate echo re-sends nothing (the committed send has not
+        // echoed yet).
+        const nextIdx = s.toIdx + 1;
+        const next: [number, number] = p.route[nextIdx]!;
         // The coordinate echo and its next-square refresh are not guaranteed to share a command. Games 905
         // and 906 delivered them one frame apart. Sending in that gap either trips a shadow false-refusal or
         // reaches the server before the square exists. Keep the existing watchdog and resume on the refresh.
-        const nextOffer = currentMoveOffer(p.playerId, next[0]!);
+        const nextOffer = currentMoveOffer(p.playerId, next);
         if (!nextOffer) return;
-        if (!moveSquareInfo(g).has(`${next[0]![0]},${next[0]![1]}`)) return;
+        if (!coord || !moveSquareInfo(g).has(`${next[0]},${next[1]}`)) return;
+        // Spec 11.7 / 12.1: re-predict from the current model (opponents may have moved) and cut the next segment.
+        const seg = plannerChooseSegment(p, g, nextIdx, coord);
+        if (plannerQueueGuardHolds(p, seg)) return; // decision 7: the presentation-queue wake re-runs this send
         // Every later step has a new server-authored Dodge/Rush/Pickup offer. The initial route snapshot cannot
         // know those values several squares ahead (g907 failed on step four), so bind the owed results now.
-        p.squareResolutions[nextIdx] = plannerSquareResolutions(g, next[0]!);
-        const accepted = plannerSendsOwnSquare(p.seq, () => (p.actKind === 'blitz' || p.actKind === 'blitzWalk'
-          ? gameStore.o66BlitzMove(p.playerId, next)
-          : gameStore.o66Move(p.playerId, next)));
-        // Commit the sent index only after the command reached transport. A later model frame retries the same
-        // square after a refusal; once accepted, the new index makes duplicate frames idempotent as before.
+        p.squareResolutions[nextIdx] = plannerSquareResolutions(g, next);
+        const accepted = plannerSendSegment(p, seg);
+        // Commit the send only after the command reached transport. A later model frame retries the same
+        // segment after a refusal; once accepted, the new send makes duplicate frames idempotent as before.
         if (!accepted) { plannerArmAbort(true); return; } // review 11-18: bounded, abort-only (see the declaring branch)
-        p.sentIdx = nextIdx;
-        p.sentOfferRevisions[nextIdx] = nextOffer.revision;
+        plannerCommitSend(p, seg, coord, plannerSendObligations(p, g, seg, p.squareResolutions[nextIdx]!, seg.eligible), nextOffer.revision, seg.eligible);
         plannerSentCommand(p);
         return;
       }
@@ -18135,12 +18934,17 @@ export function installProFailureSplashTestHarness(
 /** @internal W27 production-planner test seam. Installs an isolated in-memory game/session and drives the SAME
  * plannerStart/plannerAdvance functions used at runtime; no alternate drain implementation exists. The caller
  * must dispose it. Kept out of gameStore so application code cannot discover or invoke it accidentally. */
+/** Round 7 test seam (installMovePlannerTestHarness.serverLine). */
+let harnessServerLine: '3.4.0' | '3.5.0' = '3.5.0';
 export function installMovePlannerTestHarness(
   fixture: GameJson,
   send: (command: Record<string, unknown>) => void,
 ): {
   start(playerId: string, route: [number, number][]): boolean;
   submit(playerId: string, route: [number, number][]): void;
+  /** One square of the walk as the server's StepMove frame (currentMove + coordinate, then `moveSquares` as StepMove's own
+   *  refresh when given), through the planner's frame hook; for a square the server walks past (no `moveSquares`, more
+   *  squares of the sent array or latch to come) the 3.5.0 next-square rebuild follows through the production apply. */
   echo(
     playerId: string,
     square: [number, number],
@@ -18150,6 +18954,10 @@ export function installMovePlannerTestHarness(
     }>,
   ): void;
   apply(changes: Record<string, unknown>[], reports?: Record<string, unknown>[]): void;
+  /** Round 7: which server line `echo` imitates for a square the server walks PAST (an array square before its last):
+   *  '3.5.0' (default, the live fork jar) follows the coordinate frame with the next square's rebuild-only frame
+   *  (StepInitMoving.java:369); '3.4.0' (FUMBBL live) sends none. */
+  serverLine(line: '3.4.0' | '3.5.0'): void;
   /** Owner 10-15: a full receive - the receive-time acting mirror (enqueueSync's trackActingPlayer), then the apply. */
   receive(changes: Record<string, unknown>[], reports?: Record<string, unknown>[]): void;
   /** Owner 10-15: the production send boundary (sendCommand) with a hand-made command (declaration watcher tests). */
@@ -18169,6 +18977,21 @@ export function installMovePlannerTestHarness(
   reconnect(): void;
   active(): boolean;
   intent(): typeof state.movementIntent;
+  /** Move batching: a copy of the live plan's outstanding send (obligations, echoedSteps), or null. */
+  outstanding(): { sendSeq: number; fromIdx: number; toIdx: number; echoedSteps: number; obligations: { idx: number; kind: string; state: string }[] } | null;
+  /** Move batching (spec test 36g): present the capability of the LAST accepted send again through the real boundary. */
+  resendLastSegment(): boolean;
+  /** Steps waiting in the walk presentation queue (decision 7). */
+  queuedSteps(): number;
+  /** Move batching: the server's end-of-move frame (StepEndMoving's clear + rebuild) through the production apply path:
+   *  every current move square removed, then `squares` added (default: the current squares again). It never invents an
+   *  offer (review r3): the caller states what the server offers. With nothing to remove or add the server sends no
+   *  frame, and neither does this. */
+  endMove(playerId: string, squares?: { coordinate: [number, number]; minimumRollDodge?: number; minimumRollGfi?: number }[]): void;
+  /** Re-run the planner's frame hook with the very same command object (a duplicate delivery of one frame). */
+  plannerFrame(cmd: Record<string, unknown>): void;
+  /** Review r6 2b: drop the live plan WITHOUT touching the transport latch (the latch is then on its own). */
+  detachPlan(): void;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -18187,6 +19010,8 @@ export function installMovePlannerTestHarness(
   const priorCommandNr = lastAppliedCommandNr;
   plannerClearAbort();
   plannerSet(null);
+  harnessServerLine = '3.5.0';
+  movementAwaitingEcho = null; arrayCutShort = null; lastFailedGate = null; // a harness never inherits another test's movement latch / failed negatrait
   state.movementIntent = null;
   movementRttEwmaMs = 90;
   lastAppliedCommandNr = -1;
@@ -18209,6 +19034,10 @@ export function installMovePlannerTestHarness(
       observeMovementIntentEcho(playerId, square);
       const data = game.value?.fieldModel.playerDataArray.find((entry) => entry.playerId === playerId);
       if (data) data.playerCoordinate = [square[0], square[1]];
+      const frame: Record<string, unknown>[] = [
+        { modelChangeId: 'actingPlayerSetCurrentMove', modelChangeKey: null, modelChangeValue: currentMove },
+        { modelChangeId: 'fieldModelSetPlayerCoordinate', modelChangeKey: playerId, modelChangeValue: [square[0], square[1]] },
+      ];
       if (game.value && moveSquares) {
         const priorSquares = game.value.fieldModel.moveSquareArray ?? [];
         const nextSquares = moveSquares.map((entry) => Array.isArray(entry)
@@ -18219,6 +19048,10 @@ export function installMovePlannerTestHarness(
               minimumRollGfi: entry.minimumRollGfi,
             });
         game.value.fieldModel.moveSquareArray = nextSquares;
+        frame.push(
+          ...priorSquares.map((entry) => ({ modelChangeId: 'fieldModelRemoveMoveSquare', modelChangeKey: null, modelChangeValue: entry })),
+          ...nextSquares.map((entry) => ({ modelChangeId: 'fieldModelAddMoveSquare', modelChangeKey: null, modelChangeValue: entry })),
+        );
         observeMoveOfferGeneration({
           modelChangeList: {
             modelChangeArray: [
@@ -18234,8 +19067,29 @@ export function installMovePlannerTestHarness(
       }
       const acting = game.value?.actingPlayer as { currentMove?: number } | undefined;
       if (acting) acting.currentMove = currentMove;
-      plannerAdvance();
+      plannerOnModelApplied({ modelChangeList: { modelChangeArray: frame }, reportList: { reports: [] } });
+      if (moveSquares || harnessServerLine !== '3.5.0' || !game.value) return;
+      const s = plannerPlan?.playerId === playerId ? plannerPlan.send : null;
+      const latch = movementAwaitingEcho?.playerId === playerId && movementAwaitingEcho.batched ? movementAwaitingEcho : null;
+      const walkedPast = (!!s && plannerSendIsArray(s) && s.echoedSteps >= 1 && s.echoedSteps < sendSquares(s))
+        || (!!latch && currentMove - latch.currentMove >= 1 && currentMove - latch.currentMove < latch.squares);
+      if (!walkedPast) return;
+      // StepInitMoving.java:369 for the next square: clear + the reachable squares around the player's actual square.
+      const occupied = new Set(game.value.fieldModel.playerDataArray.map((d) => JSON.stringify(d.playerCoordinate ?? null)));
+      const around: { coordinate: [number, number] }[] = [];
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const c: [number, number] = [square[0] + dx, square[1] + dy];
+        if ((dx || dy) && c[0] >= 0 && c[0] <= 25 && c[1] >= 0 && c[1] <= 14 && !occupied.has(JSON.stringify(c))) around.push({ coordinate: c });
+      }
+      const current = (game.value.fieldModel.moveSquareArray ?? []) as unknown[];
+      if (current.length === 0 && around.length === 0) return; // an empty sync is never sent
+      isolatedPresentationTestCommandNr += 1;
+      applyFrame({ receivedAt: Date.now(), cmd: { netCommandId: NetCommandId.SERVER_MODEL_SYNC, commandNr: isolatedPresentationTestCommandNr, modelChangeList: { modelChangeArray: [
+        ...current.map((m) => ({ modelChangeId: 'fieldModelRemoveMoveSquare', modelChangeKey: null, modelChangeValue: m })),
+        ...around.map((m) => ({ modelChangeId: 'fieldModelAddMoveSquare', modelChangeKey: null, modelChangeValue: m })),
+      ] }, reportList: { reports: [] } } });
     },
+    serverLine(line) { harnessServerLine = line; },
     apply(changes, reports = []) {
       isolatedPresentationTestCommandNr += 1;
       applyFrame({
@@ -18319,6 +19173,36 @@ export function installMovePlannerTestHarness(
     reconnect() { resetPlayback(); },
     active: plannerActive,
     intent: () => state.movementIntent,
+    outstanding: () => (plannerPlan?.send ? structuredClone({
+      sendSeq: plannerPlan.send.sendSeq, fromIdx: plannerPlan.send.fromIdx, toIdx: plannerPlan.send.toIdx,
+      echoedSteps: plannerPlan.send.echoedSteps, obligations: plannerPlan.send.obligations,
+    }) : null),
+    resendLastSegment() {
+      const p = plannerPlan;
+      const s = p?.send;
+      if (!p || !s) return false;
+      const at = s.baselineCoord;
+      const prior = plannerSendCapability;
+      plannerSendCapability = { planSeq: p.seq, sendSeq: s.sendSeq, fromIdx: s.fromIdx, toIdx: s.toIdx };
+      try {
+        return sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: p.playerId, coordinateFrom: [at[0], at[1]], coordinatesTo: p.route.slice(s.fromIdx, s.toIdx + 1) });
+      } finally { plannerSendCapability = prior; }
+    },
+    queuedSteps: () => presentationStepsWaiting(),
+    endMove(playerId, squares) {
+      const g = game.value;
+      if (!g || !plannerCoord(playerId)) return;
+      const current = (g.fieldModel.moveSquareArray ?? []) as { coordinate: [number, number] }[];
+      const rebuilt = (squares ?? current).map((m) => structuredClone(m));
+      if (current.length === 0 && rebuilt.length === 0) return; // an empty sync is never sent (UtilServerGame.syncGameModel)
+      isolatedPresentationTestCommandNr += 1;
+      applyFrame({ receivedAt: Date.now(), cmd: { netCommandId: NetCommandId.SERVER_MODEL_SYNC, commandNr: isolatedPresentationTestCommandNr, modelChangeList: { modelChangeArray: [
+        ...current.map((m) => ({ modelChangeId: 'fieldModelRemoveMoveSquare', modelChangeKey: null, modelChangeValue: m })),
+        ...rebuilt.map((m) => ({ modelChangeId: 'fieldModelAddMoveSquare', modelChangeKey: null, modelChangeValue: m })),
+      ] }, reportList: { reports: [] } } });
+    },
+    plannerFrame: (cmd) => plannerOnModelApplied(cmd),
+    detachPlan() { plannerClearAbort(); plannerSet(null); },
     dispose() {
       unregisterConfirmedMovementPresentation();
       plannerClearAbort();
@@ -18897,6 +19781,9 @@ export function installUseInducementTestHarness(
   resolve(kind: 'inducement' | 'card' | 'decline', value?: string): void;
   /** Make the transport refuse (false) or accept (true) the next sends. */
   setSendResult(ok: boolean): void;
+  /** The snapshot handler's dialog passes on an adopted model: its synthetic frame (forceSnapshotTick), then its own
+   *  resolvePlayFollowups. */
+  adoptSnapshot(model: GameJson): void;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -18945,6 +19832,7 @@ export function installUseInducementTestHarness(
     waiting: () => state.useInducementWaiting,
     resolve(kind, value) { gameStore.resolveUseInducement(kind, value); },
     setSendResult(ok) { sendResult = ok; },
+    adoptSnapshot(model) { game.value = structuredClone(model); forceSnapshotTick(); resolvePlayFollowups(); },
     dispose() {
       retireUseInducement();
       cancelUseInducementStall();
@@ -19099,6 +19987,7 @@ export function installWizardTargetConfirmationTestHarness(
   const priorOffer = liveWizardSpellOffer;
   const priorSpell = liveWizardSpell;
   const priorAwaiting = liveWizardSpellAwaitingServer;
+  const priorDialog = liveWizardSpellDialog;
   const priorPick = state.squarePick;
   const priorConfirm = state.wizardTargetConfirm;
   const priorInducement = state.inducementUse;
@@ -19123,6 +20012,7 @@ export function installWizardTargetConfirmationTestHarness(
   };
   liveWizardSpell = spell;
   liveWizardSpellAwaitingServer = false;
+  liveWizardSpellDialog = toRaw(fixture.dialogParameter) as object;
   state.squarePick = null;
   state.wizardTargetConfirm = null;
   state.yesNo = null;
@@ -19163,6 +20053,7 @@ export function installWizardTargetConfirmationTestHarness(
       liveWizardSpellOffer = priorOffer;
       liveWizardSpell = priorSpell;
       liveWizardSpellAwaitingServer = priorAwaiting;
+      liveWizardSpellDialog = priorDialog;
       lastAppliedCommandNr = priorCommandNr;
       game.value = priorGame;
       session = priorSession;
@@ -20800,6 +21691,8 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
   primalIntent(): { playerId: string; skillUsed: boolean } | null;
   scatterSeq(): number;
   answer(source: string | null): void;
+  /** Read-only: the answered-dialog latch holds for the live dialog (dialogAlreadyAnswered). */
+  answeredLatched(): boolean;
   dispose(): void;
 } {
   const priorGame = game.value;
@@ -20859,6 +21752,7 @@ export function installReRollOfferTestHarness(fixture: GameJson, send: (command:
       : null,
     scatterSeq: () => state.bncScatter?.seq ?? 0,
     answer(source) { gameStore.resolveReRoll(source); },
+    answeredLatched: () => dialogAlreadyAnswered(),
     dispose() {
       resetModifierChoiceOccurrences();
       followupHandled.clear();
@@ -20946,6 +21840,8 @@ export function installPassPickupReRollPlannerTestHarness(
   answered(): boolean;
   active(): boolean;
   sentIndex(): number | null;
+  /** Move batching: the head index of the outstanding send (== sentIndex for an array of one). */
+  sentFromIndex(): number | null;
   step(playerId: string, square: [number, number]): boolean;
   yesNo(): typeof state.yesNo;
   answerYesNo(yes: boolean): void;
@@ -20971,6 +21867,7 @@ export function installPassPickupReRollPlannerTestHarness(
   resetPresentation();
   plannerClearAbort();
   plannerSet(null);
+  movementAwaitingEcho = null; arrayCutShort = null; // move batching: an earlier test's array latch never leaks in (its fail-open would retire this plan)
   clearAnsweredDialogInstance();
   followupHandled.clear();
   state.reRollPrompt = null;
@@ -21009,6 +21906,7 @@ export function installPassPickupReRollPlannerTestHarness(
     answered: () => dialogAlreadyAnswered(),
     active: plannerActive,
     sentIndex: () => plannerPlan?.sentIdx ?? null,
+    sentFromIndex: () => plannerPlan?.sentFromIdx ?? null,
     step: (playerId, square) => gameStore.stepMove(playerId, square),
     yesNo: () => state.yesNo,
     answerYesNo: (yes) => gameStore.resolveYesNo(yes),
@@ -22558,20 +23456,60 @@ function plannerBindPipelinedFirst(p: PlannerPlan, cmd: Record<string, unknown> 
     const firstOffer = currentMoveOffer(p.playerId, first);
     if (!firstOffer) return; // the offers follow in a later frame; the plan waits (plannerAdvance)
     p.squareResolutions[0] = plannerSquareResolutions(g, first);
-    p.sentOfferRevisions[0] = firstOffer.revision;
+    plannerBindHeadRolls(p, p.squareResolutions[0]);
+    if (p.send) p.sentOfferRevisions[p.send.sendSeq] = firstOffer.revision;
     refreshMovementIntentRolls(p.playerId, first);
   } else {
     const offered = (from ? offeredRollResolutions(p.playerId, from, first) : null) ?? frameOfferRollsBeforeArrival(cmd, p.playerId, first);
     // Astra r2: the offer carries Dodge / Rush only; a Pick-up the plan already knew (the ball sat on the square when
     // the plan was made) is kept, an empty Dodge / Rush list never says the pick-up is not owed
-    if (offered) p.squareResolutions[0] = new Set([...offered, ...(p.squareResolutions[0]?.has('pickup') ? ['pickup' as PlanResolution] : [])]);
+    if (offered) {
+      p.squareResolutions[0] = new Set([...offered, ...[...(p.squareResolutions[0] ?? [])].filter((k) => k === 'pickup' || k === 'trapdoor')]); // finding 5: trapdoor too
+      plannerBindHeadRolls(p, offered);
+    }
   }
   p.pipelinedFirst = false;
+}
+/** Spec 11.5 / 12.3: the arriving offer may replace only the HEAD's Dodge / Rush facts of the outstanding send; every
+ *  pickup / trapdoor obligation (head of an array of one, or the endpoint) is kept untouched. */
+function plannerBindHeadRolls(p: PlannerPlan, kinds: Iterable<PlanResolution>): void {
+  const s = p.send;
+  if (!s) return;
+  const offered = new Set([...kinds].filter((k) => k === 'dodge' || k === 'gfi'));
+  s.obligations = s.obligations.filter((o) => !(o.idx === s.fromIdx && (o.kind === 'dodge' || o.kind === 'gfi') && o.state === 'pending' && !offered.has(o.kind)));
+  for (const kind of offered) {
+    if (!s.obligations.some((o) => o.idx === s.fromIdx && o.kind === kind)) s.obligations.push({ idx: s.fromIdx, kind, state: 'pending' });
+  }
 }
 
 /** Hook: called after each server command is fully applied to the model (applyFrame). `cmd` is the frame just
  *  applied — its reportList carries the arrival-square resolution outcomes (leg-2a). */
+/** Move batching (review finding 1): the server's terminal refresh (plannerTerminalRefresh) after fewer squares than an
+ *  ARRAY latch holds proves the run stopped short: the latch releases on it, plan or no plan. Round 7: only with the
+ *  same end-of-stack evidence plannerStoppedShortFrame needs (a walked-past square's 3.5.0 recompute is no stop). */
+function movementLatchOnFrame(cmd: Record<string, unknown> | undefined): void {
+  const latch = movementAwaitingEcho;
+  const g = game.value;
+  if (!latch?.batched || !g) return;
+  const acting = g.actingPlayer as { playerId?: string | null; currentMove?: number } | undefined;
+  if (String(acting?.playerId ?? '') !== latch.playerId) return;
+  const steps = Number(acting?.currentMove ?? 0) - latch.currentMove;
+  const at = plannerCoord(latch.playerId);
+  if (steps !== (latch.frameSteps ?? 0)) {
+    latch.frameSteps = steps;
+    latch.stepFrameRefreshed = !!cmd && moveSquaresRefreshedAfterStep(cmd, latch.playerId);
+    latch.refreshesSinceStep = 0;
+    return;
+  }
+  if (!at || !plannerTerminalRefresh(cmd, at)) return;
+  latch.refreshesSinceStep = (latch.refreshesSinceStep ?? 0) + 1;
+  if (steps >= 1 && steps < latch.squares && (latch.stepFrameRefreshed || latch.refreshesSinceStep >= 2)) {
+    latch.terminalStop = true;
+    arrayCutShort = { playerId: latch.playerId, turnKey: currentTurnKey(g) };
+  }
+}
 function plannerOnModelApplied(cmd?: Record<string, unknown>) {
+  movementLatchOnFrame(cmd);
   // Owner 11-03: a failed negatrait roll is remembered even with no plan (lastFailedGate), for a plan started after it.
   for (const r of ((cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; confusionSkill?: unknown }[] } | undefined)?.reports ?? [])) {
     if (String(r.reportId ?? '') !== 'confusionRoll') continue;
@@ -22597,10 +23535,13 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     }
   }
   // Resolve a square's rolls only after arrival and only on success; failures remain pending for reroll/fall.
-  if (p.phase === 'moving' && p.sentIdx >= 0) {
+  // Move batching (spec 11.2): rolls bind to the outstanding send's obligations by kind AND position (head / endpoint).
+  if (p.phase === 'moving' && p.send) {
     if (p.pipelinedFirst) plannerBindPipelinedFirst(p, cmd); // owner 10-17: before this frame's reports settle the first square
-    const cur = p.squareResolutions[p.sentIdx];
-    const target = p.route[p.sentIdx];
+    plannerObserveSteps(p, cmd);
+    const send = p.send;
+    const head = send.fromIdx;
+    const target = p.route[head]; // Bloodlust / lash-out / reroll-rescue marks belong to the HEAD of the send
     const reps = (cmd?.reportList as { reports?: { reportId?: unknown; playerId?: unknown; successful?: unknown; reRolled?: unknown; attackerId?: unknown; defenderId?: unknown }[] } | undefined)?.reports ?? [];
     // Owner 10-08: Bloodlust is rolled on the activation's first command, BEFORE the move. A failure marks the sent
     // square as possibly spent (owner 10-14: plannerAdvance clears the plan for a re-plan once the model says the
@@ -22612,17 +23553,19 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     // excluded on evidence: BlitzMove carries no activation steps (the roll belongs to SelectBlitzTarget), so a
     // clientBlitzMove is never spent this way. The mark alone releases nothing, see readyRevision below.
     const g = game.value;
-    const sentCoord = plannerCoord(p.playerId);
-    const atSent = !!sentCoord && !!target && sentCoord[0] === target[0] && sentCoord[1] === target[1];
+    // The head of the send has echoed (spec 11.2: the first square, in order). Was: the player stands on the one sent square.
+    const atSent = send.echoedSteps >= 1;
     // Owner 10-10: an opponent's Shadowing / Diving Tackle choice opened over an unechoed sent square (see
     // PlannerPlan.opponentPromptOverSend). Marked once, never over a Bloodlust / lash-out mark (their own clear / resend
     // rules stay in charge); the plan ends on the first frame that leaves no dialog, BEFORE this frame's reports can
     // settle a roll and release any send (a Diving Tackle that forces a reroll of the previous square included).
-    if (g && target && !atSent && !p.spentMove && !p.opponentPromptOverSend && plannerOpponentReactionOpened(g, cmd)) p.opponentPromptOverSend = true;
+    // A command is in flight only until its squares have echoed: a prompt after that swallowed nothing of ours (an eligible
+    // send waits for the end-of-move frame, which the server emits only after the reaction is resolved).
+    if (g && target && send.echoedSteps < sendSquares(send) && !p.spentMove && !p.opponentPromptOverSend && plannerOpponentReactionOpened(g, cmd)) p.opponentPromptOverSend = true;
     if (g && plannerEndAfterOpponentPrompt(p, g)) return;
     for (const r of reps) {
       if (String(r.reportId ?? '') === 'bloodLustRoll' && String(r.playerId ?? '') === p.playerId) {
-        if (r.successful === false) p.spentMove = { idx: p.sentIdx, cause: 'bloodlust', offerFloor: moveOfferRevision };
+        if (r.successful === false) p.spentMove = { idx: head, cause: 'bloodlust', offerFloor: moveOfferRevision };
         else if (p.spentMove?.cause === 'bloodlust') p.spentMove = null;
       }
       if (String(r.reportId ?? '') === 'animalSavagery' && String(r.attackerId ?? '') === p.playerId) {
@@ -22636,7 +23579,7 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
           && !movesRandomly(g, victim);
         if (walkSpent) {
           p.spentMove = {
-            idx: p.sentIdx, cause: 'animalSavagery', offerFloor: moveOfferRevision,
+            idx: head, cause: 'animalSavagery', offerFloor: moveOfferRevision,
             currentMove: Number((g!.actingPlayer as { currentMove?: unknown } | undefined)?.currentMove ?? 0),
             readyRevision: null, readyAt: 0,
           };
@@ -22646,36 +23589,218 @@ function plannerOnModelApplied(cmd?: Record<string, unknown>) {
     // The lash-out is fully resolved and the server is selecting a move again only once StepEndMoving republishes
     // the squares in a frame of its own (plannerMoveSelectionReoffer). The marking frame carries the report, so it
     // can never qualify; a later non-qualifying republish replaces the offer and thereby withdraws the proof.
-    const lash = p.spentMove?.cause === 'animalSavagery' && p.spentMove.idx === p.sentIdx ? p.spentMove : null;
+    const lash = p.spentMove?.cause === 'animalSavagery' && p.spentMove.idx === head ? p.spentMove : null;
     if (lash && target && plannerMoveSelectionReoffer(cmd, target)) {
       const offer = currentMoveOffer(p.playerId, target, lash.offerFloor);
       lash.readyRevision = offer ? offer.revision : null;
       lash.readyAt = Date.now();
     }
-    if (cur && cur.size > 0 && target) {
-      const coord = plannerCoord(p.playerId);
-      const arrived = !!coord && coord[0] === target[0] && coord[1] === target[1];
-      for (const r of reps) {
+    if (target) {
+      const frameNr = (cmd as { commandNr?: unknown } | undefined)?.commandNr;
+      for (const [reportIndex, r] of reps.entries()) {
         if (String(r.playerId ?? '') !== p.playerId) continue;
+        // Review r2 finding 4: a report this send already took (the same frame delivered again) is skipped; a frame
+        // without a commandNr (test seams) is always new.
+        if (typeof frameNr === 'number' && plannerSendIsArray(send) && movementRollOutcome(r as Record<string, unknown>)) {
+          const key = `${frameNr}:${reportIndex}`;
+          if (send.seenRollReports.has(key)) continue;
+          send.seenRollReports.add(key);
+        }
+        // Spec 11.2: an activation roll of this send's head (first segment of the activation).
+        const activation = plannerActivationObligationFor(send, r as Record<string, unknown>);
+        if (activation) {
+          if (r.successful === true) activation.state = 'succeeded';
+          else if (r.successful === false) activation.state = 'failed';
+          continue;
+        }
         // Owner 10-26 (g1075): "guards should drop when rerollmodifierchoice fires" - the modifier's skillUse makes the
         // failed roll pass (no new roll report follows): settle it exactly as a successful (re)roll of that kind.
         const rescued = modifierRescuedRoll(r as Record<string, unknown>, p.playerId, p.failedRoll);
-        const kind = rescued ?? PLAN_RESOLUTION_REPORT[String(r.reportId ?? '')];
-        const successful = rescued ? true : r.successful;
-        if (kind && cur.has(kind) && successful === false) { p.failedRoll = kind; continue; } // owner 09-15: remembered for the quiet retire
-        if (!kind || successful !== true || !cur.has(kind)) continue;
+        const outcome = movementRollOutcome(r as Record<string, unknown>); // spec 11.5: trapDoor reports carry `escaped`
+        const kind = rescued ?? outcome?.kind ?? null;
+        const successful = rescued ? true : outcome?.successful ?? null;
+        if (!kind || successful === null) continue;
+        const ob = plannerBindReport(p, send, kind);
+        if (!ob) {
+          // Spec 11.4: a roll that binds to no obligation of the send (a dodge / rush past the head or the head offer
+          // never asked for, a pickup / trapdoor anywhere but the endpoint) is unpredicted. Never bound to the head. A
+          // repeat of a roll this send occurrence already settled (a Diving Tackle re-roll of a passed dodge) is not one.
+          // Every outstanding send of the BB2025-eligible path, one square or more (spec 11.4); the per-square path of
+          // BB2020 / BB2016 games stays as it was.
+          if (!rescued && plannerSendIsArray(send)) plannerNoteUnpredictedRoll(p, send, r as Record<string, unknown>); // r3 A: arrays only
+          continue;
+        }
+        // owner 09-15: a failure is remembered for the quiet retire. Spec 11.5: a failed trapdoor roll is a failed
+        // ATTEMPT that stays live through its reroll decision; only the removal (or turnover) retires the plan.
+        if (successful === false) { ob.state = 'failed'; p.failedRoll = kind; continue; } // a new attempt may turn succeeded -> failed
         p.failedRoll = null; // a success (incl. a rescuing re-roll) supersedes the remembered failure
-        if (arrived) cur.delete(kind);
-        else if (r.reRolled === true || rescued) {
-          // A successful reroll may settle the roll but leave the model at the origin. Mark the current destination
-          // for one server-offer-bounded resend after the live reroll dialog clears (plannerPromptPending above).
-          cur.delete(kind);
-          p.retryResolvedIdx = p.sentIdx;
+        if (ob.idx !== head || send.echoedSteps >= 1) ob.state = 'succeeded';
+        else if ((outcome?.reRolled === true || rescued) && kind !== 'trapdoor') {
+          // A successful reroll may settle the roll but leave the model at the origin. Mark the head for one
+          // server-offer-bounded resend (of the head ALONE, spec 11.3) after the live reroll dialog clears
+          // (plannerPromptPending above). A trapdoor reroll never arms a movement resend.
+          ob.state = 'succeeded';
+          p.retryResolvedIdx = head;
         }
       }
     }
+    // Spec 11.4: the server ended the move sequence before the array's last square. Nothing is sent.
+    if (plannerStoppedShortFrame(p, send, cmd)) { plannerStopShort(p, send, 'stopped'); return; }
+    // Review r2 finding 3: the end-of-move frame after every square of an eligible send (and after its rolls).
+    if (plannerEndOfMoveFrame(p, send, cmd)) send.endOfMoveSeen = true;
   }
   plannerAdvance();
+}
+/** Spec 11.2 binding: a dodge / rush report binds to the HEAD only while at most the head has echoed; a pickup / trapdoor
+ *  report binds to the endpoint only while the player stands on route[toIdx] (an array of one: its single square). */
+function plannerBindReport(p: PlannerPlan, s: PlannerSend, kind: PlanResolution): PlanObligation | null {
+  // A live (pending / failed) obligation first; then (review r2 finding 4) a succeeded one of the same occurrence: a NEW
+  // attempt for it (a Diving Tackle look-ahead the coach answers with a fresh reroll, StepMoveDodge.java 379-420)
+  // updates it. Duplicate DELIVERY never reaches here (seenRollReports).
+  const pick = (idx: number) => s.obligations.find((o) => o.idx === idx && o.kind === kind && (o.state === 'pending' || o.state === 'failed'))
+    ?? (plannerSendIsArray(s) ? s.obligations.find((o) => o.idx === idx && o.kind === kind && o.state === 'succeeded') ?? null : null); // r3 A: base for one square
+  if (kind === 'dodge' || kind === 'gfi') return s.echoedSteps <= 1 ? pick(s.fromIdx) : null;
+  if (s.fromIdx === s.toIdx) return pick(s.fromIdx);
+  const at = plannerCoord(p.playerId);
+  const end = p.route[s.toIdx];
+  if (s.echoedSteps < sendSquares(s) || !at || !end || at[0] !== end[0] || at[1] !== end[1]) return null;
+  return pick(s.toIdx);
+}
+/** Spec 11.4: model change ids the server's end-of-move refresh may carry besides the move squares (StepEndMoving 281:
+ *  clear + rebuild; a Blitz also refreshes the dice decorations; the hideDialog / timer flags as in
+ *  plannerMoveSelectionReoffer). */
+const TERMINAL_REFRESH_BENIGN = new Set(['fieldModelAddDiceDecoration', 'fieldModelRemoveDiceDecoration']);
+/** Spec 11.4 terminal-refresh discriminator (a sibling of plannerMoveSelectionReoffer, which wants the target offered;
+ *  the mover's own square is never offered). Accepts ONLY a frame with no report whose changes are the move-square
+ *  refresh (at least one remove / add, every added square adjacent to the player's CURRENT square) plus the benign ids
+ *  above. Any coordinate change (the walk's own steps, a shadower, a diving tackler), any player state change, any
+ *  report (dodge, Shadowing, Tentacles, ...) or dialog disqualifies it, so no frame between two steps of an uncut run
+ *  matches: those carry the mover's coordinate change (StepMove refreshes the squares only on the LAST square of an
+ *  array, in the same frame as that square's coordinate change). */
+function plannerTerminalRefresh(cmd: Record<string, unknown> | undefined, at: [number, number]): boolean {
+  const changes = (cmd?.modelChangeList as { modelChangeArray?: { modelChangeId?: unknown; modelChangeKey?: unknown; modelChangeValue?: unknown }[] } | undefined)?.modelChangeArray;
+  const reports = (cmd?.reportList as { reports?: unknown[] } | undefined)?.reports ?? [];
+  if (!Array.isArray(changes) || reports.length > 0) return false;
+  let refresh = 0;
+  for (const change of changes) {
+    const id = String(change.modelChangeId ?? '');
+    if (id === 'fieldModelRemoveMoveSquare') { refresh += 1; continue; }
+    if (id === 'fieldModelAddMoveSquare') {
+      const raw = (change.modelChangeValue as { coordinate?: unknown } | null | undefined)?.coordinate;
+      if (!Array.isArray(raw) || Math.max(Math.abs(Number(raw[0]) - at[0]), Math.abs(Number(raw[1]) - at[1])) !== 1) return false;
+      refresh += 1;
+      continue;
+    }
+    if (TERMINAL_REFRESH_BENIGN.has(id)) continue;
+    // Review r3 F2: StepEndMoving clears a defender a Shadowing step left behind (bb2025 StepEndMoving.java:199,
+    // game.setDefenderId(null)) in the same step as its rebuild (:281). Game.setDefenderId (Game.java:371-376) notifies
+    // GAME_SET_DEFENDER_ID with the NEW id as the key and a null value: a clear is key null.
+    if (id === 'gameSetDefenderId' && change.modelChangeKey == null && change.modelChangeValue == null) continue;
+    if (id === 'gameSetDialogParameter' && change.modelChangeValue == null) continue;
+    if (id === 'gameSetWaitingForOpponent' && change.modelChangeValue === false) continue;
+    if (id === 'gameSetTimeoutPossible' && change.modelChangeValue === true) continue;
+    return false;
+  }
+  return refresh > 0;
+}
+/** Spec 11.4 "stopped short": ALL of: fewer squares echoed than sent (at least the head); the head settled; no dialog
+ *  for either coach and no opponent reaction over the send; the player standing, still the coach's acting player under
+ *  the plan's action, on the last echoed route square; THIS frame is the server's terminal refresh from there; and
+ *  (round 7) the server's own evidence that its stack ended on that square:
+ *   - the square's coordinate frame refreshed the offer after the move (StepMove.java:128: empty stack, i.e. the server
+ *     trimmed the array on receipt, UtilServerPlayerMove.trimUnsafeMoveStack), then this rebuild (StepEndMoving:281); or
+ *   - this is the SECOND rebuild since that square (3.5.0: StepInitMoving.java:369 recomputed, found no square for the
+ *     next coordinate, :371-374 ended the move, StepEndMoving:281 rebuilt).
+ *  ONE rebuild after a plain coordinate frame is the 3.5.0 recompute before the next square: the walk goes on. A run
+ *  that ends silently after it is left to the plan watchdog (8 s of silence, restarted by every applied frame). */
+function plannerStoppedShortFrame(p: PlannerPlan, s: PlannerSend, cmd: Record<string, unknown> | undefined): boolean {
+  const g = game.value;
+  if (!g || plannerPlan !== p || sendSquares(s) <= 1) return false;
+  if (s.echoedSteps < 1 || s.echoedSteps >= sendSquares(s) || !plannerHeadSettled(s)) return false;
+  if (g.dialogParameter != null || p.opponentPromptOverSend) return false;
+  const base = plannerBase(p.playerId);
+  if (base !== 0x01 && base !== 0x02) return false;
+  if (plannerActingId() !== p.playerId || plannerActingAction() !== p.declare) return false;
+  const at = plannerCoord(p.playerId);
+  const reached = p.route[s.fromIdx + s.echoedSteps - 1];
+  if (!at || !reached || at[0] !== reached[0] || at[1] !== reached[1]) return false;
+  if (!s.stepFrameRefreshed && s.refreshesSinceStep < 2) return false; // round 7: a walked-past square's recompute
+  return plannerTerminalRefresh(cmd, at);
+}
+/** Spec 11.4 / decision 12: the evidence a "Move stopped early" report carries. */
+function plannerMoveStopEvidence(p: PlannerPlan, s: PlannerSend, reason: 'stopped' | 'unpredicted', roll: Record<string, unknown> | null): Record<string, unknown> {
+  const g = game.value;
+  const home = !!g?.teamHome.playerArray.some((pl) => pl.playerId === p.playerId);
+  const turnData = (home ? g?.turnDataHome : g?.turnDataAway) as { turnNr?: unknown } | undefined;
+  return {
+    kind: reason === 'stopped' ? 'moveStoppedEarly' : 'unpredictedMoveRoll',
+    gameId: (g as { gameId?: unknown } | null)?.gameId ?? null,
+    playerId: p.playerId,
+    playerAction: plannerActingAction() || p.declare,
+    arraySent: p.route.slice(s.fromIdx, s.toIdx + 1).map((c) => [c[0], c[1]]),
+    coordinateFrom: [s.baselineCoord[0], s.baselineCoord[1]],
+    routeIndexes: [s.fromIdx, s.toIdx],
+    sendSeq: s.sendSeq,
+    echoedSteps: s.echoedSteps,
+    stoppedOn: plannerCoord(p.playerId),
+    half: (g as { half?: unknown } | null)?.half ?? null,
+    turn: turnData?.turnNr ?? null,
+    clientVersion: APP_VERSION,
+    rulesVersion: g?.gameOptions?.gameOptionArray?.find((o) => o?.gameOptionId === 'rulesVersion')?.gameOptionValue ?? null,
+    lastMoveOffer: ((g?.fieldModel.moveSquareArray ?? []) as unknown[]).map((m) => structuredClone(m)),
+    ...(roll ? { unpredictedRoll: structuredClone(roll) } : {}),
+  };
+}
+/** Decision 12: raise the non-blocking "Move stopped early. Report this?" banner (cleared at the end of the coach's
+ *  turn, plannerMoveStopBannerOnModelApplied). One per occurrence: a duplicate frame finds no plan and raises nothing. */
+function raiseMoveStopBanner(evidence: Record<string, unknown>): void {
+  const g = game.value;
+  const text = $t('store.text.moveStoppedEarlyReport');
+  state.moveStopReport = {
+    text,
+    report: `${text}
+
+${JSON.stringify(evidence, null, 2)}`,
+    evidence,
+    turnKey: g ? currentTurnKey(g) : '',
+    seq: (state.moveStopReport?.seq ?? 0) + 1,
+  };
+  log('system', `⚠ move stopped early: ${JSON.stringify(evidence)}`);
+}
+/** Spec 11.4 stopped short: abandon every obligation beyond the stop (a cut before a ball / trapdoor cannot strand the
+ *  plan), capture the evidence, raise the banner, end the plan quietly. Nothing is sent. */
+function plannerStopShort(p: PlannerPlan, s: PlannerSend, reason: 'stopped' | 'unpredicted'): void {
+  const stopIdx = s.fromIdx + Math.max(0, s.echoedSteps - 1);
+  for (const o of s.obligations) if (o.state === 'pending' && o.idx > stopIdx) o.state = 'abandoned';
+  if (!p.unpredictedRoll) raiseMoveStopBanner(plannerMoveStopEvidence(p, s, reason, null)); // an unpredicted roll raised it already
+  plannerRetireQuietly('the server ended the move before the planned square');
+  plannerDropOwnSendIntent(p, s);
+}
+/** A plan retired because its outstanding send was cut by the server or its outcome is unknown (watchdog) also drops
+ *  the local movement intent THAT send published, as plannerEndForBloodlustReplan does for a spent step: no later frame
+ *  will settle it, and a live intent keeps the actor reading as mid-walk (the view's deferred friendly switch refuses).
+ *  Only the matching intent goes (this player, published from the send's origin to its head): a later send's intent, or
+ *  another player's, is never touched. Nothing is fenced: steps the server already confirmed keep drawing. */
+function plannerDropOwnSendIntent(p: PlannerPlan, s: PlannerSend | null): void {
+  const intent = state.movementIntent;
+  const head = s ? p.route[s.fromIdx] : null;
+  if (!s || !intent || !head || intent.playerId !== p.playerId) return;
+  if (intent.to[0] !== head[0] || intent.to[1] !== head[1] || intent.from[0] !== s.baselineCoord[0] || intent.from[1] !== s.baselineCoord[1]) return;
+  state.movementIntent = null;
+}
+/** Spec 11.4 unpredicted roll: recorded as evidence, the banner raised (the report IS the roll's result), the plan ends
+ *  when the server next waits (plannerAdvance never sends past it). The client answers nothing for the coach. */
+function plannerNoteUnpredictedRoll(p: PlannerPlan, s: PlannerSend, report: Record<string, unknown>): void {
+  if (p.unpredictedRoll) return;
+  p.unpredictedRoll = structuredClone(report);
+  raiseMoveStopBanner(plannerMoveStopEvidence(p, s, 'unpredicted', report));
+}
+/** Decision 12: the banner stands until the end of the coach's turn (the turn key changes). */
+function plannerMoveStopBannerOnModelApplied(): void {
+  const banner = state.moveStopReport;
+  if (!banner) return;
+  const g = game.value;
+  if (!g || currentTurnKey(g) !== banner.turnKey) state.moveStopReport = null;
 }
 
 /** Owner-captured 08-04 defaults, home-relative (own half x0..12, LOS x=12).
@@ -23296,6 +24421,37 @@ function commandPermittedByLock(cmd: Record<string, unknown>): boolean {
 /** Commands the transport accepted - counted after session.send returned, past every gate and late refusal (Astra 10-05: lets a caller of a void sender
  *  such as endActivation() prove its command was really sent before acting on the outcome). */
 let emittedCommandCount = 0;
+/** Move batching spec 11.6: why a movement command may NOT leave (null = it may). Every clientMove / clientBlitzMove
+ *  with more than one square needs the live plan's capability (planSeq, sendSeq, fromIdx, toIdx) with coordinatesTo
+ *  EXACTLY route[fromIdx..toIdx] in order, the plan's acting player and command id, the player's current square as
+ *  coordinateFrom, and eligibility re-evaluated here; a spent capability is refused whatever its length. Occupancy is
+ *  not re-checked (the pather already excludes the mover's own square and earlier route squares). */
+function plannerOutboundMoveRefusal(cmd: Readonly<Record<string, unknown>>): string | null {
+  const id = cmd.netCommandId;
+  if (id !== NetCommandId.CLIENT_MOVE && id !== NetCommandId.CLIENT_BLITZ_MOVE) return null;
+  const to = Array.isArray(cmd.coordinatesTo) ? cmd.coordinatesTo as unknown[] : [];
+  const cap = plannerSendCapability;
+  if (cap && consumedPlannerSends.has(plannerCapabilityKey(cap))) return 'that planned step was already sent';
+  if (to.length <= 1) return null;
+  if (!cap) return 'a move of several squares is sent only by the planner';
+  const p = plannerPlan;
+  const g = game.value;
+  if (!p || !g || p.seq !== cap.planSeq || p.sendSeqNext !== cap.sendSeq) return 'the planned step is not the live plan\'s next send';
+  if (cap.fromIdx < 0 || cap.toIdx >= p.route.length || cap.toIdx - cap.fromIdx + 1 !== to.length) return 'the squares are not the planned segment';
+  for (let i = 0; i < to.length; i++) {
+    const c = to[i] as unknown[] | undefined;
+    const r = p.route[cap.fromIdx + i]!;
+    if (!Array.isArray(c) || Number(c[0]) !== r[0] || Number(c[1]) !== r[1]) return 'the squares are not the planned segment';
+  }
+  if (String(cmd.actingPlayerId ?? '') !== p.playerId) return 'the move is not for the planned player';
+  const blitzWalk = (p.actKind === 'blitz' || p.actKind === 'blitzWalk') && plannerActingAction() !== 'kickEmBlitz';
+  if (id !== (blitzWalk ? NetCommandId.CLIENT_BLITZ_MOVE : NetCommandId.CLIENT_MOVE)) return 'the command does not match the planned action';
+  const from = cmd.coordinateFrom as unknown[] | undefined;
+  const at = plannerCoord(p.playerId);
+  if (!at || !Array.isArray(from) || Number(from[0]) !== at[0] || Number(from[1]) !== at[1]) return 'the move does not start from the player\'s square';
+  if (!plannerBatchEligible(p, g, { pipelined: pipelinedFirstStepSend })) return 'this move is not eligible to batch';
+  return null;
+}
 function sendCommand(cmd: Record<string, unknown>): boolean {
   if (!play.active || spectatorTransport?.review.source === 'live-review' || !replayAllowsGameCommand(replay.active)) {
     observeOutgoingShadow(cmd, 'dropped');
@@ -23347,7 +24503,27 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     });
     return false;
   }
-  if (!pipelinedFirstStepSend) observeOutgoingShadow(cmd, 'emitted'); // the pipelined first step is ahead of the echo the shadow judges by
+  // Move batching spec 11.6: the OUTBOUND INVARIANT at the shared boundary. A clientMove / clientBlitzMove with more than
+  // one square leaves only with the live plan's capability for exactly that slice; a capability is spent once.
+  const moveRefusal = plannerOutboundMoveRefusal(cmd);
+  if (moveRefusal) {
+    observeOutgoingShadow(cmd, 'dropped');
+    console.warn('[move-batch] refused outbound move:', moveRefusal);
+    log('system', `play: ${String(cmd.netCommandId)} not sent - ${moveRefusal}`);
+    return false;
+  }
+  // Review r3 C: no terminal command for a player whose array is still outstanding (whatever UI path sent it).
+  // Review r5 1: either value of skillUsed - bb2025 StepInitMoving.java:299 / :326 branch on the skill's property, not on
+  // the boolean (the place-and-end I'll Carry You election sends false).
+  const skillCommit = cmd.netCommandId === NetCommandId.CLIENT_USE_SKILL && ARRAY_TERMINAL_SKILLS.has(String(cmd.skill ?? ''));
+  if ((ARRAY_TERMINAL_COMMANDS.has(String(cmd.netCommandId ?? '')) && plannerArrayBarsTerminal(String(cmd.actingPlayerId ?? '')))
+      || (skillCommit && plannerArrayBarsTerminal(String(cmd.playerId ?? cmd.actingPlayerId ?? plannerActingId())))) {
+    observeOutgoingShadow(cmd, 'dropped');
+    log('system', `play: ${String(cmd.netCommandId)} not sent - the planned run is still being walked`);
+    return false;
+  }
+  const authorizedMoveArray = plannerSendCapability !== null && Array.isArray(cmd.coordinatesTo) && cmd.coordinatesTo.length > 1;
+  if (!pipelinedFirstStepSend) observeOutgoingShadow(cmd, 'emitted', authorizedMoveArray); // the pipelined first step is ahead of the echo the shadow judges by
   let outgoing = cmd;
   const g = game.value;
   // Respin 7 (owner live false-refusal, 08-12 eve): the Move-rail cutover claims sends ONLY in the turn
@@ -23385,6 +24561,11 @@ function sendCommand(cmd: Record<string, unknown>): boolean {
     const declarationSwitch = detectDeclarationSwitch(cmd); // owner 10-15: detect only - the command goes out unchanged
     session.send(outgoing as never);
     emittedCommandCount += 1; // Astra pass 3: only after the transport accepted it (past every late refusal above)
+    // Move batching spec 11.6: the capability is CONSUMED once the transport accepted the send (a refusal above leaves it
+    // usable for the retry).
+    if (plannerSendCapability && (cmd.netCommandId === NetCommandId.CLIENT_MOVE || cmd.netCommandId === NetCommandId.CLIENT_BLITZ_MOVE)) {
+      consumedPlannerSends.add(plannerCapabilityKey(plannerSendCapability));
+    }
     if (cmd.netCommandId === NetCommandId.CLIENT_MOVE || cmd.netCommandId === NetCommandId.CLIENT_BLITZ_MOVE) noteMovementSent(cmd);
     if (declarationSwitch) reportDeclarationSwitch(declarationSwitch); // after the count: a throwing report must not lose it
     // Owner 10-15: a declaration is in flight until its acting-player echo; an accepted null cancel answers it and
@@ -25020,6 +26201,7 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
       selectedIndex: Number(r.selectedIndex ?? -1),
       pickable: nrOfDice > 0 || !hasAnyReroll,
       teamRR: srcTeam, mascot: rr.includes('MASCOT'), pro: srcPro && !proHidden, brawler: srcBrawler, consummate: srcConsummate,
+      trr: rr.includes('TRR'),
       consummateLabel: consummateSrc ? valuedSkillLabel(consummateSrc, blockerSkillValues) : null,
       proComposite: proSpent ? [] : blockProCompositeOptions(dp.dialogId, r, { driveBonus: rowDriveBonus }),
       namedTeam: hasDriveBonusOrLeader(rr), teamChoices: blockTeamChoices(rr, rowDriveBonus),
@@ -25485,6 +26667,7 @@ function clearWizardSpellElection(): void {
   liveWizardSpellOffer = null;
   liveWizardSpell = null;
   liveWizardSpellAwaitingServer = false;
+  liveWizardSpellDialog = null;
 }
 
 function answerWizardSpell(choice: { kind: 'cancel' } | { kind: 'spell'; spell: WizardSpell }): void {
@@ -25493,14 +26676,14 @@ function answerWizardSpell(choice: { kind: 'cancel' } | { kind: 'spell'; spell: 
   const key = wizardSpellKey(offer.commandNr);
   const dialogId = String((game.value?.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '');
   if (dialogId !== 'wizardSpell' || game.value?.turnMode !== 'wizard'
-    || lastAppliedCommandNr !== offer.commandNr || followupHandled.has(key)) {
+    || !wizardOccurrenceLive() || followupHandled.has(key)) {
     clearWizardSpellElection();
     return;
   }
   if (choice.kind === 'spell') {
     if (!wizardSpellChoices(offer).some((candidate) => candidate.kind === 'spell' && candidate.spell === choice.spell)) return;
+    if (!wizardAnswerOpen()) return; // this occurrence is already answered
     liveWizardSpell = choice.spell;
-    liveWizardSpellAwaitingServer = false;
     state.wizardTargetPreview = null;
     state.wizardTargetConfirm = null;
     state.inducementUse = {
@@ -25513,11 +26696,11 @@ function answerWizardSpell(choice: { kind: 'cancel' } | { kind: 'spell'; spell: 
     armServerCoordinatePicks();
     return;
   }
+  if (!wizardAnswerOpen()) return; // this occurrence is already answered
   const command = buildWizardSpellCommand(offer, choice);
   state.wizardTargetPreview = null;
   state.wizardTargetConfirm = null;
-  const sent = sendCommand(command);
-  liveWizardSpellAwaitingServer = sent;
+  const sent = sendWizardAnswer(command);
   if (!sent) {
     const message = $t('store.message.wizardCancelSendFailed');
     console.warn('[wizardSpell]', message);
@@ -25535,6 +26718,9 @@ function clearRegenerationElection(): void {
   liveRegenerationChoices.clear();
 }
 
+/** The applied frame + dialog occurrence of the last headless regeneration decline attempt (independent of the
+ *  answered latch `followupHandled`, which only a SENT answer sets). */
+let lastHeadlessRegenerationAttempt: string | null = null;
 function answerRegenerationElection(choice: RegenerationElectionChoice): void {
   const offer = liveRegenerationOffer;
   if (!offer) return;
@@ -25546,9 +26732,12 @@ function answerRegenerationElection(choice: RegenerationElectionChoice): void {
     return;
   }
   const command = buildRegenerationElectionCommand(offer, choice);
+  // Owner 11-25 (Sol r2 #2): a refused send (play gate, action lock, transport down) sends nothing; the card and the
+  // server decision stay answerable. A refused send never goes out later (sendCommand does not queue), so a retry once
+  // the transport is back is the one command.
+  if (!sendCommand(command)) return;
   followupHandled.add(key);
   clearRegenerationElection();
-  sendCommand(command);
 }
 const LEGACY_HANDLED_DIALOGS = new Set(['pettyCashInducements', 'coinThrow', 'kickReceive']);
 
@@ -25607,7 +26796,7 @@ function outgoingDecisionContext(g: GameJson | null = game.value): EndGameDecisi
 
 const outgoingShadowCounts = createRefusalDivergenceCounts();
 
-function observeOutgoingShadow(cmd: Readonly<Record<string, unknown>>, legacyOutcome: LegacyOutgoingOutcome): void {
+function observeOutgoingShadow(cmd: Readonly<Record<string, unknown>>, legacyOutcome: LegacyOutgoingOutcome, authorizedMoveArray = false): void {
   const g = game.value;
   if (!g) return;
   try {
@@ -25618,6 +26807,9 @@ function observeOutgoingShadow(cmd: Readonly<Record<string, unknown>>, legacyOut
       // The handler's structural capability is independent of the separately recorded legacy result.
       // Feeding playPermitted() back here would make play-gate drops tautological again.
       maySend: play.active,
+      // Move batching spec 11.6: a planner array that passed the outbound invariant is EXPECTED by the shadow move rail
+      // (head offered, later squares chained); the rail stays shadow-only.
+      ...(authorizedMoveArray ? { authorizedMoveArray: true } : {}),
     }, legacyOutcome, railDiagnostic, outgoingShadowCounts);
   } catch (error) {
     console.warn('[rail-shadow] outgoing observation failed:', (error as Error)?.message);
@@ -25906,6 +27098,8 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
   } else if (hasMascot) {
     opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team' });
     if (hasTeam) opts.push({ label: 'Mascot + RR', source: 'Mascot TRR', kind: 'team' });
+    // Owner 11-25: the plain Team reroll beside the Mascot buttons (upstream teamReRollSources(includeMascot = true)).
+    if (hasTeam) opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
   } else if (hasTeam) {
     opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
   }
@@ -26019,6 +27213,9 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
   if (initialDialogId !== 'wizardSpell' || g.turnMode !== 'wizard') clearWizardSpellElection();
   // Astra confirmlock-6: a replacement wizardSpell occurrence (the opponent's) retires the stale Zap confirmation.
   else if (state.wizardTargetConfirm?.answersInstance && !cardDialogPresent(['wizardSpell'], state.wizardTargetConfirm.answersInstance)) clearWizardSpellElection();
+  // Sol (Fireball aim review): ANY replacement wizardSpell dialog object (an opponent-owned one included) retires the
+  // election it does not belong to - preview, reticle, tags and prompt. A local new occurrence is offered afresh below.
+  else if (liveWizardSpellDialog !== null && toRaw(g.dialogParameter as object) !== liveWizardSpellDialog) clearWizardSpellElection();
   if (initialDialogId !== 'reRollRegenerationMultiple') clearRegenerationElection();
   if (initialDialogId !== 'opponentBlockSelectionProperties') { state.opponentBlockSelection = null; liveOpponentBlockDialog = null; }
   if (!isReRollForTargetsDialog(initialDialogId)) { state.reRollForTargets = null; liveReRollForTargetsDialog = null; }
@@ -26079,15 +27276,17 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
         });
         if (!offer) return;
         const enabledSpells = offer.enabledSpells;
-        const key = wizardSpellKey(offer.commandNr);
-        if (followupHandled.has(key)) return;
-        if (!liveWizardSpellOffer || wizardSpellKey(liveWizardSpellOffer.commandNr) !== key) {
+        // Fireball round 3 (Sol): the election belongs to the dialog OCCURRENCE (its object), not to the frame that
+        // carried it - an unrelated sync over the standing dialog re-offers nothing and releases no answer.
+        const dialogRef = toRaw(wdp) as object;
+        if (!liveWizardSpellOffer || liveWizardSpellDialog !== dialogRef) {
           if (liveWizardSpellOffer && liveWizardSpellAwaitingServer) {
-            const message = 'Server kept wizardSpell open after the prior answer; re-offering the dialog.';
+            const message = 'Server set wizardSpell again after the prior answer; offering the new dialog.';
             console.warn('[wizardSpell]', message);
             log('system', `⚠ ${message}`);
           }
           liveWizardSpellOffer = offer;
+          liveWizardSpellDialog = dialogRef;
           liveWizardSpell = null;
           liveWizardSpellAwaitingServer = false;
           if (state.squarePick?.kind === 'wizard') state.squarePick = null;
@@ -26106,12 +27305,17 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
             log('system', `⚠ ${message}`);
           }
         }
+        const occurrenceOffer = liveWizardSpellOffer;
+        const key = wizardSpellKey(occurrenceOffer.commandNr);
+        if (followupHandled.has(key)) return;
+        // This occurrence is answered: nothing is offered again until the server closes, replaces or re-sends it.
+        if (liveWizardSpellAwaitingServer) return;
         if (liveWizardSpell) {
           armServerCoordinatePicks();
           return;
         }
         if (humanReRollSurface()) {
-          const options = wizardSpellChoices(offer)
+          const options = wizardSpellChoices(occurrenceOffer)
             .filter((choice): choice is { kind: 'spell'; spell: WizardSpell } => choice.kind === 'spell')
             .map((choice) => ({
               kind: 'spell' as const,
@@ -26127,7 +27331,7 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
               seq: (state.inducementUse?.seq ?? 0) + 1,
             };
           }
-        } else if (!liveWizardSpellAwaitingServer) {
+        } else {
           answerWizardSpell({ kind: 'cancel' });
         }
         return;
@@ -26190,7 +27394,14 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
             };
           }
         } else {
-          answerRegenerationElection({ kind: 'decline' });
+          // Owner 11-25 (Sol MINOR): a refused headless decline keeps the offer (the server still waits), so it is tried
+          // again - but once per received frame / snapshot (applied frame + dialog occurrence), never once per followups
+          // pass: the snapshot handler runs the followups twice (its synthetic frame, then its own pass).
+          const attempt = `${state.appliedFrameSeq}|${currentDialogOccurrence()}`;
+          if (lastHeadlessRegenerationAttempt !== attempt) {
+            lastHeadlessRegenerationAttempt = attempt;
+            answerRegenerationElection({ kind: 'decline' });
+          }
         }
         return;
       }
@@ -29480,6 +30691,19 @@ const FUMBBL_SKILL_SETTINGS = {
   dodgeBlock: { key: DODGE_BLOCK_SETTING_KEY, values: DODGE_BLOCK_VALUES as readonly string[] },
 } as const;
 export type FumbblSkillSetting = keyof typeof FUMBBL_SKILL_SETTINGS;
+/** The account a server target's stored settings belong to: 'fumbbl' for an official FUMBBL host, else the game
+ *  server's host (the fork). Null without a parsable URL. */
+function skillPromptTarget(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return isOfficialFumbblHost(host) ? 'fumbbl' : host || null;
+  } catch { return null; }
+}
+/** The target the selects describe: the live game connection, else the server Settings points at. */
+function skillPromptDisplayTarget(): string {
+  return skillPromptTarget(gameConnectionUrl) ?? skillPromptTarget(settings.url) ?? 'fumbbl';
+}
 function refreshFumbblSkillSettings(): void {
   const stored = session?.storedUserSettings;
   if (!stored) return;
@@ -29487,22 +30711,86 @@ function refreshFumbblSkillSettings(): void {
     const value = stored.get(FUMBBL_SKILL_SETTINGS[name].key);
     fumbblSkillSettings[name] = value != null && value.trim() !== '' ? value : null;
   }
+  const target = skillPromptTarget(gameConnectionUrl);
+  if (target) {
+    const st = settings.fumbblSkillPrompts;
+    settings.fumbblSkillPrompts = { ...st, known: { ...st.known, [target]: { ...fumbblSkillSettings } } };
+  }
+  applyPendingFumbblSkillSettings();
 }
 /** A save goes out on this coach's own seated game connection only, as upstream's client sends it from inside a game. */
 function fumbblSkillSettingsEditable(): boolean {
   return !!session && play.active && !replay.active && state.sessionState === 'joined';
 }
-/** Store one of the two values for the coach on FUMBBL: upstream's clientUserSettings (client.setProperty +
- *  saveUserSettings, GamePlayMenu.dialogClosed:502-511), carrying every other saved setting unchanged
- *  (clientUserSettingsCommand). The server applies it to the running game at once
- *  (ServerCommandHandlerUserSettings.updateGameplaySettings). Only the upstream option values are ever sent. */
+/** Owner 11-21 ("why not just queue the message for the next time the user is seated?"): the latest pick is applied ONCE
+ *  per server target. On this coach's seated connection, after the join delivered the account's stored settings (the
+ *  server sends serverUserSettings before serverJoin, UtilServerStartGame:73 vs :79, so at 'joined' the list is complete
+ *  and the resend-everything save is never short), every pending value that differs from the stored one goes out in ONE
+ *  clientUserSettings; equal values send nothing. Either way the target is then marked applied, so a reconnect does not
+ *  resend and a value changed later elsewhere on that account is never overwritten by this older pick. A newer pick
+ *  replaces the pending values and clears the applied targets. Spectator / replay connections never send. */
+function applyPendingFumbblSkillSettings(): void {
+  const st = settings.fumbblSkillPrompts;
+  const target = skillPromptTarget(gameConnectionUrl);
+  if (!target || !fumbblSkillSettingsEditable() || !session) return;
+  // Sol (11-21, P2): PER SETTING. Only the picks not yet applied on this target are considered; one applied here is
+  // dropped here for good, so a later pick for another setting can never resend it over a newer server value.
+  const due = (Object.keys(FUMBBL_SKILL_SETTINGS) as FumbblSkillSetting[])
+    .filter((name) => { const pick = st.pending[name]; return !!pick && !pick.appliedOn.includes(target); });
+  if (!due.length) return;
+  const stored = session.storedUserSettings;
+  const changes: [string, string][] = [];
+  for (const name of due) {
+    const value = st.pending[name]!.value;
+    const key = FUMBBL_SKILL_SETTINGS[name].key;
+    if (FUMBBL_SKILL_SETTINGS[name].values.includes(value) && stored.get(key) !== value) changes.push([key, value]);
+  }
+  if (changes.length) {
+    const merged = new Map(stored);
+    for (const [key, value] of changes) merged.set(key, value);
+    const [firstKey, firstValue] = changes[0]!;
+    if (!sendCommand(clientUserSettingsCommand(merged, firstKey, firstValue) as unknown as Record<string, unknown>)) return;
+  }
+  const now = settings.fumbblSkillPrompts;
+  const pending = { ...now.pending };
+  for (const name of due) {
+    const pick = pending[name];
+    if (pick && !pick.appliedOn.includes(target)) pending[name] = { value: pick.value, appliedOn: [...pick.appliedOn, target].slice(-8) };
+  }
+  settings.fumbblSkillPrompts = { ...now, pending };
+  if (changes.length) refreshFumbblSkillSettings();
+}
+/** Store one of the two values for the coach: upstream's clientUserSettings (client.setProperty + saveUserSettings,
+ *  GamePlayMenu.dialogClosed:502-511), carrying every other saved setting unchanged (clientUserSettingsCommand); the server
+ *  applies it to the running game at once (ServerCommandHandlerUserSettings.updateGameplaySettings). Seated: sent now.
+ *  Not seated (menus, spectating, a replay): queued for the next seated join (applyPendingFumbblSkillSettings). Only the
+ *  upstream option values are accepted. */
 function saveFumbblSkillSetting(name: FumbblSkillSetting, value: string): boolean {
   const spec = FUMBBL_SKILL_SETTINGS[name];
-  if (!spec || !spec.values.includes(value) || !fumbblSkillSettingsEditable() || !session) return false;
-  if (!sendCommand(clientUserSettingsCommand(session.storedUserSettings, spec.key, value) as unknown as Record<string, unknown>)) return false;
-  refreshFumbblSkillSettings();
+  if (!spec || !spec.values.includes(value)) return false;
+  const st = settings.fumbblSkillPrompts;
+  // Only this setting's pick is replaced (and only its applied targets reset); the other setting is untouched.
+  settings.fumbblSkillPrompts = { ...st, pending: { ...st.pending, [name]: { value, appliedOn: [] } } };
+  applyPendingFumbblSkillSettings();
   return true;
 }
+/** What a select shows: its setting's pick still pending for the target it describes, else the live / last known value. */
+function fumbblSkillPromptValue(name: FumbblSkillSetting): string | null {
+  const st = settings.fumbblSkillPrompts;
+  const target = skillPromptDisplayTarget();
+  const pick = st.pending[name];
+  if (pick && !pick.appliedOn.includes(target)) return pick.value;
+  if (fumbblSkillSettingsEditable()) return fumbblSkillSettings[name];
+  return st.known[target]?.[name] ?? null;
+}
+/** A pick is waiting for the next seated join on the target the selects describe. */
+function fumbblSkillPromptPending(): boolean {
+  const st = settings.fumbblSkillPrompts;
+  const target = skillPromptDisplayTarget();
+  return Object.values(st.pending).some((pick) => !!pick && !pick.appliedOn.includes(target));
+}
+// The seated join completes after serverUserSettings: apply a pending pick then.
+watch(() => [state.sessionState, play.active, !!game.value] as const, () => applyPendingFumbblSkillSettings());
 
 function handleServerPush(cmd: Record<string, unknown>) {
   const id = String(cmd.netCommandId ?? '');
@@ -29759,6 +31047,7 @@ function clearReplaySession(): void {
   replay.active = false;
   replay.loading = false;
   replay.source = null;
+  replay.hasResult = false;
   replay.playing = false;
   replay.speed = REAL_TIME_REPLAY_SPEED;
   replay.error = null;
@@ -29820,6 +31109,22 @@ function preflightReplayBundle(bundle: ReplayBundle): PreflightedReplayBundle {
     },
     apply: applyReplayCommand,
     estimateStateBytes: (value) => JSON.stringify(value).length * 2,
+    // Owner 11-25: the replay ends with an end-game report exactly when the end-game handler would make one ready at the
+    // end: the same reducer over the same model-sync frames, and the same end-of-input authorization (the replay
+    // presentation path runs syncEndGame for model syncs only).
+    resultTracker: () => {
+      let endGame = EMPTY_END_GAME;
+      return {
+        step(value, command, inputEnded) {
+          if (command.netCommandId !== NetCommandId.SERVER_MODEL_SYNC) return;
+          endGame = reduceEndGame(endGame, endGameFrameFromServer(value, command as Pick<ServerCommand, 'commandNr'> & {
+            reportList?: { reports?: readonly Record<string, unknown>[] };
+          }));
+          if (inputEnded) endGame = authorizeEndGamePresentationAtInputEnd(endGame, 'replay');
+        },
+        ready: () => endGame.finalPresentationReady,
+      };
+    },
     present: async () => undefined,
     resetPresentation: () => undefined,
     renderOnce: () => undefined,
@@ -29865,6 +31170,7 @@ function installReplayBundle(bundle: ReplayBundle, preflighted?: PreflightedRepl
   replay.source = bundle.source;
   replay.error = null;
   replay.sessionKey = `${bundle.finalState.gameId}:${Date.now()}`;
+  replay.hasResult = candidate.prepared.endsWithResult ?? false;
   play.active = false;
   state.demoMode = false;
   // Owner 10-10: the replay owns the dice tallies from the moment its seed goes on screen - not from its first applied
@@ -30060,6 +31366,8 @@ export const gameStore = {
   fumbblSkillSettings: fumbblSkillSettings as Readonly<typeof fumbblSkillSettings>,
   fumbblSkillSettingsEditable,
   saveFumbblSkillSetting,
+  fumbblSkillPromptValue,
+  fumbblSkillPromptPending,
   spectatorPublishedPosition: spectatorPublication.position,
   /** Owner 10-11: a published position's automatic field flip under Settings > Spectator and replay view. */
   publishedFieldFlip,
@@ -30267,6 +31575,51 @@ export const gameStore = {
    *  crosshair square. Dispatch the wire command by `kind`, then clear the pick. New skill-based
    *  coordinate picks add a `kind` here (Sidestep is separate — it keeps its pushback resolve). */
   /** `friendlyFireConfirmed`: only the wizard friendly-fire card's Yes passes it (FFB 3.4.0 entry 5). */
+  /** Owner 11-21 ("Can't we just use the same flow as the pass/bomb targeting?"): the Fireball square is chosen like a
+   *  throw target - no field of markers; the square under the pointer (a first tap on touch, the crosshair on a pad)
+   *  previews the blast, its victims' 4+ chips and the target cue, as upstream's ClientStateWizard.mouseOverField draws
+   *  its fireball marker on the hovered square. Legality is isWizardTargetLegal, unchanged: an illegal square previews
+   *  nothing (as a pass over a square it cannot throw at shows no readout). Display only, nothing is sent.
+   *  Returns whether the square is a legal Fireball target. */
+  previewFireballSquare(coord: [number, number] | null, source: 'pointer' | 'touch' = 'pointer'): boolean {
+    const pick = state.squarePick;
+    const offer = liveWizardSpellOffer;
+    const g = game.value;
+    const live = !!pick && pick.kind === 'wizard' && pick.skill === 'Fireball' && !!offer && liveWizardSpell === 'fireball'
+      && !liveWizardSpellAwaitingServer && !!g;
+    const clearHover = () => { if (state.wizardTargetPreview?.hover) state.wizardTargetPreview = null; };
+    if (!live) { clearHover(); return false; }
+    // Fireball round 5 (Sol, P2): the friendly-fire card pins its square's preview. No hover, hover-clear or tap
+    // replaces it while the card is up; Back unpins it (the next hover / tap previews as usual).
+    if (state.yesNo?.key.startsWith('wizardFriendlyFire:')) {
+      const pinned = state.wizardTargetPreview;
+      return !!coord && !!pinned && pinned.square[0] === coord[0] && pinned.square[1] === coord[1];
+    }
+    // Fireball round 4 (Sol, P2, hybrid device): a preview is owned by the input that made it. A pointer leaving the
+    // pitch (its hover-clear) clears only a pointer preview: a resting mouse whose hover state is torn down when a
+    // touch pointer departs (renderer clearPointerHover) no longer erases the square just tapped, nor its staged Confirm.
+    if (!coord) {
+      if (state.wizardTargetPreview?.hover && (state.wizardTargetPreview.source ?? 'pointer') === source) state.wizardTargetPreview = null;
+      return false;
+    }
+    const rule = liveWizardTargetRule(g!);
+    if (!isWizardTargetLegal('fireball', coord, wizardRulePlayers(g!, offer!.teamId, rule), rule)) { clearHover(); return false; }
+    const current = state.wizardTargetPreview;
+    if (current?.hover && current.square[0] === coord[0] && current.square[1] === coord[1]) {
+      // the same square: the newest input takes ownership (a tap on the square a resting mouse already hovers)
+      if ((current.source ?? 'pointer') !== source) state.wizardTargetPreview = { ...current, source };
+      return true;
+    }
+    state.wizardTargetPreview = {
+      square: [coord[0], coord[1]],
+      playerSquares: fireballPreviewSquares(coord, wizardPitchPlayers(g!), rule),
+      seq: (current?.seq ?? 0) + 1,
+      hover: true,
+      source,
+    };
+    return true;
+  },
+
   resolveSquarePick(coord: [number, number], opts?: { friendlyFireConfirmed?: boolean }) {
     const sp = state.squarePick;
     if (!sp) return;
@@ -30314,24 +31667,32 @@ export const gameStore = {
         const key = offer ? wizardSpellKey(offer.commandNr) : '';
         const dialogId = String((game.value?.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '');
         if (!offer || !spell || !game.value || dialogId !== 'wizardSpell' || game.value.turnMode !== 'wizard'
-          || lastAppliedCommandNr !== offer.commandNr || followupHandled.has(key)) {
+          || !wizardOccurrenceLive() || followupHandled.has(key)) {
           clearWizardSpellElection();
           return;
         }
+        if (!wizardAnswerOpen()) return; // release review P1: this occurrence is already answered
         const rule = liveWizardTargetRule(game.value);
         const opponentPlayers = wizardRulePlayers(game.value, offer.teamId, rule);
         if (!isWizardTargetLegal(spell, coord, opponentPlayers, rule)) return;
-        // FFB 3.4.0 entry 5 (owner spec 10-26): a square whose spell would hit ONLY the caster's own players asks
-        // first. The card sends nothing: Back leaves the crosshairs armed; Cast re-checks the live occurrence and
-        // re-enters this path (Zap then still stages its ordinary Confirm card).
-        if (!friendlyFireConfirmed && wizardTargetsOnlyOwnPlayers(spell, coord, opponentPlayers, rule)) {
+        // Release review (Sol, P2 x2): a Fireball casts only on the square whose preview (blast, victims' chips, cue) is
+        // on screen now - a touch Confirm after the preview moved or cleared, or a pad crosshair that never previewed,
+        // sends nothing. The friendly-fire card's Cast is that square's preview (it names the players hit).
+        // Fireball round 5 (Sol, P2): while the friendly-fire card is up its square's preview is PINNED (as the Zap
+        // confirm card freezes its staged target): a pick elsewhere does nothing, and the card's Cast, too, must find
+        // that preview on screen, so Cast always sends the square that is shown.
+        if (spell === 'fireball' && !friendlyFireConfirmed && state.yesNo?.key.startsWith('wizardFriendlyFire:')) return;
+        const preview = state.wizardTargetPreview;
+        if (spell === 'fireball'
+          && !(preview?.hover && preview.square[0] === coord[0] && preview.square[1] === coord[1])) return;
+        // Upstream bb2025 ClientStateWizard.showFriendlyFireConfirmation: a spell that would affect ANY of the caster's
+        // own players asks first (wizardOwnPlayersAffected). The card sends nothing: Back leaves the crosshairs armed;
+        // Cast re-checks the live occurrence and re-enters this path (Zap then still stages its ordinary Confirm card).
+        const ownAffected = wizardOwnPlayersAffected(spell, coord, opponentPlayers, rule);
+        if (!friendlyFireConfirmed && ownAffected.length > 0) {
           const at: [number, number] = [coord[0], coord[1]];
           const offerNr = offer.commandNr;
-          const ownNames = spell === 'zap'
-            ? opponentPlayers.filter((player) => player.rosterPlayer && player.coordinate?.[0] === at[0] && player.coordinate[1] === at[1])
-            : opponentPlayers.filter((player) => player.coordinate
-              && player.coordinate[0] >= 0 && player.coordinate[0] <= 25 && player.coordinate[1] >= 0 && player.coordinate[1] <= 14
-              && Math.abs(player.coordinate[0] - at[0]) <= 1 && Math.abs(player.coordinate[1] - at[1]) <= 1);
+          const ownNames = ownAffected;
           askYesNo({
             key: `wizardFriendlyFire:${offerNr}:${spell}:${at[0]},${at[1]}`,
             // answersDialog defaults to the live wizardSpell occurrence: the server clearing or replacing it retires
@@ -30372,8 +31733,7 @@ export const gameStore = {
           opponentPlayers,
           rule,
         });
-        const sent = sendCommand(command);
-        liveWizardSpellAwaitingServer = sent;
+        const sent = sendWizardAnswer(command);
         if (!sent) {
           const message = $t('store.gameStore.p0SendFailedTarget', { p0: spell === 'fireball' ? 'Fireball' : 'Zap' });
           console.warn('[wizardSpell]', message);
@@ -30402,7 +31762,7 @@ export const gameStore = {
     const key = offer ? wizardSpellKey(offer.commandNr) : '';
     const dialogId = String((game.value?.dialogParameter as { dialogId?: unknown } | null)?.dialogId ?? '');
     if (!pending || !offer || liveWizardSpell !== 'zap' || !game.value || dialogId !== 'wizardSpell'
-      || game.value.turnMode !== 'wizard' || lastAppliedCommandNr !== offer.commandNr || followupHandled.has(key)) {
+      || game.value.turnMode !== 'wizard' || !wizardOccurrenceLive() || followupHandled.has(key)) {
       clearWizardSpellElection();
       return;
     }
@@ -30420,8 +31780,7 @@ export const gameStore = {
       kind: 'target', spell: 'zap', coordinate: pending.square,
       opponentPlayers, rule,
     });
-    const sent = sendCommand(command);
-    liveWizardSpellAwaitingServer = sent;
+    const sent = sendWizardAnswer(command);
     if (!sent) {
       const message = $t('store.gameStore.zapSendFailedThe');
       console.warn('[wizardSpell]', message);
@@ -31439,8 +32798,9 @@ export const gameStore = {
   resolveBloodlustReroll(source: string | null) {
     const b = state.bloodlust; if (!b || b.stage !== 'reroll') return;
     if (!dialogInstanceLive(b.instanceKey)) { state.bloodlust = null; return; } // R-E1
-    latchAnsweredDialogInstance(b.instanceKey ?? null, game.value?.dialogParameter as object | null);
-    sendCommand({ netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: b.reRolledAction, reRollSource: source });
+    // Owner 11-25 (Sol r2 #2): latch the answered dialog only when the answer went out; a refused send keeps the card.
+    if (!sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: b.reRolledAction, reRollSource: source },
+      b.instanceKey ?? null, game.value?.dialogParameter as object | null)) return;
     log('system', `play: bloodlust reroll ${source ? `via ${source}` : 'declined'} (${b.vampire})`);
     state.bloodlust = null;
   },
@@ -31629,7 +32989,8 @@ export const gameStore = {
           || new Set(dieSelection).size !== dieSelection.length
           || dieSelection.some((i) => !Number.isInteger(i) || i < 0 || i >= diceCount)) return;
         // Upstream DialogBlockRollPropertiesHandler -> sendUseMultiBlockDiceReRoll; command field: `blockDiceIndexes`.
-        gameStore.sendMultiBlockDiceReRoll(dieSelection);
+        // Sol r3 #3: a refused send keeps the card (same rule as the commands below)
+        if (!gameStore.sendMultiBlockDiceReRoll(dieSelection)) return;
         break;
       }
       // Hatred (ClientCommandUseHatred, upstream): wire field is `playerId` (IJsonOption.PLAYER_ID) — the
@@ -31657,9 +33018,12 @@ export const gameStore = {
     // derived from the server's reroll report (Brawler / Hatred / a full reroll).
     // A composite answered with the die index rerolls that one die (c66198ac4 StepBlockRoll:263-275), Pro or fallback.
     const indexedComposite = BLOCK_PRO_COMPOSITE_KINDS.includes(kind as BlockProCompositeKind);
-    ownBlockRerollIndices = kind === 'pro' || kind === 'consummate' || kind === 'singleBlockDie' || indexedComposite ? [dieIndex]
+    const rerollIndices = kind === 'pro' || kind === 'consummate' || kind === 'singleBlockDie' || indexedComposite ? [dieIndex]
       : kind === 'multiBlockDice' && Array.isArray(dieSelection) ? [...dieSelection] : null;
-    if (cmd) sendCommand(cmd);
+    // Owner 11-25 (Sol r2 #2): a refused send (play gate, action lock, transport down) sends nothing; the card and the
+    // server decision stay answerable (sendCommand never queues, so a later retry is the one command).
+    if (cmd && !sendCommand(cmd)) return;
+    ownBlockRerollIndices = rerollIndices;
     state.blockPartial = null;
     blockChoiceEpoch++; // g313: the NEXT block-choice offer gets a fresh de-dup key even on identical dice
     log('system', `play: block partial reroll — ${kind === 'teamChoice' ? teamChoiceSource : kind}`);
@@ -32782,10 +34146,19 @@ export const gameStore = {
       const actingId = String((game.value.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
       if (actingId !== playerId) { log('system', 'ignored: server has not confirmed this player as acting'); return; }
       if (playerAction === 'illCarryYou' && localWideRailSessionActive()) return;
-      sendCommand({
+      const carrySent = sendCommand({
         netCommandId: NetCommandId.CLIENT_USE_SKILL, skill: "I'll Carry You",
         skillUsed: playerAction === 'illCarryYou', playerId,
       });
+      if (!carrySent) {
+        // Review r5 1: refused (e.g. the player's planned run is still being walked): say so; nothing is consumed, the
+        // menu row stays and works once the run has ended.
+        if (plannerArrayBarsTerminal(playerId)) {
+          const text = $t('store.text.plannedRunStillWalking');
+          state.actionNotice = { text, seq: (state.actionNotice?.seq ?? 0) + 1 };
+        }
+        return;
+      }
       log('system', `play: I'LL CARRY YOU — ${playerAction === 'illCarryYou' ? 'pick up team-mate' : 'place carried player and end action'} (server resolves)`);
       return;
     }
@@ -32936,6 +34309,8 @@ export const gameStore = {
   /** True from an accepted gameplay send until the next applied server frame (the End row label reads it). */
   gameplaySendUnanswered(): boolean { return gameplaySendUnanswered; },
   gameplaySendCount(): number { return gameplaySendCount; },
+  /** Owner 11-25: the installed server dialog's occurrence (currentDialogOccurrence); coach-seat paths only. */
+  dialogOccurrence(): number { return currentDialogOccurrence(); },
 
   /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent.
    *  No victim is named here (owner 10-08): the server echo makes the activation live and the victim is picked later. */
@@ -33020,6 +34395,7 @@ export const gameStore = {
     const intent = state.gazeIntent;
     const g = game.value;
     if (plannerOwnsAct('gaze')) { log('system', 'ignored: the walk-then-gaze plan gazes once its walk has ended'); return false; } // review 11-18
+    if (plannerArrayBarsTerminal(String((g?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''))) { log('system', 'ignored: the planned run is still being walked'); return false; } // review r3 C
     if (!gameStore.canConfirmGazeTarget(victimId)) {
       const reason = !intent || !g ? 'the Gaze activation is no longer active'
         : gameStore.armedGazeVictimId() !== victimId ? 'the nominated victim has changed'
@@ -33207,7 +34583,11 @@ export const gameStore = {
     // always pass a single square (path.length===1) and never trip this. Caller audit (2026-09-28, S3 v2
     // report): every production caller either has no plan active yet (a fresh confirm/click) or already gates
     // on its own walk-in-progress hold (SpectateView's walkStillOnScreen) before reaching here with path.length>1.
-    if (path.length > 1 && plannerPlan?.playerId === playerId) {
+    // Move batching spec 12.4: the planner's OWN segment (presented with the live plan's capability) takes the
+    // continuation path: no plannerStart, not refused here or by fumbblWholePathRefused; the head offer check and the
+    // head's movement intent still apply. sendCommand's outbound invariant checks the slice itself.
+    const continuation = plannerContinuationFor(playerId);
+    if (path.length > 1 && plannerPlan?.playerId === playerId && !continuation) {
       log('system', `ignored: a move is already in progress for ${playerName(game.value, playerId)}`);
       return false;
     }
@@ -33234,9 +34614,10 @@ export const gameStore = {
       if (onTheBall) { log('system', 'ignored: On the Ball route could not start'); return false; }
     }
     if (onTheBall) return gameStore.stepMove(playerId, path[0]!);
-    // FUMBBL Controls (spec touch point 7, #99): a multi-square run goes one square per echo through the planner and
-    // NEVER as one whole-path CLIENT_MOVE. When the planner refused it, nothing is sent.
-    if (path.length > 1 && fumbblWholePathRefused(playerId)) return false;
+    // FUMBBL Controls (spec touch point 7, #99): a multi-square run goes through the planner and NEVER as a raw
+    // whole-path CLIENT_MOVE. When the planner refused it, nothing is sent. (The planner's own BB2025 segment is the
+    // continuation above, decided 12.4.)
+    if (path.length > 1 && !continuation && fumbblWholePathRefused(playerId)) return false;
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === playerId)?.playerCoordinate;
     if (!from) return false;
     if (!currentMoveOffer(playerId, path[0]!, minimumOfferRevision)) {
@@ -33245,8 +34626,8 @@ export const gameStore = {
     }
     const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_MOVE, actingPlayerId: playerId, coordinateFrom: from, coordinatesTo: path });
     if (accepted) {
-      publishMovementIntent(playerId, [from[0], from[1]], path[0]!);
-      log('system', `play: STEP ${playerName(game.value, playerId)} — 1 sq (server resolves)`);
+      publishMovementIntent(playerId, [from[0], from[1]], path[0]!, { path });
+      log('system', `play: STEP ${playerName(game.value, playerId)} — ${path.length} sq (server resolves)`);
     }
     return accepted;
   },
@@ -33761,6 +35142,12 @@ export const gameStore = {
     }
     const offer = kind == null ? null : c.offers.find((candidate) => candidate.kind === kind);
     if (kind != null && !offer) return; // accept only an alternative present in the held upstream-mirrored offer set
+    // Review r4 1a: refuse (the card stays) while the blitzer's array is outstanding, exactly as the attack gate's 'wait'
+    // below keeps it for an unechoed square; the planned block itself waits for the array in plannerAdvance.
+    if (c.origin === 'blitz' && plannerArrayBarsTerminal(c.blitzerId)) {
+      log('system', 'play: block held - the planned run is still being walked (confirm again once it ends)');
+      return;
+    }
     // P0 g1963245: a Blitz card whose block can no longer be made retires with no wire (Gored's use-skill included).
     const attackGate = c.origin === 'blitz' ? blitzAttackGate(c.blitzerId) : null;
     if (attackGate === 'wait' || attackGate === 'waitForeign') return; // the card stays: confirm again once the square lands
@@ -33981,11 +35368,13 @@ export const gameStore = {
    * DiceReRoll(int[]); `diceIndexes` = the re-roll indexes the dialog chose (Fives' rail → wire BLOCK_DICE_INDEXES).
    * Emits only; no rail reshape. Wire shape [SOURCE]-verified spec-58 §2b/:118.
    */
-  sendMultiBlockDiceReRoll(diceIndexes: number[]) {
+  /** True when the command went out (Sol r3 #3: the block card keeps itself on a refusal). */
+  sendMultiBlockDiceReRoll(diceIndexes: number[]): boolean {
     if (!play.active || !game.value
-      || (!localOwnsCurrentBlockDialog() && !localOwnsCurrentMultiBlockDialog())) return;
-    sendCommand({ netCommandId: NetCommandId.CLIENT_USE_MULTI_BLOCK_DICE_RE_ROLL, blockDiceIndexes: diceIndexes });
+      || (!localOwnsCurrentBlockDialog() && !localOwnsCurrentMultiBlockDialog())) return false;
+    if (!sendCommand({ netCommandId: NetCommandId.CLIENT_USE_MULTI_BLOCK_DICE_RE_ROLL, blockDiceIndexes: diceIndexes })) return false;
     log('system', `play: multi-block dice reroll (${diceIndexes.length}) (server resolves)`);
+    return true;
   },
 
   /** Brawler rerolls one synchronous multi-block target via CLIENT_USE_BRAWLER; other sources use the per-target choice command. */
@@ -34047,6 +35436,17 @@ export const gameStore = {
     // P0 g1963245: a Blitz block (any flavor) needs a square left to spend on it, or a pinned blitzer.
     if (blitzAttackGate(attackerId)) return false;
     const actingAction = String((game.value.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '');
+    // Move batching (review finding 1): a Blitz ARRAY the server cut short (proven by its terminal refresh) leaves the
+    // blitzer away from the target; no block is sent from a square that is not beside it.
+    if ((actingAction === 'blitzMove' || actingAction === 'blitz') && arrayCutShort?.playerId === attackerId
+        && arrayCutShort.turnKey === currentTurnKey(game.value)) {
+      const ac = plannerCoord(attackerId);
+      const dc = plannerCoord(defenderId);
+      if (!ac || !dc || Math.max(Math.abs(ac[0] - dc[0]), Math.abs(ac[1] - dc[1])) !== 1) {
+        log('system', 'ignored: the blitzer is not beside the target');
+        return false;
+      }
+    }
     if (actingAction === 'maximumCarnage'
         && maximumCarnageConfirmedInstanceKey !== maximumCarnageEntryKey(game.value, attackerId)) {
       log('system', 'ignored: Maximum Carnage has not been confirmed');
@@ -34359,7 +35759,8 @@ export const gameStore = {
     // request while a plan is ALREADY active for this attacker must not reach plannerStart's own
     // supersede-and-restart (abandoning whatever step is already in flight) or, if plannerStart itself refuses,
     // the raw whole-path CLIENT_BLITZ_MOVE fallthrough below.
-    if (path.length > 1 && plannerPlan?.playerId === attackerId) {
+    const continuation = plannerContinuationFor(attackerId); // move batching spec 12.4 (see o66Move)
+    if (path.length > 1 && plannerPlan?.playerId === attackerId && !continuation) {
       log('system', `ignored: a Blitz move is already in progress for ${playerName(game.value, attackerId)}`);
       return false;
     }
@@ -34368,8 +35769,9 @@ export const gameStore = {
     // Owner 11-03 (Take Root): a pinned blitzer cannot step (upstream StepMove refuses it); nothing is sent.
     if (plannerPinned(attackerId)) { log('system', `ignored: ${playerName(game.value, attackerId)} is rooted to the spot and cannot move`); return false; }
     // Multi-square Blitz walks use one CLIENT_BLITZ_MOVE per echo and never fire the block automatically.
-    if (path.length > 1 && plannerStart({ playerId: attackerId, actKind: 'blitzWalk', route: path })) return true;
-    if (path.length > 1 && fumbblWholePathRefused(attackerId)) return false; // FUMBBL Controls: never a whole-path send (#99)
+    // Spec 12.4: the planner's own segment never restarts its plan here.
+    if (path.length > 1 && !continuation && plannerStart({ playerId: attackerId, actKind: 'blitzWalk', route: path })) return true;
+    if (path.length > 1 && !continuation && fumbblWholePathRefused(attackerId)) return false; // FUMBBL Controls: never a raw whole-path send (#99)
     const from = game.value.fieldModel.playerDataArray.find((d) => d.playerId === attackerId)?.playerCoordinate;
     if (!from) return false;
     if (!currentMoveOffer(attackerId, path[0]!, minimumOfferRevision)) {
@@ -34378,8 +35780,8 @@ export const gameStore = {
     }
     const accepted = sendCommand({ netCommandId: NetCommandId.CLIENT_BLITZ_MOVE, actingPlayerId: attackerId, coordinateFrom: from, coordinatesTo: path });
     if (accepted) {
-      publishMovementIntent(attackerId, [from[0], from[1]], path[0]!);
-      log('system', `play: BLITZ STEP ${playerName(game.value, attackerId)} — 1 sq (server resolves)`);
+      publishMovementIntent(attackerId, [from[0], from[1]], path[0]!, { path });
+      log('system', `play: BLITZ STEP ${playerName(game.value, attackerId)} — ${path.length} sq (server resolves)`);
     }
     return accepted;
   },
@@ -34390,6 +35792,7 @@ export const gameStore = {
   // No live callers remain; legacy-rip candidate.
   o66BlitzExecute(attackerId: string, defenderId: string, path: [number, number][]) {
     if (!play.active || !game.value) return;
+    if (path.length > 1) { log('system', 'ignored: a Blitz walk of several squares is sent only by the planner'); return; } // spec 11.6 (finding 2)
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
     // Review of 1a98974d8 (finding 5): no shipping caller, but a future one must not bypass the Blitz move-left rule.
     if (!blitzBlockFitsAfterSteps(game.value, attackerId, path.length)) { log('system', lt('store.gameStore.blitzBlockNoMoveLeft')); return; }
@@ -34519,7 +35922,7 @@ export const gameStore = {
   dismissFoulChoice(): boolean {
     if (!state.foulChoiceHold) return false;
     state.foulChoiceHold = null;
-    if (plannerPlan && plannerPlan.actKind === 'foul') plannerRetireQuietly('foul choice dismissed');
+    if (plannerPlan && plannerPlan.actKind === 'foul' && !plannerDeferCancel('foul choice dismissed', true)) plannerRetireQuietly('foul choice dismissed');
     log('system', 'play: foul choice dismissed — nothing sent, the activation stays');
     return true;
   },
@@ -34749,6 +36152,8 @@ export const gameStore = {
   declarationWatcherCount(): number { return declarationWatcherOccurrences; },
   /** The coach answered the watcher card ("Report" or "Not now"): it closes; it is not asked again in this game. */
   dismissSwitchWatcherCard(): void { state.switchWatcherCard = null; },
+  /** Move batching decision 12: the coach dismissed the stopped-early banner (or filed the report). */
+  dismissMoveStopReport(): void { state.moveStopReport = null; },
   /** Owner 10-15 P0 #2: our cancel was accepted and the server has not answered it yet (the surface stands down).
    *  Reactive through state.cancelRevision (Astra r7 F1). */
   cancelInFlight(): boolean { void state.cancelRevision; return cancelInFlight; },
@@ -34764,16 +36169,19 @@ export const gameStore = {
   emittedCommandCount(): number { return emittedCommandCount; },
   isPlanWalking(playerId: string): boolean { return plannerPlan != null && plannerPlan.phase === 'moving' && plannerPlan.playerId === playerId; },
   /** ORDER 66 (#6.4): cancel the in-flight plan (e.g. user Esc / right-click clear). */
-  cancelPlan() { priorActivationEndSeq += 1; plannerFlush(lt('store.text.planCanceledByYou')); }, // Astra r3 F2: and any queued declaration
+  cancelPlan() { priorActivationEndSeq += 1; if (plannerDeferCancel(lt('store.text.planCanceledByYou'), false)) return; plannerFlush(lt('store.text.planCanceledByYou')); }, // Astra r3 F2: and any queued declaration; review r3 C: deferred while an array is outstanding
   /** The coach confirmed End Activation / End Turn: the plan goes with it. Expected, so no "Plan cancelled" notice. */
-  retirePlanForConfirmedEnd() { plannerRetireQuietly('the coach confirmed the end'); },
+  retirePlanForConfirmedEnd() { if (plannerDeferCancel('the coach confirmed the end', true)) return; plannerRetireQuietly('the coach confirmed the end'); },
   /** Astra 10-10 (P2): the view reports its End prompts (End Activation / End Turn warning). Open = the planner sends
    *  nothing; closed = it resumes at once from the current model (a plan cancelled by Confirm is already gone). */
   setPlannerClientPromptHold(open: boolean) {
     if (plannerClientPromptHold === open) return;
     plannerClientPromptHold = open;
     // Opening and closing both restart the watchdog's silence window from now (a prompt closed at 7.9 s must not time out at 8 s).
-    if (plannerPlan && plannerAbortTimer) plannerArmAbort();
+    // Review r6 1: not over an outstanding ARRAY with no live, unanswered server decision: a local card toggled again
+    // and again must not reset the silence window or its 30 s cap (the watchdog's callback already ignores the hold).
+    const localOnlyOverArray = plannerArrayOutstanding(plannerPlan) && !liveUnansweredServerDecision();
+    if (plannerPlan && plannerAbortTimer && !localOnlyOverArray) plannerArmAbort();
     if (!open && plannerPlan) plannerAdvance();
   },
 
@@ -34828,6 +36236,9 @@ export const gameStore = {
   /** Blitz wire: declare blitzMove, select target, walk with clientBlitzMove, then clientBlock. */
   playerBlitz(attackerId: string, defenderId: string, path: [number, number][]) {
     if (!play.active || !game.value) return;
+    // Move batching (spec 11.6, review finding 2): a walk of several squares is sent only by the planner; this legacy
+    // macro (no shipping caller) refuses it up front, before declaring or scheduling anything.
+    if (path.length > 1) { log('system', 'ignored: a Blitz walk of several squares is sent only by the planner'); return; }
     if (isSelfBlitzNomination(game.value, defenderId, attackerId)) return;
     if (!iControlPlayer(attackerId)) { log('system', 'ignored: not your player / not your turn'); return; }
     // Review of 1a98974d8 (finding 5): the legacy fresh-Blitz macro reads the same move-left rule (walk + block).

@@ -504,6 +504,10 @@ export function offeredReRollOptions(
   } else if (hasMascot) {
     options.push({ get label() { return t('dialogs.reroll.text.teamMascotNoReroll'); }, source: 'Team Mascot', response: 'reroll', role: 'source' });
     if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.mascotRr'); }, source: 'Mascot TRR', response: 'reroll', role: 'source' });
+    // Owner 11-25 (supersedes 07-12): the plain Team reroll stands beside the two Mascot buttons, as upstream's first
+    // question offers it (ffb-common ReRollSourceComposer.teamReRollSources(includeMascot = true) :66-85: Mascot, then the
+    // drive bonus, else Leader, else the plain Team Re-Roll, with TRR). Here (no DRIVE_BONUS / LEADER) that is the plain one.
+    if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.teamReroll'); }, source: 'Team ReRoll', response: 'reroll', role: 'source' });
   } else if (hasTeam) {
     options.push({ get label() { return t('dialogs.reroll.text.teamReroll'); }, source: 'Team ReRoll', response: 'reroll', role: 'source' });
   }

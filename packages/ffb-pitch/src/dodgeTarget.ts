@@ -52,7 +52,7 @@ export function breakTackleAvailable(game: GameJson | null | undefined, playerId
 }
 
 export interface DodgeProjectionOptions {
-  /** Include Break Tackle's modifier (the caller decides which dodge of a plan may still use it). Default: false. */
+  /** Include Break Tackle's modifier: what the SERVER prices while the skill is unused. Never shown (shownDodgeTarget). Default: false. */
   breakTackle?: boolean;
   /** A further modifier summed with the others BEFORE the minimum-2 clamp (e.g. a worst-case Diving Tackle +2). */
   extraModifier?: number;
@@ -60,7 +60,8 @@ export interface DodgeProjectionOptions {
 
 /**
  * Client PROJECTION of a dodge's minimum roll for a step the server has NOT priced. Wherever the server sent the
- * square's minimumRollDodge (fieldModel.moveSquareArray), that number wins — callers must prefer it.
+ * square's minimumRollDodge (fieldModel.moveSquareArray), callers show that number through shownDodgeTarget (the
+ * server's own number, with only an unused Break Tackle taken back off).
  *
  * Mirrors fumbbl40k-server ffb-common (upstream/Live):
  *  - AgilityMechanic (bb2020 / bb2025) minimumRollDodge = Math.max(2, AG with modifiers + Σ modifier) — no upper
@@ -98,25 +99,54 @@ export function dodgeTargetForPlayer(
 }
 
 /**
- * One dodge of a plan with Break Tackle bookkeeping. Upstream prices every square with Break Tackle while it is
- * unused (UtilServerPlayerMove#addMoveSquare -> BreakTackle#appliesToContext) and StepMoveDodge spends it only when
- * it turns a fail into a pass. So: while available, the target is the Break-Tackle-modified one, and
- * `breakTackleSpent` is true only when the unmodified target is ABOVE the modified one (Break Tackle could actually
- * be spent here). A dodge it cannot change (already 2+) leaves it available; from a dodge that could spend it on,
- * callers treat it as consumed (conservative).
+ * The dodge number SHOWN for a square the server priced. Owner 11-23: Break Tackle is spent once per activation, so
+ * a predicted dodge never counts it; modifiers that apply to every dodge (Two Heads, Titchy, ...) still do.
+ * Upstream prices every square with Break Tackle while it is unused (UtilServerPlayerMove#addMoveSquare ->
+ * BreakTackle#appliesToContext), so the server's number has it taken off again here.
+ *
+ * When the mirror agrees with the server (its Break Tackle number equals the server's), the mirror's number without
+ * Break Tackle is shown. When they differ (a modifier the mirror does not know), the Break Tackle modifier is
+ * taken back off the server's number; a server number at the minimum of 2 hides how far below 2 it went, so there
+ * the mirror's number without Break Tackle is shown. An adjusted number is capped at 6+; a number that needs no
+ * adjusting (no Break Tackle, already used, or it changes nothing here) is returned exactly as sent.
  */
-export function planDodgeTarget(
+export function shownDodgeTarget(
   game: GameJson | null | undefined,
   playerId: string | null | undefined,
   from: Square,
   to: Square,
-  breakTackleStillAvailable: boolean,
-  extraModifier = 0,
-): { target: number | null; breakTackleSpent: boolean } {
-  const without = dodgeTargetForPlayer(game, playerId, from, to, { extraModifier });
-  if (!breakTackleStillAvailable) return { target: without, breakTackleSpent: false };
-  const withBt = dodgeTargetForPlayer(game, playerId, from, to, { breakTackle: true, extraModifier });
-  return { target: withBt, breakTackleSpent: without !== null && withBt !== null && without > withBt };
+  serverTarget: number,
+): number {
+  if (!(serverTarget > 0) || !breakTackleAvailable(game, playerId)) return serverTarget;
+  const without = dodgeTargetForPlayer(game, playerId, from, to);
+  const withBt = dodgeTargetForPlayer(game, playerId, from, to, { breakTackle: true });
+  if (without === null || withBt === null) return serverTarget;
+  const found = findPlayer(game!, String(playerId));
+  const modifier = found ? breakTackleModifier(dodgeRulesVersion(game), effectiveStat(found.player, 'ST')) : 0;
+  const adjusted = withBt === serverTarget ? without : serverTarget > 2 ? serverTarget - modifier : without;
+  // Nothing to take back (Break Tackle changes nothing here): the server's number exactly as sent.
+  if (adjusted <= serverTarget) return serverTarget;
+  // Sol r1 / r2: a number that had Break Tackle taken back off is capped at 6+ like every projected tag.
+  return Math.min(6, adjusted);
+}
+
+/**
+ * Owner 11-23 ("a small tag underneath the first dodge die tag that says BT +<N>"): how much Break Tackle would add
+ * to this dodge's roll, as a positive number, or 0 when it has nothing to offer here: the mover lacks it, it is
+ * already used this activation, or the dodge shows the same number with and without it (both capped to 2+..6+).
+ */
+export function breakTackleBonus(
+  game: GameJson | null | undefined,
+  playerId: string | null | undefined,
+  from: Square,
+  to: Square,
+): number {
+  if (!breakTackleAvailable(game, playerId)) return 0;
+  const without = dodgeTargetForPlayer(game, playerId, from, to);
+  const withBt = dodgeTargetForPlayer(game, playerId, from, to, { breakTackle: true });
+  if (without === null || withBt === null || Math.min(6, without) <= Math.min(6, withBt)) return 0;
+  const found = findPlayer(game!, String(playerId));
+  return found ? -breakTackleModifier(dodgeRulesVersion(game), effectiveStat(found.player, 'ST')) : 0;
 }
 
 function dodgeModifierSum(

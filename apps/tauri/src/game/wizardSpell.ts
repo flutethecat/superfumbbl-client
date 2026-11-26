@@ -129,21 +129,22 @@ export function isWizardTargetLegal(
 }
 
 /**
- * The bb2025 friendly-fire case: the spell would affect players, and every one of them is the caster's own
- * (Zap: the player on the square; Fireball: every player in the 3x3). Owner spec 10-26: such a cast needs an explicit
- * confirmation first. Always false under the legacy rule (it can never target only own players).
+ * The bb2025 friendly-fire case, exactly upstream's: c66198ac4 bb2025 ClientStateWizard.showFriendlyFireConfirmation
+ * (:153-163) asks DialogConfirmWizardFriendlyFire ("<Spell> will affect one or more of your own players.") whenever
+ * WizardLogicModule.affectsOwnPlayer (:132-142) holds - Zap: an own RosterPlayer on the square; Fireball: ANY own player
+ * with a state in the 3x3 (fireballAffectsPlayer(coordinate, ownTeamOnly = true), :117-130). The caster's own players
+ * affected, in board order. Always empty under the legacy rule (mixed ClientStateWizard has no such confirmation).
  */
-export function wizardTargetsOnlyOwnPlayers(
+export function wizardOwnPlayersAffected(
   spell: WizardSpell,
   coordinate: readonly [number, number],
   players: readonly WizardTargetPlayer[],
   rule: WizardTargetRule,
-): boolean {
-  if (rule !== 'bb2025' || !onPitch(coordinate)) return false;
-  const affected = spell === 'zap'
-    ? players.filter((player) => player.rosterPlayer && onSquare(player, coordinate))
-    : players.filter((player) => inFireballArea(player, coordinate));
-  return affected.length > 0 && affected.every((player) => player.ownTeam === true);
+): WizardTargetPlayer[] {
+  if (rule !== 'bb2025' || !onPitch(coordinate)) return [];
+  return spell === 'zap'
+    ? players.filter((player) => player.ownTeam === true && player.rosterPlayer && onSquare(player, coordinate))
+    : players.filter((player) => player.ownTeam === true && inFireballArea(player, coordinate));
 }
 
 /** FieldCoordinateBounds.java:103-110 enumerates FIELD with x outer/y inner. */

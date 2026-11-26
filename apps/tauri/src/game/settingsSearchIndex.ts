@@ -135,6 +135,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'pitch.flipThePitchView', tab: 'pitch', label: 'settings.display.pitch.flipThePitchView', info: 'settings.info.pitchFlipped', group: 'settings.pitch.view.view' },
   { id: 'pitch.spectatorAndReplayView', tab: 'pitch', label: 'settings.display.pitch.spectatorAndReplayView', info: 'settings.info.spectatorView', group: 'settings.pitch.view.view' },
   { id: 'pitch.flatNonIsometricPitch', tab: 'pitch', label: 'settings.display.pitch.flatNonIsometricPitch', info: 'settings.info.flatRender', group: 'settings.pitch.view.view' },
+  { id: 'pitch.classicNsPerspective', tab: 'pitch', label: 'settings.display.pitch.classicPerspective', info: 'settings.info.classicNsPerspective', group: 'settings.pitch.view.view' },
   { id: 'pitch.tackleZonesShown', tab: 'pitch', label: 'settings.general.gameplayAssistance.tackleZonesShown', info: 'settings.info.tackleZones', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
   { id: 'pitch.disturbingPresence', tab: 'pitch', label: 'settings.general.auras.disturbingPresence', info: 'settings.info.auraDisturbingPresence', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },
   { id: 'pitch.pickMeUp', tab: 'pitch', label: 'settings.general.auras.pickMeUp', info: 'settings.info.auraPickMeUp', group: 'settings.pitch.gameplayHelpers.gameplayHelpers' },

@@ -40,6 +40,7 @@ const PITCH_LABEL_KEYS: Readonly<Record<string, string>> = {
   'LEAP': 'pitch.tagLeap',
   'POGO': 'pitch.tagPogo',
   'PICKUP': 'pitch.tagPickup',
+  'TRAPDOOR': 'pitch.tagTrapdoor', // move batching decision 13: the trapdoor path chip
 };
 
 let installed = false;

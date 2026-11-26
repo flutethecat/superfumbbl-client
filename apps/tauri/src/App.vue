@@ -448,10 +448,11 @@ async function finishSetupWizard(): Promise<void> {
   }
   if (firstLaunch && !settings.hideTutorialSplash) guideOpen.value = true; // the existing post-first-run path
 }
-/** Settings > Skills > Skill prompts: the value a select shows (B&C unset = Always, what clientMove then carries;
- *  Dodge unset = '' = "Not set", the server then uses Sideline & chain push). A refused save keeps the stored value. */
+/** Settings > Skills > Skill prompts: the value a select shows - a pick still pending for this server target, else the
+ *  live / last known stored value (B&C unset = Always, what clientMove then carries; Dodge unset = '' = "Not set", the
+ *  server then uses Sideline & chain push). A refused pick keeps the shown value. */
 function skillPromptValue(name: FumbblSkillSetting): string {
-  return gameStore.fumbblSkillSettings[name] ?? (name === 'ballAndChain' ? 'reRollBallAndChainAlways' : '');
+  return gameStore.fumbblSkillPromptValue(name) ?? (name === 'ballAndChain' ? 'reRollBallAndChainAlways' : '');
 }
 function saveSkillPrompt(name: FumbblSkillSetting, event: Event): void {
   const select = event.target as HTMLSelectElement;
@@ -3622,6 +3623,18 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.info.flatRender')" :def="$t('settings.info.valueOff')" :previews="SETTING_PREVIEWS.flatRender" />
             </div>
+            <!-- Owner 11-25: the classic (1.0.335) north-south perspective as an opt-in. It only applies to the N-S standard
+                 view, so it greys out in East-West, with the flat pitch and with N-S uniform figures. -->
+            <div class="row" data-setting-id="pitch.classicNsPerspective">
+              <label class="row-main">
+                <span>{{ $t('settings.display.pitch.classicPerspective') }}</span>
+                <span class="row-ctl">
+                  <input v-model="settings.classicNsPerspective" type="checkbox" data-testid="classic-ns-perspective"
+                    :disabled="settings.flatRender || settings.pitchOrientation === 'ew' || uniformFiguresChoice === 'ns' || uniformFiguresChoice === 'both'" />
+                </span>
+              </label>
+              <SettingInfo :text="$t('settings.info.classicNsPerspective')" :def="$t('settings.info.valueOff')" :previews="SETTING_PREVIEWS.classicNsPerspective" />
+            </div>
           </fieldset>
 
           <fieldset class="settings-group">
@@ -4079,14 +4092,15 @@ onBeforeUnmount(() => {
         <section v-if="settingsTab === 'skills'">
           <!-- Upstream's Game Play > Skill settings (c66198ac4 DialogSkillSettings: Ask for Whirling Dervish, Ask for Dodge
                on Stumble), stored on the coach's FUMBBL account with clientUserSettings (gameStore.saveFumbblSkillSetting).
-               Saved at once and outside the Settings preview (Cancel does not undo a save); only while seated in a game. -->
+               Saved at once and outside the Settings preview (Cancel does not undo a save); a pick made while not seated waits for
+               the next seated game (owner 11-21). -->
           <fieldset class="settings-group" data-testid="skill-prompt-settings">
             <legend>{{ $t('settings.skillPrompts.legend') }}</legend>
             <div class="row" data-setting-id="skills.askForWhirlingDervish">
               <label class="row-main">
                 <span>{{ $t('settings.skillPrompts.ballAndChain') }}</span>
                 <span class="row-ctl">
-                  <select :value="skillPromptValue('ballAndChain')" :disabled="!gameStore.fumbblSkillSettingsEditable()"
+                  <select :value="skillPromptValue('ballAndChain')"
                     data-testid="skill-prompt-ball-and-chain" @change="saveSkillPrompt('ballAndChain', $event)">
                     <option value="reRollBallAndChainAlways">{{ $t('settings.skillPrompts.always') }}</option>
                     <option value="reRollBallAndChainNoOpponent">{{ $t('settings.skillPrompts.whenNotHittingOpponent') }}</option>
@@ -4101,9 +4115,9 @@ onBeforeUnmount(() => {
               <label class="row-main">
                 <span>{{ $t('settings.skillPrompts.dodgeBlock') }}</span>
                 <span class="row-ctl">
-                  <select :value="skillPromptValue('dodgeBlock')" :disabled="!gameStore.fumbblSkillSettingsEditable()"
+                  <select :value="skillPromptValue('dodgeBlock')"
                     data-testid="skill-prompt-dodge-block" @change="saveSkillPrompt('dodgeBlock', $event)">
-                    <option v-if="!gameStore.fumbblSkillSettings.dodgeBlock" value="" disabled>{{ $t('settings.skillPrompts.notSet') }}</option>
+                    <option v-if="!skillPromptValue('dodgeBlock')" value="" disabled>{{ $t('settings.skillPrompts.notSet') }}</option>
                     <option value="dodgeBlockAlways">{{ $t('settings.skillPrompts.always') }}</option>
                     <option value="dodgeBlockWideZone">{{ $t('settings.skillPrompts.wideZoneAndChainPush') }}</option>
                     <option value="dodgeBlockSituational">{{ $t('settings.skillPrompts.sidelineAndChainPush') }}</option>
@@ -4113,7 +4127,9 @@ onBeforeUnmount(() => {
               </label>
               <SettingInfo :text="$t('settings.skillPrompts.dodgeBlockInfo')" :def="$t('settings.skillPrompts.sidelineAndChainPush')" />
             </div>
-            <p class="settings-immediate-note" data-testid="skill-prompts-note">{{ $t('settings.skillPrompts.savedToAccount') }}</p>
+            <!-- Owner 11-21: never greyed out; a pick made while not seated waits for the next seated game. -->
+            <p v-if="gameStore.fumbblSkillPromptPending()" class="settings-immediate-note" data-testid="skill-prompts-pending">{{ $t('settings.skillPrompts.savedNextGame') }}</p>
+            <p v-else class="settings-immediate-note" data-testid="skill-prompts-note">{{ $t('settings.skillPrompts.savedToAccount') }}</p>
           </fieldset>
 
           <fieldset class="settings-group">

@@ -204,7 +204,11 @@ export function reduceMoveTransaction(
   };
 }
 
-function exactMoveIntent(state: Readonly<MoveTransaction>, command: Readonly<Record<string, unknown>>): MoveDecision | null {
+function exactMoveIntent(
+  state: Readonly<MoveTransaction>,
+  command: Readonly<Record<string, unknown>>,
+  authorizedMoveArray = false,
+): MoveDecision | null {
   const actingPlayerId = String(command.actingPlayerId ?? '');
   const destinations = Array.isArray(command.coordinatesTo)
     ? command.coordinatesTo.map(coordinate)
@@ -213,6 +217,17 @@ function exactMoveIntent(state: Readonly<MoveTransaction>, command: Readonly<Rec
       || destinations.length === 0 || destinations.some((value) => value == null)) return null;
   const offered = new Set(state.moveSquares.map((square) => `${square.coordinate[0]},${square.coordinate[1]}`));
   const coordinatesTo = destinations as Coordinate[];
+  if (authorizedMoveArray && coordinatesTo.length > 1) {
+    // Move batching (spec 11.6): the server offers only adjacent squares, so a planner array is judged by its HEAD;
+    // every later square must be adjacent to the one before it. The store's outbound invariant owns enforcement.
+    if (!offered.has(`${coordinatesTo[0]![0]},${coordinatesTo[0]![1]}`)) return null;
+    for (let i = 1; i < coordinatesTo.length; i++) {
+      const a = coordinatesTo[i - 1]!;
+      const b = coordinatesTo[i]!;
+      if (Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])) !== 1) return null;
+    }
+    return { kind: 'move', actingPlayerId, coordinateFrom: state.actingPlayerCoordinate, coordinatesTo };
+  }
   if (coordinatesTo.some((value) => !offered.has(`${value[0]},${value[1]}`))) return null;
   return { kind: 'move', actingPlayerId, coordinateFrom: state.actingPlayerCoordinate, coordinatesTo };
 }
@@ -286,7 +301,7 @@ export function deriveMoveDecision(
   if (!command) return null;
   if (id === 'clientActingPlayer') return actingPlayerIntent(state, frame, context, command);
   if (state.status !== 'active' || !state.actingTeamId || context.myTeamId !== state.actingTeamId) return null;
-  if (id === 'clientMove') return exactMoveIntent(state, command);
+  if (id === 'clientMove') return exactMoveIntent(state, command, context.authorizedMoveArray === true);
   if (id === 'clientUseFumblerooskie'
       && fumblerooskieAvailable(frame.game as unknown as GameJson, state.actingPlayerId!)) {
     return { kind: 'use-fumblerooskie' };

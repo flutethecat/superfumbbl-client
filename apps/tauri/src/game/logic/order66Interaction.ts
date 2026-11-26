@@ -567,6 +567,8 @@ export function escCascadeDecision(input: EscCascadeInput): EscCascadeDecision {
     // (SpectateView.vue's requestEndActivation) exactly.
     const confirmKind: EndActivationConfirmKind = requiresBlitzEndConfirmation(input.clientState) ? 'blitz'
       : input.clientState === 'PUNT' ? 'punt' : declaredActionEndConfirmKind(input.clientState) ?? 'generic';
+    // Owner 11-23: at level 3 the view no longer raises this card itself - it runs the right-click cancel, which asks
+    // through the same card for these kinds and ends directly for 'generic' (endActivationByEscape).
     return { level: 3, kind: 'ask-end-activation', confirmKind, wire: 'none' };
   }
   if (input.hasSelection) return { level: 3, kind: 'clear-selection', wire: 'none' };

@@ -51,9 +51,33 @@ export function parseSquareLabel(label: string): [number, number] | null {
 export const TILE_W = 44; // width-tile size at the NEAR edge
 export const TILE_H = 38; // depth-tile size at the NEAR edge
 
-/** Far-edge scale relative to near. N-S over 26 rows (owner-tuned Madden); E-W
- *  over 15 rows uses a gentler value so the shorter depth doesn't over-warp. */
-export const FAR_SCALE = 0.6;
+/**
+ * Owner 11-25 (stadium designer): in the N-S standard view the pitch's outer boundaries are STRAIGHT and lean exactly
+ * this far from vertical, every grid line in between is straight too and leans in proportion to its distance from the
+ * centre (about 1, 3, 5 ... 15 degrees), so the perspective does not bend toward the bottom. The earlier linear width
+ * taper (far scale 0.6) bowed the sidelines from about 7.6 degrees at the near edge to 12.6 degrees at the far edge.
+ *
+ * The N-S ground is a GEOMETRIC taper: depth boundary b has scale s(b) = r^b, row d is TILE_H * s(d) tall and each of
+ * its squares TILE_W * s(d) wide at its near edge (every square keeps the near edge's 44:38 shape). Screen y is then
+ * linear in s (y(b) = y(0) - TILE_H * (1 - s(b)) / (1 - r)) and so is the x of every width line, which makes each line
+ * straight, with tan(lean) = (offset from centre) * (1 - r) / TILE_H. At the sideline (offset 15 * TILE_W / 2) that is
+ * tan(NS_SIDELINE_DEG), which fixes r. The same law extrapolates past both ends (stadium surround, dugouts, tracks).
+ */
+export const NS_SIDELINE_DEG = 15;
+/** Per-row ground ratio of the N-S standard projection, derived from NS_SIDELINE_DEG (about 0.96915; far edge
+ *  NS_DEPTH_RATIO ** 26, about 0.443). */
+export const NS_DEPTH_RATIO = 1 - (Math.tan((NS_SIDELINE_DEG * Math.PI) / 180) * TILE_H) / ((PITCH_ROWS * TILE_W) / 2);
+/** Owner 11-25: in the N-S standard projection FIGURES (non-walker sprites, dice, badges, markers, labels, the ball:
+ *  everything that reads depthScale) do not follow the steeper ground taper; they keep the far size they had under
+ *  the old linear law, 1.0 at the near edge to this at the far edge, on their own smooth geometric law. Same seam as
+ *  uniform figures (figures 1.0 on a 0.8 ground). Bundled walkers never read depthScale and keep token scale 1. */
+export const NS_FAR_FIGURE_SCALE = 0.6;
+/** Owner 11-25 ("turn on the old perspective distort as a setting"): the far-edge scale of the CLASSIC N-S projection -
+ *  the 1.0.335 linear taper (curved sidelines, about 7.6 to 12.6 degrees), opt-in via setClassicNsPerspective. */
+export const NS_CLASSIC_FAR_SCALE = 0.6;
+
+/** Far-edge scale relative to near for the LINEAR projections: E-W over 15 rows uses a gentle value so the shorter
+ *  depth doesn't over-warp. (N-S standard is geometric, see NS_SIDELINE_DEG.) */
 export const FAR_SCALE_EW = 0.82;
 /** Owner 09-09 ("option 3"): with UNIFORM FIGURES on, the N-S ground keeps its perspective but narrows only to
  *  0.8 (E-W already 0.82) so the far rows are not crowded by full-size sprites. */
@@ -65,6 +89,13 @@ interface Proj {
   rows: number; // depth count (boundaries 0..rows)
   cols: number; // width count
   far: number;
+  /** Owner 11-25: per-row GEOMETRIC ground ratio (s(b) = ratio ** b), or null for the linear taper
+   *  s(b) = 1 - (b / rows) * (1 - far). Only the N-S standard projection is geometric. */
+  ratio: number | null;
+  /** Geometric only: screen px per unit of scale along the depth (TILE_H / (1 - ratio)); y(b) = y(0) - unit * (1 - s(b)). */
+  unit: number;
+  /** Geometric only: the per-row FIGURE ratio (depthScale), or null when figures follow the ground scale. */
+  figureRatio: number | null;
   depthTile: number; // near-edge tile size along the DEPTH axis
   widthTile: number; // near-edge tile size along the WIDTH axis
   boundaryY: number[]; // screen Y of each depth boundary; [0] = bottom (near)
@@ -97,6 +128,44 @@ function buildProj(cfg: {
     rows: cfg.rows,
     cols: cfg.cols,
     far: cfg.far,
+    ratio: null,
+    unit: 0,
+    figureRatio: null,
+    depthTile: cfg.depthTile,
+    widthTile: cfg.widthTile,
+    boundaryY: ys,
+    pixelW,
+    pixelH: ys[0]!,
+    centerX: pixelW / 2,
+    depthOf: cfg.depthOf,
+    widthOf: cfg.widthOf,
+  };
+}
+
+/** Owner 11-25: the GEOMETRIC taper (see NS_SIDELINE_DEG). Boundary b sits at y(b) = y(0) - unit * (1 - ratio ** b)
+ *  with unit = depthTile / (1 - ratio), so row d is exactly depthTile * ratio ** d tall; y(0) is the pitch depth. */
+function buildGeometricProj(cfg: {
+  rows: number;
+  cols: number;
+  ratio: number;
+  figureRatio: number;
+  depthTile: number;
+  widthTile: number;
+  depthOf: (x: number, y: number) => number;
+  widthOf: (x: number, y: number) => number;
+}): Proj {
+  const unit = cfg.depthTile / (1 - cfg.ratio);
+  const total = unit * (1 - cfg.ratio ** cfg.rows);
+  const ys: number[] = [];
+  for (let b = 0; b <= cfg.rows; b++) ys.push(total - unit * (1 - cfg.ratio ** b));
+  const pixelW = cfg.cols * cfg.widthTile;
+  return {
+    rows: cfg.rows,
+    cols: cfg.cols,
+    far: cfg.ratio ** cfg.rows,
+    ratio: cfg.ratio,
+    unit,
+    figureRatio: cfg.figureRatio,
     depthTile: cfg.depthTile,
     widthTile: cfg.widthTile,
     boundaryY: ys,
@@ -113,10 +182,12 @@ function buildProj(cfg: {
 // earlier B9-19 swap (widthTile=TILE_H, depthTile=TILE_W) squeezed the field's long axis to avoid a
 // wide 2:1 canvas, but it made every E-W square a PORTRAIT rectangle (38 wide x 44 tall, 0.86); the
 // pitch really is 26:15, so the canvas is wide by nature and the camera fit absorbs it.
-const NS = buildProj({
+// Owner 11-25: N-S standard = straight sidelines at NS_SIDELINE_DEG (geometric ground), figures 1.0 -> 0.6.
+const NS = buildGeometricProj({
   rows: PITCH_COLS,
   cols: PITCH_ROWS,
-  far: FAR_SCALE,
+  ratio: NS_DEPTH_RATIO,
+  figureRatio: NS_FAR_FIGURE_SCALE ** (1 / PITCH_COLS),
   depthTile: TILE_H,
   widthTile: TILE_W,
   depthOf: (x) => x,
@@ -133,6 +204,18 @@ const EW = buildProj({
 });
 // Owner 2026-07-04f: FLAT (non-isometric) variants — far=1 removes the
 // perspective taper so every row is the same width (a clean top-down grid).
+// Owner 11-25: the CLASSIC N-S standard projection, exactly 1.0.335's NS (linear taper, far scale 0.6; figures follow
+// the ground scale). Selected instead of NS when the classic perspective setting is on; uniform figures and flat render
+// keep their own projections either way.
+const NS_CLASSIC = buildProj({
+  rows: PITCH_COLS,
+  cols: PITCH_ROWS,
+  far: NS_CLASSIC_FAR_SCALE,
+  depthTile: TILE_H,
+  widthTile: TILE_W,
+  depthOf: (x) => x,
+  widthOf: (_x, y) => y,
+});
 const NS_SOFT = buildProj({
   rows: PITCH_COLS, cols: PITCH_ROWS, far: FAR_SCALE_SOFT, depthTile: TILE_H, widthTile: TILE_W,
   depthOf: (x) => x, widthOf: (_x, y) => y,
@@ -151,10 +234,26 @@ let flat = false;
 /** Owner 09-09 ("option 3"): figures, dice, badges and markers render at ONE scale on every square — the
  *  trapezoid ground still carries the depth. Off = the Madden depth scaling (0.6 far). */
 let uniformFigures = false;
+/** Owner 11-25: the classic (1.0.335) N-S perspective instead of the straight 15 degree one. N-S standard only. */
+let classicNs = false;
 let P: Proj = NS;
 function pickProj(): Proj {
-  if (orientation === 'ns') return flat ? NS_FLAT : uniformFigures ? NS_SOFT : NS;
+  if (orientation === 'ns') return flat ? NS_FLAT : uniformFigures ? NS_SOFT : classicNs ? NS_CLASSIC : NS;
   return flat ? EW_FLAT : EW;
+}
+/** Owner 11-25: the CLASSIC N-S perspective setting (the 1.0.335 curved-sideline view). Takes effect in the N-S
+ *  standard projection only; E-W, flat render and N-S uniform figures are unchanged by it. */
+export function setClassicNsPerspective(on: boolean): void {
+  classicNs = on;
+  P = pickProj();
+}
+export function isClassicNsPerspective(): boolean {
+  return classicNs;
+}
+/** Owner 11-25: true when the projection on screen IS the classic N-S one (the setting is on AND N-S standard is
+ *  active) - the renderer's camera then behaves exactly as 1.0.335 (PitchRenderer.usesClassicCamera). */
+export function isClassicNsProjectionActive(): boolean {
+  return P === NS_CLASSIC;
 }
 export function setUniformFigures(on: boolean): void {
   uniformFigures = on;
@@ -192,7 +291,9 @@ export function setFieldFlip(f: boolean): void {
 /** P3 (perf 09-14): every module-level input of extPoint/depthScale in one comparable string — the stadium memo key
  *  in renderer.ts carries it so a projection change (orientation, flat, uniform figures, field flip) always redraws. */
 export function geometryStateKey(): string {
-  return `${orientation}|${flat ? 1 : 0}|${uniformFigures ? 1 : 0}|${fieldFlip ? 1 : 0}`;
+  // Owner 11-25 (Sol r1): the classic switch counts only where it changes the projection (N-S standard), so a
+  // stored-only toggle in East-West / flat / uniform figures invalidates no memo.
+  return `${orientation}|${flat ? 1 : 0}|${uniformFigures ? 1 : 0}|${fieldFlip ? 1 : 0}|${P === NS_CLASSIC ? 1 : 0}`;
 }
 
 export function isFieldFlip(): boolean {
@@ -231,9 +332,41 @@ export function worldHeight(): number {
   return P.pixelH;
 }
 
+/** Ground perspective scale of a projection at a DEPTH boundary d (0 = near, rows = far; any real d). */
+function projScale(proj: Proj, d: number): number {
+  if (proj.ratio !== null) {
+    // Owner 11-25: N-S geometric taper, r^b at every integer boundary. A FRACTIONAL depth is linear in the scale
+    // between its two boundaries, which keeps (a) every point on the straight width lines (x and y are both linear
+    // in the scale) and (b) the square's centre point extPoint(x + 0.5, y + 0.5) on squareAnchor, as in the linear
+    // projections (the anchor is the mean of the corners, so it sits at the mean of the two boundary scales).
+    const di = Math.floor(d);
+    const base = proj.ratio ** di;
+    return d === di ? base : base * (1 - (1 - proj.ratio) * (d - di));
+  }
+  return 1 - (d / proj.rows) * (1 - proj.far);
+}
+
+/** Geometric projections: the (fractional) depth whose scale is s, the inverse of projScale. */
+function geometricDepthOfScale(proj: Proj, s: number): number {
+  const r = proj.ratio!;
+  let di = Math.floor(Math.log(s) / Math.log(r));
+  for (let guard = 0; guard < 4; guard++) {
+    const t = (1 - s / r ** di) / (1 - r);
+    if (t < 0) di--;
+    else if (t > 1) di++;
+    else return di + t;
+  }
+  return di + (1 - s / r ** di) / (1 - r);
+}
+
+/** Geometric projections: the ground scale drawn at screen y (y is linear in the scale). <= 0 past the vanishing line. */
+function geometricScaleAtY(proj: Proj, worldY: number): number {
+  return 1 - (proj.boundaryY[0]! - worldY) / proj.unit;
+}
+
 /** Perspective scale at a DEPTH boundary d (0 = near, P.rows = far). */
 function boundaryScaleD(d: number): number {
-  return 1 - (d / P.rows) * (1 - P.far);
+  return projScale(P, d);
 }
 
 /** Extrapolated screen Y of a depth boundary d (beyond [0,rows] for the arena).
@@ -241,6 +374,9 @@ function boundaryScaleD(d: number): number {
  *  depth axis is y, so centre points like extPoint(x, 7.5) land between integer
  *  boundaries (they returned undefined and blew up the stadium props/dugouts). */
 function depthBoundaryY(d: number): number {
+  // Owner 11-25: the geometric N-S taper has a closed form for every real d (on, before and past the pitch), so
+  // fractional and extrapolated points stay on the same straight lines as the grid.
+  if (P.ratio !== null) return Number.isInteger(d) && d >= 0 && d <= P.rows ? P.boundaryY[d]! : P.boundaryY[0]! - P.unit * (1 - projScale(P, d));
   const di = Math.floor(d);
   if (di !== d) {
     // fractional: linear within the tile between the surrounding boundaries
@@ -366,6 +502,8 @@ export function pitchTextRotation(x: number, y: number): number {
 export function depthScale(x: number, y = 0): number {
   if (uniformFigures) return 1; // owner 09-09: one sprite scale everywhere; the ground keeps its perspective
   const [d] = flipSquareIndex(P.depthOf(x, y), P.widthOf(x, y));
+  // Owner 11-25: N-S standard figures ride their own taper (1.0 near -> NS_FAR_FIGURE_SCALE far), not the ground's.
+  if (P.figureRatio !== null) return P.figureRatio ** (d + 0.5);
   return boundaryScaleD(d + 0.5);
 }
 
@@ -389,7 +527,12 @@ export function worldToSquare(worldX: number, worldY: number): FieldCoordinateJs
     }
   }
   if (d < 0) d = worldY > P.boundaryY[0]! ? -1 : P.rows;
-  const scale = boundaryScaleD(Math.min(Math.max(d, 0), P.rows - 1) + 0.5);
+  // Owner 11-25: in the geometric N-S taper the column is read at the pointer's own ground scale (a width line is
+  // straight, so the scale under the pointer, not the row's middle, gives the column), which fixes the old mid-row
+  // approximation inside the pitch. Off the pitch the depth stays the -1 / rows sentinel as before; past the vanishing
+  // line the far row's scale is used.
+  const geo = P.ratio !== null ? geometricScaleAtY(P, worldY) : 0;
+  const scale = geo > 0 ? geo : boundaryScaleD(Math.min(Math.max(d, 0), P.rows - 1) + 0.5);
   // #17/#40 (owner/Yularen 07-16): invert the WIDTH axis with the orientation's own width tile (P.widthTile),
   // matching edgeXD's forward projection. N-S widthTile === TILE_W (unchanged); E-W widthTile === TILE_H (38),
   // so the old hardcoded TILE_W (44) over-scaled the E-W inverse and mapped wing-column clicks up to 2 columns
@@ -414,7 +557,7 @@ export function isWorldPointOnPitch(worldX: number, worldY: number): boolean {
     }
   }
   if (d < 0) return false;
-  const scale = boundaryScaleD(d + 0.5);
+  const scale = P.ratio !== null ? geometricScaleAtY(P, worldY) : boundaryScaleD(d + 0.5); // owner 11-25: pointer's own scale in N-S
   const widthTile = P.widthTile;
   const w = Math.floor((worldX - (P.centerX - (P.cols * widthTile * scale) / 2)) / (widthTile * scale));
   return w >= 0 && w < P.cols;
@@ -429,13 +572,20 @@ export function projectionInverse(): (worldX: number, worldY: number) => { x: nu
   const proj = P;
   const flip = fieldFlip;
   const o = orientation;
-  const scaleAt = (d: number): number => 1 - (d / proj.rows) * (1 - proj.far);
+  const scaleAt = (d: number): number => projScale(proj, d);
   const leftAt = (d: number): number => proj.centerX - (proj.cols * proj.widthTile * scaleAt(d)) / 2;
   return (worldX, worldY) => {
     let d: number;
     const near = proj.boundaryY[0]!;
     const far = proj.boundaryY[proj.rows]!;
-    if (worldY <= near && worldY >= far) {
+    if (proj.ratio !== null) {
+      // Owner 11-25: the geometric N-S taper inverts in closed form (y is linear in the scale) for ordinary ground
+      // points on and off the pitch. The scale is clamped at 1e-6 so points at or past the vanishing line (which have
+      // no ground point) stay finite; that clamp also means ground drawn at a scale below 1e-6 (hundreds of rows past
+      // the far edge) does not round-trip.
+      const s = Math.max(1e-6, geometricScaleAtY(proj, worldY));
+      d = geometricDepthOfScale(proj, s);
+    } else if (worldY <= near && worldY >= far) {
       let row = 0;
       while (row < proj.rows - 1 && worldY < proj.boundaryY[row + 1]!) row++;
       const a = proj.boundaryY[row]!;

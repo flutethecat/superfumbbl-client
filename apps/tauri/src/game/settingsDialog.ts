@@ -75,6 +75,7 @@ export const SETTINGS_TRANSACTION_EXCLUDED = new Set([
   'coach', 'password', 'coach40k', 'activeServerTarget',
   'completedFirstRun', 'savedSetupPreviews',
   'recentPlayedTeams', // owner 10-11: written when an official game is joined, never by the dialog
+  'fumbblSkillPrompts', // owner 11-21: a Skill prompts pick saves (or queues) at once; Cancel does not undo it
   'clientTourSeenVersion', // the client walkthrough sets it outside the dialog; its "run again" button must survive Cancel
   // Owner 10-06: the FUMBBL.COM walkthrough / zoom keys.
   'homeTourSeenVersion', // the walkthrough sets it outside the dialog; its "run again" button must not be undone by Cancel

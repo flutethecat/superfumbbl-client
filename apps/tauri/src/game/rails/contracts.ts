@@ -43,6 +43,10 @@ export interface DecisionContext {
   audience: RailAudience;
   myTeamId: string | null;
   maySend: boolean;
+  /** Move batching (spec 11.6): the outgoing clientMove is a planner array that already passed the store's outbound
+   *  invariant (capability + exact route slice). The shadow move rail then expects the HEAD in the offer and every
+   *  later square chained to the one before it, instead of every square offered. Never set for a non-planner send. */
+  authorizedMoveArray?: boolean;
 }
 
 export interface RailHandler<TState, TFrame, TDecision, TPresentation, TCommand> {

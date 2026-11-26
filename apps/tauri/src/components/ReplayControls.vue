@@ -7,7 +7,13 @@ import { settings } from '../game/settings';
 import { anchorPanelPosition, dodgePanelObstacle, edgePanelStyle, persistClampedPanelPosition } from '../game/edgePanelLayout';
 import { $t } from '../i18n';
 
-const props = defineProps<{ review?: ReviewControlsBinding }>();
+const props = defineProps<{
+  review?: ReviewControlsBinding;
+  /** Owner 11-25: the replay ends with an end-game report: the Turns list's last entry, "Show result", goes to the end of
+   *  the game with the report up. */
+  resultEntry?: boolean;
+}>();
+const emit = defineEmits<{ showResult: [] }>();
 const replaySpeedOptions = REPLAY_SPEED_LABELS.flatMap((label, index) =>
   index === 1 || index === 6 ? [] : [{ label, value: index as ReplaySpeed }],
 );
@@ -36,7 +42,8 @@ function skipActivation(direction: -1 | 1): void {
   if (direction < 0) gameStore.replayActivationBackward(); else gameStore.replayActivationForward();
 }
 const turnMarkers = computed(() => props.review?.turnMarkers ?? gameStore.replay.status.turnMarkers);
-// Owner 09-25: file / FUMBBL replays offer "Inducements" and "End of game" above the turns (live review has no chapters).
+// Owner 09-25: file / FUMBBL replays offer "Inducements" above the turns (live review has no chapters). Owner 11-25: the
+// "End of game" chapter is gone; "Show result" (resultEntry) is the list's last entry instead.
 const chapters = computed(() => (props.review ? [] : (gameStore.replay.status.chapters ?? [])));
 function turnMarkerKey(marker: (typeof turnMarkers.value)[number]): string {
   return `${marker.segmentId ?? ''}:${marker.cursor}:${marker.boundary}:${marker.side}:${marker.turn}:${marker.half}`;
@@ -235,8 +242,19 @@ function changeSpeed(event: Event): void {
 function seek(sequence: number): void {
   if (props.review) void props.review.seek(sequence); else gameStore.replaySeek(sequence);
 }
+const RESULT_ENTRY = 'result:show';
+const resultEntryShown = computed(() => !!props.resultEntry && !props.review);
 function selectTurn(event: Event): void {
-  const key = (event.target as HTMLSelectElement).value;
+  const select = event.target as HTMLSelectElement;
+  const key = select.value;
+  // The list is disabled while a command presents (seeks are refused then); a change that still arrives does nothing.
+  if (!ready.value) { select.value = selectedTurnMarker.value ? turnMarkerKey(selectedTurnMarker.value) : ''; return; }
+  if (key === RESULT_ENTRY) {
+    emit('showResult');
+    // Never left selected: the list keeps naming the turn at the cursor, so the entry can be chosen again.
+    select.value = selectedTurnMarker.value ? turnMarkerKey(selectedTurnMarker.value) : '';
+    return;
+  }
   if (key.startsWith('chapter:')) {
     const chapter = chapters.value.find((c) => c.id === key.slice(8));
     if (chapter) seek(chapter.cursor);
@@ -320,12 +338,14 @@ function openRecentHistory(): void {
     <div class="replay-position-stack">
       <label class="replay-turn-select">
         <span class="sr-only">{{ $t('replayLauncher.jumpToRecordedTurn') }}</span>
-        <select :disabled="!ready || turnMarkers.length === 0" :value="selectedTurnMarker ? turnMarkerKey(selectedTurnMarker) : ''"
+        <select :disabled="!ready || (turnMarkers.length === 0 && !resultEntryShown)" :value="selectedTurnMarker ? turnMarkerKey(selectedTurnMarker) : ''"
           :aria-label="$t('replayLauncher.jumpToRecordedTurn')" @change="selectTurn">
           <option value="" disabled>{{ $t('replayLauncher.turns') }}</option>
-          <!-- Owner 09-25: jump points beyond the turns — the inducement phase and the end-game pane. -->
+          <!-- Owner 09-25: jump points beyond the turns — the inducement phase. -->
           <option v-for="chapter in chapters" :key="chapter.id" :value="`chapter:${chapter.id}`" class="chapter-option">{{ chapter.label }}</option>
           <option v-for="marker in turnMarkers" :key="turnMarkerKey(marker)" :value="turnMarkerKey(marker)">{{ marker.label }}</option>
+          <!-- Owner 11-25: the last entry, after the final turn, on a replay that ends with an end-game report. -->
+          <option v-if="resultEntryShown" :value="RESULT_ENTRY" class="chapter-option" data-testid="replay-show-result">{{ $t('hud.showResult') }}</option>
         </select>
       </label>
     </div>

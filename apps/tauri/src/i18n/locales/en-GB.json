@@ -57,6 +57,7 @@
   "store.text.moveCancelledP0Already": "⚠ Move cancelled — {p0} already selected a target; finish or end that action first.",
   "store.text.planCanceledByYou": "Plan cancelled. Cancelled by you.",
   "store.text.planCancelledP0P1": "Plan cancelled. {p0}{p1}.",
+  "store.text.planCanceledServerSilent": "Plan cancelled. The server did not respond.",
   "settings.info.backdropColor": "The backdrop colour when Backdrop is set to a colour.",
   "settings.info.chatStyle": "Chat as bubbles in the speaker's team colour, or as plain lines.",
   "settings.info.colorPreset": "Preset accent colours. Text colour is picked automatically, so it stays readable.",

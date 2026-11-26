@@ -17,7 +17,7 @@ export function sanitizePlayerCardPos(value: unknown): { x: number; y: number } 
 export function sanitizePlayerCardSize(value: unknown): { w: number; h: number } | null {
   return sanitizeFloatSize(value, PLAYER_CARD_MIN_SIZE);
 }
-import { md5Hex } from '@fumbbl40k/ffb-protocol';
+import { BALL_AND_CHAIN_RE_ROLL_VALUES, DODGE_BLOCK_VALUES, md5Hex } from '@fumbbl40k/ffb-protocol';
 import { bundledTurfOptions } from '@fumbbl40k/ffb-pitch';
 import { normalizeLegalAcceptanceVersion } from './legalNotice';
 import { CONFIRMATION_DEFAULTS, normalizeConfirmationSettings, type ConfirmationSettings } from './confirmationSettings';
@@ -694,6 +694,10 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
   /** Owner 2026-07-04f: FLAT (non-isometric) render — no perspective taper + no
    *  off-centre token nudge. Off = the default isometric/Madden look. */
   flatRender: boolean;
+  /** Owner 11-25: the CLASSIC north-south perspective (1.0.335: curved sidelines, a wider far end, its camera too)
+   *  instead of the straight 15 degree view. N-S standard only (no effect in E-W, with flat render or with N-S uniform
+   *  figures). Default OFF. */
+  classicNsPerspective: boolean;
   /** Owner 2026-07-07: show the on-pitch turn/score/re-roll tracks (the SW + NE off-pitch grids). */
   turnTrack: boolean;
   /** Owner 2026-07-06: DEPRECATED gold-echo pop when the active player changes.
@@ -777,6 +781,13 @@ export interface AppSettings extends ConfirmationSettings, SettingsReflowFeature
    *  recentPlayedTeams.ts). Local only: leads the recent-games team order, and is left out of bug reports. The coach
    *  name is a VALUE (`account`), never a key: stripSecretFields deletes keys that look like a credential. */
   recentPlayedTeams: { account: string; teams: { teamId: number; at: number }[] }[];
+  /** Owner 11-21: Settings > Skills > Skill prompts (the coach's FUMBBL-stored "Ask for Whirling Dervish" / "Ask for Dodge
+   *  on Stumble"). `pending` = the latest pick PER SETTING, each with the server targets it was already applied to
+   *  (`appliedOn`): sent with the normal user-settings save the next time this coach is seated on a target it was not yet
+   *  applied to, then dropped there for good (a pick for one setting never revives another's); `known` = the values each
+   *  target's last join delivered, for the selects while not seated. Target keys: 'fumbbl' (an official FUMBBL host) or
+   *  the game server's host. */
+  fumbblSkillPrompts: FumbblSkillPromptsState;
   /** Owner 2026-07-05: persisted-settings schema version. Bumped when a default
    *  change should be FORCED onto existing installs (see `load()` migrations). */
   settingsVersion: number;
@@ -1021,6 +1032,7 @@ const DEFAULTS: AppSettings = {
   auraPickMeUp: 'selected',
   casualtySplash: false, // owner 2026-07-08: casualty splash defaults OFF (the red toast remains)
   flatRender: false,
+  classicNsPerspective: false,
   turnTrack: true, // owner 2026-07-07: on-pitch turn/score/re-roll tracks shown by default
   activePlayerEcho: false, // owner 2026-07-06: deprecated echo, off by default
   clickEcho: true,
@@ -1040,6 +1052,7 @@ const DEFAULTS: AppSettings = {
   modernHudStyle: 'minimalist', // owner 10-05: minimalist panels are the default (was chrome)
   savedSetupPreviews: {},
   recentPlayedTeams: [],
+  fumbblSkillPrompts: { pending: {}, known: {} },
   completedFirstRun: false,
   legalAcceptanceVersion: 0,
   contributionsSeenVersion: 0,
@@ -1245,6 +1258,62 @@ function stampStoredSecret(field: 'password40k' | 'password', value: string): vo
 /** Parse + migrate ONE raw blob text. Throws on unparseable JSON — the caller decides what a
  *  failure means (try the backup / guard the persist). Returning DEFAULTS from in here is what
  *  let a single bad read become a persisted wipe of coach/password (P1 08-18). */
+/** One setting's latest pick and the server targets it has already been applied to. */
+export interface FumbblSkillPromptPick { value: string; appliedOn: string[] }
+export interface FumbblSkillPromptsState {
+  pending: { ballAndChain?: FumbblSkillPromptPick; dodgeBlock?: FumbblSkillPromptPick };
+  known: Record<string, { ballAndChain: string | null; dodgeBlock: string | null }>;
+}
+/** The values upstream offers per setting (FumbblSkillPromptPick.value must be one of them). */
+const FUMBBL_SKILL_PROMPT_VALUES: Record<'ballAndChain' | 'dodgeBlock', readonly string[]> = {
+  ballAndChain: BALL_AND_CHAIN_RE_ROLL_VALUES,
+  dodgeBlock: DODGE_BLOCK_VALUES,
+};
+/** A server target key as the store writes it (skillPromptTarget): 'fumbbl', or a lower-case host name / IPv4. */
+function isSkillPromptTarget(x: unknown): x is string {
+  return typeof x === 'string' && x.length > 0 && x.length <= 64
+    && (x === 'fumbbl' || /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/.test(x));
+}
+const discardedSkillPromptRows = new Set<string>();
+/** A stored Skill prompts state, or the empty one (anything malformed is dropped, never guessed at). Sol (11-21): a
+ *  pending pick whose history cannot be read is never sent. A row is kept only when it is fully well-formed: its value
+ *  is one upstream offers for that setting, and `appliedOn` is an array of server-target keys. Anything else (a missing
+ *  or non-array history, an unknown target, a value outside the set, any other shape) discards the pick; dev builds
+ *  log it once. The queue never shipped in an older format, so there is nothing to migrate. */
+export function normalizeFumbblSkillPrompts(value: unknown): FumbblSkillPromptsState {
+  const empty: FumbblSkillPromptsState = { pending: {}, known: {} };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return empty;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown): string | undefined => (typeof x === 'string' && x.length > 0 && x.length <= 64 ? x : undefined);
+  const pending: FumbblSkillPromptsState['pending'] = {};
+  if (v.pending && typeof v.pending === 'object' && !Array.isArray(v.pending)) {
+    const p = v.pending as Record<string, unknown>;
+    for (const name of ['ballAndChain', 'dodgeBlock'] as const) {
+      const row = p[name];
+      if (row === undefined || row === null) continue;
+      const r = row && typeof row === 'object' && !Array.isArray(row) ? row as Record<string, unknown> : null;
+      const applied = r?.appliedOn;
+      const wellFormed = !!r && typeof r.value === 'string' && FUMBBL_SKILL_PROMPT_VALUES[name].includes(r.value)
+        && Array.isArray(applied) && applied.length <= 8 && applied.every(isSkillPromptTarget);
+      if (wellFormed) {
+        pending[name] = { value: r!.value as string, appliedOn: [...new Set(applied as string[])] };
+      } else if (import.meta.env?.DEV && !discardedSkillPromptRows.has(name)) {
+        discardedSkillPromptRows.add(name);
+        console.warn(`[settings] discarded an unreadable pending Skill prompts pick (${name}); it will not be sent`, row);
+      }
+    }
+  }
+  const known: FumbblSkillPromptsState['known'] = {};
+  if (v.known && typeof v.known === 'object' && !Array.isArray(v.known)) {
+    for (const [target, row] of Object.entries(v.known as Record<string, unknown>).slice(0, 8)) {
+      if (!str(target) || !row || typeof row !== 'object') continue;
+      const r = row as Record<string, unknown>;
+      known[target] = { ballAndChain: str(r.ballAndChain) ?? null, dodgeBlock: str(r.dodgeBlock) ?? null };
+    }
+  }
+  return { pending, known };
+}
+
 function hydrate(rawText: string | null, stampToLocalStorage = true): AppSettings {
   {
     const raw = JSON.parse(rawText ?? '{}') as Partial<AppSettings> & {
@@ -1297,6 +1366,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
       typeof value === 'number' && Number.isFinite(value) && allowed.includes(value) ? value : fallback;
     merged.renderScale = videoChoice(merged.renderScale, RENDER_SCALE_CHOICES, DEFAULTS.renderScale); // owner 09-05: 300/400% added
     merged.fpsCap = merged.fpsCap === 'display' ? 'display' : videoChoice(merged.fpsCap, FPS_CAP_CHOICES, 60); // owner 10-13: 'Match display'; never 0 / unbounded
+    merged.fumbblSkillPrompts = normalizeFumbblSkillPrompts(raw.fumbblSkillPrompts);
     merged.soundStyles = raw.soundStyles && typeof raw.soundStyles === 'object' && !Array.isArray(raw.soundStyles)
       ? Object.fromEntries(Object.entries(raw.soundStyles).filter(([key, value]) => key.length > 0 && typeof value === 'string'))
       : { ...DEFAULTS.soundStyles };
@@ -1408,6 +1478,7 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     merged.coachCornerCounts = raw.coachCornerCounts !== false; // owner 10-06: on unless the user turned it off
     merged.skipArmourDiceOnCasualty = raw.skipArmourDiceOnCasualty === true; // owner 10-14: off unless the user turned it on
     merged.hidePassedNegatraitRolls = raw.hidePassedNegatraitRolls === true; // owner 11-24: off unless the user turned it on
+    merged.classicNsPerspective = raw.classicNsPerspective === true; // owner 11-25: off unless the user turned it on
     merged.rosterHideInnateSkills = raw.rosterHideInnateSkills !== false; // owner 10-10: on unless the user turned it off
     merged.oneSpritePerPosition = raw.oneSpritePerPosition === true;
     merged.pitchFlipped = raw.pitchFlipped === true; // owner 10-12: only an explicit true flips the view

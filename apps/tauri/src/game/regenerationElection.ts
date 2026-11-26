@@ -108,6 +108,9 @@ export function regenerationElectionChoices(
     if (mascot) {
       choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team Mascot' });
       if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Mascot TRR' });
+      // Owner 11-25: the plain Team reroll beside the Mascot choices (upstream DialogReRollRegenerationMultiple:122-127,
+      // teamReRollSources(options, true): Mascot, then TRR).
+      if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team ReRoll' });
     } else if (offered.has('TRR')) {
       choices.push({ kind: 'reRoll', playerId, reRollSource: sharedTeamSource });
     }

@@ -28,7 +28,7 @@ import { disturbingPresenceTagText } from './disturbingPresence';
 import type { GameJson, PlayerDataJson, PlayerJson, TeamJson } from '@fumbbl40k/ffb-protocol';
 import { effectiveMovement, playerHasSkill, playerSkillDisplayNames, playerSkillNames, pushedPlayerId } from '@fumbbl40k/ffb-protocol';
 import { type ServerMoveRoll } from './jumpTarget';
-import { breakTackleAvailable, planDodgeTarget } from './dodgeTarget';
+import { breakTackleBonus, dodgeTargetForPlayer, shownDodgeTarget } from './dodgeTarget';
 import {
   PITCH_COLS,
   PITCH_ROWS,
@@ -42,6 +42,10 @@ import {
   isFieldFlip,
   isFlat,
   isOnPitch,
+  isUniformFigures,
+  isClassicNsProjectionActive,
+  isClassicNsPerspective,
+  setClassicNsPerspective,
   projectionInverse,
   type Orientation,
   setFieldFlip,
@@ -128,6 +132,10 @@ import {
   setTokenVisualNudge,
   tokenVisualNudge,
   textureArtCentre,
+  walkCastShadowsEnabled,
+  walkDisplaySheetsActive,
+  walkFaceCameraEnabled,
+  walkSpriteSnap,
 } from './walkers';
 import {
   blockTargetingSquares,
@@ -1555,6 +1563,9 @@ export function ballOutStampSize(label: string): { w: number; h: number } {
     h: lines.length * (BALL_OUT_STAMP_FONT_PX + 1) + 6,
   };
 }
+/** Owner 11-22: the Fireball aim reticle (the kick-off reticle shifted to red) and its over-head tag plate. */
+const FIREBALL_AIM_COLOR = 0xff3b30;
+const FIREBALL_TAG_COLOR = 0xff8a3a;
 const DODGE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: 0x1a1a1a });
 /** CROWD QUIP / SIGN font. Owner 2026-09-02: system monospace (MXSQUAD retired — its
  *  desktop license does not cover redistributing the .otf in a public source tree). */
@@ -1829,10 +1840,25 @@ const DP_TAG_PLATE = { fill: 0xe8806f, stroke: 0x6a1a10 };
 const DP_DIE_WORD_SCALE = 1.6;
 /** Owner 10-15: gap (px, die units) between the die's lowest decoration and the DP tag row. */
 const DP_DIE_TAG_GAP = 3;
-const PLANNER_TAG_PLATES: Record<'rush' | 'dodge' | 'jump' | 'pickup', { fill: number; stroke: number }> = {
+/** Owner 11-23: height and (widest, with the icon) width, px at tag scale 1, of the "BT +N" tag under a dodge tag. */
+const BREAK_TACKLE_TAG_H = 9;
+const BREAK_TACKLE_TAG_W = 36;
+const PLANNER_TAG_PLATES: Record<'rush' | 'dodge' | 'jump' | 'pickup' | 'trapdoor', { fill: number; stroke: number }> = {
   rush: { fill: 0xf0ead6, stroke: 0x6a5a10 }, dodge: { fill: 0xe0c832, stroke: 0x6a5a10 },
   jump: { fill: 0xe08a2a, stroke: 0x6a3c10 }, pickup: { fill: 0xd98836, stroke: 0x6a3a10 },
+  trapdoor: { fill: 0xb9b2d6, stroke: 0x3e3560 }, // move batching decision 13: a plain lavender-grey plate, its own colour
 };
+/** Move batching decision 13: the roll a trapdoor square owes (bb2025 StepTrapDoor: a D6, the player falls through on
+ *  a 1), so the chip reads "2+". A plain value: the chip is drawn only for a trapdoor the SERVER sent. */
+const TRAPDOOR_ESCAPE_TARGET = 2;
+/** Move batching section 14 (review finding 6): the mover ignores tackle zones when moving - an ACTIVE Incorporeal (the
+ *  server's ignoreTacklezonesWhenMoving; the skill shows in the player's temporary maps once used, as
+ *  availableActions.incorporealIsActive reads it). Leaving a tackle zone then rolls no dodge, so no dodge chip is drawn;
+ *  the store still cuts the route there (geometric leavesTacklezone). */
+function moverIgnoresTacklezones(player: unknown): boolean {
+  const p = player as { temporaryModifiersMap?: Record<string, unknown>; temporarySkillsMap?: Record<string, unknown>; temporaryPropertiesMap?: Record<string, unknown> } | null | undefined;
+  return !!p && ('Incorporeal' in (p.temporaryModifiersMap ?? {}) || 'Incorporeal' in (p.temporarySkillsMap ?? {}) || 'Incorporeal' in (p.temporaryPropertiesMap ?? {}));
+}
 const ROLL_DIE_STYLE = new TextStyle({ fontFamily: 'sans-serif', fontSize: 11, fontWeight: 'bold', fill: 0x8a2a2a });
 // Owner 2026-07-07: the spectator-reach rush "2+" label — styled to MATCH the rush die
 // (cream 0xf2efe6 plate, dark-red 0x8a2a2a border). Dark-red fill + a soft
@@ -2069,6 +2095,59 @@ function sameSquareList(a: readonly Square[], b: readonly Square[]): boolean {
   for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
   return true;
 }
+
+/** Retained pitch tokens (spec 2026-11-23, Cut 1): one record per player token built by refresh(). */
+interface RetainedTokenRecord {
+  playerId: string;
+  token: Container;
+  /** Every construction input of this token (signature), as built. */
+  sig: string;
+  /** The token's own transform right after construction. */
+  built: { x: number; y: number; scaleX: number; scaleY: number; alpha: number; zIndex: number; rotation: number };
+  /** RenderLayer attachments the construction made, in order. */
+  attachments: [RenderLayer, Container][];
+  /** overlayScaleGroups entries the construction registered, in order. */
+  groups: Container[];
+  /** A non-construction write reached the token or a descendant since it was built. */
+  touched: boolean;
+}
+
+/** One player refresh()'s token loop would draw, with the loop's own lookups (one signature pass). */
+interface RetainedDrawable {
+  data: PlayerDataJson; coordinate: [number, number]; synthetic: boolean; player: PlayerJson; isHome: boolean; team: TeamJson;
+  renderData: PlayerDataJson; baseline: Set<string> | undefined; baselineKey: string; bloodlust: boolean;
+  teamSide: 'home' | 'away' | undefined;
+  /** null = a duplicate player id in the field model (never kept). */
+  sig: string | null;
+}
+
+/** One signature pass: the generation-wide key, the two team keys and every drawable player's signature. */
+interface RetainedPass {
+  globalKey: string[];
+  teamKeys: { home: string; away: string };
+  drawables: RetainedDrawable[];
+  sigs: Map<string, string | null>;
+  /** The stun-decoration holds the signatures were taken with. */
+  stunHoldsKey: string;
+}
+
+/** Dev counters for retained tokens (soak rigs read them; no logging). */
+export interface RetentionCounters {
+  refreshes: number;
+  fullRebuilds: number;
+  tokensKept: number;
+  tokensRebuilt: number;
+  /** Generation invalidations by reason (seek, clearEffects, asset, ...). */
+  invalidations: Record<string, number>;
+  /** Refreshes that kept nothing, by reason (invalid:<last invalidation>, globalKey:<first changed input>, ...). */
+  fullRebuildReasons: Record<string, number>;
+  reset(): void;
+}
+
+/** Owner 11-25: the legal-destination state a camera tween carries (see PitchRenderer.legalTweenFrame): the cached
+ *  destination and the inputs it was computed from, and - once an input changed mid-glide - the on-screen view the
+ *  glide was re-based from and the (linear) time fraction it happened at. */
+type CameraTweenLegal = { legalKey?: string; legalDest?: CameraView; legalRebase?: { from: CameraView; t0: number } };
 
 export class PitchRenderer {
   /** ms per block-die face — UI-7 study Option A (700ms, recommended);
@@ -3124,14 +3203,17 @@ export class PitchRenderer {
     if (!this.app || !this.pixelZoom) return;
     const oldScale = this.world.scale.x;
     // The 1.5 stop is wheel-only: a camera already ON it keeps it; a free camera (a held trigger) never lands there.
-    const newScale = this.quantizeZoom(oldScale, 'nearest', this.onMidZoomRung());
-    if (Math.abs(newScale - oldScale) < 1e-6) return;
+    let newScale = this.quantizeZoom(oldScale, 'nearest', this.onMidZoomRung());
+    // Owner 11-25 (Sol review r2): the nearest rung may lie below the stadium-fit floor - never land under it.
+    if (this.clampToPitch && !this.usesClassicCamera()) newScale = Math.max(newScale, this.cameraFitScale);
+    if (Math.abs(newScale - oldScale) < 1e-6) { this.settleAtFitFloor(); return; }
     const cx = this.app.screen.width / 2;
     const cy = this.app.screen.height / 2;
     const worldCx = (cx - this.world.position.x) / oldScale;
     const worldCy = (cy - this.world.position.y) / oldScale;
     this.world.scale.set(newScale);
     this.world.position.set(cx - worldCx * newScale, cy - worldCy * newScale);
+    this.settleAtFitFloor();
     this.updateOverlayScales();
   }
   /** Owner 11-11: the in-between wheel stop below the 2x default (see quantizeZoom). */
@@ -3181,7 +3263,12 @@ export class PitchRenderer {
     if (withMid) ladder.splice(2, 0, PitchRenderer.MID_ZOOM_RUNG);
     // JLeav 09-23: the first step in from the whole-stadium fit jumped straight to 2x. Add a rung at the scale
     // where just the 26x15 pitch fills the viewport, when that lands strictly between two fixed rungs.
-    const pitchFit = this.pitchOnlyFitScale();
+    // Owner 11-25 (Sol review of the 15 degree N-S pitch): NOT for the stadium-fit FLOOR (fitScaleFor, the only 'floor'
+    // caller). The pitch-fit rung moves with the CSS viewport, so a stadium fit that floored onto it at 100 % UI zoom
+    // fell to the fixed rung below at 150 % - the fit camera jumped (1080p: 1.53 -> 1.0 physical). The floor uses the
+    // fixed rungs only; wheel, keys, focus and cinematics keep the pitch-fit rung as their in-between step.
+    // Owner 11-25: the classic N-S perspective keeps 1.0.335's ladder, the pitch-fit rung included in the floor.
+    const pitchFit = mode === 'floor' && !this.usesClassicCamera() ? null : this.pitchOnlyFitScale();
     if (pitchFit != null) {
       const p = pitchFit * res;
       // Owner 11-11: a pitch-fit rung within 12% of the 1.5 stop replaces it (it already is the in-between step).
@@ -3364,6 +3451,56 @@ export class PitchRenderer {
     }
     this.overlayLayer.addChild(area);
   }
+  /** Owner 11-22: the Fireball aim. The kick-off aim's reticle (buildPushCrosshair, as buildKickBallCrosshair uses it)
+   *  in red on the previewed centre square, and a "🔥 4+" tag over the head of every player the host says the blast
+   *  would hit. Host-fed from the store's preview; overlay only, no input. null clears. */
+  private fireballAim: { square: Square; victims: Square[] } | null = null;
+  setFireballAim(square: Square | null, victims: readonly Square[] = []): void {
+    const next = square ? { square: [square[0], square[1]] as Square, victims: victims.map((s) => [s[0], s[1]] as Square) } : null;
+    const prev = this.fireballAim;
+    if (!prev && !next) return;
+    if (prev && next && prev.square[0] === next.square[0] && prev.square[1] === next.square[1]
+      && prev.victims.length === next.victims.length
+      && next.victims.every((s, i) => prev.victims[i]![0] === s[0] && prev.victims[i]![1] === s[1])) return;
+    this.fireballAim = next;
+    this.redrawOverlays();
+  }
+  /** Drawn on pathLayer (above the tokens) so a player standing on the aimed square does not hide the reticle. */
+  private drawFireballAim(): void {
+    const aim = this.fireballAim;
+    if (!aim || !isOnPitch(aim.square)) return;
+    const node = new Container();
+    node.label = 'fireball-aim';
+    node.eventMode = 'none';
+    for (const [sx, sy] of aim.victims) {
+      if (!isOnPitch([sx, sy])) continue;
+      const a = this.tokenPos(sx, sy);
+      const depth = depthScale(sx, sy);
+      node.addChild(this.buildFireballTag(a.x, a.y - TILE_H * depth * 1.25, depth * 0.8));
+    }
+    // The reticle goes on last: the tag of the player one row nearer the camera hangs over the aimed square.
+    node.addChild(this.buildPushCrosshair(aim.square, FIREBALL_AIM_COLOR, 1.25));
+    this.pathLayer.addChild(node);
+  }
+  /** The "🔥 4+" plate: the pass-roll chip's look, but only as wide as its content so the tags of three players
+   *  standing side by side do not run into each other. */
+  private buildFireballTag(x: number, y: number, scale: number): Container {
+    const tag = new Container();
+    const content = this.buildD6Requirement(4, '🔥');
+    const w = (content.width + 8) * scale;
+    const h = 17 * scale;
+    tag.addChild(
+      new Graphics()
+        .roundRect(-w / 2, -h / 2, w, h, 3 * scale)
+        .fill({ color: FIREBALL_TAG_COLOR, alpha: 0.94 })
+        .roundRect(-w / 2, -h / 2, w, h, 3 * scale)
+        .stroke({ color: 0x5a1a08, width: 1.1 * scale }),
+    );
+    content.scale.set(scale);
+    tag.addChild(content);
+    tag.position.set(x, y);
+    return tag;
+  }
   /** Client-declared Gaze target; cleared before CLIENT_GAZE is sent. */
   private gazeTarget: string | null = null;
   setGazeTarget(playerId: string | null): void {
@@ -3460,7 +3597,7 @@ export class PitchRenderer {
     /** Owner 2026-07-04: Auto Director event priority — a HIGHER-priority request
      *  (e.g. ball in flight) preempts a lower one already on screen. Default 1. */
     priority?: number;
-  } | null = null;
+  } & CameraTweenLegal | null = null;
   /** Owner 2026-07-14 (#5/#15 interpolation fix (a), Yularen-ruled): the FULL computed move path for a player,
    *  so ONE tween steps through each square at STEP_BEAT even when the o66 immediate-apply collapses the per-
    *  square syncs into one frame (which denied refresh() the deltas the single-segment tween needed). Persists
@@ -3708,6 +3845,7 @@ export class PitchRenderer {
       } else if (!visibleToken || visibleToken.destroyed) {
         if (tween.token.destroyed || tween.token.parent == null) { this.moveTweens.delete(id); continue; }
       }
+      this.markRetainedTouched(tween.token); // M8: every tween-driven position / scale write below
       this.anchorPresentationTileOnFirstTweenPass(id, tween, now);
       const { total, elapsed, done, segment, t, ease } = moveTweenProgress(tween, now);
       if (id === '__ball__') { // owner 10-29: the ground glow reads this frame's progress instead of recomputing it
@@ -3882,14 +4020,27 @@ export class PitchRenderer {
 
   private autoDirectorTileSize(point: { x: number; y: number }): { width: number; height: number } {
     const [sx, sy] = worldToSquare(point.x, point.y);
-    // Clamp extrapolated arc/apron points to a sane projected tile range. The
-    // active projection and field flip are already reflected by depthScale.
-    const localDepth = Math.min(1.25, Math.max(0.45, depthScale(sx, sy)));
     const scale = this.world.scale.x;
-    // Owner 09-08: both orientations project a square as TILE_W across x TILE_H along the depth (geometry.ts).
+    // Uniform figures: depthScale is 1 everywhere, so the base estimate is the near tile on every row (kept as it was;
+    // it overstates the soft 0.8 far rows by up to 1.25x).
+    if (isUniformFigures()) return { width: TILE_W * scale, height: TILE_H * scale };
+    // Owner 11-25: the classic N-S perspective keeps 1.0.335's estimate verbatim (there depthScale IS the ground scale).
+    if (this.usesClassicCamera()) {
+      const localDepth = Math.min(1.25, Math.max(0.45, depthScale(sx, sy)));
+      return { width: TILE_W * localDepth * scale, height: TILE_H * localDepth * scale };
+    }
+    // Owner 11-25 (Sol review): the GROUND square under the point, from its projected quad - depthScale follows the
+    // figure law in N-S since the 15 degree pitch (0.6 far against a 0.44 ground), which made far squares read ~1.35x
+    // too big and the director engage late. In the linear projections the quad's mean width and height are exactly
+    // TILE x the row's mid-depth scale, i.e. the old depthScale estimate. The active projection and field flip are
+    // reflected by squareQuad; extrapolated arc/apron points keep the old clamp to a sane tile range.
+    const q = squareQuad(sx, sy);
+    const groundW = (q.points[1]![0] - q.points[0]![0] + (q.points[2]![0] - q.points[3]![0])) / 2;
+    const groundH = q.yBottom - q.yTop;
+    const clampTo = (v: number, tile: number): number => Math.min(1.25 * tile, Math.max(0.45 * tile, Math.abs(v)));
     return {
-      width: TILE_W * localDepth * scale,
-      height: TILE_H * localDepth * scale,
+      width: clampTo(groundW, TILE_W) * scale,
+      height: clampTo(groundH, TILE_H) * scale,
     };
   }
 
@@ -4075,6 +4226,7 @@ export class PitchRenderer {
 
   /** Atomic pack-swap hook: persistent nodes rebuild; active effects redraw in place. */
   refreshSkillIconAssets(): void {
+    this.invalidateRetainedTokens('skillIconAssets');
     if (this.app) this.refresh();
     for (const [node, redraw] of this.liveSkillAssets) {
       if (node.destroyed || !node.parent) {
@@ -4083,6 +4235,7 @@ export class PitchRenderer {
       }
       redraw();
     }
+    this.invalidateRetainedTokens('skillIconAssets'); // the redraws wrote into the new tokens
   }
   /** Owner 2026-07-04: where the die-roll-CAUSE tag sits on the on-pitch d6.
    *  'corner' (default) = top-right corner, offset to the die edge; 'top' = top
@@ -4156,6 +4309,17 @@ export class PitchRenderer {
     }
     this.actedPlayers = next;
     this.refresh();
+  }
+  /** The activation-dim ticker body (a method so a test runs the same frames as initRenderer's ticker). */
+  private tickActivationFades(): void {
+    if (this.activationFades.size === 0) return;
+    const now = this.activationClock();
+    const ms = this.activationFadeMs();
+    for (const [id, f] of [...this.activationFades]) {
+      const done = now - f.start >= ms;
+      this.activationFadePaint.get(id)?.(done ? f.to : this.activationDimLevel(id, f.to));
+      if (done) { this.activationFades.delete(id); this.activationFadePaint.delete(id); }
+    }
   }
   /** Cross-fade duration. presentationMs-family, so passive spectating gets the slower beat (~350ms)
    *  while live and real-time replay use the untrimmed base; no documented "live is intentionally instant" choice exists —
@@ -4262,6 +4426,7 @@ export class PitchRenderer {
     if (!this.cinematic && !this.cameraFocus) return;
     this.cinematic = null;
     this.cameraFocus = null;
+    this.liftToFitFloor(); // owner 11-25 (Sol r3): a camera released mid-tween UNDER a since-raised floor rests on it
     this.updateOverlayScales();
   }
 
@@ -4709,13 +4874,14 @@ export class PitchRenderer {
     for (const id of ids) {
       const token = id ? this.tokensById.get(id) : undefined;
       if (!token || token.destroyed) continue;
+      if (token.children.some((child) => child.zIndex > 50 && !child.parentRenderLayer)) this.markRetainedTouched(token); // M3
       for (const child of token.children) {
         if (child.zIndex > 50 && !child.parentRenderLayer) this.blitzBadgeLayer.attach(child);
       }
     }
   }
   private drawKickEmTargetMark(): void {
-    if (this.kickEmTargetMarkNode) { this.kickEmTargetMarkNode.destroy(); this.kickEmTargetMarkNode = null; }
+    if (this.kickEmTargetMarkNode) { this.markRetainedTouched(this.kickEmTargetMarkNode); this.kickEmTargetMarkNode.destroy(); this.kickEmTargetMarkNode = null; } // M3
     const id = this.kickEmTargetNominatedId;
     if (!this.game || !id) return;
     const d = this.game.fieldModel.playerDataArray.find((p) => p.playerId === id);
@@ -4728,6 +4894,7 @@ export class PitchRenderer {
     node.label = 'kickEmTargetMark';
     node.zIndex = 50; // the state-marker row, exactly like the ordinary Blitz target badge
     placeWalkerDecor(token, node, 0, 0, badge?.scale ?? 1); // Kick 'em's target is always DOWN — row y=0
+    this.markRetainedTouched(token); // M3
     token.sortableChildren = true;
     // Owner 09-28 (Sol round-3, item 5, waived — not built): being a token CHILD, this badge inherits the
     // token's own alpha (e.g. activation shading dimming an off-turn player) — no independent alpha is set.
@@ -5086,6 +5253,7 @@ export class PitchRenderer {
     this.world.position.x = screenX - (screenX - this.world.position.x) * applied;
     this.world.position.y = screenY - (screenY - this.world.position.y) * applied;
     this.world.scale.set(newScale);
+    this.settleAtFitFloor();
     this.clampCamera();
     this.updateOverlayScales();
   }
@@ -5313,6 +5481,7 @@ export class PitchRenderer {
     if (!this.app || getOrientation() !== 'ew') return;
     // The wheel-out floor follows the gutter; the coach's zoom and pan are kept (only re-legalised).
     this.cameraFitScale = this.currentFitScale();
+    this.liftToFitFloor(); // owner 11-25 (Sol r3): a shrinking gutter raises the floor - a camera under it is lifted
     this.updateOverlayScales();
     this.clampCamera();
   }
@@ -5815,16 +5984,7 @@ export class PitchRenderer {
     });
     // item3: activation-dim cross-fade. Repaints ONLY the alpha/tint of the fading tokens (no rebuild),
     // off the same clock the rebuild path reads, so a turnover eases evenly in both directions.
-    app.ticker.add(() => {
-      if (this.activationFades.size === 0) return;
-      const now = this.activationClock();
-      const ms = this.activationFadeMs();
-      for (const [id, f] of [...this.activationFades]) {
-        const done = now - f.start >= ms;
-        this.activationFadePaint.get(id)?.(done ? f.to : this.activationDimLevel(id, f.to));
-        if (done) { this.activationFades.delete(id); this.activationFadePaint.delete(id); }
-      }
-    });
+    app.ticker.add(() => this.tickActivationFades());
     app.ticker.add(() => {
       if (this.movementOverlayFades.size === 0) return;
       const now = performance.now();
@@ -5980,14 +6140,20 @@ export class PitchRenderer {
       if (!focus || !this.app || this.cinematic) { if (focus && this.cinematic) this.cameraFocus = null; return; }
       // Settings reflow (Sol r1): reduced motion snaps the eased focus pan (same end state, no glide).
       const t = this.reducedMotion ? 1 : Math.min(1, (performance.now() - focus.start) / focus.ms);
-      const e = 1 - (1 - t) * (1 - t);
-      const scale = focus.fromScale + (focus.toScale - focus.fromScale) * e;
-      const cx = this.app.screen.width / 2 - focus.target.x * focus.toScale;
-      const cy = this.app.screen.height / 2 - focus.target.y * focus.toScale;
-      this.world.scale.set(scale);
-      this.world.position.set(focus.fromX + (cx - focus.fromX) * e, focus.fromY + (cy - focus.fromY) * e);
+      // Owner 11-25 (Sol r3/r4): the pan ends where the camera may rest - its target scale raised to a floor that rose
+      // meanwhile (a resize), framed at the floor (legalTweenFrame re-bases the glide if that changes mid-pan).
+      const view = this.legalTweenFrame(focus, {
+        scale: focus.toScale,
+        x: this.app.screen.width / 2 - focus.target.x * focus.toScale,
+        y: this.app.screen.height / 2 - focus.target.y * focus.toScale,
+      }, { scale: focus.fromScale, x: focus.fromX, y: focus.fromY }, t, (u) => 1 - (1 - u) * (1 - u));
+      this.world.scale.set(view.scale);
+      this.world.position.set(view.x, view.y);
+      if (t >= 1) {
+        this.cameraFocus = null;
+        this.settleAtFitFloor(); // owner 11-25 (Sol r4): safety net - a no-op when the destination stayed legal
+      }
       this.updateOverlayScales();
-      if (t >= 1) this.cameraFocus = null;
     });
 
     // B5-5 cinematic camera: 400ms ease in → hold → 450ms ease out
@@ -6026,14 +6192,21 @@ export class PitchRenderer {
         this.world.scale.set(zoomScale);
         this.world.position.set(c.x, c.y);
       } else if (elapsed < CINE_IN + cine.holdMs + CINE_OUT) {
-        const t = ease((elapsed - CINE_IN - cine.holdMs) / CINE_OUT);
         const c = centerFor(zoomScale);
-        this.world.scale.set(zoomScale + (cine.savedScale - zoomScale) * t);
-        this.world.position.set(c.x + (cine.savedX - c.x) * t, c.y + (cine.savedY - c.y) * t);
+        // Owner 11-25 (Sol r3/r4): the return glides to where the camera may REST - the saved camera, raised to a floor
+        // that rose meanwhile (a resize) and framed at the floor - so it ends there with no final-frame jump. A legal
+        // saved camera with stable inputs (the usual case) gives exactly the old path. Same 450 ms.
+        const view = this.legalTweenFrame(cine, { scale: cine.savedScale, x: cine.savedX, y: cine.savedY },
+          { scale: zoomScale, x: c.x, y: c.y }, (elapsed - CINE_IN - cine.holdMs) / CINE_OUT, ease);
+        this.world.scale.set(view.scale);
+        this.world.position.set(view.x, view.y);
       } else {
-        this.world.scale.set(cine.savedScale);
-        this.world.position.set(cine.savedX, cine.savedY);
+        const view = this.legalTweenFrame(cine, { scale: cine.savedScale, x: cine.savedX, y: cine.savedY },
+          { scale: zoomScale, x: 0, y: 0 }, 1, ease);
+        this.world.scale.set(view.scale);
+        this.world.position.set(view.x, view.y);
         this.cinematic = null;
+        this.settleAtFitFloor(); // owner 11-25 (Sol r4): safety net - a no-op when the destination stayed legal
       }
       this.updateOverlayScales();
     });
@@ -6443,6 +6616,7 @@ export class PitchRenderer {
    *  pruned by the redraw (cache invalidation without a second key). */
   relabelForLocale(): void {
     if (this.destroyed || !this.app || !this.localiseLabels) return;
+    this.invalidateRetainedTokens('locale'); // retained labels are rewritten in place below
     // Retained Text objects (edge indicators, the ball token, K.O. tags, chips) are updated in place (Astra r2 #13).
     this.retainedLabels = this.retainedLabels.filter(({ text }) => !text.destroyed);
     for (const { text, english, relayout } of this.retainedLabels) { text.text = this.label(english); relayout?.(); }
@@ -6476,6 +6650,7 @@ export class PitchRenderer {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.invalidateRetainedTokens('destroy'); this.retainedTokens = new Map(); this.retainedPendingKeep = null;
     this.flushRetiredTexts();
     this.dropProjectionLatch(); // a view change still waiting for a quiet pitch goes with the renderer
     this.pageListenerCleanup?.(); // and the window / document listeners of the pressed-pointer tracker
@@ -6640,6 +6815,7 @@ export class PitchRenderer {
           }
           this.classicIconAcquireAbort = null;
           this.classicIconLease = lease;
+          this.invalidateRetainedTokens('classicIcons'); // asset revision
           this.refresh();
           this.onPortraitVisualRevision?.();
         });
@@ -6687,7 +6863,7 @@ export class PitchRenderer {
       void this.ensureAndDrawPitch();
     }
     setWalkCastWeather(pitchWeatherKey(game?.fieldModel.weather)); // owner 09-06: weather scales the walker casts
-    if (reuseMovementTokens && !spectatorState) {
+    if (reuseMovementTokens && !spectatorState && (!this.tokenRetentionEnabled || this.retainedFastPathAllowed())) {
       // The authoritative object still replaces this.game before reaching here. Only reach/cost/path surfaces
       // changed, so repaint those against the latest model and leave every token/tween/container untouched.
       this.redrawOverlays();
@@ -6701,6 +6877,7 @@ export class PitchRenderer {
     // same model keeps carrying it (same tween, same clock, same timers) instead of starting the flight again.
     try { if (this.projectionKickCarriedInSetGame) this.refreshCarryingKickFlight(); else this.refresh(); }
     finally {
+      this.retainedPassCache = null; // a fast-path pass is only ever reused by this setGame's own refresh
       this.projectionKickCarriedInSetGame = false;
       this.suppressGenericBallInThisRefresh = false;
       // refresh destroyed every prior-game token, so no mounted texture remains.
@@ -6896,6 +7073,7 @@ export class PitchRenderer {
   }
 
   clearEffects(): void {
+    this.invalidateRetainedTokens('clearEffects');
     this.resetAutoDirectorCamera(true);
     this.kickFollow = null;
     this.clearGroundBallHold(); // owner 10-10: a game change / presentation teardown never leaves a ball held
@@ -7009,6 +7187,7 @@ export class PitchRenderer {
     this.resetAutoDirectorCamera(true);
     this.retireCrowdStomp(); // Astra 10-13: a seek never leaves the crowd stomping (fans + rings)
     this.clearActionDice(); // Owner 09-28 (S7 v3): a seek / live-review snap leaves no die behind, held or not.
+    this.invalidateRetainedTokens('seek'); // seek / snap / restore
     this.cancelTimer(this.movementIntentTimer);
     this.cancelTimer(this.movementIntentRollbackTimer);
     this.movementIntentTimer = null;
@@ -7100,6 +7279,15 @@ export class PitchRenderer {
   }
 
   private purgeFailedRefresh(error: unknown): void {
+    // Retained tokens: a failed refresh invalidates the generation; tokens set aside and not yet re-added are destroyed.
+    if (this.tokenRetentionEnabled) {
+      for (const record of this.retainedPendingKeep?.values() ?? []) {
+        if (!record.token.destroyed && record.token.parent == null) record.token.destroy({ children: true });
+      }
+      this.retainedPendingKeep = null;
+      this.retainedTokens = new Map();
+      this.invalidateRetainedTokens('failedRefresh');
+    }
     this.clearTokenTickerPointers();
     for (const child of this.tokenLayer.removeChildren()) {
       if (!child.destroyed) child.destroy({ children: true });
@@ -7132,6 +7320,374 @@ export class PitchRenderer {
     }
   }
 
+  // ---- Retained pitch tokens (spec-retained-tokens-2026-11-23, Cut 1) ----
+  // refresh() keeps a player's token only when it is provably untouched since it was built; everything else is rebuilt
+  // through the unchanged path. Off = the original rebuild-everything refresh (the tests' reference renderer): no plan,
+  // signature, record, sweep or replay runs. What still executes with the switch off is only guard checks that return
+  // at once (markRetainedTouched, invalidateRetainedTokens, the fast-path and purge guards, the portrait mark), the
+  // `retainPlan` / `retainKeep` null checks and one array-length read per token in refresh(), and destroy() clearing
+  // two empty fields. None of them writes a display object or any state the drawing reads.
+  private tokenRetentionEnabled = true;
+  /** The committed generation: one record per token built (or kept) by the last successful refresh, in loop order. */
+  private retainedTokens = new Map<string, RetainedTokenRecord>();
+  /** Token -> record, so any write site can mark its token touched. */
+  private retainedByToken = new WeakMap<Container, RetainedTokenRecord>();
+  private retainedGenerationValid = false;
+  private retainedGlobalKey: string[] | null = null;
+  /** Tokens set aside for the refresh in progress (detached; destroyed by purgeFailedRefresh on a throw). */
+  private retainedPendingKeep: Map<string, RetainedTokenRecord> | null = null;
+  private retainedObjectIds = new WeakMap<object, number>();
+  private retainedObjectSeq = 0;
+  /** Dev counters (soak rigs): totals since the last reset. */
+  readonly retentionCounters: RetentionCounters = {
+    refreshes: 0, fullRebuilds: 0, tokensKept: 0, tokensRebuilt: 0, invalidations: {}, fullRebuildReasons: {},
+    reset() {
+      this.refreshes = 0; this.fullRebuilds = 0; this.tokensKept = 0; this.tokensRebuilt = 0;
+      this.invalidations = {}; this.fullRebuildReasons = {};
+    },
+  };
+  /** Why the generation was last invalidated (reported as the reason of the full rebuild that follows). */
+  private retainedLastInvalidation = 'initial';
+
+  /** The next refresh rebuilds every token (asset / seek / game / effects changes). A no-op with the switch off. */
+  private invalidateRetainedTokens(reason: string): void {
+    if (!this.tokenRetentionEnabled) return;
+    this.retainedGenerationValid = false;
+    this.retainedInvalidations++;
+    this.retainedLastInvalidation = reason;
+    const counts = this.retentionCounters.invalidations;
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+
+  /** A non-construction write reached `node` (a token or a descendant): its token is rebuilt at the next refresh. */
+  private markRetainedTouched(node: Container | null | undefined): void {
+    if (!this.tokenRetentionEnabled) return;
+    for (let n: Container | null | undefined = node; n; n = n.parent) {
+      const record = this.retainedByToken.get(n);
+      if (record) { record.touched = true; return; }
+    }
+  }
+
+  private retainedIdOf(value: object | null | undefined): string {
+    if (!value) return '-';
+    let id = this.retainedObjectIds.get(value);
+    if (id === undefined) { id = ++this.retainedObjectSeq; this.retainedObjectIds.set(value, id); }
+    return String(id);
+  }
+
+  private retainedTextureKey(texture: Texture | null | undefined): string {
+    return texture ? `${this.retainedIdOf(texture)}.${this.retainedIdOf(texture.source)}` : '-';
+  }
+
+  /** Names of the generation-wide inputs, in retainedGlobalKeyNow() order (reported when one changes). */
+  private static readonly RETAINED_GLOBAL_KEY_NAMES = [
+    'playerAction', 'actingPlayerId', 'bloodlust', 'homePlaying', 'turnMode', 'spriteSet', 'selectedSpritePack',
+    'oneSpritePerPosition', 'spritesReady', 'showSkillIcons', 'showDefaultSkills', 'skillBadgeStyle', 'skillIconStyle',
+    'iconPosition', 'markerPosition', 'markingFontFamily', 'markingFontSize', 'markingColor', 'markingFontRevision',
+    'checkerLetterFont', 'showPlayerNumbers', 'showPositionRings', 'ringDensity', 'ringColorOverride', 'friendlyIsHome',
+    'localiseLabels', 'pitchLabelRevision', 'actionDecorationStyle', 'appliedBlockFaceContain', 'activationFadeMs',
+    'geometry', 'facing', 'overlayZoomFactor', 'walkCastShadows', 'walkDisplaySheets', 'walkFaceCamera', 'walkSpriteSnap',
+    'frogTexture', 'downDecorations', 'checkerTextures', 'chessTextures', 'blockTargetDeco', 'blockAttackerDeco',
+    'eyeGougeDeco', 'blitzerDeco', 'blitzTargetDeco', 'rootedDeco', 'dodgySnackDeco', 'hypnogazeTargetDeco', 'chompedDeco',
+    'distractedDeco', 'knockoutDeco', 'heatExhaustedDeco',
+  ] as const;
+
+  /** Generation-wide construction inputs (settings, styles, geometry, shared textures, acting action), one per name. */
+  private retainedGlobalKeyNow(): string[] {
+    const g = this.game;
+    const acting = g?.actingPlayer as { playerId?: string | null; playerAction?: string | null; sufferingBloodlust?: boolean } | undefined;
+    const tex = (t: Texture | null | undefined) => this.retainedTextureKey(t);
+    const texMap = (m: Map<string, Texture>) => [...m].map(([k, t]) => `${k}=${tex(t)}`).join(',');
+    return [
+      String(acting?.playerAction ?? ''), String(acting?.playerId ?? ''), acting?.sufferingBloodlust ? 1 : 0,
+      g?.homePlaying ? 1 : 0, String(g?.turnMode ?? ''),
+      this.spriteSet, this.selectedSpritePack ? 1 : 0, this.oneSpritePerPosition ? 1 : 0, this.spritesReady ? 1 : 0,
+      this.showSkillIcons ? 1 : 0, this.showDefaultSkills ? 1 : 0, this.skillBadgeStyle, this.skillIconStyle,
+      this.iconPosition, this.markerPosition, this.skillMarkingFontFamily, this.skillMarkingFontSize, this.skillMarkingColor,
+      this.markingFontRevision, this.checkerLetterFontFamily, this.showPlayerNumbers ? 1 : 0, this.showPositionRings ? 1 : 0,
+      this.ringDensity, this.ringColorOverride ?? '-', this.friendlyIsHome ? 1 : 0, this.localiseLabels ? 1 : 0,
+      pitchLabelRevision(), this.actionDecorationStyle, this.appliedBlockFaceContain ? 1 : 0, this.activationFadeMs(),
+      geometryStateKey(), JSON.stringify(this.facingGeometry()), this.overlayZoomFactor(),
+      walkCastShadowsEnabled() ? 1 : 0, walkDisplaySheetsActive() ? 1 : 0, walkFaceCameraEnabled() ? 1 : 0, walkSpriteSnap(),
+      tex(this.frogTexture), texMap(this.downDecorations), texMap(this.checkerTextures), texMap(this.chessTextures),
+      tex(this.blockTargetDecoTexture), tex(this.blockAttackerDecoTexture), tex(this.eyeGougeDecoTexture),
+      tex(this.blitzerDecoTexture), tex(this.blitzTargetDecoTexture), tex(this.rootedDecoTexture),
+      tex(this.dodgySnackDecoTexture), tex(this.hypnogazeTargetDecoTexture), tex(this.chompedDecoTexture),
+      tex(this.distractedDecoTexture), tex(this.knockoutDecoTexture), tex(this.heatExhaustedDecoTexture),
+    ].map(String);
+  }
+
+  /** The first generation-wide input that differs from the committed one (null = none). */
+  private retainedGlobalKeyChange(now: readonly string[]): string | null {
+    const was = this.retainedGlobalKey;
+    if (!was) return 'none committed';
+    for (let i = 0; i < now.length; i++) if (now[i] !== was[i]) return PitchRenderer.RETAINED_GLOBAL_KEY_NAMES[i] ?? String(i);
+    return null;
+  }
+
+  /** Per-team construction inputs: every team field except the player list (roster, race, icon paths). Computed once
+   *  per team per pass and compared on its own; never copied into the per-player signatures. */
+  private retainedTeamKey(team: TeamJson): string {
+    return JSON.stringify(team, (key, value) => (key === 'playerArray' ? undefined : value));
+  }
+
+  /** Every per-player construction input (the spec's signature table; team-level inputs are compared separately as the
+   *  team key). Mirrors the asset lookups the builder makes; the classic icon is only looked up where the builder would
+   *  look it up. `stunHolds` is the stun-decoration hold list the build would read. */
+  private retainedSignature(
+    d: RetainedDrawable, ctx: { stunHolds: ReadonlySet<string>; occupied: ReadonlySet<string> },
+  ): string {
+    const { player, renderData, isHome, team, coordinate, synthetic, bloodlust } = d;
+    const id = player.playerId;
+    const side = isHome ? 'home' : 'away';
+    const custom = playerSpriteAsset(team.teamId, player.positionId, side, team.race);
+    const slotWalker = custom?.texture ? undefined : walkSheetFor(team.teamId, player.positionId, side, team.race);
+    const bundled = custom?.texture || slotWalker ? undefined
+      : this.spriteSet === 'walk' ? bundledWalkSheetFor(team.race, positionNameOf(player, team), side) : undefined;
+    const selectedWalker = slotWalker ?? (this.selectedSpritePack ? undefined : bundled);
+    const down = isDown(renderData.playerState);
+    const classic = !custom?.texture && !selectedWalker && !this.abstractSpriteSet()
+      ? classicIconFor(player, team, !isHome, baseState(renderData.playerState) === PlayerStateBase.MOVING, down, this.oneSpritePerPosition)
+      : undefined;
+    const icons = this.showSkillIcons
+      ? this.badgeSkillsFor(player, d.baseline).slice(0, 8)
+        .map((skill) => `${skill}=${this.retainedTextureKey(skillIcon(skill, this.skillIconStyle, { positionId: player.positionId, side: d.teamSide }))}`)
+      : [];
+    const face = this.appliedBlockFaces.get(id);
+    const [x, y] = coordinate;
+    return [
+      JSON.stringify(player), JSON.stringify(renderData), isHome ? 1 : 0, synthetic ? 1 : 0,
+      d.baselineKey, `${x},${y}`, ctx.occupied.has(`${x + 1},${y}`) ? 1 : 0,
+      this.actedPlayers.has(id) ? 1 : 0, this.pickIneligibleIds?.has(id) ? 1 : 0, this.gazeVictims.has(id) ? 1 : 0,
+      this.gazeTarget === id ? 1 : 0, this.dodgySnackPlayers.has(id) ? 1 : 0, this.recoveringPlayers.has(id) ? 1 : 0,
+      ctx.stunHolds.has(id) ? 1 : 0, this.retainedTextureKey(face),
+      this.blitzTokens?.blitzerId === id ? 'b' : '', this.blitzTokens?.targetId === id ? 't' : '', bloodlust ? 1 : 0,
+      this.distractedShadedThisTurn(renderData) ? 1 : 0, JSON.stringify(this.playerIconSkills?.get(id) ?? null),
+      this.markingContentKey(id, true), icons.join(','),
+      custom ? `${this.retainedTextureKey(custom.texture)}@${custom.url}` : '-',
+      this.retainedIdOf(slotWalker), this.retainedIdOf(bundled), this.retainedTextureKey(classic),
+    ].join('\u0003');
+  }
+
+  private retainedTransform(token: Container): RetainedTokenRecord['built'] {
+    return { x: token.position.x, y: token.position.y, scaleX: token.scale.x, scaleY: token.scale.y, alpha: token.alpha, zIndex: token.zIndex, rotation: token.rotation };
+  }
+
+  /** E13: a block preview / pre-click dots / occlusion nudges are (or were last commit) measuring live token geometry. */
+  private retainedBlockPreflight(previewDrawnAtLastCommit: boolean): boolean {
+    if (previewDrawnAtLastCommit) return true;
+    if (this.blockTargetsAttacker != null) return true;
+    for (const raw of (this.game?.fieldModel.diceDecorationArray ?? []) as { coordinate?: unknown; nrOfDice?: unknown }[]) {
+      if (Array.isArray(raw?.coordinate) && raw.coordinate.length === 2 && Number(raw.nrOfDice) !== 0) return true;
+    }
+    if (this.occlusionNudgeCurrent.size > 0 || this.occlusionNudgeDesired.size > 0) return true;
+    return this.occlusionTargetingSquares().length > 0;
+  }
+
+  /** The RenderLayers a token's construction attaches to. */
+  private retainedLayers(): RenderLayer[] {
+    return [this.markingLayer, this.blitzBadgeLayer, this.moveBadgeLayer, this.blockPreviewLayer];
+  }
+
+  private static isDescendantOf(node: Container, root: Container): boolean {
+    for (let n: Container | null = node; n; n = n.parent) if (n === root) return true;
+    return false;
+  }
+
+  /** Records the attachments / zoom groups a construction made (the layers' appended tails). A construction that
+   *  rearranged anything else leaves the record touched, so it is rebuilt next time. */
+  private finishRetainedRecord(
+    record: RetainedTokenRecord, layerMarks: { layer: RenderLayer; length: number; last: Container | undefined }[], groupMark: number,
+  ): void {
+    for (const { layer, length, last } of layerMarks) {
+      const list = layer.renderLayerChildren;
+      if (list.length < length || (length > 0 && list[length - 1] !== last)) { record.touched = true; continue; }
+      for (let i = length; i < list.length; i++) {
+        const node = list[i]!;
+        if (!PitchRenderer.isDescendantOf(node, record.token)) record.touched = true;
+        record.attachments.push([layer, node]);
+      }
+    }
+    for (let i = groupMark; i < this.overlayScaleGroups.length; i++) {
+      const group = this.overlayScaleGroups[i]!;
+      if (!PitchRenderer.isDescendantOf(group, record.token)) record.touched = true;
+      record.groups.push(group);
+    }
+  }
+
+  /** E2: the record's token and every recorded attachment are still live and where construction left them. */
+  private retainedRecordIntact(record: RetainedTokenRecord): boolean {
+    const token = record.token;
+    if (token.destroyed || token.parent !== this.tokenLayer) return false;
+    for (const [layer, node] of record.attachments) {
+      if (node.destroyed || node.parentRenderLayer !== layer || !PitchRenderer.isDescendantOf(node, token)) return false;
+    }
+    for (const group of record.groups) if (group.destroyed || !PitchRenderer.isDescendantOf(group, token)) return false;
+    const b = record.built;
+    return token.position.x === b.x && token.position.y === b.y && token.scale.x === b.scaleX && token.scale.y === b.scaleY
+      && token.alpha === b.alpha && token.zIndex === b.zIndex && token.rotation === b.rotation;
+  }
+
+  /** One signature pass: the players refresh()'s token loop draws (loop order, the loop's own skip rules and lookups),
+   *  each with its per-player signature, plus the generation-wide key and the two team keys. Roster maps, baseline sets
+   *  and the occupied-square set are built once per pass. `stunHolds` is the hold list the builds would read. */
+  private retainedPass(preSetup: Map<string, [number, number]>, stunHolds: ReadonlySet<string>): RetainedPass {
+    const game = this.game;
+    const pass: RetainedPass = {
+      globalKey: this.retainedGlobalKeyNow(), teamKeys: { home: '', away: '' }, drawables: [], sigs: new Map(),
+      stunHoldsKey: [...stunHolds].sort().join(','),
+    };
+    if (!game) return pass;
+    pass.teamKeys = { home: this.retainedTeamKey(game.teamHome), away: this.retainedTeamKey(game.teamAway) };
+    if (this.boardCleared) return pass;
+    const playersById = new Map<string, PlayerJson>();
+    for (const p of game.teamHome.playerArray) playersById.set(p.playerId, p);
+    for (const p of game.teamAway.playerArray) playersById.set(p.playerId, p);
+    const homeIds = new Set(game.teamHome.playerArray.map((p) => p.playerId));
+    // The same baseline resolution as refresh(): one map keyed by positionId, away entries overwrite home.
+    const baselines = new Map<string, { set: Set<string>; key: string }>();
+    for (const team of [game.teamHome, game.teamAway]) {
+      const positions = (team.roster as { positionArray?: { positionId: string; skillArray?: string[] }[] }).positionArray ?? [];
+      for (const position of positions) {
+        const set = new Set(position.skillArray ?? []);
+        baselines.set(position.positionId, { set, key: [...set].join(',') });
+      }
+    }
+    const occupied = new Set<string>();
+    for (const d of game.fieldModel.playerDataArray) {
+      if (isOnPitch(d.playerCoordinate)) occupied.add(`${d.playerCoordinate![0]},${d.playerCoordinate![1]}`);
+    }
+    const teamSide = (team: TeamJson): 'home' | 'away' | undefined =>
+      game.teamHome.teamId === team.teamId ? 'home' : game.teamAway.teamId === team.teamId ? 'away' : undefined;
+    const acting = game.actingPlayer as { playerId?: string | null; sufferingBloodlust?: boolean } | undefined;
+    const ctx = { stunHolds, occupied };
+    for (const data of game.fieldModel.playerDataArray) {
+      const coordinate = isOnPitch(data.playerCoordinate) ? data.playerCoordinate! : preSetup.get(data.playerId) ?? null;
+      if (!coordinate) continue;
+      const synthetic = !isOnPitch(data.playerCoordinate);
+      if (!synthetic && (baseState(data.playerState) === PlayerStateBase.RESERVE || !isOnPitch(data.playerCoordinate))) continue;
+      const player = playersById.get(data.playerId);
+      if (!player) continue;
+      const isHome = homeIds.has(data.playerId);
+      const team = isHome ? game.teamHome : game.teamAway;
+      const baseline = baselines.get(player.positionId);
+      const d: RetainedDrawable = {
+        data, coordinate, synthetic, player, isHome, team,
+        renderData: synthetic ? { ...data, playerCoordinate: coordinate } : data,
+        baseline: baseline?.set, baselineKey: baseline ? baseline.key : '-',
+        bloodlust: !!acting?.sufferingBloodlust && acting.playerId === data.playerId, teamSide: teamSide(team), sig: null,
+      };
+      if (!pass.sigs.has(data.playerId)) d.sig = this.retainedSignature(d, ctx);
+      pass.sigs.set(data.playerId, pass.sigs.has(data.playerId) ? null : d.sig);
+      pass.drawables.push(d);
+    }
+    return pass;
+  }
+
+  /** A pass the setGame fast-path check computed and rejected, reused by the refresh that setGame runs next. */
+  private retainedPassCache: { game: GameJson; pass: RetainedPass } | null = null;
+
+  /** Invalidations since the plan of the refresh in progress (an invalidation during a refresh wins over its commit). */
+  private retainedInvalidations = 0;
+  /** The team keys of the committed generation. */
+  private retainedTeamKeys: { home: string; away: string } | null = null;
+
+  /** Keep-eligibility (spec E1-E14) for the refresh in progress. Called after the capture step, before any destroy. */
+  private planRetainedTokens(
+    preservedPresentationToken: Container | undefined,
+    carriedTweenPos: ReadonlyMap<string, unknown>,
+    postStepIds: ReadonlySet<string>,
+    previewDrawnAtLastCommit: boolean,
+  ): { keep: Map<string, RetainedTokenRecord>; pass: RetainedPass; invalidations: number } {
+    // A refresh re-entered from inside another keeps nothing, and the outer one then commits no valid generation.
+    if (this.retainedPendingKeep) this.invalidateRetainedTokens('reentered');
+    const cached = this.retainedPassCache;
+    this.retainedPassCache = null;
+    const holdsKey = [...this.stunDecorationDeferredDrawn].sort().join(',');
+    const pass = cached && cached.game === this.game && cached.pass.stunHoldsKey === holdsKey
+      ? cached.pass
+      : this.retainedPass(this.preSetupCoords, this.stunDecorationDeferredDrawn);
+    const keep = new Map<string, RetainedTokenRecord>();
+    const invalidations = this.retainedInvalidations;
+    // E1 (committed, valid generation) + generation-wide E13 / keg (E10) / board cleared.
+    const keyChange = this.retainedGenerationValid ? this.retainedGlobalKeyChange(pass.globalKey) : null;
+    const generationWide = !this.retainedGenerationValid ? `invalid:${this.retainedLastInvalidation}`
+      : keyChange ? `globalKey:${keyChange}`
+      : this.boardCleared ? 'boardCleared'
+      : this.kegTargetSet ? 'keg'
+      : this.retainedBlockPreflight(previewDrawnAtLastCommit) ? 'blockPreview'
+      : null;
+    if (generationWide) { this.retainedFullRebuildReason = generationWide; return { keep, pass, invalidations }; }
+    // A changed team key (roster, race, icon paths ...) makes that team's players ineligible.
+    const teamChanged = {
+      home: pass.teamKeys.home !== this.retainedTeamKeys?.home, away: pass.teamKeys.away !== this.retainedTeamKeys?.away,
+    };
+    const busy = new Set<string>([
+      ...this.o66MovePath.keys(), ...this.pendingScatter.keys(), ...this.pendingTtmThrow.keys(), ...this.pendingTrickster.keys(),
+      ...this.pendingLeaps.keys(), ...this.pendingLeapInPlace, ...this.deferredMoves, ...this.reconciliationTimers.keys(), ...postStepIds,
+      ...this.persistentPlayerArrowIds, ...this.playerMarkLabels.keys(),
+    ]);
+    const addBusy = (id: string | null | undefined) => { if (id) busy.add(id); };
+    addBusy(this.movementIntent?.playerId); addBusy(this.presentationStep?.playerId); addBusy(this.activePlayerId);
+    addBusy(this.ttmHeld?.thrownId); addBusy(this.ttmHeld?.throwerId); addBusy(this.blitzTokens?.blitzerId);
+    addBusy(this.blitzTokens?.targetId); addBusy(this.kickEmTargetNominatedId); addBusy(this.moveBadgeTarget()?.playerId);
+    addBusy(this.groundBallHold?.playerId); addBusy(this.actingPlayerId()); // conservative: the server's acting player too
+    const ballSquares = [this.passBallHold, this.game?.fieldModel.ballCoordinate as [number, number] | null | undefined,
+      this.kickDescendSnapshot?.landing, this.groundBallHold?.square].filter((s): s is [number, number] => Array.isArray(s) && s.length === 2);
+    for (const d of pass.drawables) {
+      const id = d.data.playerId;
+      const sig = pass.sigs.get(id);
+      const record = this.retainedTokens.get(id);
+      if (!sig || !record || record.sig !== sig || record.touched) continue; // E2, E3
+      if (d.isHome ? teamChanged.home : teamChanged.away) continue; // team-level signature
+      if (d.synthetic || busy.has(id) || this.moveTweens.has(id) || carriedTweenPos.has(id) || this.activationFades.has(id)) continue; // E4-E7, E10, E11, E14
+      if (record.token === preservedPresentationToken) continue; // E6
+      const last = this.lastSquares.get(id);
+      if (!last || last[0] !== d.coordinate[0] || last[1] !== d.coordinate[1]) continue; // E8
+      const model = d.data.playerCoordinate;
+      if (model && ballSquares.some((s) => s[0] === model[0] && s[1] === model[1])) continue; // E12
+      if (!this.retainedRecordIntact(record)) continue; // E2 live token, E9 placement
+      const nudge = tokenVisualNudge(record.token);
+      if (nudge.x !== 0 || nudge.y !== 0) continue; // E9
+      keep.set(id, record);
+    }
+    this.retainedFullRebuildReason = keep.size === 0 ? (this.retainedTokens.size === 0 ? 'noRecords' : 'noneEligible') : null;
+    return { keep, pass, invalidations };
+  }
+  /** Why the refresh in progress keeps nothing (null = it keeps some tokens). */
+  private retainedFullRebuildReason: string | null = null;
+
+  /** Spec "Fast path": the token-reuse return in setGame also needs the committed generation to be exactly what a
+   *  refresh would draw now (same ids in order, same signatures, global and team keys, the same injury holds, live
+   *  tokens). Signatures are taken with FRESH stun-decoration holds (the probe a refresh would read). A rejected pass
+   *  is cached for the refresh setGame runs next. */
+  private retainedFastPathAllowed(): boolean {
+    if (!this.retainedGenerationValid || this.retainedTokens.size === 0 || !this.game) return false;
+    const holds = this.injuryTokenHoldsNow().map((hold) => hold.playerId);
+    if (holds.length !== this.injuryHeldDrawn.size || holds.some((id) => !this.injuryHeldDrawn.has(id))) return false;
+    const pass = this.retainedPass(preSetupPlacements(this.game), this.readStunDecorationHolds());
+    this.retainedPassCache = { game: this.game, pass };
+    if (this.retainedGlobalKeyChange(pass.globalKey) !== null) return false;
+    if (pass.teamKeys.home !== this.retainedTeamKeys?.home || pass.teamKeys.away !== this.retainedTeamKeys?.away) return false;
+    const presenterId = this.presentationStep?.playerId;
+    const ids = [...pass.sigs.keys()].filter((id) => !(id === presenterId && !this.retainedTokens.has(id)
+      && this.tokensById.get(id) && !this.tokensById.get(id)!.destroyed));
+    const retainedIds = [...this.retainedTokens.keys()];
+    if (ids.length !== retainedIds.length || ids.some((id, i) => id !== retainedIds[i])) return false;
+    for (const id of ids) {
+      const record = this.retainedTokens.get(id)!;
+      if (pass.sigs.get(id) !== record.sig || record.token.destroyed || record.token.parent !== this.tokenLayer) return false;
+    }
+    this.retainedPassCache = null; // accepted: no refresh follows
+    return true;
+  }
+
+  /** Test / rig inspection: the players whose tokens the last refresh kept (not rebuilt). */
+  private retainedKeptLastRefresh = new Set<string>();
+  retainedKeptProbe(): string[] {
+    return [...this.retainedKeptLastRefresh];
+  }
+
   /** Re-renders tokens from the current game state (call after model sync). */
   refresh(): void {
     if (!this.app || this.destroyed) return;
@@ -7145,6 +7701,10 @@ export class PitchRenderer {
     const suspendedPostStep = this.suspendPostStepConvergenceForRefresh();
     let refreshCompleted = false;
     let preservedPresentationToken: Container | undefined;
+    // Retained tokens: the plan for this refresh (null = retention off: the original path below runs unchanged).
+    let retainPlan: ReturnType<PitchRenderer['planRetainedTokens']> | null = null;
+    let retainNext: Map<string, RetainedTokenRecord> | null = null;
+    let retainRebuilt = 0;
     try {
     this.pruneLiveSkillAssets();
     // Preserve the actively-presented actor itself (and its live tween) across same-game model refreshes. The
@@ -7175,6 +7735,8 @@ export class PitchRenderer {
     const preservedActivationFadePaint = refreshStep && preservedPresentationToken
       ? this.activationFadePaint.get(refreshStep.playerId)
       : undefined;
+    // Retained tokens (E13): whether the last commit drew a block preview, read before clearTokenTickerPointers empties it.
+    const retainPreviewDrawn = this.tokenRetentionEnabled && (this.blockPreviewSquares.length > 0 || this.preClickDotsDrawn);
     this.clearTokenTickerPointers();
     // Owner 2026-07-13 (interpolation preservation): refresh() destroys every token + clears moveTweens on
     // EVERY model sync. In play, syncs land frequently (next move-square array, acting player, tackle zones…),
@@ -7195,13 +7757,37 @@ export class PitchRenderer {
       const total = Math.max(1, (tw.waypoints.length - 1) * tw.segmentMs);
       if (carryNow - tw.start < total) carriedTweenPos.set(id, { x: tw.token.position.x, y: tw.token.position.y, tween: tw });
     }
+    if (this.tokenRetentionEnabled) {
+      this.retentionCounters.refreshes++;
+      // preSetupCoords moves ahead of eligibility (nothing between here and its old assignment reads it).
+      this.preSetupCoords = this.game ? preSetupPlacements(this.game) : new Map();
+      retainPlan = this.game
+        ? this.planRetainedTokens(preservedPresentationToken, carriedTweenPos, new Set(suspendedPostStep.map((p) => p.step.playerId)), retainPreviewDrawn)
+        : { keep: new Map(), pass: this.retainedPass(new Map(), new Set()), invalidations: this.retainedInvalidations };
+      this.retainedGenerationValid = false; // until this refresh commits
+      this.retainedPendingKeep = retainPlan.keep;
+      retainNext = new Map();
+    }
+    const retainKeep = retainPlan?.keep;
     // destroy (not just detach) the old generation — Text canvases and
     // Graphics buffers otherwise accumulate ~MBs per live model sync
     // (838MB heap after ~20min of live spectating; W-3 checkpoint 4).
     // Shared textures (iconsets, skill icons, checkers) are NOT destroyed —
     // texture destruction stays opt-in in Pixi's destroy().
-    for (const child of this.tokenLayer.removeChildren()) {
-      if (child !== preservedPresentationToken) this.destroyKeepingTextWarm(child);
+    if (!retainKeep) {
+      for (const child of this.tokenLayer.removeChildren()) {
+        if (child !== preservedPresentationToken) this.destroyKeepingTextWarm(child);
+      }
+    } else {
+      // Kept tokens are set aside (detached, attachments detached), never destroyed; everything else goes as today.
+      const keptTokens = new Set<Container>();
+      for (const record of retainKeep.values()) keptTokens.add(record.token);
+      for (const child of this.tokenLayer.removeChildren()) {
+        if (child !== preservedPresentationToken && !keptTokens.has(child)) this.destroyKeepingTextWarm(child);
+      }
+      for (const record of retainKeep.values()) {
+        for (const [layer, node] of record.attachments) layer.detach(node);
+      }
     }
     for (const child of this.kickBallLayer.removeChildren()) {
       if (!child.destroyed) child.destroy({ children: true });
@@ -7218,12 +7804,13 @@ export class PitchRenderer {
     if (refreshStep && preservedActivationFadePaint && this.activationFades.has(refreshStep.playerId)) {
       this.activationFadePaint.set(refreshStep.playerId, preservedActivationFadePaint);
     }
-    this.preSetupCoords = this.game ? preSetupPlacements(this.game) : new Map();
+    if (!retainPlan) this.preSetupCoords = this.game ? preSetupPlacements(this.game) : new Map();
     if (!this.game) {
       // Owner 10-15 (east-west loading): with no game the dugouts and the turn track draw NOTHING (they hide until the first
       // game state arrives), and a leftover from a previous game must not stay on screen at a stale placement.
       this.drawDugouts();
       this.drawTurnTrack();
+      if (retainPlan) { this.retainedTokens = new Map(); this.retainedPendingKeep = null; this.retainedLastInvalidation = 'nullGame'; } // null game: no generation
       refreshCompleted = true; return;
     }
     // Owner 2026-07-08: expire a ball throw arc unconditionally after its flight — the per-frame
@@ -7266,15 +7853,40 @@ export class PitchRenderer {
       const renderData = synthetic ? { ...data, playerCoordinate: coordinate } : data;
       const tokenWasPreserved = data.playerId === refreshStep?.playerId && preservedPresentationToken !== undefined;
       let token: Container;
+      const keptRecord = tokenWasPreserved ? undefined : retainKeep?.get(data.playerId);
       try {
+      if (keptRecord) {
+        // Retained token: no construction or visual-property writes; its construction's attachments and zoom groups are
+        // replayed here, at its loop position, so every RenderLayer list keeps today's order.
+        token = keptRecord.token;
+        for (const [layer, node] of keptRecord.attachments) layer.attach(node);
+        for (const group of keptRecord.groups) this.overlayScaleGroups.push(group);
+        retainNext!.set(data.playerId, keptRecord);
+      } else {
+      const retainSig = retainPlan && !tokenWasPreserved ? retainPlan.pass.sigs.get(data.playerId) : undefined;
+      const retainLayerMarks = retainSig
+        ? this.retainedLayers().map((layer) => ({ layer, length: layer.renderLayerChildren.length, last: layer.renderLayerChildren[layer.renderLayerChildren.length - 1] }))
+        : null;
+      const retainGroupMark = this.overlayScaleGroups.length;
       token = tokenWasPreserved
         ? preservedPresentationToken!
         : this.buildPlayerToken(player, renderData, isHome, team, baselines.get(player.positionId));
+      let retainRecord: RetainedTokenRecord | undefined;
+      if (retainPlan && !tokenWasPreserved) {
+        retainRebuilt++;
+        if (retainSig) {
+          // Created before any post-build step, so a later write in this same refresh still marks it touched.
+          retainRecord = { playerId: data.playerId, token, sig: retainSig, built: this.retainedTransform(token), attachments: [], groups: [], touched: false };
+          this.retainedByToken.set(token, retainRecord);
+          retainNext!.set(data.playerId, retainRecord);
+        }
+      }
       // #229 (owner): while the keg is armed, mute non-targets but keep the thrower at full opacity.
       const kegThrower = this.kegThrowerSquare;
       if (this.kegTargetSet && !this.kegTargetSet.has(data.playerId)
         && !(kegThrower && coordinate[0] === kegThrower[0] && coordinate[1] === kegThrower[1])) {
         token.alpha = 0.35;
+        this.markRetainedTouched(token); // M7
       }
       // Owner 2026-07-06: unified over-token STATE markers (CONFUSED "?", CHOMPED
       // 🦷, bloodlust 🩸). Bloodlust is an ACTING-player property, not a state flag,
@@ -7284,6 +7896,8 @@ export class PitchRenderer {
       const bloodlust = !!acting?.sufferingBloodlust && acting.playerId === data.playerId;
       if (!tokenWasPreserved) this.addStateMarkers(token, data.playerState, bloodlust, data.playerId, coordinate, isHome);
       else this.refreshPreservedMarking(token, player, isDown(renderData.playerState)); // review r1: markings follow
+      if (retainRecord && retainLayerMarks) this.finishRetainedRecord(retainRecord, retainLayerMarks, retainGroupMark);
+      }
       // Owner 08-18 (bullseye unify): the blitz target's ONLY mark is SpectateView's persistent
       // #94 DOM 🎯 badge (token-centred via tokenBodyCenterToCanvas). The renderer's transient
       // SELECTED_BLITZ_TARGET 🎯 (addBlitzTargetCrosshair) doubled it and is retired; the flag
@@ -7337,8 +7951,8 @@ export class PitchRenderer {
           const dest = this.tokenPos(tx, ty, data.playerId);
           const joinX = dest.x;
           const joinY = dest.y + TILE_H * 0.16; // stand IN the square, in FRONT of the thrower (no lift)
-          if (!isWalkerToken(token)) token.scale.set(token.scale.x * 0.8); // carried: a touch smaller (classic icons only)
-          token.zIndex = this.depthZ(tx, ty) + 1; // draw in front of the thrower
+          if (!isWalkerToken(token)) token.scale.set(token.scale.x * 0.8); this.markRetainedTouched(token); // carried: a touch smaller (classic icons only)
+          token.zIndex = this.depthZ(tx, ty) + 1; this.markRetainedTouched(token); // draw in front of the thrower
           const PICKUP_MS = presentationMs(300);
           const from = this.ttmHeld.fromSquare;
           const el = performance.now() - this.ttmHeld.start;
@@ -7351,7 +7965,7 @@ export class PitchRenderer {
               style: 'walk', start: this.ttmHeld.start, segmentMs: PICKUP_MS,
             });
           } else {
-            token.position.set(joinX, joinY); // pinned: joined in the thrower's square
+            token.position.set(joinX, joinY); this.markRetainedTouched(token); // pinned: joined in the thrower's square
           }
           this.lastSquares.set(data.playerId, [tx, ty]);
           continue; // held: no straight tween, no scatter this frame
@@ -7366,7 +7980,7 @@ export class PitchRenderer {
       // releaseMove()'s redraw still sees the previous→new delta and tweens then.
       if (previous && (previous[0] !== nx || previous[1] !== ny) && deferred) {
         const p = this.tokenPos(previous[0], previous[1], data.playerId);
-        token.position.set(p.x, p.y);
+        token.position.set(p.x, p.y); this.markRetainedTouched(token);
         continue; // leave lastSquares at `previous`
       }
       // #67 phase-1 (Tarkin store-paced presentation-drain): if the store is presenting a movement step for
@@ -7421,9 +8035,9 @@ export class PitchRenderer {
             token, waypoints: pts, style: this.moveStyle, start: anim.start,
             segmentMs: leap ? leap.segmentMs : this.moveStepMs, ...(leap ? { arc: leap.arc } : {}),
           });
-          token.position.set(pts[0]!.x, pts[0]!.y);
+          token.position.set(pts[0]!.x, pts[0]!.y); this.markRetainedTouched(token);
         } else {
-          const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y);
+          const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y); this.markRetainedTouched(token);
         }
         if (performance.now() - anim.start >= Math.max(1, anim.squares.length - 1) * this.moveStepMs) this.o66MovePath.delete(data.playerId);
         this.lastSquares.set(data.playerId, [nx, ny]);
@@ -7444,7 +8058,7 @@ export class PitchRenderer {
       if (placement && !deferred && previous && (previous[0] !== nx || previous[1] !== ny)) {
         // Owner 09-14: setup placements teleport — no walk tween across the pitch while coaches arrange a formation.
         this.moveTweens.delete(data.playerId);
-        const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y);
+        const p = this.tokenPos(nx, ny, data.playerId); token.position.set(p.x, p.y); this.markRetainedTouched(token);
       } else if (carried && !deferred) {
         // Owner 2026-07-13: CONTINUE an in-flight walk across the token rebuild. Same destination: re-attach the
         // tween unchanged (style, clock, remaining path) so the walk neither restarts nor changes character.
@@ -7456,7 +8070,7 @@ export class PitchRenderer {
         const plain = !carried.tween.psStep && !carried.tween.movementIntent && !carried.tween.reconcileKey && !carried.tween.postStepCorrectionKey;
         if (plain && end && Math.abs(end.x - dest.x) < 0.5 && Math.abs(end.y - dest.y) < 0.5) {
           this.moveTweens.set(data.playerId, { ...carried.tween, token });
-          token.position.set(carried.x, carried.y);
+          token.position.set(carried.x, carried.y); this.markRetainedTouched(token);
         } else this.continueMoveTween(data.playerId, token, carried, [nx, ny]);
       } else if (!ttmFlightActive && previous && (previous[0] !== nx || previous[1] !== ny)) {
         this.startMoveTween(data.playerId, token, previous, [nx, ny]);
@@ -7497,7 +8111,7 @@ export class PitchRenderer {
           // player stays drawn where he came down (bounded), never walked back to the origin square. Astra (MAJOR 2):
           // any OTHER authoritative coordinate wins at once (eased from the landing square), and so does the cap.
           if (this.ttmLandingHeld(tt.armedAt, tt.to, [nx, ny], elapsed - THROW_MS)) {
-            const p = this.tokenPos(tt.to[0], tt.to[1], data.playerId); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+            const p = this.tokenPos(tt.to[0], tt.to[1], data.playerId); token.position.set(p.x, p.y); this.markRetainedTouched(token); this.moveTweens.delete(data.playerId);
           } else {
             this.pendingTtmThrow.delete(data.playerId);
             if (this.modernPitchPresentation && !atModel(tt.to)) { this.startMoveTween(data.playerId, token, tt.to, [nx, ny]); landedTo = [nx, ny]; }
@@ -7519,7 +8133,7 @@ export class PitchRenderer {
         if (elapsed >= total) {
           // Owner 10-13 (Modern): like the flight, the bounce's landing square is held until the model reaches it.
           if (this.ttmLandingHeld(sc.armedAt, end, [nx, ny], elapsed - total)) {
-            const p = this.tokenPos(end[0], end[1], data.playerId); token.position.set(p.x, p.y); this.moveTweens.delete(data.playerId);
+            const p = this.tokenPos(end[0], end[1], data.playerId); token.position.set(p.x, p.y); this.markRetainedTouched(token); this.moveTweens.delete(data.playerId);
           } else {
             this.pendingScatter.delete(data.playerId);
             if (this.modernPitchPresentation && !atModel(end)) { this.startMoveTween(data.playerId, token, end, [nx, ny]); landedOn = [nx, ny]; }
@@ -8256,6 +8870,22 @@ export class PitchRenderer {
       }
     }
     this.syncMoveRemainingBadge();
+    if (retainPlan && retainNext) {
+      // Commit: this generation is what the next refresh compares against (unless invalidated meanwhile).
+      this.retainedTokens = retainNext;
+      this.retainedGlobalKey = retainPlan.pass.globalKey;
+      this.retainedTeamKeys = retainPlan.pass.teamKeys;
+      this.retainedGenerationValid = retainPlan.invalidations === this.retainedInvalidations;
+      this.retainedPendingKeep = null;
+      this.retainedKeptLastRefresh = new Set(retainPlan.keep.keys());
+      if (retainPlan.keep.size === 0) {
+        this.retentionCounters.fullRebuilds++;
+        const reasons = this.retentionCounters.fullRebuildReasons, reason = this.retainedFullRebuildReason ?? 'noneEligible';
+        reasons[reason] = (reasons[reason] ?? 0) + 1;
+      }
+      this.retentionCounters.tokensKept += retainPlan.keep.size;
+      this.retentionCounters.tokensRebuilt += retainRebuilt;
+    }
     refreshCompleted = true;
     this.syncFocusArrow();
     } catch (error) {
@@ -8510,7 +9140,7 @@ export class PitchRenderer {
   /** Owner 09-08: log double-click — centre the camera on a square. With the auto-director on, the director's
    *  own nudge glides there (it keeps ownership); otherwise an eased manual pan. Zoom only comes IN, and only from
    *  the whole-pitch fit (a coach's closer zoom is never yanked); a live cinematic owns the camera and wins. */
-  private cameraFocus: { target: { x: number; y: number }; fromX: number; fromY: number; fromScale: number; toScale: number; start: number; ms: number } | null = null;
+  private cameraFocus: ({ target: { x: number; y: number }; fromX: number; fromY: number; fromScale: number; toScale: number; start: number; ms: number } & CameraTweenLegal) | null = null;
   static readonly FOCUS_MS = 420;
   static readonly FOCUS_ZOOM_FROM_FIT = 1.6;
   focusOnSquare(square: [number, number], ms = PitchRenderer.FOCUS_MS): void {
@@ -9570,6 +10200,8 @@ export class PitchRenderer {
     // plate, rush die) are not drawn there. A server-priced JUMP plate stays: the path draws no jump tag, so without it
     // the leap's price would vanish.
     const pathKeys = new Set(this.o66PathSquares.map(([px, py]) => `${px},${py}`));
+    // Owner 11-23: the reach dodge chip shows the roll without Break Tackle too (shownDodgeTarget); a jump price is untouched.
+    const actorAt = this.game?.fieldModel.playerDataArray.find((d) => String(d.playerId) === actorId)?.playerCoordinate as [number, number] | undefined;
     for (const key of this.tilePickEligible) {
       const rolls = this.tilePickRolls?.get(key);
       const legacyRush = this.tilePickGfi?.has(key) ?? false;
@@ -9597,9 +10229,10 @@ export class PitchRenderer {
           const plate = this.plannerTagStyle === 'dieWord';
           const dodgeScale = plate ? this.plannerTagGroupLayout(['dodge'], this.reachPlateRoom(sx, sy, a, ds, actorId || undefined) / ds).scale : 1;
           if (plate) this.registerReachPlate('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds, dodgeScale);
+          const shown = actorAt ? shownDodgeTarget(this.game, actorId, actorAt, [sx, sy], rolls.dodge) : rolls.dodge;
           const chip = plate
-            ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, rolls.dodge, actorSide)
-            : this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, rolls.dodge);
+            ? this.buildPlannerTag('dodge', a.x, a.y + (both ? REACH_PLATE_STACK_GAP * ds : 0), ds * dodgeScale, shown, actorSide)
+            : this.buildDodgeChip(a.x, a.y + (both ? REACH_STACK_GAP * ds : 0), ds * 0.5, shown);
           chip.alpha = 0.9;
           this.pathLayer.addChild(chip);
         }
@@ -9699,6 +10332,7 @@ export class PitchRenderer {
     // #151: pass rolls-required cues (throw over passer / catch over target) — server-fed, cleared with the layer.
     this.drawPassRollCues();
     this.drawBlastArea(); // owner 11-12: the Kaboom! blast squares, while the server's dialog stands
+    this.drawFireballAim(); // owner 11-22: the red Fireball reticle and the "🔥 4+" tags over the players it would hit
     // Owner o66 automove PREVIEW: draw the pending route (a trail through the square centres + a dot per step,
     // a brighter ring on the destination) BEFORE the legacy planner gate — plannerEnabled is off in o66. The
     // host passes [from, ...route]; the start square gets no dot. Minimal by design (owner tunes on return).
@@ -9745,15 +10379,17 @@ export class PitchRenderer {
         const rushTarget = rushTargetForPlayer(this.game, this.o66PathMover);
         if (b && moverPlayer) {
           const persistentPath = this.movementOverlayOwner === this.o66PathMover;
+          const moverIgnoresTz = moverIgnoresTacklezones(moverPlayer); // section 14: no dodge owed, no dodge chip
           // Owner 10-22: every tag on the route wears the MOVER's seat die (home blue / away red under the Home / Away
           // dice), the same for the first, second and any later step; the price still comes from the server / mirror.
           const moverSide = this.plannedRollSide(this.o66PathMover);
           if (persistentPath) this.pathLayer.addChild(this.movementPathCostLayer);
           const agility = Number((moverPlayer as { agility?: number }).agility) || 3;
           // Owner 10-21 (mutations): the dodge NUMBER for a step the server has not priced is dodgeTargetForPlayer
-          // (upstream DodgeModifierFactory mirror: Two Heads, Titchy, Prehensile Tail, Stunty + cancels, Break Tackle).
-          // Break Tackle counts until the first dodge where it could actually be spent (planDodgeTarget).
-          let breakTacklePending = breakTackleAvailable(this.game, this.o66PathMover);
+          // (upstream DodgeModifierFactory mirror: Two Heads, Titchy, Prehensile Tail, Stunty + cancels).
+          // Owner 11-23: Break Tackle is spent once per activation, so no predicted dodge counts it (shownDodgeTarget).
+          // The first dodge of the route it could help wears a small "BT +N" tag under its die tag instead.
+          let breakTackleTagged = false;
           // #77 (owner batch §N): a pickup is required whenever a move step LANDS ON the loose ball
           // (ballInPlay && !ballMoving — a carrier's square is occupied so can't be a move target). We only
           // DETECT that square here for chip placement; the difficulty NUMBER comes from the view's
@@ -9761,6 +10397,12 @@ export class PitchRenderer {
           const fm = this.game?.fieldModel;
           const ballSq = fm?.ballInPlay && !fm?.ballMoving ? (fm?.ballCoordinate as [number, number] | undefined) : undefined;
           const ballKey = ballSq ? `${ballSq[0]},${ballSq[1]}` : null;
+          // Move batching decision 13 (server-derived law): a TRAPDOOR chip on a route square only where the server's
+          // fieldModel.trapDoors has one. Annotation only: the route itself is planPath's, unchanged.
+          const trapKeys = new Set<string>();
+          for (const trap of ((fm as { trapDoors?: unknown[] } | undefined)?.trapDoors ?? []) as { coordinate?: [number, number] }[]) {
+            if (isOnPitch(trap?.coordinate ?? null)) trapKeys.add(`${trap.coordinate![0]},${trap.coordinate![1]}`);
+          }
           // path is [from, ...route]; step k (1..n) lands on o66PathSquares[k], leaving o66PathSquares[k-1].
           // ⚑ SR-108 cross-ref: the #150 plot-number loop below walks this SAME array anchored on the square
           // DEPARTED (k=0..n-1, label k+1) — the opposite anchor, and deliberately so. A COST chip belongs on
@@ -9778,17 +10420,18 @@ export class PitchRenderer {
           for (let k = 1; k < this.o66PathSquares.length; k++) {
             const [dx, dy] = this.o66PathSquares[k]!;
             const [fx, fy] = this.o66PathSquares[k - 1]!;
-            const dodge = oppCounts.has(`${fx},${fy}`); // leaving a marked square rolls a dodge
+            const dodge = oppCounts.has(`${fx},${fy}`) && !moverIgnoresTz; // leaving a marked square rolls a dodge (not for an active Incorporeal)
             const rush = k > b.normal; // steps beyond normal MA need a Go-For-It (2+, 3+ blizzard)
             const stepKey = `${dx},${dy}`;
             const pickup = ballKey === stepKey; // this step lands on the loose ball → pickup roll
+            const trapdoor = trapKeys.has(stepKey); // decision 13: this step enters a server-sent trapdoor → its D6
             // Astra pass 6: the server's price for this square (tilePickRolls) wins over the local derivation; a server-priced
             // JUMP on a path square is drawn here as the first tag of its group (die + word style), so it respects the rows
             // and the crosshair like the other tags.
             const srvRolls = this.tilePickRolls?.get(stepKey);
             const isJumpStep = !!srvRolls?.jump && srvRolls.dodge > 0; // a server-priced leap, in either style
             const jumpPlate = this.plannerTagStyle === 'dieWord' && isJumpStep; // dieWord: the path draws the plate; letter: the reach J6+ chip is the one jump tag
-            if (!dodge && !rush && !pickup && !jumpPlate) continue;
+            if (!dodge && !rush && !pickup && !jumpPlate && !trapdoor) continue;
             const a = this.tokenPos(dx, dy, this.o66PathMover ?? undefined);
             const ds = depthScale(dx, dy);
             const both = dodge && rush;
@@ -9798,7 +10441,7 @@ export class PitchRenderer {
             // Owner 10-14: die + word tags sit SIDE BY SIDE (rush, dodge, pickup) when a square owes several rolls.
             const pickupPt = this.pickupTarget;
             const pickupHere = pickup && !!pickupPt && pickupPt.square[0] === dx && pickupPt.square[1] === dy;
-            const groupKinds = dieWord ? (['jump', 'rush', 'dodge', 'pickup'] as const).filter((k) => (k === 'jump' ? jumpPlate : k === 'rush' ? rush : k === 'dodge' ? dodge && !isJumpStep : pickupHere)) : [];
+            const groupKinds = dieWord ? (['jump', 'rush', 'dodge', 'pickup', 'trapdoor'] as const).filter((k) => (k === 'jump' ? jumpPlate : k === 'rush' ? rush : k === 'dodge' ? dodge && !isJumpStep : k === 'trapdoor' ? trapdoor : pickupHere)) : [];
             const grouped = groupKinds.length > 1;
             let gs = 1;
             const slotX = new Map<string, number>(); // centre of each tag, in depth-scale units from the square's x
@@ -9821,14 +10464,15 @@ export class PitchRenderer {
             }
             if (dodge && !isJumpStep) { // a jump replaces the dodge: one jump tag, never J6+ together with D4+
               // Upstream mirror: dodgeTarget.ts (DodgeModifierFactory + AgilityMechanic.minimumRollDodge).
-              const planned = planDodgeTarget(this.game, this.o66PathMover, [fx, fy], [dx, dy], breakTacklePending);
-              const projected = planned.target;
-              if (planned.breakTackleSpent) breakTacklePending = false;
+              const projected = dodgeTargetForPlayer(this.game, this.o66PathMover, [fx, fy], [dx, dy]);
               const localDodge = Math.min(6, projected ?? Math.max(2, agility + (oppDodgeMarks.get(`${dx},${dy}`) ?? 0)));
               // Astra pass 6 (server-derived law): the server's dodge price for the square, when it sent one, is shown.
               // Astra r2: only the FIRST step (from the actor's current square) can carry the server's price; a later
-              // visit to the same square is projected like any other step (Break Tackle may be spent by then).
-              const target = k === 1 && srvRolls && !srvRolls.jump && srvRolls.dodge > 0 ? srvRolls.dodge : localDodge;
+              // visit to the same square is projected like any other step. The server's price has Break Tackle taken
+              // back off (shownDodgeTarget).
+              const target = k === 1 && srvRolls && !srvRolls.jump && srvRolls.dodge > 0
+                ? shownDodgeTarget(this.game, this.o66PathMover, [fx, fy], [dx, dy], srvRolls.dodge)
+                : localDodge;
               // Owner o66aq: the path COST chips (dodge / rush) belong ABOVE the tokens (pathLayer), not overlayLayer
               // (which sits UNDER tokenLayer — the chips were being occluded by players/shading; "rushes don't
               // surface"). pathLayer is the same over-tokens layer the block-dice dots already use, cleared each frame.
@@ -9845,6 +10489,102 @@ export class PitchRenderer {
               } else {
                 const chip = this.buildPlannerTag('dodge', tagX('dodge'), dieWord ? placeY : cy + (both ? stackGap : 0), ds * gs, target, moverSide);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
+              }
+              const btBonus = breakTackleTagged ? 0 : breakTackleBonus(this.game, this.o66PathMover, [fx, fy], [dx, dy]);
+              if (btBonus > 0) {
+                breakTackleTagged = true;
+                const btScale = ds * gs * (dieWord ? 1 : 0.75); // the letter chip is the smaller tag; stay smaller than it
+                const btX = tagX('dodge');
+                // directly under the dodge tag: half the dodge tag (14 tall as a plate, 8.5 as a letter chip) + half this one
+                const dodgeY = dieWord ? placeY : cy + (both ? stackGap : 0);
+                const btOff = (dieWord ? 7 : 4.25) * ds * gs + (BREAK_TACKLE_TAG_H / 2 + 0.5) * btScale;
+                // Sol r2: the tag is an obstacle like the others. Under the dodge tag by default; when that spot is taken
+                // (the destination crosshair, another tag's plate) it sits above the dodge tag instead. Its rectangle is
+                // recorded so later tags and the move-number badge keep clear of it.
+                const btRect = (x: number, y: number) => ({
+                  x0: x - (BREAK_TACKLE_TAG_W / 2) * btScale, x1: x + (BREAK_TACKLE_TAG_W / 2) * btScale,
+                  y0: y - (BREAK_TACKLE_TAG_H / 2) * btScale, y1: y + (BREAK_TACKLE_TAG_H / 2) * btScale,
+                });
+                const destSq = this.o66PathSquares[this.o66PathSquares.length - 1]!;
+                const cross = this.tokenPos(destSq[0], destSq[1], this.o66PathMover ?? undefined);
+                const crossReach = 0.8 * (TILE_W * 0.26 * depthScale(destSq[0], destSq[1]) + 1.1);
+                const btObstacles = [...this.o66TagRects, { x0: cross.x - crossReach, x1: cross.x + crossReach, y0: cross.y - crossReach, y1: cross.y + crossReach }];
+                // Sol r3: letter chips are not recorded as rectangles, so this square's own rush and dodge chips are
+                // added here (a chip is 17 px tall at half scale; its text is about three glyphs wide).
+                const chipHalfW = 15 * ds * gs;
+                const chipHalfH = 4.25 * ds * gs;
+                if (!dieWord) {
+                  btObstacles.push({ x0: btX - chipHalfW, x1: btX + chipHalfW, y0: dodgeY - chipHalfH, y1: dodgeY + chipHalfH });
+                  if (rush) btObstacles.push({ x0: tagX('rush') - chipHalfW, x1: tagX('rush') + chipHalfW, y0: cy - chipHalfH, y1: cy + chipHalfH });
+                }
+                const btOverlap = (r: { x0: number; y0: number; x1: number; y1: number }): number =>
+                  btObstacles.reduce((sum, o) => {
+                    const w = Math.min(r.x1, o.x1) - Math.max(r.x0, o.x0) - 0.75; // touching edges are not a hit
+                    const h = Math.min(r.y1, o.y1) - Math.max(r.y0, o.y0) - 0.75;
+                    return w > 0 && h > 0 ? sum + w * h : sum;
+                  }, 0);
+                // Under the dodge tag first, then above it, then beside it (right, left). The first free spot wins; with
+                // none free (Sol r3) the one that overlaps least is used.
+                const sideOff = ((dieWord ? 20 : 15) * ds * gs) + (BREAK_TACKLE_TAG_W / 2 + 1) * btScale;
+                const btSpots: [number, number][] = [[btX, dodgeY + btOff], [btX, dodgeY - btOff], [btX + sideOff, dodgeY], [btX - sideOff, dodgeY]];
+                // Sol r4-r6: a spot whose plate would leave the pitch (an edge square) is never taken while another is on
+                // it. "On the pitch" is tested against the squares themselves (a point inside any square's projected quad):
+                // the sidelines taper and are segmented in perspective, so neither a bounding box nor a four-corner
+                // outline follows them.
+                const inQuad = (pts: readonly (readonly number[])[], x: number, y: number): boolean => {
+                  let inside = false;
+                  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+                    const xi = pts[i]![0]!, yi = pts[i]![1]!, xj = pts[j]![0]!, yj = pts[j]![1]!;
+                    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+                  }
+                  return inside;
+                };
+                let pitchY0 = Infinity;
+                let pitchY1 = -Infinity;
+                const quads: (readonly (readonly number[])[])[] = [];
+                for (let qx = 0; qx < PITCH_COLS; qx++) {
+                  for (let qy = 0; qy < PITCH_ROWS; qy++) {
+                    const pts = squareQuad(qx, qy).points;
+                    quads.push(pts);
+                    for (const pt of pts) { pitchY0 = Math.min(pitchY0, pt[1]!); pitchY1 = Math.max(pitchY1, pt[1]!); }
+                  }
+                }
+                // Sol r7: a point exactly on an edge shared by two squares can fall through both quads (rounding), so the
+                // test is edge-inclusive: the point or any of four neighbours a quarter pixel away is on the pitch.
+                const onPitch = (x: number, y: number): boolean =>
+                  ([[0, 0], [0.25, 0], [-0.25, 0], [0, 0.25], [0, -0.25]] as const).some(([ox, oy]) => quads.some((pts) => inQuad(pts, x + ox, y + oy)));
+                // tags sit above a square: up to one tile of headroom over the top edge, judged against the top edge's width
+                const btOffPitch = (r: { x0: number; y0: number; x1: number; y1: number }): boolean => {
+                  if (r.y0 < pitchY0 - TILE_H || r.y1 > pitchY1) return true;
+                  const top = Math.min(Math.max(r.y0, pitchY0 + 0.5), pitchY1 - 0.5);
+                  const bottom = Math.min(Math.max(r.y1, pitchY0 + 0.5), pitchY1 - 0.5);
+                  return !onPitch(r.x0, top) || !onPitch(r.x1, top) || !onPitch(r.x0, bottom) || !onPitch(r.x1, bottom);
+                };
+                let btSpot = btSpots[0]!;
+                let btBest = Infinity;
+                for (const spot of btSpots) {
+                  const spotRect = btRect(spot[0], spot[1]);
+                  const over = btOverlap(spotRect) + (btOffPitch(spotRect) ? 1e6 : 0);
+                  if (over < btBest) { btBest = over; btSpot = spot; }
+                  if (over === 0) break;
+                }
+                const btY = btSpot[1];
+                const btTagX = btSpot[0];
+                this.o66TagRects.push(btRect(btTagX, btY));
+                if (persistentPath) {
+                  this.syncMovementOverlayNode(
+                    `o66-path:breakTackle:${stepKey}`,
+                    'path',
+                    `${btBonus}:${btScale}:${tagSig}:${this.skillIconStyle}`, // position is not part of a node's signature: it is re-set on every sync
+                    btTagX,
+                    btY,
+                    0.95,
+                    () => this.buildBreakTackleTag(btBonus, btScale),
+                  );
+                } else {
+                  const btTag = this.buildBreakTackleTag(btBonus, btScale);
+                  btTag.position.set(btTagX, btY); btTag.alpha = 0.95; this.pathLayer.addChild(btTag);
+                }
               }
             }
             if (rush) {
@@ -9876,6 +10616,14 @@ export class PitchRenderer {
                 const chip = this.buildPlannerTag('pickup', tagX('pickup'), py2, ds * gs, pt.target, moverSide);
                 chip.alpha = 0.95; this.pathLayer.addChild(chip);
               }
+            }
+            if (trapdoor) {
+              // Decision 13: below the square like the pickup tag (one row lower when both share it); in the die + word
+              // style it joins the side-by-side group on the top edge.
+              const ty2 = dieWord ? placeY : a.y + TILE_H * 0.5 * ds + (pickupHere ? stackGap * 2 : 0);
+              const chip = this.buildPlannerTag('trapdoor', tagX('trapdoor'), ty2, ds * gs, TRAPDOOR_ESCAPE_TARGET, moverSide);
+              chip.label = 'plannerTrapdoorTag';
+              chip.alpha = 0.95; this.pathLayer.addChild(chip);
             }
           }
         }
@@ -10124,7 +10872,6 @@ export class PitchRenderer {
       if (persistentPlannedPath) this.pathLayer.addChild(this.movementPathCostLayer);
 
       let fromSquare: Square = [px, py];
-      let breakTacklePending = breakTackleAvailable(this.game, this.selectedPlayerId);
       this.plannedPath.forEach(([sx, sy], i) => {
         const a = squareAnchor(sx, sy);
         const stepScale = depthScale(sx, sy);
@@ -10168,16 +10915,13 @@ export class PitchRenderer {
           // dodge target = AG + 1 per opponent marking the DESTINATION
           // square (BB2025); natural 1 fails / 6 succeeds → clamp 2+..6+
           // Owner 10-21 (mutations): the unpriced dodge is dodgeTargetForPlayer (upstream DodgeModifierFactory mirror);
-          // Break Tackle counts until the first dodge where it could actually be spent. Every modifier (incl. the
-          // worst-case Diving Tackle) is summed BEFORE the single minimum-2 clamp.
-          let btSpent = false;
-          const localBase = (extra = 0): number => {
-            const planned = planDodgeTarget(this.game, this.selectedPlayerId, fromSquare, [sx, sy], breakTacklePending, extra);
-            btSpent = planned.breakTackleSpent;
-            return planned.target ?? Math.max(2, info.player.agility + dodgeDestMarks + extra);
-          };
+          // owner 11-23: Break Tackle is never counted (shownDodgeTarget). Every modifier (incl. the worst-case
+          // Diving Tackle) is summed BEFORE the single minimum-2 clamp.
+          const localBase = (extra = 0): number =>
+            dodgeTargetForPlayer(this.game, this.selectedPlayerId, fromSquare, [sx, sy], { extraModifier: extra })
+              ?? Math.max(2, info.player.agility + dodgeDestMarks + extra);
           const target = (() => {
-            // #232 (owner): step 1 is server-verbatim; later steps assume worst-case Diving Tackle.
+            // #232 (owner): step 1 is the server's number (owner 11-23: less an unused Break Tackle); later steps assume worst-case Diving Tackle.
             if (i === 0) {
               // ⚖ normalize the coordinate the way the proven server readers do (availableActions.normSquare):
               // moveSquareArray.coordinate is `unknown` — a [x,y] tuple OR an {x,y} object per wire format —
@@ -10190,10 +10934,9 @@ export class PitchRenderer {
                 const ey = Array.isArray(c) ? Number(c[1]) : Number((c as { y?: number } | null)?.y);
                 return ex === sx && ey === sy;
               });
-              const local = Math.min(6, localBase()); // also settles the Break Tackle bookkeeping for step 1
               return serverSquare && serverSquare.minimumRollDodge > 0
-                ? serverSquare.minimumRollDodge
-                : local;
+                ? shownDodgeTarget(this.game, this.selectedPlayerId, fromSquare, [sx, sy], serverSquare.minimumRollDodge)
+                : Math.min(6, localBase());
             }
             const selectedIsHome = this.selectedIsHome();
             const homeIds = new Set(this.game!.teamHome.playerArray.map((p) => p.playerId));
@@ -10213,7 +10956,6 @@ export class PitchRenderer {
             const dtAdj = hasAdjacentDivingTackle ? 2 : 0;
             return Math.min(6, localBase(dtAdj));
           })();
-          if (btSpent) breakTacklePending = false;
           if (persistentPlannedPath) {
             this.syncMovementOverlayNode(
               `planned-path:dodge:${sx},${sy}`,
@@ -11144,11 +11886,12 @@ export class PitchRenderer {
 
   /** Owner 10-14: one planned-path cost tag in the chosen style. `ds` is the square's depth scale. 'letter' = the
    *  1.0.205 plate at 0.5 x depth; 'dieWord' = the reach-square die (0.8 x depth) with the word beneath, centred on (x, y). */
-  private buildPlannerTag(kind: 'rush' | 'dodge' | 'jump' | 'pickup', x: number, y: number, ds: number, target: number, side?: BlockDieSide | null): Container {
+  private buildPlannerTag(kind: 'rush' | 'dodge' | 'jump' | 'pickup' | 'trapdoor', x: number, y: number, ds: number, target: number, side?: BlockDieSide | null): Container {
     if (this.plannerTagStyle === 'letter') {
       if (kind === 'rush') return this.buildRushChip(x, y, ds * 0.5, target);
       if (kind === 'dodge') return this.buildDodgeChip(x, y, ds * 0.5, target);
       if (kind === 'jump') return this.buildJumpChip(x, y, ds * 0.5, target);
+      if (kind === 'trapdoor') return this.buildRollTag(x, y, ds * 0.5, 'T', target, PLANNER_TAG_PLATES.trapdoor.fill, PLANNER_TAG_PLATES.trapdoor.stroke); // "T2+"
       return this.buildPickupChip(x, y, ds * 0.5, target);
     }
     // Owner 10-14: a small plate (die + "+" then the word to its right), centred on (x, y). `ds` here is the tag scale.
@@ -11193,6 +11936,48 @@ export class PitchRenderer {
     chip.addChild(text);
     chip.position.set(x, y);
     return chip;
+  }
+
+  /** Owner 11-23: the small "BT +N" tag under the first dodge tag Break Tackle could help: the skill's icon, then
+   *  "BT +N". It only tells the coach the skill is there; the dodge tag above never counts it. Centred on (0, 0). */
+  private buildBreakTackleTag(bonus: number, scale: number): Container {
+    this.pruneLiveSkillAssets(); // Sol r2: a hover route rebuilds this tag often; drop the destroyed ones first
+    const tag = new Container();
+    tag.label = 'breakTackleTag';
+    const text = new Text({ text: `BT +${bonus}`, style: DODGE_STYLE, resolution: 4, textureStyle: { scaleMode: 'linear' }, autoGenerateMipmaps: true });
+    text.anchor.set(0, 0.5);
+    text.scale.set(0.6 * scale);
+    const textW = typeof document === 'undefined' ? text.text.length * 7 * 0.6 * scale : text.width;
+    const h = BREAK_TACKLE_TAG_H * scale;
+    const iconSize = h - 2 * scale;
+    const pad = 1.5 * scale;
+    const iconHolder = new Container();
+    const layout = (): void => {
+      for (const child of tag.removeChildren()) if (child !== text && child !== iconHolder) child.destroy();
+      for (const child of iconHolder.removeChildren()) child.destroy();
+      const icon = skillIcon('BreakTackle', this.skillIconStyle);
+      const iconW = icon ? iconSize + pad : 0;
+      const w = pad + iconW + textW + pad;
+      if (icon) {
+        const sprite = new Sprite(icon);
+        sprite.anchor.set(0.5, 0.5);
+        sprite.width = iconSize; sprite.height = iconSize;
+        sprite.position.set(-w / 2 + pad + iconSize / 2, 0);
+        iconHolder.addChild(sprite);
+      }
+      text.position.set(-w / 2 + pad + iconW, 0);
+      tag.addChild(
+        new Graphics()
+          .roundRect(-w / 2, -h / 2, w, h, 2.5 * scale)
+          .fill({ color: PLANNER_TAG_PLATES.dodge.fill, alpha: 0.92 })
+          .roundRect(-w / 2, -h / 2, w, h, 2.5 * scale)
+          .stroke({ color: PLANNER_TAG_PLATES.dodge.stroke, width: 0.8 * scale }),
+        iconHolder,
+        text,
+      );
+    };
+    this.trackLiveSkillAsset(tag, layout);
+    return tag;
   }
 
   /** Owner 10-15: plate geometry of each "DP −N" tag (unscaled px) and, once placed on a die, the top of its row. */
@@ -11572,6 +12357,9 @@ export class PitchRenderer {
     // skill row covers them, with ALL skills including positional defaults)
     // Owner 10-03: the portrait always shows the player facing the camera (south), never its on-pitch facing.
     const token = withPortraitFacing(() => this.buildPlayerToken(player, data!, isHome, team, undefined, false));
+    // M10: the portrait build rewrote this player's tokenGrounds entry, which his pitch token's placement reads.
+    const portraitRecord = this.tokenRetentionEnabled ? this.retainedTokens.get(playerId) : undefined;
+    if (portraitRecord) portraitRecord.touched = true;
     token.scale.set(1); // portrait ignores depth scaling
     // Owner 09-09: the position ring and the (sheared) shadows widened the extract's bounds asymmetrically, so
     // the figure sat off-centre in the card's portrait box — the portrait is the FIGURE plus its state markers.
@@ -12715,7 +13503,7 @@ export class PitchRenderer {
     // Before init, the normal asset-loading pass will consume the selected variant.
     if (!this.app || this.d6FaceTextures.length === 0) return;
     void this.loadD6FaceTextures(variant).then(() => {
-      if (this.app && this.d6FaceVariant === variant) this.refresh();
+      if (this.app && this.d6FaceVariant === variant) { this.invalidateRetainedTokens('d6Faces'); this.refresh(); }
     }).catch((error) => {
       console.warn(`ffb-pitch: ${variant} d6 faces failed to load, retaining the previous set`, error);
     });
@@ -12875,6 +13663,7 @@ export class PitchRenderer {
         this.classicIconAcquireAbort = null;
         this.classicIconLease = lease;
         priorClassicLease?.release();
+        this.invalidateRetainedTokens('classicIcons'); // asset revision
         this.refresh();
         this.onPortraitVisualRevision?.();
       });
@@ -12882,6 +13671,7 @@ export class PitchRenderer {
       priorClassicLease?.release();
     }
     if (this.spriteSet === 'walk') this.preloadBundledWalkSheets();
+    this.invalidateRetainedTokens('spriteSet');
     this.refresh();
   }
 
@@ -12899,7 +13689,7 @@ export class PitchRenderer {
       for (const position of positions) if (position.positionName) positionNames.push(position.positionName);
     }
     void loadBundledWalkSheets(bundledWalkEntriesForRaces(races, positionNames)).then(() => {
-      if (!this.destroyed && this.spriteSet === 'walk') this.refresh();
+      if (!this.destroyed && this.spriteSet === 'walk') { this.invalidateRetainedTokens('bundledWalkers'); this.refresh(); }
     });
   }
 
@@ -12953,7 +13743,7 @@ export class PitchRenderer {
     // preemption keeps the SAVED (pre-zoom) camera so we still ease back cleanly.
     if (this.cinematic) {
       if (priority <= (this.cinematic.priority ?? 1)) return;
-      this.cinematic = { ...this.cinematic, target: squareAnchor(square[0], square[1]), start: performance.now(), holdMs, zoom: opts?.zoom, track: opts?.track, priority };
+      this.cinematic = { ...this.cinematic, target: squareAnchor(square[0], square[1]), start: performance.now(), holdMs, zoom: opts?.zoom, track: opts?.track, priority, legalKey: undefined, legalDest: undefined, legalRebase: undefined };
       return;
     }
     this.clearSelection(); // interrupt the user's current action
@@ -13824,6 +14614,7 @@ export class PitchRenderer {
         const sx = Math.abs(token.scale.x) > 1e-6 ? token.scale.x : 1;
         const sy = Math.abs(token.scale.y) > 1e-6 ? token.scale.y : 1;
         setTokenVisualNudge(token, cur.dx / sx, cur.dy / sy);
+        if (cur.dx !== 0 || cur.dy !== 0) this.markRetainedTouched(token); // M9
       }
       if (cur.dx === 0 && cur.dy === 0 && !this.occlusionNudgeDesired.has(id)) this.occlusionNudgeCurrent.delete(id);
       else this.occlusionNudgeCurrent.set(id, cur);
@@ -13938,6 +14729,7 @@ export class PitchRenderer {
   private destroyPlayerMarkLabelNodes(): void {
     for (const node of this.playerMarkLabelNodes) {
       if (node.destroyed) continue;
+      this.markRetainedTouched(node); // M4
       this.markingLayer.detach(node);
       node.parent?.removeChild(node);
       node.destroy({ children: true });
@@ -13978,6 +14770,7 @@ export class PitchRenderer {
   }
 
   private paintPlayerMarkLabel(token: Container, playerId: string, label: string, down: boolean): void {
+    this.markRetainedTouched(token); // M4
     const group = new Container();
     group.label = 'playerMarkLabel';
     // Owner 10-08: a line of 4-6 characters shrinks the text (width-preserving, 3 / n) instead of breaking early.
@@ -15928,6 +16721,7 @@ export class PitchRenderer {
     const badge = this.activeMoveBadge;
     this.activeMoveBadge = null;
     if (!badge || badge.node.destroyed) return;
+    this.markRetainedTouched(badge.node); // M5
     badge.node.parentRenderLayer?.detach(badge.node);
     badge.node.parent?.removeChild(badge.node);
     badge.node.destroy({ children: true });
@@ -15962,6 +16756,7 @@ export class PitchRenderer {
       this.placeMoveBadge(true);
       badge = this.activeMoveBadge!;
     }
+    this.markRetainedTouched(token); // M5
     const texture = index == null ? null : this.moveRemainingTextures[index] ?? null;
     if (!texture) { badge.node.visible = false; return; } // never a misleading number
     if (badge.sprite.texture !== texture) badge.sprite.texture = texture;
@@ -15979,6 +16774,7 @@ export class PitchRenderer {
     sprite.anchor.set(0.5, 0.5);
     sprite.eventMode = 'none';
     node.addChild(sprite);
+    this.markRetainedTouched(token); // M5
     const spot = this.moveBadgeFeetSpot(token, side, down);
     placeWalkerDecor(token, node, spot.x, spot.y, 1);
     node.zIndex = 50; // the chest state-marker row's depth on the token
@@ -16019,6 +16815,7 @@ export class PitchRenderer {
       next.node.visible = visible;
       return;
     }
+    this.markRetainedTouched(badge.token); // M5
     placeWalkerDecor(badge.token, badge.node, spot.x, spot.y, 1);
     badge.spot = spotKey;
   }
@@ -16889,6 +17686,7 @@ export class PitchRenderer {
       : compensateUiZoom(anchor.center, anchor.scale, anchor.from, anchor.to, next.w, next.h);
     this.world.scale.set(view.scale);
     this.world.position.set(view.x, view.y);
+    this.enforceFitFloor(); // owner 11-25 (Sol r2): never below the new floor; at the floor, the whole fit box
     this.updateOverlayScales();
     this.clampCamera();
   }
@@ -18188,7 +18986,7 @@ export class PitchRenderer {
   /** Owner 09-09: switch the BUNDLED badge family ('default' flat badges | 'illustrated') and re-render players once
    *  the family's textures are in. No-op when already active. Installed-pack targets keep precedence. */
   async setBundledSkillBadgeFamily(family: BundledSkillBadgeFamily): Promise<void> {
-    if (await setBundledSkillBadgeFamily(family)) this.refresh();
+    if (await setBundledSkillBadgeFamily(family)) { this.invalidateRetainedTokens('skillBadgeFamily'); this.refresh(); }
   }
 
   /** Re-measures the host (layout changes don't fire window resize) and refits — Owner 09-14 ("the auto director
@@ -18292,6 +19090,30 @@ export class PitchRenderer {
     this.redrawSetupZones();
     this.refreshForProjectionChange(); // 10-08: an in-air kick + the kick cues follow the new projection
     this.redrawCrosshairForProjection(); // controller P2a (Astra P2-4): the rail is projected too
+    void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
+    this.resetCamera();
+    this.rebaseKickFollowCamera();
+    refreshWalkerFacing(this.walkerOwnerId, this.facingGeometry());
+    settleStatic?.();
+  }
+
+  /** Owner 11-25: the CLASSIC N-S perspective setting (the 1.0.335 curved-sideline view, its camera included); the
+   *  same redraw and camera reset as a flat toggle. Only the N-S standard projection changes; elsewhere it is stored and
+   *  takes effect when N-S standard comes back. */
+  setClassicNsPerspective(on: boolean): void {
+    // Sol r1 (8bb42b2fc): an unchanged value does nothing; outside N-S standard (East-West, flat, N-S uniform figures)
+    // the flag is only stored - the projection on screen does not change, so nothing is redrawn and the camera stays.
+    if (isClassicNsPerspective() === on) return;
+    const wasActive = isClassicNsProjectionActive();
+    if (!this.app) { setClassicNsPerspective(on); return; }
+    const settleStatic = this.captureStaticProjection();
+    setClassicNsPerspective(on);
+    if (isClassicNsProjectionActive() === wasActive) return; // stored only: the effective projection is unchanged
+    this.drawStadium();
+    this.drawPitch();
+    this.redrawSetupZones();
+    this.refreshForProjectionChange();
+    this.redrawCrosshairForProjection();
     void this.setSweetSpotLogos(this.lastSweetSpotUrls.home, this.lastSweetSpotUrls.away);
     this.resetCamera();
     this.rebaseKickFollowCamera();
@@ -18611,6 +19433,9 @@ export class PitchRenderer {
       this.world.scale.set(keep.scale);
       this.updateOverlayScales();
       this.world.position.set(this.app.screen.width / 2 - anchor.x * keep.scale, this.app.screen.height / 2 - anchor.y * keep.scale);
+      // Owner 11-25 (Sol r3): at the floor the whole fit box stays on screen (the flipped square's projected depth
+      // differs under the 15 degree pitch); above the floor the same square stays centred, as before.
+      this.settleAtFitFloor();
       this.clampCamera();
     }
     this.rebaseKickFollowCamera();
@@ -18794,6 +19619,111 @@ export class PitchRenderer {
     return this.fitScaleFor(w, h, 24, this.topHudFitReserve((r) => this.fitScaleFor(w, h, 24, r)));
   }
 
+  /** Owner 11-25 (Sol review r2): the world box the stadium fit measures - the pitch plus the 4-square dugout band on
+   *  each side across the ACROSS axis (N-S: left / right, E-W: top / bottom) - and the top screen gutter it reserves. */
+  private fitBoxWorld(): { x0: number; y0: number; x1: number; y1: number; reserveTop: number } {
+    const ew = getOrientation() === 'ew';
+    const padX = ew ? 0 : 4 * TILE_W;
+    const padY = ew ? 4 * TILE_H : 0;
+    const w = worldWidth() + 2 * padX, h = worldHeight() + 2 * padY;
+    const reserveTop = this.app ? this.topHudFitReserve((r) => this.fitScaleFor(w, h, 24, r)) : 0;
+    return { x0: -padX, y0: -padY, x1: worldWidth() + padX, y1: worldHeight() + padY, reserveTop };
+  }
+  /** Owner 11-25 (classic perspective setting): THE switch for 1.0.335 camera behaviour. True while the classic N-S
+   *  projection is on screen (the setting is on AND N-S standard is active). Every camera difference this branch made
+   *  is gated on it: the floor ladder (quantizeZoom), the re-quantize floor clamp (requantizeZoom), legalView (and so
+   *  every settle / lift / framing caller), legalTweenFrame (cinematic return, log focus) and autoDirectorTileSize. */
+  private usesClassicCamera(): boolean {
+    return isClassicNsProjectionActive();
+  }
+  /** Owner 11-25 (Sol review r2/r3): where a camera view may REST. (1) Never below the stadium-fit floor: a lower
+   *  scale is raised to the floor about the viewport centre (the square under the centre stays there). (2) At the floor
+   *  it shows everything the fit measured: if the box is partly OFF screen (the 15 degree N-S pitch puts its middle
+   *  squares ~40 % from the far edge, so centring on them pushed the near end zone below a 1440p / 2160p window), the
+   *  view centres on the box, below the reserved top gutter. A floor view whose box is already on screen - centred or
+   *  not, in any projection - is returned unchanged, as is every view above the floor. Pure: reads the camera state
+   *  (floor, screen, projection) but not the current world transform. */
+  private legalView(view: CameraView): CameraView {
+    // Owner 11-25: inert in the classic N-S perspective (1.0.335 had no floor framing / lift), so every caller - reset,
+    // zoom, re-quantize, flip, UI-zoom re-fit, releases, HUD gutter, glide completion - behaves as 1.0.335 there.
+    if (!this.app || !this.clampToPitch || this.usesClassicCamera()) return view;
+    let { scale, x, y } = view;
+    const { width, height } = this.app.screen;
+    if (scale < this.cameraFitScale - 1e-9) {
+      const k = this.cameraFitScale / scale;
+      x = width / 2 - (width / 2 - x) * k;
+      y = height / 2 - (height / 2 - y) * k;
+      scale = this.cameraFitScale;
+    }
+    if (Math.abs(scale - this.cameraFitScale) > 1e-9) return { scale, x, y };
+    const box = this.fitBoxWorld();
+    const tol = 0.5;
+    const onScreen = x + box.x0 * scale >= -tol && x + box.x1 * scale <= width + tol
+      && y + box.y0 * scale >= box.reserveTop - tol && y + box.y1 * scale <= height + tol;
+    if (onScreen) return { scale, x, y };
+    const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
+    return { scale, x: width / 2 - cx * scale, y: box.reserveTop + (height - box.reserveTop) / 2 - cy * scale };
+  }
+  /** Owner 11-25 (Sol r4): every input legalView reads, as one comparable key - the floor, the screen, the projection
+   *  (orientation, flat, uniform figures, flip), the stadium switch, the HUD gutter and the content extent that feed
+   *  the reserved top strip - plus the raw destination. */
+  private legalInputsKey(raw: CameraView): string {
+    const cb = this.contentBounds;
+    return [
+      this.cameraFitScale, this.app?.screen.width, this.app?.screen.height, geometryStateKey(), this.stadiumEnabled ? 1 : 0,
+      this.topHudClearance, this.clampToPitch ? 1 : 0, cb ? `${cb.x},${cb.y},${cb.width},${cb.height}` : '-', raw.scale, raw.x, raw.y,
+    ].join('|');
+  }
+  /** Owner 11-25 (Sol r3/r4): one frame of a camera TWEEN (cinematic return, log-focus pan) toward its LEGAL
+   *  destination (legalView of `raw`, cached while legalInputsKey holds). `source` is the tween's own start view
+   *  (recomputed by the caller as before), `t` its linear time fraction, `ease` its easing. If any legality input
+   *  changes mid-glide, the glide is RE-BASED: from the view on screen at that moment to the new legal destination over
+   *  the remaining time (the source is frozen there, never recomputed), so there is no jump; the last frame (t = 1) is
+   *  exactly the destination. */
+  private legalTweenFrame(tween: CameraTweenLegal, raw: CameraView, source: CameraView, t: number, ease: (u: number) => number): CameraView {
+    if (this.usesClassicCamera()) {
+      // Owner 11-25: the classic N-S perspective glides exactly as 1.0.335 - from the (recomputed) source straight to
+      // the raw destination, no legal destination, no re-base.
+      if (t >= 1) return { ...raw };
+      const e = ease(t);
+      return { scale: source.scale + (raw.scale - source.scale) * e, x: source.x + (raw.x - source.x) * e, y: source.y + (raw.y - source.y) * e };
+    }
+    const key = this.legalInputsKey(raw);
+    if (tween.legalKey !== key || !tween.legalDest) {
+      const changedMidGlide = tween.legalKey !== undefined && t > 0;
+      tween.legalDest = this.legalView(raw);
+      tween.legalKey = key;
+      if (changedMidGlide) {
+        tween.legalRebase = { from: { scale: this.world.scale.x, x: this.world.position.x, y: this.world.position.y }, t0: Math.min(t, 1) };
+      }
+    }
+    const dest = tween.legalDest;
+    if (t >= 1) return { ...dest };
+    const rb = tween.legalRebase;
+    const from = rb ? rb.from : source;
+    const e = rb ? ease(rb.t0 >= 1 ? 1 : Math.min(1, Math.max(0, (t - rb.t0) / (1 - rb.t0)))) : ease(t);
+    return { scale: from.scale + (dest.scale - from.scale) * e, x: from.x + (dest.x - from.x) * e, y: from.y + (dest.y - from.y) * e };
+  }
+  /** Apply legalView to the camera as it stands (no tween: the view is already where the gesture put it). */
+  private settleAtFitFloor(): void {
+    if (!this.app) return;
+    const next = this.legalView({ scale: this.world.scale.x, x: this.world.position.x, y: this.world.position.y });
+    if (next.scale !== this.world.scale.x) this.world.scale.set(next.scale);
+    if (next.x !== this.world.position.x || next.y !== this.world.position.y) this.world.position.set(next.x, next.y);
+  }
+  /** Owner 11-25 (Sol review r2/r3): the floor-escape paths' name for settleAtFitFloor (legalView also lifts a camera
+   *  that sits below the floor). */
+  private enforceFitFloor(): void {
+    this.settleAtFitFloor();
+  }
+  /** Owner 11-25 (Sol r3): only a camera BELOW the floor is touched (raised to it, then framed); one on or above the
+   *  floor stays exactly where it is - a released cinematic leaves the camera where the cinematic left it (owner
+   *  10-08). */
+  private liftToFitFloor(): void {
+    if (!this.app || !this.clampToPitch || this.world.scale.x >= this.cameraFitScale - 1e-9) return;
+    this.settleAtFitFloor();
+  }
+
   /** A kept (diverged) camera after the host changed size: refresh the fit reference, refit if the view now sits at or
    *  below the new fit, else keep the coach's zoom and re-legalise the pan. */
   private keepOrRefitCamera(): void {
@@ -18838,6 +19768,7 @@ export class PitchRenderer {
     this.updateOverlayScales();
     const c = this.pitchCentreWorld();
     this.world.position.set(this.app.screen.width / 2 - c.x * startScale, this.app.screen.height / 2 - c.y * startScale);
+    this.settleAtFitFloor(); // owner 11-25: an opening view AT the fit floor shows the whole fit box
     // Refresh the clamp bounds to the freshly-laid-out content (keep the last good
     // box if the content isn't drawn yet, e.g. resetCamera during init).
     this.contentBounds = this.readContentBounds() ?? this.contentBounds;
@@ -19000,7 +19931,10 @@ export class PitchRenderer {
    * linear boundary math.
    */
   /** Owner 09-05: load a stadium GLB pack (null = back to the procedural stands). Renders the model once, top-down,
-   *  then redraws the stadium layer with the plan laid onto the pitch quad. */
+   *  then redraws the stadium layer with the plan laid onto the pitch quad.
+   *  Owner 11-25: no stadium art today encodes the pitch taper (the plan and the stand tiles are warped through
+   *  extPoint per square), so the classic N-S perspective uses the current art. Art DRAWN for the straight 15 degree
+   *  view (pre-rendered to its shape) must not be used in classic mode (isClassicNsProjectionActive). */
   setStadiumPack(pack: { manifest: StadiumPackManifest; modelUrl: string } | null): void {
     const generation = ++this.stadiumModelGeneration;
     const prior = this.stadiumModel;
@@ -19028,8 +19962,8 @@ export class PitchRenderer {
    *  (extPoint takes off-pitch and fractional square coordinates), perspective-correct. 09-06: the footprint's
    *  axis-aligned corners were used before, which laid a north = +Z model on the quad vertically mirrored. */
   private drawStadiumModel(model: RenderedStadium): void {
-    // 09-06 (engine acceptance): the pitch projection is a per-row LINEAR taper (geometry.ts boundaryScaleD), not a
-    // homography — a single 4-corner PerspectiveMesh reproduced the corners but bent everything in between (the
+    // 09-06 (engine acceptance): the pitch projection is a per-row taper (geometry.ts boundaryScaleD: linear, or since
+    // 11-25 geometric in N-S standard), not a homography — a single 4-corner PerspectiveMesh reproduced the corners but bent everything in between (the
     // away dugout floor smeared into a diagonal band down the flank). So the plan rides the same construction as
     // the turf (buildPitchMesh): a one-square vertex grid over the image, every vertex at extPoint(u, v) of the
     // square coordinate it samples, walking the image's rows/columns between its registered corners.
@@ -21315,6 +22249,7 @@ export class PitchRenderer {
       // Pixi also keeps whole text measurements (box size, baseline) per text + style: those were taken in the fallback
       (CanvasTextMetrics as unknown as { _measurementCache?: { clear(): void } })._measurementCache?.clear();
     } catch { /* no canvas / no cache: nothing was measured */ }
+    this.invalidateRetainedTokens('markingFonts');
     this.refresh();
   }
 
@@ -21332,6 +22267,7 @@ export class PitchRenderer {
    *  lines on the moving player until the next rebuild. Rebuild ONLY the marking group, in place, when what it shows
    *  changed; the token, its position and its tween are untouched. */
   private refreshPreservedMarking(token: Container, player: PlayerJson, down: boolean): void {
+    this.markRetainedTouched(token); // M2
     const old = token.children.find((c) => c.label === 'skillMarkings') as (Container & { markingKey?: string }) | undefined;
     const chip = (token as CheckerChipToken).checkerChip;
     this.syncPreservedCheckerLetter(chip); // before the fit is retaken: it measures this letter
@@ -22610,7 +23546,7 @@ export class PitchRenderer {
           ? this.tokenPos(current.coordinate[0], current.coordinate[1], player.playerId)
           : { x: token.position.x, y: token.position.y }; // refresh resolved this compartment's current slot
         if (Math.hypot(target.x - prior.x, target.y - prior.y) <= 0.5) continue;
-        token.position.set(prior.x, prior.y);
+        token.position.set(prior.x, prior.y); this.markRetainedTouched(token);
         this.startTokenReconciliation(
           player.playerId,
           token,
@@ -22832,7 +23768,7 @@ export class PitchRenderer {
     if (tween?.postStepCorrectionKey !== key) return;
     const end = tween.waypoints.at(-1);
     if (end && !tween.token.destroyed) {
-      tween.token.position.set(end.x, end.y);
+      tween.token.position.set(end.x, end.y); this.markRetainedTouched(tween.token);
       this.followTokenDecorations(playerId, end.x, end.y);
     }
     this.moveTweens.delete(playerId);
@@ -22900,7 +23836,7 @@ export class PitchRenderer {
       // Vue's post-flush model rebuild may already have placed a fresh token at truth. Restore only the exact
       // pixels visible when the fence arrived, then bridge forward; never revisit the movement origin.
       if (start && Math.hypot(target.x - start.x, target.y - start.y) > 0.5) {
-        token.position.set(start.x, start.y);
+        token.position.set(start.x, start.y); this.markRetainedTouched(token);
         this.followTokenDecorations(playerId, start.x, start.y);
       }
       this.startTokenReconciliation(playerId, token, target, key, expectedRttMs);
@@ -22953,7 +23889,7 @@ export class PitchRenderer {
     if (tween?.reconcileKey === key) {
       const end = tween.waypoints.at(-1);
       if (end && !tween.token.destroyed) {
-        tween.token.position.set(end.x, end.y);
+        tween.token.position.set(end.x, end.y); this.markRetainedTouched(tween.token);
         this.followTokenDecorations(playerId, end.x, end.y);
       }
       this.moveTweens.delete(playerId);
@@ -22990,7 +23926,7 @@ export class PitchRenderer {
       x: from.x + (to.x - from.x) * (intent.failureConfirmed ? 1 : MOVEMENT_INTENT_HOLD_PROGRESS),
       y: from.y + (to.y - from.y) * (intent.failureConfirmed ? 1 : MOVEMENT_INTENT_HOLD_PROGRESS),
     };
-    token.position.set(initial.x, initial.y);
+    token.position.set(initial.x, initial.y); this.markRetainedTouched(token);
     this.followTokenDecorations(intent.playerId, initial.x, initial.y);
     this.moveTweens.set(intent.playerId, {
       token,
@@ -23015,7 +23951,7 @@ export class PitchRenderer {
     const token = this.tokensById.get(intent.playerId);
     if (!token || token.destroyed) return;
     const to = this.tokenPos(intent.to[0], intent.to[1], intent.playerId);
-    token.position.set(to.x, to.y);
+    token.position.set(to.x, to.y); this.markRetainedTouched(token);
     this.followTokenDecorations(intent.playerId, to.x, to.y);
   }
 
@@ -23024,14 +23960,19 @@ export class PitchRenderer {
     if (!intent) return;
     const tween = this.moveTweens.get(intent.playerId);
     if (tween?.movementIntent?.seq === intent.seq) this.moveTweens.delete(intent.playerId);
+    // Owner 11-25 (g1148, option 1): only an intent whose early stride this renderer actually STARTED moved the token,
+    // so only that one is put back. An unstarted intent (the token still waits on a die, or is still walking the
+    // previous array) never moved anything: the token stays where its confirmed presentation has it, and the model's
+    // square - which can already be the end of a run not yet drawn - is never snapped to.
+    const started = this.movementIntentStartedSeq === intent.seq;
     const token = this.tokensById.get(intent.playerId);
     const data = this.game?.fieldModel.playerDataArray.find((entry) => entry.playerId === intent.playerId);
     const model = data?.playerCoordinate as [number, number] | undefined;
     const square = model && model[0] >= 0 && model[0] < 26 && model[1] >= 0 && model[1] < 15
       ? model : intent.from;
-    if (token && !token.destroyed) {
+    if (started && token && !token.destroyed) {
       const p = this.tokenPos(square[0], square[1], intent.playerId);
-      token.position.set(p.x, p.y);
+      token.position.set(p.x, p.y); this.markRetainedTouched(token);
       this.followTokenDecorations(intent.playerId, p.x, p.y);
     }
     this.movementIntent = null;
@@ -23048,7 +23989,7 @@ export class PitchRenderer {
     const token = this.tokensById.get(intent.playerId);
     if (token && !token.destroyed) {
       const to = this.tokenPos(intent.to[0], intent.to[1], intent.playerId);
-      token.position.set(to.x, to.y);
+      token.position.set(to.x, to.y); this.markRetainedTouched(token);
       this.followTokenDecorations(intent.playerId, to.x, to.y);
     }
     this.movementIntent = null;
@@ -23126,7 +24067,7 @@ export class PitchRenderer {
       const token = this.tokensById.get(step.playerId);
       if (token && !token.destroyed) {
         const from = this.tokenPos(step.from[0], step.from[1], step.playerId);
-        token.position.set(from.x, from.y);
+        token.position.set(from.x, from.y); this.markRetainedTouched(token);
         this.followTokenDecorations(step.playerId, from.x, from.y);
         this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
         this.redrawOverlays();
@@ -23250,13 +24191,13 @@ export class PitchRenderer {
     if (step.rollPending) {
       this.moveTweens.delete(step.playerId);
       const p = this.tokenPos(step.from[0], step.from[1], step.playerId);
-      token.position.set(p.x, p.y);
+      token.position.set(p.x, p.y); this.markRetainedTouched(token);
       this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
       return;
     }
     if (this.presentationStepConsumed !== step) { this.armPresentationStepTween(step, token); return; }
     const p = this.tokenPos(step.to[0], step.to[1], step.playerId);
-    token.position.set(p.x, p.y);
+    token.position.set(p.x, p.y); this.markRetainedTouched(token);
     this.lastSquares.set(step.playerId, [step.to[0], step.to[1]]);
   }
 
@@ -23286,7 +24227,7 @@ export class PitchRenderer {
     if (step.rollPending) {
       this.moveTweens.delete(step.playerId);
       const p = this.tokenPos(step.from[0], step.from[1], step.playerId);
-      token.position.set(p.x, p.y);
+      token.position.set(p.x, p.y); this.markRetainedTouched(token);
       this.lastSquares.set(step.playerId, [step.from[0], step.from[1]]);
       return;
     }
@@ -23328,7 +24269,7 @@ export class PitchRenderer {
       ...(leap ? { arc: leap.arc } : {}),
       psStep: step, // step-stutter: the ticker marks THIS step consumed at its visual end
     });
-    token.position.set(start.x, start.y);
+    token.position.set(start.x, start.y); this.markRetainedTouched(token);
     this.lastSquares.set(step.playerId, [step.to[0], step.to[1]]);
   }
 
@@ -23486,7 +24427,7 @@ export class PitchRenderer {
       segmentMs: (segmentMsOverride ?? this.moveStepMs) + ballBounceExtra,
       arc,
     });
-    token.position.set(waypoints[0]!.x, waypoints[0]!.y);
+    token.position.set(waypoints[0]!.x, waypoints[0]!.y); this.markRetainedTouched(token);
   }
 
   /** Owner 2026-07-13: continue an in-flight walk after refresh() rebuilt the token — ease from the token's
@@ -23502,7 +24443,7 @@ export class PitchRenderer {
   ): void {
     const dest = this.tokenPos(to[0], to[1], playerId);
     if (Math.abs(fromPixel.x - dest.x) < 0.5 && Math.abs(fromPixel.y - dest.y) < 0.5) {
-      token.position.set(dest.x, dest.y); // already there — no tween needed
+      token.position.set(dest.x, dest.y); this.markRetainedTouched(token); // already there — no tween needed
       return;
     }
     const tiles = Math.max(1, Math.hypot(dest.x - fromPixel.x, dest.y - fromPixel.y) / Math.max(1, TILE_W));
@@ -23514,7 +24455,7 @@ export class PitchRenderer {
       start: performance.now(),
       segmentMs,
     });
-    token.position.set(fromPixel.x, fromPixel.y);
+    token.position.set(fromPixel.x, fromPixel.y); this.markRetainedTouched(token);
   }
 
   /** B2-4/B2-20: skill icons + marking tags counter-scale with zoom so they stay
@@ -23529,9 +24470,30 @@ export class PitchRenderer {
   private updateOverlayScales(): void {
     const factor = this.overlayZoomFactor();
     for (const group of this.overlayScaleGroups) {
-      if (!group.destroyed) this.applyOverlayScale(group, factor);
+      if (group.destroyed) continue;
+      // M1: a refit that changes ANY value it writes (the group, or a marking line) marks the token touched; a refit
+      // that writes the same values (a camera pan) does not.
+      const before = this.tokenRetentionEnabled ? this.overlayRefitState(group) : null;
+      this.applyOverlayScale(group, factor);
+      if (before && before.length > 0) {
+        const after = this.overlayRefitState(group);
+        if (after.length !== before.length || before.some((v, i) => v !== after[i])) this.markRetainedTouched(group);
+      }
     }
     this.placeMoveBadge(); // Astra r2: the feet clearance follows the rescaled skill rows
+  }
+
+  /** Every value applyOverlayScale / fitDiscMarkings write for `group`: its position and scale, and each fitted
+   *  marking line's position and scale. Empty when the group is under no retained token (nothing to mark). */
+  private overlayRefitState(group: Container): number[] {
+    let owned = false;
+    for (let n: Container | null = group; n && !owned; n = n.parent) owned = this.retainedByToken.has(n);
+    if (!owned) return [];
+    const state = [group.position.x, group.position.y, group.scale.x, group.scale.y];
+    for (const line of this.markingFit.get(group)?.lines ?? []) {
+      if (!line.destroyed) state.push(line.position.x, line.position.y, line.scale.x, line.scale.y);
+    }
+    return state;
   }
 
   private applyOverlayScale(group: Container, factor: number): void {
@@ -23852,6 +24814,7 @@ export class PitchRenderer {
     const baseTints = sprites.map((s) => Number(s.tint));
     const paint = (kk: number): void => {
       if (token.destroyed) return;
+      this.markRetainedTouched(token); // M6 (no record exists yet during construction, so the build's own paint is free)
       const alpha = 1 - kk * (1 - 0.715); // owner 09-07: +5 points of shading (was 0.765)
       token.alpha = alpha;
       for (let i = 0; i < sprites.length; i += 1) {
@@ -24442,6 +25405,15 @@ export class PitchRenderer {
         return;
       }
     }
+    // Owner 11-25 (bluxxt_the_new g1967504): a tap ON a player the server offered in an armed player pick answers the
+    // pick, even when a tile pick is armed over the same square (a Thrall standing on a pass square could not be
+    // bitten). Only that tap: every other tap keeps today's order, so the tile pick still gets its squares.
+    if (this.playerPickIds && isTap) {
+      const worldX = (offsetX - this.world.position.x) / this.world.scale.x;
+      const worldY = (offsetY - this.world.position.y) / this.world.scale.y;
+      const picked = this.resolveArmedPlayerPick(worldX, worldY);
+      if (picked) { this.onPlayerPick?.(picked); return; }
+    }
     // Owner 2026-07-04e: an armed raw TILE pick owns taps (unknown-call
     // coordinate response) — a click on any (eligible) square reports it.
     if (this.tilePickActive && isTap) {
@@ -24807,6 +25779,12 @@ export class PitchRenderer {
       this.squareHoverLast = null;
       this.onSquareHover?.(null);
     }
+    // Release review (Sol, P2): the hover-change dedup key is cleared too, so the next hover of the SAME square (the
+    // crosshair parked where it was) is reported again instead of being swallowed as "unchanged".
+    if (this.hoverSquareLast !== null) {
+      this.hoverSquareLast = null;
+      this.onHoverSquare?.(null);
+    }
   }
 
   /**
@@ -25033,6 +26011,7 @@ export class PitchRenderer {
     this.world.position.x = cx - (cx - this.world.position.x) * applied;
     this.world.position.y = cy - (cy - this.world.position.y) * applied;
     this.world.scale.set(newScale);
+    this.settleAtFitFloor();
     this.clampCamera();
     this.updateOverlayScales();
   }
@@ -25055,6 +26034,7 @@ export class PitchRenderer {
       const box = this.pitchFitBox();
       this.world.position.set(this.app.screen.width / 2 - box.cx * newScale, this.app.screen.height / 2 - box.cy * newScale);
     }
+    this.settleAtFitFloor(); // owner 11-25 (Sol r2): wheeled out to the floor, the whole fit box is on screen
     this.clampCamera();
     this.updateOverlayScales(); // B2-4/B2-20: badges counter-scale with zoom
   }
