@@ -1596,6 +1596,10 @@ function hydrate(rawText: string | null, stampToLocalStorage = true): AppSetting
     Object.assign(merged, normalizeControlLayerSettings(raw as Record<string, unknown>));
     applyLayerConfirmations(merged, merged.controlLayer);
     merged.fumbblKeyBindings = normalizeFumbblKeyBindings(raw.fumbblKeyBindings);
+    // Owner 11-26: the Range Grid shortcut is new. A stored table from before it has no cell for it; its default (Ctrl+R)
+    // is taken only when nothing the coach already bound holds that key, otherwise the cell starts unbound.
+    if (raw.fumbblKeyBindings && typeof raw.fumbblKeyBindings === 'object' && !('rangeGrid' in (raw.fumbblKeyBindings as object))
+      && fumbblKeyConflict('rangeGrid', merged.fumbblKeyBindings.rangeGrid, merged as AppSettings)) merged.fumbblKeyBindings.rangeGrid = '';
     // v5 (owner 2026-07-14): the theme engine. Existing installs adopt the Black/Red default; a later user
     // change to the theme fields sticks (stamped below).
     if ((raw.settingsVersion ?? 0) < 5) {

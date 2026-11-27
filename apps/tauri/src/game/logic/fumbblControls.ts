@@ -309,7 +309,7 @@ export const FFB_MENU_ORDER: readonly string[] = [
   'KICK_EM_BLITZ', 'THE_FLASHING_BLADE', 'VICIOUS_VINES', 'FURIOUS_OUTBURST', 'RECOVER', 'STAND_UP_BLITZ', 'STAND_UP',
   'SECURE_THE_BALL', 'FORGO', 'THEN_I_STARTED_BLASTIN', 'CHOMP', 'FUMBLEROOSKIE', 'END_MOVE', 'ILL_CARRY_YOU',
   'TREACHEROUS', 'WISDOM', 'RAIDING_PARTY', 'LOOK_INTO_MY_EYES', 'BALEFUL_HEX', 'BLACK_INK', 'CATCH_OF_THE_DAY',
-  'AUTO_GAZE_ZOAT', 'INCORPOREAL', 'SLASHING_NAILS', 'STAR_SKILL',
+  'AUTO_GAZE_ZOAT', 'INCORPOREAL', 'SLASHING_NAILS', 'STAR_SKILL', 'RANGE_GRID',
 ];
 
 /** IPlayerPopupMenuKeys: the letter each FFB row answers to while its popup is open. */
@@ -322,6 +322,7 @@ export const FFB_MENU_LETTERS: Readonly<Record<string, string>> = {
   FORGO: 'F', THEN_I_STARTED_BLASTIN: '!', CHOMP: '1', FUMBLEROOSKIE: '4', END_MOVE: 'E', ILL_CARRY_YOU: '3',
   TREACHEROUS: 'A', WISDOM: 'W', RAIDING_PARTY: '2', LOOK_INTO_MY_EYES: 'Y', BALEFUL_HEX: 'X', BLACK_INK: 'L',
   CATCH_OF_THE_DAY: 'D', AUTO_GAZE_ZOAT: 'Z', INCORPOREAL: 'U', SLASHING_NAILS: 'S',
+  RANGE_GRID: 'R', // owner 11-26: IPlayerPopupMenuKeys.KEY_RANGE_GRID ("Range Grid on/off", a uiOnlyMenuItems row)
 };
 
 /** One row of our menu, tagged for the FFB pass: `ffb` = its FFB ClientAction (null = a row FFB lacks). */

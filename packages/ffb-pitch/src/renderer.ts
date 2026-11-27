@@ -5374,6 +5374,33 @@ export class PitchRenderer {
     this.passTemplateMaxRange = range;
     this.queueProjectionRefresh();
   }
+  /** Owner 11-26 (warpstone g1967957, "Can't get pass template to display?"): the Range Grid - the passing range bands
+   *  from the passer's square (FFB "Range Grid on/off"). Display only: it marks no click target and changes no click;
+   *  the host turns it on and off and moves it with the passer at every step of his walk. Null = off. */
+  private rangeGridFrom: Square | null = null;
+  setRangeGrid(from: Square | null): void {
+    const next = from && isOnPitch(from) ? [from[0], from[1]] as Square : null;
+    if (this.rangeGridFrom?.[0] === next?.[0] && this.rangeGridFrom?.[1] === next?.[1]) return;
+    this.rangeGridFrom = next;
+    this.redrawOverlays();
+  }
+  /** The throw-square tint that is ON SCREEN now: the node drawPlayerPick last painted and the band it gave each square.
+   *  A record of the paint itself, never a guess from the current selection or throw squares: those can change (a new
+   *  selection, a token-reuse frame that absorbs the refresh) while the old tint is still mounted. */
+  private throwTintPainted: { node: Graphics; bands: Map<string, PassRange> } | null = null;
+  /** Does a mounted throw-square tint already shade this square? The Range Grid leaves such a square to that tint -
+   *  one owner per square, so none is shaded twice and none is left unshaded. Whatever band the tint gave it: the tint
+   *  measures from the SELECTED player, which can be someone other than the passer after an inspection click (its own
+   *  long-standing rule, unchanged here), and two bands blended on one square would read as neither. */
+  private rangeGridSquareTintedByThrowSurface(sx: number, sy: number): boolean {
+    const painted = this.throwTintPainted;
+    if (!painted || painted.node.destroyed || !painted.node.parent) return false;
+    return painted.bands.has(`${sx},${sy}`);
+  }
+  /** @internal test seam: the square the Range Grid is drawn from (null = off). */
+  rangeGridOrigin(): Square | null {
+    return this.rangeGridFrom ? [this.rangeGridFrom[0], this.rangeGridFrom[1]] : null;
+  }
   setPassRuler(from: Square | null, to: Square | null): void {
     this.passRulerFrom = from && isOnPitch(from) ? [from[0], from[1]] : null;
     this.passRulerTo = this.passRulerFrom && to && isOnPitch(to) ? [to[0], to[1]] : null;
@@ -10328,6 +10355,11 @@ export class PitchRenderer {
     this.drawJumpCrosshairs();
     this.drawPassDestinationMarker();
     this.drawHmpScatterMarks();
+    // Owner 11-26: the Range Grid (display only); a square a mounted throw tint already shades is left to that tint.
+    if (this.rangeGridFrom) {
+      const gridFrom = this.rangeGridFrom;
+      this.drawPassTemplate(gridFrom, (sx, sy) => this.rangeGridSquareTintedByThrowSurface(sx, sy));
+    }
     this.drawPassRuler();
     // #151: pass rolls-required cues (throw over passer / catch over target) — server-fed, cleared with the layer.
     this.drawPassRollCues();
@@ -10986,7 +11018,7 @@ export class PitchRenderer {
    * square (Quick 0 / Short −1 / Long −2 / Bomb −3); Long+Bomb drop out in a
    * blizzard (C9). Modifier labels run along the thrower's own row.
    */
-  private drawPassTemplate(from: Square): void {
+  private drawPassTemplate(from: Square, skipSquare?: (sx: number, sy: number) => boolean): void {
     const blizzard = String(this.game?.fieldModel.weather ?? '').toLowerCase().includes('blizzard');
     const TIER_MODIFIERS: Record<PassRange, string> = { T: '', Q: '0', S: '−1', L: '−2', B: '−3' };
     const shade = new Graphics();
@@ -10995,6 +11027,7 @@ export class PitchRenderer {
         const range = passRange(sx - from[0], sy - from[1]);
         if (!range || range === 'T') continue;
         if ((blizzard || this.passTemplateMaxRange === 'S') && (range === 'L' || range === 'B')) continue;
+        if (skipSquare?.(sx, sy)) continue;
         const quad = squareQuad(sx, sy);
         shade.poly(quad.points.flat()).fill({ color: PASS_RANGE_COLORS[range], alpha: 0.24 });
       }
@@ -14323,6 +14356,7 @@ export class PitchRenderer {
     if (this.tilePickExtra) {
       const from = this.selectionInfo()?.data.playerCoordinate;
       const rangeTints = new Graphics();
+      const paintedBands = new Map<string, PassRange>(); // owner 11-26: what this tint shades (the Range Grid reads it)
       for (const key of this.tilePickExtra) {
         const [sx, sy] = key.split(',').map(Number) as [number, number];
         const a = this.tokenPos(sx, sy);
@@ -14331,6 +14365,7 @@ export class PitchRenderer {
           const range = passRange(sx - from[0], sy - from[1]);
           if (range && range !== 'T') {
             rangeTints.poly(squareQuad(sx, sy).points.flat()).fill({ color: PASS_RANGE_COLORS[range], alpha: 0.24 });
+            paintedBands.set(key, range);
           }
         }
         // Owner o66 #14 (canonical parity): stamp the PASS minimum roll on each range tile (host-computed from the
@@ -14358,6 +14393,7 @@ export class PitchRenderer {
       }
       rangeTints.zIndex = 0.5;
       this.tokenLayer.addChildAt(rangeTints, 0);
+      this.throwTintPainted = { node: rangeTints, bands: paintedBands };
     }
     // The roll-chip sink also accepts display-only maps outside the clickable range surface.
     for (const [key, pr] of this.tilePickPassRolls ?? []) {

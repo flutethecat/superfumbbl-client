@@ -434,6 +434,9 @@ const o66PendingThrowKind = ref<'pass' | 'bomb' | 'throwTeamMate' | null>(null);
 // Owner 08-12: the pass range template renders in EXACTLY three cases (positive allow-list) — ① free-select, ②
 // the "Show pass template" menu item (#250, sets this flag), ③ a pass target armed. Everything else suppresses it.
 const passTemplateForced = ref(false); // case ②; cleared when the activation ends
+/** Owner 11-26 (warpstone g1967957; "users should be able to see the range ruler at any step of the walk"): the Range
+ *  Grid toggle (FFB "Range Grid on/off", R). Display only; off again when the activation ends (ClientStatePass.leaveState). */
+const rangeGridOn = ref(false);
 // U9c: Punt aim is its own two-click arm. It cannot share o66PendingPass: that ref also drives pass/catch roll
 // previews, while a Punt has no accuracy threshold and only previews its presentation-only scatter spread.
 const o66PendingPunt = ref<[number, number] | null>(null);
@@ -3186,7 +3189,7 @@ const bpTumbling = computed(() => !!gameStore.state.blockPartial && !!bpTumble.v
 function bpDieTumbling(i: number): boolean {
   return bpTumbling.value && !!bpTumble.value?.tumbling.includes(i);
 }
-const blockChooserSeat = computed<BlockChooserSide | null>(() => gameStore.blockPresentationSeat.value);
+const blockChooserSeat = computed<BlockChooserSide | null>(() => gameStore.blockChoiceSeat.value); // owner 11-26: Home in a same-coach test game
 const blockChooserSpectator = computed(() => !gameStore.isPlaying.value);
 const liveBlockChoiceDialog = computed(() => isCurrentBlockChoiceDialog(gameStore.game.value));
 const liveMultiBlockChoiceDialog = computed(() => isCurrentMultiBlockChoiceDialog(gameStore.game.value));
@@ -7213,6 +7216,29 @@ function confirmPuntV2() {
   const af = puntActingFrom(g); if (!af) return;
   touchCardConfirm(null, () => { gameStore.sendFieldCoordinate(af.actingId, o66PendingPunt.value!); o66PendingPunt.value = null; }); // round 7
 }
+/** The Range Grid row is offered to a declared passer I control until the ball is thrown (bb2025 PassLogicModule
+ *  .performsRangeGridAction: !actingPlayer.hasPassed()). Hail Mary has no range bands. */
+function rangeGridOffered(g: NonNullable<typeof gameStore.game.value>, playerId: string): boolean {
+  const acting = g.actingPlayer as { playerId?: string | null; hasPassed?: boolean } | undefined;
+  return gameStore.isPlaying.value && !!playerId && String(acting?.playerId ?? '') === playerId && gameStore.iControl(playerId)
+    && acting?.hasPassed !== true && !isHailMaryPassAction(g) && deriveClientState(g, o66Ctx()) === 'PASS';
+}
+/** Where the Range Grid is drawn from: the passer's own square, re-read at every step of his walk. Null = not shown. */
+const rangeGridFrom = computed<[number, number] | null>(() => {
+  if (!rangeGridOn.value) return null; // read first: the watch below runs at setup, before the surface epoch exists
+  void o66SurfaceEpoch.value;
+  const g = gameStore.game.value;
+  if (!g) return null;
+  const actingId = String((g.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? '');
+  if (!rangeGridOffered(g, actingId)) return null;
+  return normSquare((g.fieldModel.playerDataArray as { playerId: string; playerCoordinate?: unknown }[])
+    .find((d) => d.playerId === actingId)?.playerCoordinate) ?? null;
+});
+watch([rangeGridFrom, rendererReady], ([from]) => { renderer?.setRangeGrid(from); }, { immediate: true });
+// A toggle belongs to one activation: the next passer starts with the grid off.
+// A reconnect or any other playback reset ends it too (the same player id may name a later activation after one).
+watch([() => String((gameStore.game.value?.actingPlayer as { playerId?: string | null } | undefined)?.playerId ?? ''),
+  () => gameStore.playbackResetRev.value], () => { rangeGridOn.value = false; });
 function isHailMaryPassAction(g: { actingPlayer?: unknown }): boolean {
   return String((g.actingPlayer as { playerAction?: string | null } | undefined)?.playerAction ?? '') === 'hailMaryPass';
 }
@@ -10709,6 +10735,10 @@ function assembleActingPlayerRows(target: ContextTarget, x: number, y: number): 
           },
         });
       }
+    }
+    if (rangeGridOffered(g, target.playerId)) {
+      // Owner 11-26: FFB's "Range Grid on/off" row (R): the range bands from the passer, at any step of his walk.
+      items.unshift({ ffb: 'RANGE_GRID', label: `${rangeGridOn.value ? '✓ ' : ''}${$t('hud.text.showRangeGridToggle')}`, action: () => { rangeGridOn.value = !rangeGridOn.value; ctxMenu.visible = false; } });
     }
     if (deriveClientState(g, o66Ctx()) === 'PASS' && !isHailMaryPassAction(g) && target.playerId === actingId) {
       // Owner o66r: FUMBBL-client behaviour — a declared passer gets "Show pass template" (throw from rest).

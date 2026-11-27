@@ -32,6 +32,8 @@ export const FUMBBL_KEY_ACTIONS = [
   { id: 'pass', key: 'Ctrl+KeyP', get label() { return $t('settings.fumbblKeys.pass'); } },
   { id: 'jump', key: 'Ctrl+KeyJ', get label() { return $t('settings.fumbblKeys.jump'); } },
   { id: 'end', key: 'Ctrl+KeyE', get label() { return $t('settings.fumbblKeys.endAction'); } },
+  // Owner 11-26: FFB's Range Grid key (client.ini key.player.action.rangeGrid = control R), the passer's "Range grid on/off" row.
+  { id: 'rangeGrid', key: 'Ctrl+KeyR', get label() { return $t('settings.fumbblKeys.rangeGrid'); } },
 ] as const;
 
 export type FumbblKeyActionId = (typeof FUMBBL_KEY_ACTIONS)[number]['id'];
@@ -44,6 +46,7 @@ export const FUMBBL_STEP_DIRECTION: Readonly<Partial<Record<FumbblKeyActionId, S
 /** The FFB menu row each Ctrl shortcut picks (fumbblControls.ts ffbClientAction names). */
 export const FUMBBL_KEY_MENU_ROW: Readonly<Partial<Record<FumbblKeyActionId, string>>> = {
   move: 'MOVE', block: 'BLOCK', blitz: 'BLITZ', foul: 'FOUL', pass: 'PASS', jump: 'JUMP', end: 'END_MOVE',
+  rangeGrid: 'RANGE_GRID',
 };
 
 export function defaultFumbblKeyBindings(): FumbblKeyBindings {

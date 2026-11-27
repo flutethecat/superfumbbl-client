@@ -7,6 +7,7 @@ export interface BlockChooserTeamLike {
 }
 
 export interface BlockChooserGameLike {
+  testing?: unknown;
   teamHome?: BlockChooserTeamLike | null;
   teamAway?: BlockChooserTeamLike | null;
   dialogParameter?: { dialogId?: unknown; choosingTeamId?: unknown; playerId?: unknown } | null;
@@ -30,6 +31,30 @@ export function strictBlockPresentationSeat(
   const homeMatch = normalizedCoach(game?.teamHome?.coach) === coach;
   const awayMatch = normalizedCoach(game?.teamAway?.coach) === coach;
   return homeMatch === awayMatch ? null : homeMatch ? 'home' : 'away';
+}
+
+/**
+ * The seat that owns block choices. The strict seat, plus one case it cannot name: a TEST game with the local coach's
+ * name on both teams (owner 11-26, Chainsawpill g1967945, "it will not let me select a block result": one coach, two
+ * windows, one per team). The name matches both sides there, so the strict seat is null, no block choice was ever the
+ * local coach's and the dice stayed disabled.
+ *
+ * The server sends each playing seat its own team as the HOME team (the away seat's feed is the swapped game:
+ * upstream Game.transform(), sent by ServerCommunication.sendAwaySession), so in that game the local seat is Home.
+ * The other window's choices stay the other window's. Only a server-declared test game qualifies; every other
+ * ambiguity keeps failing closed.
+ */
+export function blockChoiceSeat(
+  game: BlockChooserGameLike | null | undefined,
+  playing: boolean,
+  playCoach: unknown,
+): BlockChooserSide | null {
+  const strict = strictBlockPresentationSeat(game, playing, playCoach);
+  if (strict || !playing || game?.testing !== true) return strict;
+  const coach = normalizedCoach(playCoach);
+  return coach !== null
+    && normalizedCoach(game?.teamHome?.coach) === coach
+    && normalizedCoach(game?.teamAway?.coach) === coach ? 'home' : null;
 }
 
 export interface BlockChooserProjection {

@@ -188,6 +188,7 @@ import {
   currentMultiBlockChoosingTeamId,
   projectBlockChooser,
   strictBlockPresentationSeat,
+  blockChoiceSeat,
 } from './blockChooser';
 import { leaveGameTeardownSteps, type LeaveGameTeardownStep } from './leaveGameLifecycle';
 import { forgetGameLoadRankPanelGame, rankPanelOpponentCr } from './gameLoadRankPanel';
@@ -24665,16 +24666,21 @@ function blockPresentationSeat(g: GameJson | null | undefined): 'home' | 'away' 
   return strictBlockPresentationSeat(g, play.active, play.coach);
 }
 
+/** The seat that owns block choices: the strict seat, or Home in a test game the local coach plays on both teams. */
+function localBlockChoiceSeat(g: GameJson | null | undefined): 'home' | 'away' | null {
+  return blockChoiceSeat(g, play.active, play.coach);
+}
+
 function localOwnsCurrentBlockDialog(): boolean {
   const g = game.value;
   if (!g || !play.active) return false;
-  return projectBlockChooser(g, currentBlockChoosingTeamId(g), blockPresentationSeat(g), false).mine;
+  return projectBlockChooser(g, currentBlockChoosingTeamId(g), localBlockChoiceSeat(g), false).mine;
 }
 
 function localOwnsCurrentMultiBlockDialog(): boolean {
   const g = game.value;
   if (!g || !play.active) return false;
-  return projectBlockChooser(g, currentMultiBlockChoosingTeamId(g), blockPresentationSeat(g), false).mine;
+  return projectBlockChooser(g, currentMultiBlockChoosingTeamId(g), localBlockChoiceSeat(g), false).mine;
 }
 
 /** Player-ids of my team. */
@@ -31887,6 +31893,8 @@ export const gameStore = {
   playbackResetRev: computed(() => playbackResetRev.value),
   /** Strict seat for ownership presentation/decision gates; null on missing or ambiguous coach identity. */
   blockPresentationSeat: computed<'home' | 'away' | null>(() => blockPresentationSeat(game.value)),
+  /** Owner 11-26: the seat that owns block choices - the strict seat, or Home in a test game with the local coach on both teams. */
+  blockChoiceSeat: computed<'home' | 'away' | null>(() => localBlockChoiceSeat(game.value)),
   /** #157-v2 (owner 08-18): which SEAT the local coach occupies, or null when there is no seat
    *  (spectator / replay). The log tints player names seat-relatively -- mine vs opponent while
    *  playing, native home/away otherwise -- and this is the only bit of seat truth it needs. */
