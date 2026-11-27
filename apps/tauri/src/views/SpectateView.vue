@@ -2099,14 +2099,20 @@ watch(
     }
   },
 );
-function openLiveChat() {
-  gameStore.openSpectatorLiveChat();
+/** Owner 11-26 (breakmonker g1967904, "cant see dice log any more"): bring the chat forward. Docked, that is the panel's
+ *  Chat tab. Popped out, the chat already floats in its own window and the docked panel has no Chat tab to show, so the
+ *  panel is left exactly as it is (Enter used to switch it to the absent tab, which blanked the Log). */
+function showChatTab() {
+  if (settings.chatPoppedOut || settings.chatDisabled) return; // chat off: no Chat tab either (a notice toast click)
   panelTab.value = 'chat';
   panelCollapsed.value = false;
 }
+function openLiveChat() {
+  gameStore.openSpectatorLiveChat();
+  showChatTab();
+}
 function openChatFromToast() {
-  panelTab.value = 'chat';
-  panelCollapsed.value = false;
+  showChatTab();
 }
 // owner 2026-07-08: opening (or un-collapsing onto) the Chat tab clears the unread badge.
 watch(
@@ -2137,9 +2143,11 @@ function popOutChat() {
 // Owner 08-19: while popped out the CHAT tab is gone from the row — a panel left on the
 // now-absent tab falls back to LOG (never a blank panel; same rule as chatDisabled above).
 // `immediate` covers a persisted chatPoppedOut=true at mount.
-watch(() => settings.chatPoppedOut, (popped) => {
-  if (popped && panelTab.value === 'chat') panelTab.value = 'log';
-}, { immediate: true });
+// Owner 11-26: the rule holds whichever side changes - the panel can never sit on the Chat tab while the chat is popped
+// out or switched off, whoever sets the tab (sync, so no frame draws the blank panel).
+watch(() => [settings.chatPoppedOut, settings.chatDisabled, panelTab.value] as const, ([popped, disabled, tab]) => {
+  if ((popped || disabled) && tab === 'chat') panelTab.value = 'log';
+}, { immediate: true, flush: 'sync' });
 function dockChat() {
   settings.chatPoppedOut = false;
   panelTab.value = 'chat';
@@ -12817,8 +12825,7 @@ const runAction = createInGameActionRunner({
   togglePitchFlip: () => { settings.pitchFlipped = !settings.pitchFlipped; return true; },
   openChat: () => {
     if (settings.chatDisabled) return false;
-    panelTab.value = 'chat';
-    panelCollapsed.value = false;
+    showChatTab(); // popped out: the panel keeps its tab, the floating window's entry box takes the focus
     void nextTick(() => chatInputEl.value?.focus());
     return true;
   },
