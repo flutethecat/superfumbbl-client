@@ -2494,6 +2494,11 @@ export class PitchRenderer {
    * canvas's CSS rect so the caller can place it. Null when no application is mounted or the extract fails.
    * Read-only: no state, ticker or camera change.
    */
+  /** The pitch's own canvas (null before mount). The host holds other canvases too (the 3D block dice row sits earlier
+   *  in the document), so "the first canvas in the host" is not the pitch. */
+  pitchCanvas(): HTMLCanvasElement | null {
+    return (this.app?.canvas as HTMLCanvasElement | undefined) ?? null;
+  }
   captureFrame(): { canvas: HTMLCanvasElement; rect: { left: number; top: number; width: number; height: number } } | null {
     const app = this.app;
     if (!app) return null;

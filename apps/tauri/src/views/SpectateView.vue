@@ -2365,12 +2365,21 @@ const reportGameId = computed<number | string | null>(() =>
 /** Absolute path of the current per-game wire log; empty when verbose logging is off. */
 const reportWireLogPath = computed(() => gameStore.state.wireLogFile);
 
+/** Owner 11-26 (Chainsawpill g1967945: a bug report screenshot with a black pitch): the pitch canvas itself. The first
+ *  canvas inside the pitch host is the 3D block dice row whenever that panel is up, so a report taken during a block
+ *  punched the dice row out of the picture instead of the pitch, measured the dice row as "the canvas", and the
+ *  edge-pan gate stopped seeing the pointer as over the pitch. */
+function pitchCanvasEl(): HTMLCanvasElement | null {
+  const own = renderer?.pitchCanvas?.();
+  if (typeof HTMLCanvasElement !== 'undefined' && own instanceof HTMLCanvasElement) return own;
+  return pitchHost.value?.querySelector<HTMLCanvasElement>(':scope > canvas') ?? null;
+}
 const reportHost: BugReportHost = {
   // Read when Report is pressed: the mounted renderer's frame + its canvas, punched out of the DOM snapshot.
   pitch: () => {
     const live = renderer;
     if (!live) return null;
-    return { capture: () => live.captureFrame(), element: pitchHost.value?.querySelector('canvas') ?? null };
+    return { capture: () => live.captureFrame(), element: pitchCanvasEl() };
   },
   gameId: () => reportGameId.value,
   /** Which SERVICE that id belongs to — derived from the active server target, never guessed. */
@@ -7025,7 +7034,7 @@ function exportUnknownLog() {
 }
 function screenshotUnknown() {
   // capture the render canvas as a PNG download (the pitch state at this moment)
-  const canvas = pitchHost.value?.querySelector('canvas') as HTMLCanvasElement | null;
+  const canvas = pitchCanvasEl();
   if (!canvas) { liveSetHere(unknownCopyStatus, 'value', () => $t('hud.text.noCanvas')); return; }
   try {
     canvas.toBlob((blob) => {
@@ -7531,10 +7540,16 @@ watch([o66MoveSquares, () => gameStore.state.freeSelectPass, o66PendingPunt, o66
   if (currentActing?.hasPassed === true) {
     o66PendingPass.value = null;
     renderer.setPassRuler(null, null);
-    renderer.setTilePick(false);
-    renderer.setO66MoveRolls(null);
     renderer.setO66PassRolls(null);
-    return;
+    // Owner 11-27 (kinquelido g1968003, "Cant move after hand-off despite having the skill that allows it"): Give and
+    // Go. After a hand-off or a quick pass the server turns the thrower's action into a plain Move and sends his walk
+    // squares (bb2025 StepHandOver canMoveAfterHandOff, StepEndPassing canMoveAfterQuickPass); hasPassed stays true.
+    // The throw rail is finished, the walk is not: only a throw still resolving turns the squares off here.
+    if (!currentGame || deriveClientState(currentGame, o66Ctx()) !== 'MOVE') {
+      renderer.setTilePick(false);
+      renderer.setO66MoveRolls(null);
+      return;
+    }
   }
   // Owner 11-25 (bluxxt_the_new g1967504, "Couldn't bite the thrall"): while the server waits for a player pick in a
   // Pass or Hand-off (the Bloodlust bite after the throw), the target squares stay off. The pick's own watcher turns
@@ -11231,7 +11246,7 @@ const edgePan = createEdgePanController({
   hitTest: (x, y) => document.elementFromPoint(x, y),
   hostRect: () => pitchHost.value?.getBoundingClientRect() ?? null,
   gate: (pointer) => {
-    const canvas = pitchHost.value?.querySelector('canvas') ?? null;
+    const canvas = pitchCanvasEl();
     return {
       enabled: settings.edgePan,
       controllerMode: activeInput.value === 'controller' || (renderer?.isPointerHidden() ?? false),

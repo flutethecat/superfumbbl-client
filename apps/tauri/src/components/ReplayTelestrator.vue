@@ -96,7 +96,7 @@ function refresh(): void { revision.value += 1; }
  *  the svg (today's hit-test target while `active`) never reaches the canvas's own 'wheel' listener
  *  (renderer.ts attachCamera). Manually re-dispatch an equivalent WheelEvent onto the canvas. */
 function forwardWheel(event: WheelEvent): void {
-  const canvas = root.value?.closest('.pitch-host')?.querySelector('canvas');
+  const canvas = root.value?.closest('.pitch-host')?.querySelector(':scope > canvas'); // the pitch's own canvas, not the 3D block dice row's
   if (canvas) {
     canvas.dispatchEvent(new WheelEvent('wheel', {
       deltaX: event.deltaX, deltaY: event.deltaY, deltaZ: event.deltaZ, deltaMode: event.deltaMode,
