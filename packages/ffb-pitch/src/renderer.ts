@@ -752,6 +752,9 @@ export const AD_FOLLOW_TAU_MS = 180; // exp time-constant
 export const KICK_FOLLOW_TAU_MS = 650;
 /** Owner 09-14: turn modes where a coordinate change is a PLACEMENT (drag/preset/formation), never a walk — the
  *  token teleports to its square. kickoffReturn / passBlock stay real moves. */
+/** Owner 11-27 (breakmonker g1968235, "couldnt see the location of the ball where it was going to land during the
+ *  blitz"): the turn modes of a kick-off mini-turn a coach plays BEFORE the ball comes down (Charge is FFB `blitz`). */
+export const KICKOFF_PRE_FLIGHT_TURN_MODES: ReadonlySet<string> = new Set(['blitz', 'quickSnap', 'highKick', 'solidDefence', 'perfectDefence', 'swarming', 'kickoffReturn']);
 export const PLACEMENT_TURN_MODES: ReadonlySet<string> = new Set(['setup', 'perfectDefence', 'solidDefence', 'quickSnap', 'swarming', 'highKick']);
 export const KICK_FOLLOW_RETURN_MS = 900;
 /** Extra dwell on the landing square before the return starts. */
@@ -7177,6 +7180,7 @@ export class PitchRenderer {
     this.retireBallOut(); this.ballOutHideWhileOut = false; // owner 10-07: a ball-out stand-in never leaks games
     this.pendingServerKickoffScatter = null;
     this.serverKickoffScatterReveal = null;
+    this.syncKickoffLandingBall(); // owner 11-27: the faded landing ball goes with the held kick-off
     this.suppressGenericBallInThisRefresh = false;
     this.kickoffScatterSeqSeen = -1;
     this.pendingTtmThrow.clear(); // LIVE TTM: a stale throw-flight cue must not leak games
@@ -7249,6 +7253,7 @@ export class PitchRenderer {
     this.pendingScatter.clear();
     this.pendingServerKickoffScatter = null;
     this.serverKickoffScatterReveal = null;
+    this.syncKickoffLandingBall(); // owner 11-27: the faded landing ball goes with the held kick-off
     this.suppressGenericBallInThisRefresh = false;
     this.kickoffScatterSeqSeen = -1;
     this.pendingTtmThrow.clear();
@@ -10314,6 +10319,7 @@ export class PitchRenderer {
   }
 
   private redrawOverlays(): void {
+    this.syncKickoffLandingBall(); // owner 11-27: the faded landing ball follows the turn mode and the held kick-off
     this.o66TagRects = [];
     this.syncMoveRemainingBadge(); // owner 10-21: a step frame on the token-reuse path paints only here
     // owner 10-12: a token-reuse setGame paints here instead of refresh(). Mid-refresh this runs BEFORE drawDugouts
@@ -15485,7 +15491,7 @@ export class PitchRenderer {
   private pendingKickAim: [number, number] | null = null;
   /** Reveal the server's kickoffScatter result without arming motion. The matching setGame consumes it once. */
   setServerKickoffScatter(snap: { commandNr: number; endpoint: [number, number]; seq: number; marker?: [number, number] | null } | null): void {
-    if (!snap) { this.pendingServerKickoffScatter = null; this.serverKickoffScatterReveal = null; this.serverKickoffScatterMarker = null; return; }
+    if (!snap) { this.pendingServerKickoffScatter = null; this.serverKickoffScatterReveal = null; this.serverKickoffScatterMarker = null; this.syncKickoffLandingBall(); return; }
     if (snap.seq === this.kickoffScatterSeqSeen) return;
     this.kickoffScatterSeqSeen = snap.seq;
     // S45: `marker` (the in-bounds landing) is drawn instead of the end; the end still keys the model-ball transition and the mask.
@@ -15497,12 +15503,73 @@ export class PitchRenderer {
     };
     this.serverKickoffScatterReveal = [snap.endpoint[0], snap.endpoint[1]];
     this.showKickTargetPersistent(this.serverKickoffScatterMarker ?? snap.endpoint, false);
+    this.syncKickoffLandingBall();
   }
   /** S47: the public landing marker moved (Kick skill accept, pre-flight gust) while the occurrence is still masked: redraw the reticle there. Marker only. */
   setServerKickoffScatterMarker(square: [number, number] | null): void {
     if (!square || !this.serverKickoffScatterReveal) return;
     this.serverKickoffScatterMarker = [square[0], square[1]];
     this.showKickTargetPersistent(this.serverKickoffScatterMarker, false);
+    this.syncKickoffLandingBall();
+  }
+  /** Owner 11-27 (breakmonker g1968235; owner: "we should be matching upstream here"): during a kick-off mini-turn
+   *  played before the ball comes down (Charge, Quick Snap, High Kick, ...) the ball is drawn FADED on its landing
+   *  square, as FFB draws it (FieldLayerPlayers.drawBall: the ball at its coordinate while it is moving, faded while it
+   *  is not in play). The landing reticle alone was missed there.
+   *
+   *  A stand-in on the effects layer, display only. It is NOT the model ball: that stays masked until the flight
+   *  (serverKickoffScatterReveal), so no ball-in branch, latch, tween or kick timer sees it and the fly-in starts
+   *  exactly as before. It exists only while the masked occurrence is held AND the server's turn mode is one of those
+   *  mini-turns; the flight arming, a clear, or the turn mode leaving retires it. */
+  private kickoffLandingBall: { node: Container; square: [number, number] } | null = null;
+  /** True from the first frame of such a mini-turn until the server's turn mode is back to `kickoff` (or the turn is
+   *  over): the mini-turn passes through other modes on the way (a Charge blitzer's `selectBlitzTarget`, cmd 3624 of
+   *  that game) and the ball must not blink off for them. */
+  private kickoffLandingBallTurn = false;
+  private kickoffLandingBallSquare(): [number, number] | null {
+    if (!this.serverKickoffScatterReveal || !this.game) { this.kickoffLandingBallTurn = false; return null; }
+    const turnMode = String((this.game as { turnMode?: unknown }).turnMode ?? '');
+    if (KICKOFF_PRE_FLIGHT_TURN_MODES.has(turnMode)) this.kickoffLandingBallTurn = true;
+    else if (turnMode === 'kickoff' || turnMode === 'regular' || turnMode === 'setup' || turnMode === '') this.kickoffLandingBallTurn = false;
+    // A renderer mounted in the middle of such a turn (a view remount during the Charge blitzer's target pick) never
+    // saw the turn start: the server's lastTurnMode names the mini-turn the current sub-mode belongs to.
+    else if (KICKOFF_PRE_FLIGHT_TURN_MODES.has(String((this.game as { lastTurnMode?: unknown }).lastTurnMode ?? ''))) this.kickoffLandingBallTurn = true;
+    if (!this.kickoffLandingBallTurn) return null;
+    const square = this.serverKickoffScatterMarker ?? this.serverKickoffScatterReveal;
+    return isOnPitch(square) ? [square[0], square[1]] : null;
+  }
+  private placeKickoffLandingBall(node: Container, square: [number, number]): void {
+    const anchor = squareAnchor(square[0], square[1]);
+    node.position.set(anchor.x, anchor.y - 3); // a loose ball's own resting spot in its square
+    node.scale.set(depthScale(square[0], square[1]));
+  }
+  private syncKickoffLandingBall(): void {
+    const square = this.kickoffLandingBallSquare();
+    const current = this.kickoffLandingBall;
+    if (current && (current.node.destroyed || !current.node.parent || !square
+        || current.square[0] !== square[0] || current.square[1] !== square[1])) {
+      if (!current.node.destroyed) { current.node.parent?.removeChild(current.node); current.node.destroy({ children: true }); }
+      this.kickoffLandingBall = null;
+    }
+    if (!square || this.kickoffLandingBall || !this.app || this.destroyed) return;
+    const node = new Container();
+    const radius = BALL_SPRITE_SIZE * 0.5;
+    node.addChild(this.ballTexture
+      ? this.sizedBallSprite(BALL_SPRITE_SIZE)
+      : new Graphics().ellipse(0, 0, radius, radius * 0.78).fill(COLORS.ball).stroke({ color: 0x5a3a1a, width: 1 }));
+    node.alpha = 0.7; // FFB fades the icon of a ball that is not in play (PlayerIconFactory.fadeIcon: 0.7)
+    // Just over the landing reticle (0.55) on the effects layer, which is drawn above the tokens: a player standing on
+    // the landing square (a High Kick receiver, a Charge mover) has the faded ball drawn over him, as FFB's own redraw
+    // paints the ball after the player (FieldLayerPlayers.updateBallAndPlayers).
+    node.zIndex = 0.56;
+    this.placeKickoffLandingBall(node, square);
+    this.effectsLayer.addChild(node);
+    this.kickoffLandingBall = { node, square };
+  }
+  /** @internal test seam: the square the faded landing ball is drawn on (null = not drawn). */
+  kickoffLandingBallProbe(): [number, number] | null {
+    const ball = this.kickoffLandingBall;
+    return ball && !ball.node.destroyed && ball.node.parent ? [ball.square[0], ball.square[1]] : null;
   }
   /** @internal Behavioral probe for the server kickoff occurrence; presentation-only state, never model state. */
   kickoffPresentationProbe(): { modelBallMasked: boolean; ballTweenActive: boolean; authoritativeFlightArmed: boolean } {
@@ -15602,6 +15669,7 @@ export class PitchRenderer {
     const exact = authoritativeKickPath(snap.origin, snap.landing);
     this.kickDescendSnapshot = { ...exact, seq: snap.seq };
     this.serverKickoffScatterReveal = null;
+    this.syncKickoffLandingBall(); // owner 11-27: the faded landing ball goes with the held kick-off
     this.pendingKickDescendClear = false; // a fresh arm supersedes any pending deferred clear
     // Arm the kick-in state from the snapshot: aim = the scatter landing, and force the off-pitch condition
     // false→ so the refresh() kick-in block runs even though immediate-apply may have already put the ball
@@ -15626,6 +15694,7 @@ export class PitchRenderer {
   clearKickAnimation(): void {
     this.pendingServerKickoffScatter = null;
     this.serverKickoffScatterReveal = null;
+    this.syncKickoffLandingBall(); // owner 11-27: the faded landing ball goes with the held kick-off
     this.suppressGenericBallInThisRefresh = false;
     this.kickDescendSnapshot = null;
     this.pendingKickDescendClear = false;
@@ -16113,6 +16182,8 @@ export class PitchRenderer {
    *  flip) calls this after its redraw: the reticle moves to the anchor of the SAME server square and the trail is
    *  redrawn from the SAME squares. Position only: no timer, TTL, pulse or kick pacing state is touched. */
   private reprojectKickCues(): void {
+    const landingBall = this.kickoffLandingBall;
+    if (landingBall && !landingBall.node.destroyed) this.placeKickoffLandingBall(landingBall.node, landingBall.square);
     const target = this.kickTarget;
     if (target && !target.g.destroyed) {
       const anchor = squareAnchor(target.square[0], target.square[1]);
