@@ -14,12 +14,14 @@
 //    press stays the marker's until its keyup (auto-repeat included), then the listener is removed (also on window
 //    blur and on unmount), so Escape then behaves as before;
 //  - with the marker focused, Enter / Space toggle the tooltip and stop there: they never become the card's confirm.
+// Rig 11-27: `escapePasses` (the markers inside a reroll follow-up): there Escape is Back, which declines nothing, so the
+// marker closes its tooltip and lets the key go on: Escape returns to the first panel from anywhere in the follow-up.
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 
 /** `tag`: a short text badge ("BCR"); `icon`: an image badge (the Leader skill icon); neither = the plain "i".
  *  Owner 11-21: it is drawn as a CORNER BADGE over the top-right of the answer button it belongs to (the caller wraps both
  *  in `.rr-badged`); it stays a sibling of the button, so a press on it never reaches the button. */
-const props = defineProps<{ text: string; tag?: string; icon?: string }>();
+const props = defineProps<{ text: string; tag?: string; icon?: string; escapePasses?: boolean }>();
 
 const el = ref<HTMLElement | null>(null);
 const hovered = ref(false);
@@ -74,6 +76,7 @@ function syncKeyListeners(): void {
 }
 function onWindowEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return;
+  if (props.escapePasses) { close(); return; }
   event.preventDefault();
   event.stopImmediatePropagation();
   if (shown.value) {

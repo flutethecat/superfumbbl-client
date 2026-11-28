@@ -10,7 +10,7 @@ import { jumpKindFor } from './logActionPlates';
 import type { ObservedMovementOccurrence } from './movementOccurrenceProjection';
 import { t, terms, data } from '../i18n';
 import { serverExplanationLines } from './serverExplanation';
-import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, mascotTag, proChoices, proTag, teamIdOfPlayer, teamPartBadge, type MascotFallback, type ProPart } from './teamReRollComposer';
 const PRIMAL_SAVAGERY_SKILL = starRuleById('primalSavagery')?.upstreamSkill ?? 'Primal Savagery';
 const normSkill = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z]/g, '');
 
@@ -223,6 +223,12 @@ export interface ReRollPromptOption {
   badgeTag?: string;
   badgeSkill?: 'Leader';
   badgeName?: string;
+  /** Owner 11-24: a Mascot answer (teamReRollComposer.mascotTag). The card shows ONE Team Mascot button and asks for
+   *  the fallback in a client-local follow-up (mascotFirstQuestion / mascotFollowUp); the source sent is unchanged. */
+  mascotFallback?: MascotFallback;
+  /** Owner 11-25: a Pro answer (teamReRollComposer.proTag): ONE Pro button, its fallbacks in a client-local follow-up. */
+  proPart?: ProPart;
+  proMascotPart?: MascotFallback;
 }
 
 export function skillNameWithValue(displayValue: string | undefined, skillName: string): string {
@@ -485,7 +491,7 @@ export function offeredReRollOptions(
   if (modifyingSkill && modifyingSkill !== skillName) {
     options.push({ label: valuedSkillLabel(modifyingSkill, skillDisplayValues), source: modifyingSkill, response: 'skill', role: 'modifier' });
   }
-  if (hasPro) options.push({ get label() { return t('dialogs.reroll.text.pro'); }, source: 'Pro', response: 'reroll', role: 'source' });
+  if (hasPro) options.push({ get label() { return t('dialogs.reroll.text.pro'); }, source: 'Pro', response: 'reroll', role: 'source', proPart: 'none' });
   const driveBonus = () => driveBonusName(game, teamIdOfPlayer(game, String(dp.playerId ?? '')));
   for (const composite of proCompositeReRollOptions(rrProps, driveBonus)) {
     options.push({ ...composite, response: 'reroll', role: 'source' });
@@ -497,16 +503,15 @@ export function offeredReRollOptions(
     for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
       options.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, response: 'reroll', role: 'source',
         ...(c.team && !c.mascot && c.team !== 'team' ? { teamKind: c.team } : {}),
-        ...teamPartBadge(c, driveBonus) });
+        ...teamPartBadge(c, driveBonus), ...mascotTag(c) });
     }
   } else if (specialTeamLabel && specialTeamSource) {
     options.push({ label: specialTeamLabel, source: specialTeamSource, response: 'reroll', role: 'source' });
   } else if (hasMascot) {
-    options.push({ get label() { return t('dialogs.reroll.text.teamMascotNoReroll'); }, source: 'Team Mascot', response: 'reroll', role: 'source' });
-    if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.mascotRr'); }, source: 'Mascot TRR', response: 'reroll', role: 'source' });
-    // Owner 11-25 (supersedes 07-12): the plain Team reroll stands beside the two Mascot buttons, as upstream's first
-    // question offers it (ffb-common ReRollSourceComposer.teamReRollSources(includeMascot = true) :66-85: Mascot, then the
-    // drive bonus, else Leader, else the plain Team Re-Roll, with TRR). Here (no DRIVE_BONUS / LEADER) that is the plain one.
+    options.push({ get label() { return t('dialogs.reroll.text.teamMascotNoReroll'); }, source: 'Team Mascot', response: 'reroll', role: 'source', mascotFallback: 'none' });
+    if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.mascotRr'); }, source: 'Mascot TRR', response: 'reroll', role: 'source', mascotFallback: 'team' });
+    // Owner 11-25 (supersedes 07-12): the plain Team reroll stands beside the Team Mascot, as upstream's first question
+    // offers it (ReRollSourceComposer.teamReRollSources(includeMascot = true) :66-85: Mascot, then TRR).
     if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.teamReroll'); }, source: 'Team ReRoll', response: 'reroll', role: 'source' });
   } else if (hasTeam) {
     options.push({ get label() { return t('dialogs.reroll.text.teamReroll'); }, source: 'Team ReRoll', response: 'reroll', role: 'source' });
@@ -514,20 +519,20 @@ export function offeredReRollOptions(
   return options;
 }
 
-export function proCompositeReRollOptions(rrProps: string[], driveBonus: () => string = genericDriveBonusName): { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] {
+export function proCompositeReRollOptions(rrProps: string[], driveBonus: () => string = genericDriveBonusName): { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; proPart?: ProPart; proMascotPart?: MascotFallback }[] {
   if (!rrProps.includes('PRO')) return [];
   // Current server: every Pro answer upstream's fallback question can produce (Pro + drive bonus / Leader / Mascot).
   if (hasDriveBonusOrLeader(rrProps)) {
     return proChoices(rrProps).slice(1).map((c) => ({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source,
-      ...teamPartBadge(c, driveBonus) }));
+      ...teamPartBadge(c, driveBonus), ...proTag(c.source, rrProps) }));
   }
   const hasMascot = rrProps.includes('MASCOT');
   const hasTeam = rrProps.includes('TRR'); // never LONER or a legacy drive bonus name on its own (see offeredReRollOptions)
-  const options: { label: string; source: string }[] = [];
-  if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamReroll'); }, source: 'Pro TRR' });
-  if (hasMascot) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot'); }, source: 'Pro Mascot' });
+  const options: { label: string; source: string; proPart?: ProPart; proMascotPart?: MascotFallback }[] = [];
+  if (hasTeam) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamReroll'); }, source: 'Pro TRR', ...proTag('Pro TRR', rrProps) });
+  if (hasMascot) options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot'); }, source: 'Pro Mascot', ...proTag('Pro Mascot', rrProps) });
   if (hasMascot && hasTeam) {
-    options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot2'); }, source: 'Pro Mascot TRR' });
+    options.push({ get label() { return t('dialogs.reroll.text.proThenTeamMascot2'); }, source: 'Pro Mascot TRR', ...proTag('Pro Mascot TRR', rrProps) });
   }
   return options;
 }

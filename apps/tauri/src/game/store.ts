@@ -39,7 +39,7 @@ import { anchorBallOutAt, ballOutHoldMs, ballOutTravelMs, frameSetsOutOfBounds, 
 import { createSkillDecisionProjection, reduceSkillDecisionProjection, skillUseHasFollowup, skillUseFollowupPending, type SkillDecisionDetails } from './skillDecisionProjection';
 import { appendLogLane, composeLogLanes, createLogLanes, restoreChatLane, type LogLane, type OrderedLogRow } from './logLanes';
 import { BLOCK_PRO_COMPOSITE_KINDS, blockProCompositeOptions, blockTeamChoices, buildBlockDecision, playerProSpent, createBlockContext, reduceBlockContext, type BlockProCompositeKind, type BlockProCompositeOption, type BlockTeamChoice } from './blockDecisionProjection';
-import { composedChoiceLabel, directTeamChoices, driveBonusName, hasDriveBonusOrLeader, mascotChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
+import { composedChoiceLabel, decomposeReRollSource, directTeamChoices, driveBonusName, hasDriveBonusOrLeader, mascotChoices, mascotTag, normalizeReRollOptionsBySource, teamIdOfPlayer, teamPartBadge, type MascotFallback, type ProPart } from './teamReRollComposer';
 import { findBlockRerollReport, buildBlockRerollUseCaptionText } from './logic/blockRerollUseCaption';
 import { allBlockDiceIndices, blockRerollOutcome, rerolledBlockDiceIndices, type BlockRerollOutcome } from './blockRerollTumble';
 import { LONER_RETUMBLE_DELAY_MS } from './lonerCueLayout';
@@ -505,9 +505,13 @@ export function reRollPromptScreenPosition(
     y: Math.min(Math.max(p.y, PROMPT_EDGE_MARGIN_PX), Math.max(PROMPT_EDGE_MARGIN_PX, viewport.height - PROMPT_EDGE_MARGIN_PX)),
   });
   // Anchor→top-left deltas, so a desired BOX edge converts back to the anchor coordinate.
+  // Sol 11-27 (P2): the near (top / left) edge wins. A card larger than the viewport used to get a NEGATIVE top / left
+  // (the far-edge bound applied last), hiding its heading and first answers; it is now pinned at the top / left edge and
+  // overflows the far edge only (the card's own max-height + scroll keeps every answer reachable). A card that fits is
+  // placed exactly as before.
   const clampToViewport = (p: { x: number; y: number }): { x: number; y: number } => card ? ({
-    x: Math.min(Math.max(p.x, -card.dx), viewport.width - card.width - card.dx),
-    y: Math.min(Math.max(p.y, -card.dy), viewport.height - card.height - card.dy),
+    x: Math.max(Math.min(p.x, viewport.width - card.width - card.dx), -card.dx),
+    y: Math.max(Math.min(p.y, viewport.height - card.height - card.dy), -card.dy),
   }) : clampAnchor(p);
   const base = clampToViewport(anchor ?? { x: viewport.width / 2, y: viewport.height / 2 });
   if (!avoid || !card) return base;
@@ -836,6 +840,9 @@ const legacyState = reactive({
              trr: boolean;
              /** Current server: drive bonus / Leader replace the plain team reroll; teamChoices carries them (blockTeamChoices). */
              namedTeam: boolean; teamChoices: BlockTeamChoice[];
+             /** Owner 11-24: the older server's MASCOT + TRR row: the Mascot may fall back to the Team reroll (Mascot TRR),
+              *  as on the single block card (mascotTrr); reached through the Mascot follow-up (blockMascotFollowUp). */
+             mascotTrr: boolean;
              /** Owner 10-10: Pro-with-fallback answers for this target (blockProCompositeOptions); empty when not offered. */
              proComposite: BlockProCompositeOption[];
              singleBlockDie: string | null; singleBlockDieLabel: string | null;
@@ -865,7 +872,7 @@ const legacyState = reactive({
     player: string;
     reRolledAction: string;
     targets: { targetId: string; target: string; minimumRoll: number | null }[];
-    options: { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
+    options: { label: string; source: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; mascotFallback?: MascotFallback; proPart?: ProPart; proMascotPart?: MascotFallback }[];
     loner: boolean;
     seq: number;
     instanceKey: string | null;
@@ -1158,7 +1165,13 @@ const legacyState = reactive({
     prompt: string;
     declineLabel: string;
     /** `info`: owner 11-21, the "i" text of a regeneration answer that spends a drive bonus reroll. */
-    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
+    options: { kind: 'inducement' | 'card' | 'spell' | 'regeneration'; value: string; label: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string;
+      /** Owner 11-24: a regeneration Mascot answer: `source` (its reRollSource), its fallback part, the player it is for
+       *  (`mascotGroup`: one Mascot button and one follow-up per player) and, on the Mascot alone, the button label. */
+      source?: string; mascotFallback?: MascotFallback; mascotGroup?: string; mascotLabel?: string; proPart?: ProPart; proMascotPart?: MascotFallback;
+      /** Owner 11-27 (icon-only reroll sources): a regeneration reroll answer's wire source, player and player name, so the
+       *  card draws the source as its icon under the player's name. Display only: the answer sent is `value`. */
+      rerollSource?: string; regenPlayerId?: string; playerLabel?: string }[];
     seq: number;
   } | null,
   /** Display-only Fireball 4+ chips retained until the server closes the wizard dialog. Owner 11-21: also the HOVER
@@ -1500,7 +1513,7 @@ const legacyState = reactive({
   bloodlust: null as {
     stage: 'reroll' | 'decision' | 'bite';
     playerId: string; vampire: string; seq: number;
-    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[];
+    reRolledAction?: string; rerollOptions?: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; mascotFallback?: MascotFallback; proPart?: ProPart; proMascotPart?: MascotFallback }[];
     /** the failed d6 that triggered this reroll offer (owner W37 mock: shown alone on its own card line). */
     roll?: number;
     changeToMove?: boolean; action?: string;
@@ -1610,7 +1623,8 @@ function spectatorHud(position: SpectatorPublishedPosition): Partial<typeof lega
     useInducementWaiting: passive.useInducementWaiting,
     followupChoice: null,
     skillChoice: passive.skillChoice ? { ...passive.skillChoice, mine: false, seq } : null,
-    reRollPrompt: p.reRollCard ? { ...p.reRollCard, mine: false, chosen: null, seq } : null,
+    // Sol 11-25 #2: an older checkpoint's composed answers are tagged by wire source (one control per source)
+    reRollPrompt: p.reRollCard ? { ...p.reRollCard, options: normalizeReRollOptionsBySource(p.reRollCard.options), mine: false, chosen: null, seq } : null,
     blockPartial: p.blockCard ? { ...p.blockCard, defenderSquare: p.block.defenderSquare ?? undefined, mine: false, pickable: false, tumbleKey: sourceKey + ':' + p.block.rollOccurrence, seq } : null,
     apothecaryChoice: p.apothecaryCard ? { ...p.apothecaryCard, key: sourceKey, mine: false, seq } : null,
     apothecaryD16: p.apothecaryResult ? { ...p.apothecaryResult, mine: false, seq } : null,
@@ -4976,13 +4990,16 @@ function passiveDialogOccurrence(dialog: object): number {
   if (occurrence === undefined) { occurrence = ++passiveDialogOccurrenceSeq; passiveDialogOccurrences.set(raw, occurrence); }
   return occurrence;
 }
-/** Owner 11-25: the occurrence of the server dialog the model holds now (one number per dialog OBJECT, the passive skill
- *  card's numbering), 0 when there is none. Used by the Multiple Block card's submit latch to release on a dialog change.
- *  Contract, INTERACTIVE (coach seat) paths only: a gameSetDialogParameter frame (each wire command is parsed afresh), a
- *  snapshot adoption or in-place resync and a replay model adoption or seek (structuredClone) all install a new object;
- *  frames that leave the dialog standing mutate the model in place and keep it; a client re-render never touches it.
- *  Spectator checkpoint paths do NOT follow it (a reduction clones the model on every non-clock event, a cached
- *  checkpoint republished as-is keeps its number); no spectator consumer reads it. */
+/** Owner 11-25 (Sol r3 #1, r4 #1): the occurrence of the server dialog the model holds now (one number per dialog
+ *  OBJECT), 0 when there is none. Used by the coach's local Mascot follow-up and its submit lock.
+ *  Contract, INTERACTIVE (coach seat) paths only: every path that installs or replaces the dialog brings a new object -
+ *  a gameSetDialogParameter frame (each wire command is parsed afresh), a snapshot adoption or in-place resync, a replay
+ *  model adoption or seek (structuredClone) - while frames that leave the dialog standing mutate the model in place and
+ *  keep the object, and a client re-render never touches it. So no install site needs its own bump.
+ *  Spectator checkpoint paths do NOT follow it: a checkpoint reduction clones the whole model on every non-clock event
+ *  (a dialog-neutral event renumbers a standing dialog), and a cached checkpoint republished as-is (seek to the same
+ *  head, anchor or resolved position) keeps its number. That is harmless today (spectator cards are passive and their
+ *  sends are gated), but a spectator consumer must not read this as "a new server arrival". */
 function currentDialogOccurrence(): number {
   const dialog = game.value?.dialogParameter;
   return dialog && typeof dialog === 'object' ? passiveDialogOccurrence(dialog) : 0;
@@ -20498,6 +20515,12 @@ export function installBlockPartialTestHarness(
   sendMultiHatred(targetId: string): void;
   sendMultiProComposite(targetId: string, kind: BlockProCompositeKind, proIndex?: number): void;
   sendMultiChoice(targetId: string, diceIndex: number, reRollSource?: unknown, proIndex?: number): void;
+  /** Owner 11-25 (Sol r3 #1): an in-place resync: the model is replaced by a byte-identical snapshot (its own objects,
+   *  the same dialog contents) and the synthetic snapshot frame runs, without a reset (playback, epochs, cards kept). */
+  resyncSnapshot(): void;
+  /** Its replay-seek / checkpoint-restore shape: the same model installed again from a stored copy, no frame. */
+  adoptStoredModel(): void;
+  dialogOccurrence(): number;
   setCoach(coach: string): void;
   setPlaying(playing: boolean): void;
   presentationSeat(): 'home' | 'away' | null;
@@ -20573,6 +20596,9 @@ export function installBlockPartialTestHarness(
     sendMultiHatred(targetId) { gameStore.sendMultiBlockHatred(targetId); },
     sendMultiProComposite(targetId, kind, proIndex) { gameStore.sendMultiBlockProComposite(targetId, kind, proIndex); },
     sendMultiChoice(targetId, diceIndex, reRollSource, proIndex) { gameStore.sendMultiBlockChoiceForTarget(targetId, diceIndex, reRollSource, proIndex); },
+    resyncSnapshot() { game.value = structuredClone(toRaw(game.value)); forceSnapshotTick(); },
+    adoptStoredModel() { game.value = structuredClone(toRaw(game.value)); resolvePlayFollowups(); },
+    dialogOccurrence: () => currentDialogOccurrence(),
     setCoach(coach) { play.coach = coach; },
     setPlaying(playing) { play.active = playing; },
     presentationSeat: () => gameStore.blockPresentationSeat.value,
@@ -26211,6 +26237,7 @@ function surfaceMultiBlockResolution(dp: Record<string, unknown>, reports: reado
       consummateLabel: consummateSrc ? valuedSkillLabel(consummateSrc, blockerSkillValues) : null,
       proComposite: proSpent ? [] : blockProCompositeOptions(dp.dialogId, r, { driveBonus: rowDriveBonus }),
       namedTeam: hasDriveBonusOrLeader(rr), teamChoices: blockTeamChoices(rr, rowDriveBonus),
+      mascotTrr: rr.includes('MASCOT') && rr.includes('TRR') && !hasDriveBonusOrLeader(rr),
       singleBlockDie: singleBlockDieSrc,
       singleBlockDieLabel: singleBlockDieSrc ? valuedSkillLabel(singleBlockDieSrc, blockerSkillValues) : null,
       multiBlockDice: multiBlockDiceSrc,
@@ -27075,8 +27102,8 @@ function maybeSurfaceDefenderAction(g: GameJson) {
 
 
 // Reused by the unified bloodlust card; source is the exact CLIENT_USE_RE_ROLL wire value.
-export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] {
-  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string }[] = [];
+export function rerollOptsFor(dp: Record<string, unknown>): { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; mascotFallback?: MascotFallback; proPart?: ProPart; proMascotPart?: MascotFallback }[] {
+  const opts: { label: string; source: string; kind: 'team' | 'pro' | 'skill'; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; mascotFallback?: MascotFallback; proPart?: ProPart; proMascotPart?: MascotFallback }[] = [];
   const singleUse = singleUseReRollName(dp);
   const skill = reRollSkillName(dp);
   const rrProps = Array.isArray(dp.reRollProperties) ? (dp.reRollProperties as unknown[]).map(String) : [];
@@ -27089,7 +27116,7 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
   const hasTeam = rrProps.includes('TRR') || !!dp.teamReRollOption;
   if (singleUse) opts.push({ label: singleUse, source: singleUse, kind: 'skill' });
   if (skill && skill !== singleUse) opts.push({ label: skill, source: skill, kind: 'skill' });
-  if (rrProps.includes('PRO') || dp.proReRollOption) opts.push({ label: 'Pro', source: 'Pro', kind: 'pro' });
+  if (rrProps.includes('PRO') || dp.proReRollOption) opts.push({ label: 'Pro', source: 'Pro', kind: 'pro', proPart: 'none' });
   // Composite choices start with Pro, so they keep the Pro icon; source is the exact server wire value.
   const driveBonus = () => driveBonusName(game.value, teamIdOfPlayer(game.value, String(dp.playerId ?? '')));
   for (const composite of proCompositeReRollOptions(rrProps, driveBonus)) opts.push({ ...composite, kind: 'pro' });
@@ -27097,14 +27124,14 @@ export function rerollOptsFor(dp: Record<string, unknown>): { label: string; sou
     // Current server: drive bonus / Leader replace the regular team button; the Mascot keeps its fallbacks (as offeredReRollOptions).
     for (const c of [...mascotChoices(rrProps), ...directTeamChoices(rrProps)]) {
       opts.push({ get label() { return composedChoiceLabel(c, driveBonus); }, source: c.source, kind: 'team',
-        ...teamPartBadge(c, driveBonus) });
+        ...teamPartBadge(c, driveBonus), ...mascotTag(c) });
     }
   } else if (specialTeamLabel && hasTeam) {
     opts.push({ label: specialTeamLabel, source: 'Team ReRoll', kind: 'team' });
   } else if (hasMascot) {
-    opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team' });
-    if (hasTeam) opts.push({ label: 'Mascot + RR', source: 'Mascot TRR', kind: 'team' });
-    // Owner 11-25: the plain Team reroll beside the Mascot buttons (upstream teamReRollSources(includeMascot = true)).
+    opts.push({ label: 'Team Mascot (no reroll if it fails)', source: 'Team Mascot', kind: 'team', mascotFallback: 'none' });
+    if (hasTeam) opts.push({ label: 'Mascot + RR', source: 'Mascot TRR', kind: 'team', mascotFallback: 'team' });
+    // Owner 11-25: the plain Team reroll beside the Team Mascot (upstream teamReRollSources(includeMascot = true)).
     if (hasTeam) opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
   } else if (hasTeam) {
     opts.push({ label: 'Team reroll', source: 'Team ReRoll', kind: 'team' });
@@ -27389,6 +27416,16 @@ function resolvePlayFollowups(reports: readonly Record<string, unknown>[] = []) 
               ? `${playerName(g, choice.playerId)} — ${choice.label ?? choice.reRollSource}`
               : playerName(g, choice.playerId),
             ...(choice.kind === 'reRoll' && choice.info ? { info: choice.info, badgeTag: choice.badgeTag, badgeSkill: choice.badgeSkill, badgeName: choice.badgeName } : {}),
+            ...(choice.kind === 'reRoll' ? { rerollSource: choice.reRollSource, regenPlayerId: choice.playerId, playerLabel: playerName(g, choice.playerId) } : {}),
+            ...(choice.kind === 'reRoll' && choice.mascotFallback ? {
+              source: choice.reRollSource, mascotFallback: choice.mascotFallback, mascotGroup: choice.playerId,
+              ...(choice.mascotFallback === 'none' ? { mascotLabel: `${playerName(g, choice.playerId)} — ${$t('hud.teamMascot')}` } : {}),
+            } : {}),
+            // Owner 11-25: a regeneration Pro answer: one Pro choice per player, its fallbacks in the Pro follow-up.
+            ...(choice.kind === 'reRoll' && choice.proPart ? {
+              source: choice.reRollSource, proPart: choice.proPart, mascotGroup: choice.playerId,
+              ...(choice.proMascotPart ? { proMascotPart: choice.proMascotPart } : {}),
+            } : {}),
           }));
           if (state.inducementUse?.key !== key) {
             state.inducementUse = {
@@ -32806,6 +32843,8 @@ export const gameStore = {
   resolveBloodlustReroll(source: string | null) {
     const b = state.bloodlust; if (!b || b.stage !== 'reroll') return;
     if (!dialogInstanceLive(b.instanceKey)) { state.bloodlust = null; return; } // R-E1
+    // Sol 11-25 r2 (C): only a source the card offers is sent (a hidden Leader answer never goes out); null = keep the roll.
+    if (source !== null && !(b.rerollOptions ?? []).some((o) => o.source === source)) return;
     // Owner 11-25 (Sol r2 #2): latch the answered dialog only when the answer went out; a refused send keeps the card.
     if (!sendAnsweredDialogCommand({ netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: b.reRolledAction, reRollSource: source },
       b.instanceKey ?? null, game.value?.dialogParameter as object | null)) return;
@@ -32978,10 +33017,17 @@ export const gameStore = {
       // CLIENT_USE_RE_ROLL with a null source, NOT a CLIENT_BLOCK_CHOICE. Matches our existing decline shape
       // (store.ts:4118/4141/5588 send reRollSource:null). The server then flips the pick to the defender.
       case 'declineReroll': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: null }; break;
-      case 'team': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Team ReRoll' }; break;
+      // Sol 11-25 r2 (C): the plain Team reroll only when the card offers it (the view's own rule: TRR, no drive bonus /
+      // Leader, and beside a Mascot only on the TRR + MASCOT card), so no internal path sends a hidden Leader answer.
+      case 'team': {
+        const p = state.blockPartial;
+        if (!p.teamRR || p.namedTeam || (p.mascot && !p.mascotTrr)) return;
+        cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Team ReRoll' };
+        break;
+      }
       // Owner 2026-07-12: distinct mascot sources (upstream ReRollSources names) — mirror the 'team' send.
-      case 'mascot': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Team Mascot' }; break;
-      case 'mascotTrr': cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Mascot TRR' }; break;
+      case 'mascot': if (!state.blockPartial.mascot) return; cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Team Mascot' }; break;
+      case 'mascotTrr': if (!state.blockPartial.mascotTrr) return; cmd = { netCommandId: NetCommandId.CLIENT_USE_RE_ROLL, reRolledAction: 'block', reRollSource: 'Mascot TRR' }; break;
       // Current server: a drive bonus / Leader reroll, or the Mascot falling back to one, as the block dialog offered it
       // (DialogBlockRollPropertiesHandler: team reroll buttons -> selectTeamReRoll -> sendUseReRoll(BLOCK, source)).
       case 'teamChoice': {
@@ -34317,7 +34363,7 @@ export const gameStore = {
   /** True from an accepted gameplay send until the next applied server frame (the End row label reads it). */
   gameplaySendUnanswered(): boolean { return gameplaySendUnanswered; },
   gameplaySendCount(): number { return gameplaySendCount; },
-  /** Owner 11-25: the installed server dialog's occurrence (currentDialogOccurrence); coach-seat paths only. */
+  /** Owner 11-25 (Sol r3 #1): the installed server dialog's occurrence (currentDialogOccurrence); reactive through game. */
   dialogOccurrence(): number { return currentDialogOccurrence(); },
 
   /** W40 step 1: the menu declare sends only the ordinary gazeMove acting-player command and arms local intent.
@@ -35296,6 +35342,17 @@ export const gameStore = {
     if (typeof reRollSource === 'string' && /^Pro( |$)/.test(reRollSource)) {
       const row = state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
       if (!row || !(reRollSource === 'Pro' ? row.pro : row.proComposite.some((o) => o.source === reRollSource))) return;
+    } else if (typeof reRollSource === 'string' && decomposeReRollSource(reRollSource)) {
+      // Sol 11-25 r2 (C): a team-family source (Team ReRoll, Team Mascot, Mascot TRR, the drive bonus and its Mascot form)
+      // goes out only when that row offers it, so no internal path sends a hidden Leader / pool answer.
+      const row = state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
+      if (!row) return;
+      const named = row.teamChoices.some((c) => c.source === reRollSource);
+      const offered = reRollSource === 'Team Mascot' ? row.mascot
+        : reRollSource === 'Team ReRoll' ? named || (row.teamRR && !row.namedTeam && (row.trr || !row.mascot))
+          : reRollSource === 'Mascot TRR' ? named || row.mascotTrr
+            : named;
+      if (!offered) return;
     }
     const cmd: Record<string, unknown> = {
       netCommandId: NetCommandId.CLIENT_BLOCK_OR_RE_ROLL_CHOICE_FOR_TARGET,
@@ -35358,7 +35415,8 @@ export const gameStore = {
    *  sendBlockOrReRollChoiceForTarget(target, selectedIndex, source, proIndex, anyDice)). */
   sendMultiBlockTeamChoice(targetId: string, source: string) {
     const row = state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
-    if (!row?.teamChoices.some((c) => c.source === source)) return;
+    // Owner 11-24: Mascot TRR on an older-server row comes from the Mascot follow-up (row.mascotTrr), sent like the rest.
+    if (!row?.teamChoices.some((c) => c.source === source) && !(row?.mascotTrr && source === 'Mascot TRR')) return;
     gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0);
   },
 

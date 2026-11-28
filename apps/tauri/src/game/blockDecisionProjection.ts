@@ -1,6 +1,6 @@
 import type { GameJson } from '@fumbbl40k/ffb-protocol';
 import { playerById, valuedSkillLabel } from './reRollDecisionProjection';
-import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamIdOfPlayer, teamPartBadge } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, driveBonusName, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, mascotFollowUp, mascotTag, proChoices, proFollowUp, proTag, teamIdOfPlayer, teamPartBadge, type MascotFallback, type ProPart } from './teamReRollComposer';
 
 export interface BlockContextProjection {
   attackerId: string | null;
@@ -60,6 +60,9 @@ export const BLOCK_PRO_COMPOSITES = [
 export type BlockProCompositeKind = (typeof BLOCK_PRO_COMPOSITES)[number]['kind'] | 'proDriveBonus' | 'proMascotDriveBonus';
 export interface BlockProCompositeOption {
   kind: BlockProCompositeKind; source: string; label: string; title: string;
+  /** Owner 11-25: the Pro follow-up tag (teamReRollComposer.proTag). */
+  proPart?: ProPart;
+  proMascotPart?: MascotFallback;
   /** Owner 11-21: the corner badge (teamPartBadge): tooltip, and the drive bonus tag or the Leader skill icon. */
   info?: string;
   badgeTag?: string;
@@ -81,6 +84,9 @@ export interface BlockTeamChoice {
   badgeTag?: string;
   badgeSkill?: 'Leader';
   badgeName?: string;
+  /** Owner 11-24: the Mascot with this fallback; shown only in the Mascot follow-up (blockMascotFollowUp), never as
+   *  its own button. */
+  mascotFallback?: MascotFallback;
 }
 
 /** Current server (c66198ac4): when the block offers a drive bonus or a Leader reroll they REPLACE the plain Team
@@ -90,8 +96,23 @@ export function blockTeamChoices(rr: readonly string[], driveBonus: () => string
   if (!hasDriveBonusOrLeader(rr)) return [];
   return [...mascotChoices(rr).slice(1), ...directTeamChoices(rr)]
     .map((c) => {
-      return { source: c.source, label: composedChoiceLabel(c, driveBonus), ...teamPartBadge(c, driveBonus) };
+      return { source: c.source, label: composedChoiceLabel(c, driveBonus), ...teamPartBadge(c, driveBonus), ...mascotTag(c) };
     });
+}
+
+/** Owner 11-24: the Mascot follow-up of a block card or of one Multiple Block row (upstream
+ *  DialogBlockRollPropertiesHandler:106-108 / DialogReRollBlockForTargetsPropertiesHandler:66-71 -> selectTeamReRoll ->
+ *  AbstractReRollDialogHandler.select:40-53). The Mascot rerolls the whole block (a team reroll: clientUseReRoll{block}
+ *  / the target's choice with dieIndex -1), never one die. Answers in upstream's order, then "No reroll" (Team Mascot);
+ *  null when the card offers no Mascot or no fallback (skip rule: the Mascot button sends Team Mascot at once). */
+export function blockMascotFollowUp(card: { mascot?: boolean; mascotTrr?: boolean; teamChoices?: readonly BlockTeamChoice[] }): BlockTeamChoice[] | null {
+  if (!card.mascot) return null;
+  return mascotFollowUp<BlockTeamChoice>([
+    { source: 'Team Mascot', label: 'Team Mascot', mascotFallback: 'none' },
+    // The older server's dialog (TRR / MASCOT only): the Mascot falls back to the Team reroll.
+    ...(card.mascotTrr ? [{ source: 'Mascot TRR', label: 'Mascot TRR', mascotFallback: 'team' as const }] : []),
+    ...(card.teamChoices ?? []).filter((c) => !!c.mascotFallback && c.mascotFallback !== 'none'),
+  ]);
 }
 
 /** Owner 10-10: the "Pro, then Team Reroll" answers of a BLOCK dialog, offered as upstream's own client offers them
@@ -125,7 +146,7 @@ export function blockProCompositeOptions(dialogId: unknown, roll: Record<string,
     const driveBonus = opts.driveBonus ?? genericDriveBonusName;
     return proChoices(rr).slice(1).map((c) => {
       const label = composedChoiceLabel(c, driveBonus);
-      return { kind: COMPOSITE_KIND_BY_SOURCE[c.source]!, source: c.source, label, title: label, ...teamPartBadge(c, driveBonus) };
+      return { kind: COMPOSITE_KIND_BY_SOURCE[c.source]!, source: c.source, label, title: label, ...teamPartBadge(c, driveBonus), ...proTag(c.source, rr) };
     });
   }
   const trr = rr.includes('TRR');
@@ -133,7 +154,15 @@ export function blockProCompositeOptions(dialogId: unknown, roll: Record<string,
   const sources = mascot
     ? (trr ? ['Pro TRR', 'Pro Mascot', 'Pro Mascot TRR'] : ['Pro Mascot'])
     : trr ? ['Pro TRR'] : [];
-  return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source)).map((option) => ({ ...option }));
+  return BLOCK_PRO_COMPOSITES.filter((option) => sources.includes(option.source)).map((option) => ({ ...option, ...proTag(option.source, rr) }));
+}
+
+/** Owner 11-25: the Pro follow-up of a block card or one Multiple Block row (upstream DialogBlockRollPropertiesHandler
+ *  :102-105 / DialogReRollBlockForTargetsPropertiesHandler :66-71 -> selectTeamReRoll(PRO) -> select :40-53): the card's
+ *  Pro composites, then "No reroll" (Pro alone, sent as the plain Pro answer); null when the card offers none (skip rule:
+ *  the Pro button answers Pro at once). The Pro rerolls the chosen die (proIndex). */
+export function blockProFollowUp(proComposite: readonly BlockProCompositeOption[] | null | undefined): (BlockProCompositeOption | { source: 'Pro'; proPart: 'none' })[] | null {
+  return proFollowUp<BlockProCompositeOption | { source: 'Pro'; proPart: 'none' }>([...(proComposite ?? []), { source: 'Pro', proPart: 'none' }]);
 }
 
 export function buildBlockDecision(game: GameJson | null, dp: Record<string, unknown>, readOnly: boolean) {

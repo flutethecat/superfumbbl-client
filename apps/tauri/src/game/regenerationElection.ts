@@ -4,7 +4,7 @@ import {
   type DecisionAuthority,
 } from './inducementPurchase';
 import type { InducementType } from './railRegistryKeys.generated';
-import { composedChoiceLabel, directTeamChoices, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, proChoices, teamPartBadge } from './teamReRollComposer';
+import { composedChoiceLabel, directTeamChoices, genericDriveBonusName, hasDriveBonusOrLeader, mascotChoices, mascotTag, proChoices, proTag, teamPartBadge, type MascotFallback, type ProPart } from './teamReRollComposer';
 
 export interface RegenerationReRollOptionsWire {
   reRollProperties?: readonly string[];
@@ -27,7 +27,12 @@ export type RegenerationElectionChoice =
   | { kind: 'inducement'; playerId: string }
   /** `label`: set for the current server's named team answers (a drive bonus / Leader / Mascot fallback); else the
    *  source is shown as it is today. */
-  | { kind: 'reRoll'; playerId: string; reRollSource: string; label?: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string };
+  | { kind: 'reRoll'; playerId: string; reRollSource: string; label?: string; info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string;
+    /** Owner 11-24: a Mascot answer (teamReRollComposer.mascotTag): one Team Mascot choice per player, its fallback
+     *  asked in a client-local follow-up. The source sent is unchanged. */
+    mascotFallback?: MascotFallback;
+    /** Owner 11-25: a Pro answer (teamReRollComposer.proTag). */
+    proPart?: ProPart; proMascotPart?: MascotFallback };
 
 export type RegenerationElectionCommand =
   | {
@@ -98,7 +103,7 @@ export function regenerationElectionChoices(
       const name = driveBonus ?? genericDriveBonusName;
       // Owner 11-21: a drive bonus answer reads as the Team reroll; its "i" text names the bonus (driveBonusInfo).
       const push = (c: ReturnType<typeof proChoices>[number]) => {
-        choices.push({ kind: 'reRoll', playerId, reRollSource: c.source, label: composedChoiceLabel(c, name), ...teamPartBadge(c, name) });
+        choices.push({ kind: 'reRoll', playerId, reRollSource: c.source, label: composedChoiceLabel(c, name), ...teamPartBadge(c, name), ...mascotTag(c), ...proTag(c.source, rowProperties) });
       };
       [...mascotChoices(rowProperties), ...directTeamChoices(rowProperties)].forEach(push);
       if (offered.has('PRO')) proChoices(rowProperties).forEach(push);
@@ -106,15 +111,15 @@ export function regenerationElectionChoices(
       return;
     }
     if (mascot) {
-      choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team Mascot' });
-      if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Mascot TRR' });
-      // Owner 11-25: the plain Team reroll beside the Mascot choices (upstream DialogReRollRegenerationMultiple:122-127,
+      choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team Mascot', mascotFallback: 'none' });
+      if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Mascot TRR', mascotFallback: 'team' });
+      // Owner 11-25: the plain Team reroll beside the Team Mascot (upstream DialogReRollRegenerationMultiple:122-127,
       // teamReRollSources(options, true): Mascot, then TRR).
       if (offered.has('TRR')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Team ReRoll' });
     } else if (offered.has('TRR')) {
       choices.push({ kind: 'reRoll', playerId, reRollSource: sharedTeamSource });
     }
-    if (offered.has('PRO')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Pro' });
+    if (offered.has('PRO')) choices.push({ kind: 'reRoll', playerId, reRollSource: 'Pro', proPart: 'none' });
     // The three SINGLE_DIE skills registered upstream use a ReRollSource with
     // the same name serialized in ReRollOptions.skill (ThinkingMansTroll.java:22,28;
     // HalflingLuck.java:22,28; ConsummateProfessional.java:21,27).

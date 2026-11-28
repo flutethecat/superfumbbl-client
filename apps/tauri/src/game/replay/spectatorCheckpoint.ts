@@ -727,8 +727,13 @@ export function validateSpectatorCheckpoint(value: SpectatorCheckpoint): void {
   const teamRerollOptionShape = (o: Record<string, unknown>): boolean => {
     const base = ['label', 'source', 'response', 'role'];
     const extra = Object.keys(o).filter((k) => !base.includes(k));
-    if (!base.every((k) => k in o) || extra.some((k) => !['teamKind', 'info', 'badgeTag', 'badgeSkill', 'badgeName'].includes(k))) return false;
+    if (!base.every((k) => k in o) || extra.some((k) => !['teamKind', 'info', 'badgeTag', 'badgeSkill', 'badgeName', 'mascotFallback', 'proPart', 'proMascotPart'].includes(k))) return false;
     if ('teamKind' in o && o.teamKind !== 'leader' && o.teamKind !== 'driveBonus') return false;
+    // owner 11-24: a Mascot answer's fallback part (teamReRollComposer.mascotTag), used by the coach's Mascot follow-up
+    if ('mascotFallback' in o && !oneOf(['none', 'team', 'leader', 'driveBonus'] as const, o.mascotFallback)) return false; // string-only (Sol r1 #4)
+    // owner 11-25: a Pro answer's fallback parts (teamReRollComposer.proTag)
+    if ('proPart' in o && !oneOf(['none', 'mascot', 'team', 'leader', 'driveBonus'] as const, o.proPart)) return false;
+    if ('proMascotPart' in o && !oneOf(['none', 'team', 'leader', 'driveBonus'] as const, o.proMascotPart)) return false;
     const badged = 'info' in o;
     if (badged !== ('badgeName' in o) || (badged && !('badgeTag' in o) === !('badgeSkill' in o))) return false;
     return (!badged || (typeof o.info === 'string' && typeof o.badgeName === 'string'))

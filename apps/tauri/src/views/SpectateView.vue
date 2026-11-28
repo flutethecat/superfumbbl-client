@@ -64,13 +64,15 @@ import { createModalOfferHoldTracker } from '../game/logic/modalOfferHolds';
 import { ROLL_FAILED_CUE_DELAY_MS, ROLL_FAILED_REROLL_CUE_DELAY_MS, createFailedRollCueOnce, createTurnClockCueTracker, failedRollCueDelayMs, rollFailedCueAllowed, turnClockWarnAtS } from '../game/logic/uiSoundCues';
 import { initPitchRendererMount } from '../game/pitchRendererMount';
 import type { PromptRect, PromptCardBox } from '../game/store';
-import type { BlockProCompositeKind } from '../game/blockDecisionProjection';
+import { blockMascotFollowUp, blockProFollowUp, type BlockProCompositeKind } from '../game/blockDecisionProjection';
+import { mascotFirstQuestion, mascotFollowUp, mascotFollowUpLabel, proFirstQuestion, proFollowUp, proMascotFollowUp, type MascotFallback, type MascotTaggedOption, type ProPart, type ProTaggedOption } from '../game/teamReRollComposer';
 import { multiBlockDieButtonState, multiBlockDieClick, type MultiBlockDieArm, type MultiBlockDieRow } from '../game/multiBlockDieButton';
 import DisplayCaps from '../components/DisplayCaps.vue';
 import { createPlayerCardGeometry, isPrimaryCardPointer } from '../game/playerCardGeometry';
 import D6Face from '../components/D6Face.vue';
 import RerollInfoMarker from '../components/RerollInfoMarker.vue';
 import ProTrrBlendIcon from '../components/ProTrrBlendIcon.vue';
+import NoRerollIcon from '../components/NoRerollIcon.vue';
 import GameLoadRankPanel from '../components/GameLoadRankPanel.vue';
 import WaitingMatchCardBody from '../components/WaitingMatchCardBody.vue';
 import { rankPanelInputPending, rankPanelPhaseToken, storeRankPanelDeps, useGameLoadRankPanel } from '../game/gameLoadRankPanel';
@@ -3274,6 +3276,8 @@ function useBlockPartialOption(kind: 'brawler' | 'pro' | 'consummate' | 'singleB
     return;
   }
   // Pro / Consummate / single-block-die re-roll ONE die. Only one die → submit immediately.
+  // Owner 11-25: Pro asks its fallbacks first (upstream: the die's Pro button, then the follow-up).
+  if (bp.dice.length <= 1 && kind === 'pro') { pickPro('block', 0, () => gameStore.resolveBlockPartial('pro', 0)); return; }
   if (bp.dice.length <= 1) { gameStore.resolveBlockPartial(kind, 0); return; }
   bpSelectedDice.value = new Set();
   bpDieMode.value = kind; // else arm die-selection: the dice become clickable
@@ -3281,28 +3285,21 @@ function useBlockPartialOption(kind: 'brawler' | 'pro' | 'consummate' | 'singleB
 function clickBlockPartialDie(i: number) {
   if (bpTumbling.value) return; // owner 09-05: inert while the dice tumble
   if (!gameStore.state.blockPartial || !blockDialogMine.value) return;
+  if (mascotAskOpen('block')) return; // owner 11-24: the Mascot follow-up is open (upstream's replaces the dice dialog)
   if (bpDieMode.value === 'multiBlockDice') {
     const selected = new Set(bpSelectedDice.value);
     if (selected.has(i)) selected.delete(i); else selected.add(i);
     bpSelectedDice.value = selected;
     return;
   }
+  if (bpDieMode.value === 'pro') { pickPro('block', i, () => gameStore.resolveBlockPartial('pro', i)); return; } // owner 11-25: then its fallbacks
   if (bpDieMode.value) { gameStore.resolveBlockPartial(bpDieMode.value, i); return; } // reroll THAT die — always OK
   // no reroll armed → this is a COMMIT. In o66 phase-1 (uphill, attacker still deciding a re-roll) the attacker
   // must NOT commit the die — the pick is the defender's. Ignore the click; the Decline button proceeds instead.
   if (bpPhase1ReRollOnly.value) return;
   gameStore.resolveBlockPartial('accept', i); // no reroll armed → accept that die
 }
-// Owner 10-10: Pro with a fallback ("Pro + RR" and the mascot variants). One die: sent at once. 2 or 3 dice
-// (blockProCompositeOptions): arm the die-select like Pro; the clicked die is
-// the proIndex. The store sends the offered source or nothing.
-function useBlockProComposite(kind: BlockProCompositeKind) {
-  const bp = gameStore.state.blockPartial;
-  if (!blockDialogMine.value || !bp) return;
-  if (bp.dice.length <= 1) { gameStore.resolveBlockPartial(kind, 0); return; }
-  bpSelectedDice.value = new Set();
-  bpDieMode.value = kind;
-}
+// Owner 11-25: the Pro-with-fallback answers are Pro's follow-up (pickPro / askPick), not buttons of their own.
 function commitMultiBlockDice() {
   if (!blockDialogMine.value || bpDieMode.value !== 'multiBlockDice' || bpSelectedDice.value.size < 1) return;
   gameStore.resolveBlockPartial('multiBlockDice', [...bpSelectedDice.value].sort((a, b) => a - b));
@@ -3326,45 +3323,28 @@ watch(() => gameStore.state.multiBlockResolution?.seq, () => { mbrDieMode.value 
 function mbrDieState(row: MultiBlockDieRow & { tumbleKey: string }): { readonly: boolean; disabled: boolean } {
   return multiBlockDieButtonState(row, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrRowTumble(row) });
 }
-// ---------------------------------------------------------------------------------------------------------------------
-// Owner 11-25: the Multiple Block card's submit latch. Its answers (a die, Brawler, Hatred, Pro / Consummate on one die, a
-// Pro composite on one die, the all-dice reroll, a team / Mascot / drive bonus / Leader reroll) each send a command the
-// server answers by republishing the card; until then a second press (a double click, or another row's action) would
-// send a second command. The latch is taken only when a send actually goes out (the store's gameplay send counter moved;
-// a refused send takes none), refuses AND disables every control of the card while held, and fails open: released by
-// the next applied server frame, a dialog change (gameStore.dialogOccurrence), or a 4 s watchdog. Arming a multi-die Pro /
-// Consummate / Pro composite sends nothing and takes no latch.
-// ---------------------------------------------------------------------------------------------------------------------
-const mbrLatch = ref<{ frame: number; occurrence: number } | null>(null);
-const mbrLatched = computed(() => !!mbrLatch.value && gameStore.state.appliedFrameSeq === mbrLatch.value.frame
-  && gameStore.dialogOccurrence() === mbrLatch.value.occurrence && !!gameStore.state.multiBlockResolution);
-const MBR_LATCH_WATCHDOG_MS = 4000;
-let mbrLatchWatchdog: ReturnType<typeof setTimeout> | null = null;
-function releaseMbrLatch(): void {
-  mbrLatch.value = null;
-  if (mbrLatchWatchdog) { clearTimeout(mbrLatchWatchdog); mbrLatchWatchdog = null; }
-}
-watch(mbrLatched, (held) => { if (!held && mbrLatch.value) releaseMbrLatch(); });
-onBeforeUnmount(releaseMbrLatch);
-/** One Multiple Block answer: refused while the latch holds; takes it when the command went out. */
-function mbrSubmit(send: () => void): void {
-  if (mbrLatched.value) return;
-  const before = gameStore.gameplaySendCount();
-  const occurrence = gameStore.dialogOccurrence();
-  send();
-  if (gameStore.gameplaySendCount() === before) return;
-  releaseMbrLatch();
-  mbrLatch.value = { frame: gameStore.state.appliedFrameSeq, occurrence };
-  mbrLatchWatchdog = setTimeout(() => { mbrLatchWatchdog = null; mbrLatch.value = null; }, MBR_LATCH_WATCHDOG_MS);
-}
+// Owner 11-25: the Multiple Block card's submit latch is the shared card lock (mascotCardAction / mascotCardLocked, the
+// 'mbr' card): taken only when a send actually goes out, every control of the card refused AND disabled while held, the
+// follow-up answers included, released by the next applied frame, a dialog change or the 4 s watchdog (fail open).
+// Arming a multi-die Pro / Consummate sends nothing and takes no lock.
+const mbrLatched = computed(() => mascotCardLocked('mbr'));
+/** One Multiple Block answer: refused while the card lock holds; takes it when the command went out. */
+function mbrSubmit(send: () => void): void { mascotCardAction('mbr', send); }
 function multiBlockPickDie(row: MultiBlockDieRow, dieIndex: number) {
-  mbrSubmit(() => multiBlockPickDieNow(row, dieIndex));
+  if (!gameStore.state.multiBlockResolution) return;
+  if (mascotAskOpen(`mbr:${row.targetId}`)) return; // owner 11-24: this target's follow-up is open
+  mascotCardAction('mbr', () => multiBlockPickDieNow(row, dieIndex)); // one card-wide submit lock
 }
 function multiBlockPickDieNow(row: MultiBlockDieRow, dieIndex: number) {
-  if (!gameStore.state.multiBlockResolution) return;
   // owner 10-13: a rerolled target's dice are inert while they tumble
   const click = multiBlockDieClick(row, dieIndex, { mine: multiBlockDialogMine.value, armed: mbrDieMode.value, tumbling: !!mbrTumbles.value[row.targetId] });
   if (!click) return; // the defender's choice → read-only
+  if (click.kind === 'reroll' && click.source === 'Pro') { // owner 11-25: the armed Pro's die chosen -> its fallbacks
+    const dieIndex = click.dieIndex;
+    pickPro(`mbr:${row.targetId}`, dieIndex, () => gameStore.sendMultiBlockChoiceForTarget(row.targetId, -1, 'Pro', dieIndex));
+    if (!mascotAskOpen(`mbr:${row.targetId}`)) mbrDieMode.value = null;
+    return;
+  }
   if (click.kind === 'reroll') { // armed Pro/Consummate → re-roll THIS die (sel=-1; the fresh dialog drives the pick)
     gameStore.sendMultiBlockChoiceForTarget(row.targetId, -1, click.source, click.dieIndex);
     mbrDieMode.value = null;
@@ -3379,7 +3359,7 @@ function multiBlockPickDieNow(row: MultiBlockDieRow, dieIndex: number) {
 }
 // A per-target re-roll button. team/mascot/brawler fire immediately; Pro/Consummate arm a die-select (unless 1 die).
 function multiBlockReroll(targetId: string, kind: 'team' | 'mascot' | 'brawler' | 'pro' | 'consummate', diceLen: number) {
-  mbrSubmit(() => multiBlockRerollNow(targetId, kind, diceLen));
+  mascotCardAction('mbr', () => multiBlockRerollNow(targetId, kind, diceLen));
 }
 function multiBlockRerollNow(targetId: string, kind: 'team' | 'mascot' | 'brawler' | 'pro' | 'consummate', diceLen: number) {
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
@@ -3388,26 +3368,23 @@ function multiBlockRerollNow(targetId: string, kind: 'team' | 'mascot' | 'brawle
     case 'mascot': gameStore.sendMultiBlockChoiceForTarget(targetId, -1, 'Team Mascot', 0); break;
     case 'brawler': gameStore.sendMultiBlockBrawler(targetId); break;
     case 'pro': case 'consummate':
-      if (diceLen <= 1) gameStore.sendMultiBlockChoiceForTarget(targetId, -1, kind === 'pro' ? 'Pro' : 'Consummate Professional', 0);
+      // Owner 11-25: one die -> Pro asks its fallbacks (skip rule: Pro at once); several dice -> arm the die select (sends nothing)
+      if (diceLen <= 1 && kind === 'pro') pickPro(`mbr:${targetId}`, 0, () => gameStore.sendMultiBlockChoiceForTarget(targetId, -1, 'Pro', 0));
+      else if (diceLen <= 1) gameStore.sendMultiBlockChoiceForTarget(targetId, -1, 'Consummate Professional', 0);
       else mbrDieMode.value = { targetId, kind };
       break;
   }
 }
-function multiBlockProComposite(targetId: string, kind: BlockProCompositeKind, diceLen: number) {
-  if (mbrLatched.value) return;
-  if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value) return;
-  if (diceLen <= 1) mbrSubmit(() => gameStore.sendMultiBlockProComposite(targetId, kind, 0)); // the one-die send takes the latch
-  else mbrDieMode.value = { targetId, kind: 'proComposite', composite: kind }; // arming sends nothing, takes no latch
-}
 // Savage Blow rerolls the whole multi-block pool, so send its source with dieIndex -1.
 function multiBlockRerollAllDice(targetId: string, source: string | null, nrOfDice: number) {
+  if (mascotCardLocked('mbr')) return;
   if (!gameStore.state.multiBlockResolution || !multiBlockDialogMine.value || !source || nrOfDice <= 0) return;
   // ⚠ SR-233 (Meero): SAVAGE_BLOW is a NAMED reroll source, so the server rerolls ONLY the die indexes the command
   //   carries (`getAnyDiceIndexes()` = the wire `reRolledDice`) — NOT the unnamed Team-ReRoll else-branch that
   //   rerolls all nrOfDice with no index set. Omitting the 5th arg ⇒ empty index set ⇒ ZERO dice rerolled (a no-op).
   //   Enumerate EVERY die index [0..nrOfDice-1] to reroll the WHOLE pool. (wire key `reRolledDice`, server :437.)
   const allDice = Array.from({ length: nrOfDice }, (_, i) => i);
-  mbrSubmit(() => gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0, allDice)); // takes the latch
+  mascotCardAction('mbr', () => gameStore.sendMultiBlockChoiceForTarget(targetId, -1, source, 0, allDice)); // Sol r3 #2: acquires the lock
 }
 // Owner 10-13: Multiple Block card - a per-target reroll re-tumbles that target's rerolled dice (row.rerolledDice), with
 // the first roll's tumble length; the row's dice stay inert until they settle. A target's first roll does not tumble.
@@ -3460,9 +3437,14 @@ const multiBlockRows = computed(() => {
   const mb = gameStore.state.multiBlockResolution;
   const g = gameStore.game.value;
   if (!mb || !g) return [];
-  const all = [...(g.teamHome.playerArray as { playerId: string; name?: string }[]),
-    ...(g.teamAway.playerArray as { playerId: string; name?: string }[])];
-  return mb.rolls.map((r) => ({ ...r, name: all.find((p) => p.playerId === r.targetId)?.name ?? '' }));
+  // A player's name is playerName on the wire (FFB Player JSON); the old lookup read .name, so every row's name was
+  // blank and the coach could not tell the targets apart.
+  const all = [...(g.teamHome.playerArray as { playerId: string; playerName?: string; name?: string }[]),
+    ...(g.teamAway.playerArray as { playerId: string; playerName?: string; name?: string }[])];
+  return mb.rolls.map((r) => {
+    const p = all.find((x) => x.playerId === r.targetId);
+    return { ...r, name: p?.playerName ?? p?.name ?? '' };
+  });
 });
 // Owner 09-28 (Spec S8): same rule as the single-block hint — name the source (Pro / Consummate Professional…),
 // looked up on the armed row rather than a generic options array (multiBlockReroll only tracks target+kind).
@@ -4577,6 +4559,7 @@ watch(
 // Owner 2026-07-08: bind the VAMPIRE BLOODLUST card to the vampire's token the same way as the
 // sidestep/stand-firm skill toast — RAF-follows `playerScreenPos`, sits just above the token.
 const bloodlustPos = reactive({ x: 0, y: 0, ready: false });
+const BLOODLUST_TOKEN_GAP_PX = 10; // = the dodge gap reRollPromptScreenPosition keeps from an avoid region
 let bloodlustRaf = 0;
 watchDecisionSurface(
   () => gameStore.state.bloodlust?.seq,
@@ -4588,7 +4571,22 @@ watchDecisionSurface(
     const follow = () => {
       if (!gameStore.state.bloodlust || !renderer) { bloodlustPos.ready = false; return; }
       const p = renderer.playerScreenPos(gameStore.state.bloodlust.playerId);
-      if (p && reactivePromptHeld.value !== 'bloodlust') { bloodlustPos.x = p.x; bloodlustPos.y = p.y - 54; bloodlustPos.ready = true; }
+      if (p && reactivePromptHeld.value !== 'bloodlust') {
+        // Rig 11-27: a vampire low on the screen ran the card (and, worse, its taller follow-up) off the bottom edge.
+        // The card is kept inside the pitch host the way the reroll card is (reRollPromptScreenPosition with the card's
+        // measured box). The box is measured relative to the anchor every frame, so the clamp is idempotent and follows
+        // the card's size when the follow-up opens or closes. Before the first measure the raw anchor is used.
+        // Sol 11-27 (P3): the vampire's token is the avoid region (playerTokenAvoidRect, the reroll card's dodge machinery):
+        // once measured the card sits just ABOVE the token (its bottom edge 10 px over the token's keep-out box) and, when
+        // the screen edge clamps it back over him, moves below / beside him instead.
+        const anchor = { x: p.x, y: p.y - 54 };
+        const host = pitchHost.value;
+        const card = bloodlustPos.ready && !reactivePromptDragPos.bloodlust ? anchoredCardBox(host, '.bloodlust-card', bloodlustPos) : null;
+        const avoid = card ? playerTokenAvoidRect(gameStore.state.bloodlust.playerId) : null;
+        const above = card && avoid ? { x: p.x, y: avoid.top - BLOODLUST_TOKEN_GAP_PX - card.height - card.dy } : anchor;
+        const placed = card && host ? reRollPromptScreenPosition(above, { width: host.clientWidth, height: host.clientHeight }, { card, avoid }) : anchor;
+        bloodlustPos.x = placed.x; bloodlustPos.y = placed.y; bloodlustPos.ready = true;
+      }
       bloodlustRaf = requestAnimationFrame(follow);
     };
     follow();
@@ -4862,16 +4860,22 @@ function bncDirectionAvoidRect(): PromptRect | null {
  *  needs no knowledge of the family's CSS (translateX(-50%) in icons mode, none in markings mode) or of the
  *  per-mode +16/+18 template nudge. Needs one settled frame — until then the dodge simply doesn't apply. */
 function rerollCardBox(host: HTMLElement | null): PromptCardBox | null {
-  if (!host || !rerollMenuPos.ready) return null;
-  const el = host.querySelector('.reroll-bar, .reroll-menu') as HTMLElement | null;
+  if (!rerollMenuPos.ready) return null;
+  return anchoredCardBox(host, '.reroll-bar, .reroll-menu', rerollMenuPos);
+}
+/** A token-anchored card's measured box: its size and its top-left offset from the anchor it is styled at (so any CSS
+ *  transform is accounted for). Null before it has a size. */
+function anchoredCardBox(host: HTMLElement | null, selector: string, anchor: { x: number; y: number }): PromptCardBox | null {
+  if (!host) return null;
+  const el = host.querySelector(selector) as HTMLElement | null;
   if (!el) return null;
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
   const hr = host.getBoundingClientRect();
   return {
     width: r.width, height: r.height,
-    dx: (r.left - hr.left) - rerollMenuPos.x,
-    dy: (r.top - hr.top) - rerollMenuPos.y,
+    dx: (r.left - hr.left) - anchor.x,
+    dy: (r.top - hr.top) - anchor.y,
   };
 }
 watchDecisionSurface(
@@ -5188,6 +5192,14 @@ watch(() => gameStore.state.injuryInteraction?.seq, () => { reactivePromptDragPo
 /* Show the prompted player's team-reroll count; display only. */
 // #205: the separate "team re-rolls available" chip is retired by the unification (the count now rides the
 // die icon on each TRR-consuming option), so `rerollPromptHasTeamReRoll` is no longer needed.
+/** Owner 11-25 (rig): the team reroll count of a player's team, for the Mascot follow-up's Team reroll answer on the
+ *  bloodlust, reroll-for-targets and regeneration cards (display only); null when the player is unknown. */
+function teamReRollsOf(playerId: string | null | undefined): number | null {
+  const g = gameStore.game.value;
+  const owner = playerSideById(playerId);
+  if (!g || !owner) return null;
+  return (owner.side === 'home' ? g.turnDataHome : g.turnDataAway).reRolls ?? 0;
+}
 const rerollPromptTeamReRolls = computed<number | null>(() => {
   const g = gameStore.game.value;
   const p = gameStore.state.reRollPrompt;
@@ -11976,6 +11988,7 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
       return;
     }
     case 'dismiss-prompt':
+      if (closeMascotAsk()) return; // owner 11-24: back from the Mascot follow-up, nothing sent
       if (decision.prompt === 'endActivation') cancelEndActivation();
       else if (decision.prompt === 'endTurn') cancelEndTurnWarn();
       else if (decision.prompt === 'followup') answerFollowup(false);
@@ -12035,6 +12048,7 @@ function escO66Cascade(allowed?: ReadonlySet<string>) {
 /** #48 Esc cascade (owner-ruled): in o66 PLAY, escO66Cascade owns the whole cascade (abort-arm → close-menu →
  *  END-ACTIVATION #12 → Game Menu). Flag-OFF / spectating keep the legacy menus-first cascade byte-identical. */
 function escapeCascade(): void {
+  if (closeMascotAsk()) return; // owner 11-24: Esc = Back from the Mascot follow-up (never a decline)
   if (kickConfirmCard.value) { gameStore.cancelKickSquare(); return; } // owner 10-13: Esc = Go back, keep aiming
   if (passConfirmCard.value) { cancelPassCard(); return; } // owner 10-20: Esc = Go back, free-select stays armed
   if (cancelDeferredFriendlySwitch()) { // owner 10-05: Esc only drops a pending player switch
@@ -12804,7 +12818,426 @@ const rerollOptionsShown = computed(() => {
   const options = gameStore.state.reRollPrompt?.options ?? [];
   return activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(options) : options;
 });
-const rerollPadYSource = computed(() => padRerollYSource(gameStore.state.reRollPrompt?.options ?? []));
+// ---------------------------------------------------------------------------------------------------------------------
+// Owner 11-24 ("I like upstream's version better. I suggest we use theirs."): the Team Mascot is ONE button; choosing it
+// opens a follow-up ON THE SAME CARD asking which reroll to use if the Mascot fails (upstream DialogReRollFallback via
+// AbstractReRollDialogHandler.select:40-53; options and order: teamReRollComposer.mascotFollowUp). LOCAL UI only:
+//  - nothing is sent until the final pick, which calls the very sender the old combined button called (same command);
+//  - Back / Esc / pad B / the touch window X close it and return to the first question, nothing sent;
+//  - the server dialog stays open and unanswered throughout: store state (the prompt, its timers, holds, watchdogs) is
+//    untouched; this ref is view state only, and only the coach's own cards ever open it (spectator cards unchanged);
+//  - skip rule (upstream select:44, :52): no fallback offered -> the Mascot button answers Team Mascot at once.
+// `surface` names the card (and its row / player), `token` the dialog instance it was opened on: when that card's
+// dialog changes or goes away the follow-up closes by itself.
+// ---------------------------------------------------------------------------------------------------------------------
+/** Owner 11-25: `level` = which follow-up is open: the Team Mascot's ('mascot'), Pro's ('pro', level 1) or the Pro
+ *  Mascot's ('proMascot', level 2, reached from Pro's Team Mascot answer). `proIndex` = the die Pro rerolls (block cards). */
+const mascotAsk = ref<{ surface: string; token: string; level?: 'mascot' | 'pro' | 'proMascot'; proIndex?: number } | null>(null);
+/** Sol r1 #3 / r2 #3 / r3 #1: the dialog occurrence the follow-up belongs to: the store's identity of the installed
+ *  server dialog (gameStore.dialogOccurrence: a new arrival by frame, snapshot, resync, replay seek or checkpoint is a
+ *  new occurrence, even byte-identical), plus its contents. A client re-render of the same arrival changes neither.
+ *  appliedFrameSeq and snapshotEpoch are read only so the computeds re-evaluate on every frame and snapshot. */
+function mascotDialogOccurrence(): string {
+  void gameStore.state.appliedFrameSeq; void gameStore.state.snapshotEpoch;
+  // the cards re-surface on a dialog swap even without a frame (catch-up / harness paths): track them too
+  void gameStore.state.multiBlockResolution; void gameStore.state.blockPartial; void gameStore.state.reRollPrompt;
+  let content = '';
+  try { content = JSON.stringify(gameStore.game.value?.dialogParameter ?? null); } catch { content = ''; }
+  return `${gameStore.dialogOccurrence()}|${content}`;
+}
+function mascotSurfaceToken(surface: string): string | null {
+  const t = mascotCardToken(surface);
+  return t === null ? null : `${t}|${mascotDialogOccurrence()}`;
+}
+function mascotCardToken(surface: string): string | null {
+  const s = gameStore.state;
+  if (surface === 'reroll') return s.reRollPrompt?.mine ? String(s.reRollPrompt.seq) : null;
+  if (surface === 'block') return s.blockPartial && blockDialogMine.value ? String(s.blockPartial.tumbleKey) : null;
+  if (surface === 'bloodlust') return s.bloodlust?.stage === 'reroll' ? String(s.bloodlust.seq) : null;
+  if (surface.startsWith('mbr:')) {
+    const row = s.multiBlockResolution?.rolls.find((r) => `mbr:${r.targetId}` === surface);
+    return row && multiBlockDialogMine.value ? String(row.tumbleKey) : null;
+  }
+  if (surface.startsWith('rft:')) return s.reRollForTargets ? String(s.reRollForTargets.seq) : null;
+  if (surface.startsWith('regen:')) return s.inducementUse ? String(s.inducementUse.key) : null;
+  return null;
+}
+/** The card a surface belongs to: every Multiple Block row is one card, every reroll-for-targets target and every
+ *  regeneration player one card. The submit lock is per card, not per follow-up. */
+function mascotCardOf(surface: string): string { return surface.split(':')[0]!; }
+const mascotAskLive = computed(() => !!mascotAsk.value && mascotSurfaceToken(mascotAsk.value.surface) === mascotAsk.value.token);
+// Sol r2 #1: the submit lock lives at the CARD + dialog-occurrence level, outside the follow-up's own ref, so Back and a
+// reopen cannot discard it, and it covers every row, Mascot button, answer and die of that card. It fails open: the
+// next applied server frame or a dialog change releases it, and so does the watchdog if neither comes.
+const mascotLock = ref<{ card: string; occurrence: string; frame: number } | null>(null);
+const mascotLockLive = computed(() => !!mascotLock.value && gameStore.state.appliedFrameSeq === mascotLock.value.frame
+  && mascotDialogOccurrence() === mascotLock.value.occurrence);
+function mascotCardLocked(card: string): boolean { return mascotLockLive.value && mascotLock.value!.card === card; }
+const mascotAskSent = computed(() => mascotAskLive.value && mascotCardLocked(mascotCardOf(mascotAsk.value!.surface)));
+const MASCOT_ASK_WATCHDOG_MS = 4000;
+let mascotAskWatchdog: ReturnType<typeof setTimeout> | null = null;
+function clearMascotWatchdog(): void { if (mascotAskWatchdog) { clearTimeout(mascotAskWatchdog); mascotAskWatchdog = null; } }
+/** Release: the lock and its watchdog go together (Sol r2 #4: no stale timer after a frame or a dialog change). */
+function releaseMascotLock(): void {
+  const card = mascotLock.value?.card;
+  mascotLock.value = null;
+  clearMascotWatchdog();
+  // the locked card's follow-up retires with it: the coach is back on the card's first question, as the server left it
+  if (card && mascotAsk.value && mascotCardOf(mascotAsk.value.surface) === card) mascotAsk.value = null;
+}
+watch(mascotLockLive, (live) => { if (!live && mascotLock.value) releaseMascotLock(); });
+/** A follow-up pick: `send` is the old button's own sender. Nothing sent (a store gate or the transport refused it) =
+ *  no lock. Something sent = the card is locked until release. */
+function mascotAnswer(send: () => void): void {
+  if (!mascotAskLive.value) return;
+  const card = mascotCardOf(mascotAsk.value!.surface);
+  if (mascotCardLocked(card)) return;
+  mascotCardAction(card, send);
+}
+/** Any answer of a lockable card (a follow-up pick, a Multiple Block row's own buttons and dice): refused while that
+ *  card is locked; locks the card when it sends. */
+function mascotCardAction(card: string, send: () => void): void {
+  if (mascotCardLocked(card)) return;
+  const before = gameStore.gameplaySendCount();
+  const occurrence = mascotDialogOccurrence();
+  send();
+  if (gameStore.gameplaySendCount() === before) return;
+  clearMascotWatchdog();
+  mascotLock.value = { card, occurrence, frame: gameStore.state.appliedFrameSeq };
+  mascotAskWatchdog = setTimeout(() => { mascotAskWatchdog = null; releaseMascotLock(); }, MASCOT_ASK_WATCHDOG_MS);
+}
+onBeforeUnmount(clearMascotWatchdog);
+/** Sol r1 #2: a block / Multiple Block card is a MANDATORY pad scope (B inert, no window X). While its follow-up is open
+ *  it is not: B and the touch window X run Back, as the visible Back button does. */
+const MASCOT_ASK_PAD = { cancel: () => { closeMascotAsk(); }, close: 'answer' as const };
+const multiBlockMascotAskOpen = computed(() => mascotAskLive.value && mascotAsk.value!.surface.startsWith('mbr:'));
+watch(mascotAskLive, (live) => { if (!live) mascotAsk.value = null; });
+function mascotAskOpen(surface: string): boolean {
+  return mascotAskLive.value && mascotAsk.value!.surface === surface;
+}
+/** The one Team Mascot button: opens the follow-up, or under the skip rule sends the Mascot alone (`sendAlone`). */
+function pickMascot(surface: string, followUp: readonly unknown[] | null, sendAlone: () => void): void {
+  if (mascotCardLocked(mascotCardOf(surface))) return; // a pick of this card is still on its way
+  if (!followUp) { mascotCardAction(mascotCardOf(surface), sendAlone); return; }
+  const token = mascotSurfaceToken(surface);
+  if (token === null) return;
+  if (surface === 'block') { bpDieMode.value = null; bpSelectedDice.value = new Set(); }
+  if (surface.startsWith('mbr:')) mbrDieMode.value = null;
+  mascotAsk.value = { surface, token, level: 'mascot' };
+}
+/** Back: the first question again, nothing sent. False when no follow-up is open. The card's submit lock (if a pick is
+ *  on its way) is kept: Back never re-arms an answer. */
+function closeMascotAsk(): boolean {
+  if (!mascotAskLive.value) return false;
+  if (escapeKeyActing) holdEscapeBack();
+  // Owner 11-25: Back returns ONE level (Pro Mascot's follow-up -> Pro's follow-up -> the first question)
+  if (mascotAsk.value!.level === 'proMascot') { mascotAsk.value = { ...mascotAsk.value!, level: 'pro' }; return true; }
+  mascotAsk.value = null;
+  return true;
+}
+/** Sol 11-27 (P1): ONE physical Escape press does ONE thing. A keyboard Escape that went Back from a follow-up owns the
+ *  rest of that press: its auto-repeat keydowns (wherever focus is: a badge, an answer, the page) are swallowed until
+ *  the Escape keyup (or the window losing focus), so a held key can never go on to decline the reroll on the first
+ *  panel. A fresh, separate press after the keyup behaves exactly as before. */
+let escapeKeyActing = false; // true while onKeydown handles a keyboard Escape
+let escapeBackHeld = false;
+function releaseEscapeBack(event?: Event): void {
+  if (event instanceof KeyboardEvent && event.key !== 'Escape') return;
+  escapeBackHeld = false;
+  window.removeEventListener('keyup', releaseEscapeBack, true);
+  window.removeEventListener('blur', releaseEscapeBack);
+}
+function holdEscapeBack(): void {
+  if (escapeBackHeld) return;
+  escapeBackHeld = true;
+  window.addEventListener('keyup', releaseEscapeBack, true);
+  window.addEventListener('blur', releaseEscapeBack);
+}
+onBeforeUnmount(() => releaseEscapeBack());
+type AskOption = MascotTaggedOption & ProTaggedOption & { info?: string; badgeTag?: string; badgeSkill?: 'Leader'; badgeName?: string; kind?: string; value?: string; mascotGroup?: string };
+/** The card's tagged answers (Mascot and Pro answers with their fallbacks) a follow-up is built from. */
+function askPool(surface: string): AskOption[] {
+  const s = gameStore.state;
+  if (surface === 'reroll') return (s.reRollPrompt?.options ?? []) as AskOption[];
+  if (surface === 'bloodlust') return (s.bloodlust?.rerollOptions ?? []) as AskOption[];
+  if (surface.startsWith('rft:')) return (s.reRollForTargets?.options ?? []) as AskOption[];
+  if (surface.startsWith('regen:')) {
+    const group = surface.slice(6);
+    return (s.inducementUse?.options ?? []).filter((o) => !!o.source && o.mascotGroup === group) as AskOption[];
+  }
+  const card = surface === 'block' ? s.blockPartial : s.multiBlockResolution?.rolls.find((r) => `mbr:${r.targetId}` === surface);
+  if (!card) return [];
+  return [
+    ...(blockMascotFollowUp(card) ?? []),
+    ...(card.pro ? [{ source: 'Pro', proPart: 'none' as const }] : []),
+    ...((card.proComposite ?? []) as AskOption[]),
+  ] as AskOption[];
+}
+/** The open follow-up's answers, in upstream's order, "No reroll" last. */
+function askItems(surface: string): AskOption[] {
+  if (!mascotAskOpen(surface)) return [];
+  const pool = askPool(surface);
+  const level = mascotAsk.value!.level ?? 'mascot';
+  if (level === 'pro') return proFollowUp(pool) ?? [];
+  if (level === 'proMascot') return proMascotFollowUp(pool) ?? [];
+  return mascotFollowUp(pool) ?? [];
+}
+function askLevel(): 'mascot' | 'pro' | 'proMascot' { return mascotAsk.value?.level ?? 'mascot'; }
+/** The part an answer stands for at the open level. */
+function askPart(opt: AskOption): ProPart | undefined {
+  const level = askLevel();
+  return level === 'pro' ? opt.proPart : level === 'proMascot' ? opt.proMascotPart : opt.mascotFallback;
+}
+function askQuestion(): string {
+  return askLevel() === 'pro' ? $t('dialogs.reroll.question.proFallback') : $t('dialogs.reroll.question.mascotFallback');
+}
+/** "No reroll" (the answer that spends nothing beyond what was chosen): the controller default at every level. */
+function askNone(opt: AskOption): boolean { return askPart(opt) === 'none'; }
+function askLabel(opt: AskOption, teamReRolls: number | null): string {
+  const part = askPart(opt);
+  if (part === 'mascot') return $t('hud.teamMascot');
+  const label = mascotFollowUpLabel(part);
+  return part === 'team' && teamReRolls != null ? `${label} (${teamReRolls})` : label;
+}
+/** Owner 11-27 ("Why are we using text on these dialogs?"): on a card whose first panel draws the reroll sources as icon
+ *  controls (the block card and the Multiple Block rows), the follow-up draws each fallback answer as that same control:
+ *  the Mascot art, or the reroll die (with the Leader / drive bonus corner badge, or the team reroll count). Null = the
+ *  answer is not a reroll source ("No reroll"): it is the prohibited reroll die (NoRerollIcon, owner 11-27). */
+function askIcon(opt: AskOption): 'mascot' | 'named' | 'team' | null {
+  const part = askPart(opt);
+  if (part === 'mascot') return 'mascot';
+  if (part === 'driveBonus' || part === 'leader') return 'named';
+  if (part === 'team') return 'team';
+  return null;
+}
+/** The icon answer's title, exactly the first panel's for that source on that card. */
+function askIconTitle(opt: AskOption, surface: string): string {
+  const icon = askIcon(opt);
+  if (surface === 'reroll') {
+    // the reroll card's Team Mascot is an icon .bp-opt titled "Reroll with Team Mascot"; its pool controls are .bp-team
+    if (icon === 'mascot') return $t('hud.rerollBar.rerollWithLabel', { label: $t('hud.teamMascot') });
+    if (icon === 'team') return $t('dialogs.reroll.text.teamReroll');
+  }
+  // the bloodlust card titles each source "Reroll: " + its name, as its first panel does
+  if (surface === 'bloodlust' && icon) return $t('hud.rerollBar.reroll2') + askAria(opt);
+  const row = surface.startsWith('mbr:');
+  if (icon === 'mascot') return row ? $t('hud.mbrRow.teamMascot') : $t('hud.teamMascot');
+  if (icon === 'named') return opt.badgeName ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName }) : askLabel(opt, null);
+  if (icon === 'team') return row ? $t('hud.mbrRow.teamReroll') : $t('hud.teamReroll');
+  return askLabel(opt, null);
+}
+/** The icon answer's accessible name: the source in plain words ("Team Mascot", "Team reroll", "Team reroll (Leader)",
+ *  "Team reroll (Brilliant Coaching)"). Null for a text answer ("No reroll"): its visible words name it. */
+function askAria(opt: AskOption): string | undefined {
+  const icon = askIcon(opt);
+  return icon ? rerollSourceName(icon, { ...opt, badgeSkill: askPart(opt) === 'leader' ? 'Leader' : opt.badgeSkill, label: askLabel(opt, null) }) : undefined;
+}
+/** Sol 11-27 (P2): on a card with several players / targets (regeneration, reroll-for-targets) a follow-up icon is
+ *  named with its player / target, exactly as that card's first panel names it ("Blitzer1 — Pro", "Pro on Blitzer1"). */
+function askAriaFor(opt: AskOption, surface: string): string | undefined {
+  const name = askAria(opt);
+  if (!name) return undefined;
+  if (surface.startsWith('regen:')) {
+    const player = regenPlayerLabel(surface.slice(6));
+    return player ? `${player} — ${name}` : name;
+  }
+  if (surface.startsWith('rft:')) {
+    const target = gameStore.state.reRollForTargets?.targets.find((x) => x.targetId === surface.slice(4))?.target;
+    return target ? $t('hud.mbrRow.labelOnTarget', { label: name, target }) : name;
+  }
+  return name;
+}
+/** The name of the regeneration player a follow-up group belongs to (null when the card does not know it). */
+function regenPlayerLabel(group: string | null | undefined): string | null {
+  if (!group) return null;
+  return gameStore.state.inducementUse?.options.find((o) => (o.regenPlayerId ?? o.mascotGroup) === group && !!o.playerLabel)?.playerLabel ?? null;
+}
+// ---------------------------------------------------------------------------------------------------------------------
+// Owner 11-27 ("These reroll panels still are not right. There should be no text describing the reroll type. It's just
+// the icon and the subicon."): every control that offers a reroll SOURCE (Team Mascot, Pro, the plain Team reroll, a
+// Leader reroll, a drive bonus reroll), on every reroll card, first panel and follow-ups, is icon-only: the source's art
+// plus its corner badge (Leader icon / drive bonus tag) on the icon's corner, inside the control's box. The source's name
+// is the hover title and the aria-label only. A skill reroll and Back are unchanged; "No reroll" and the first panels'
+// decline are the prohibited reroll die (NoRerollIcon, owner 11-27, also named by title / aria-label only). Nothing about what is sent changes: these only choose how an answer is drawn.
+// ---------------------------------------------------------------------------------------------------------------------
+type RerollSourceIcon = 'mascot' | 'pro' | 'team' | 'named';
+type RerollSourceLike = { source?: string; label?: string; mascotFallback?: unknown; proPart?: unknown; badgeSkill?: string; badgeName?: string; teamKind?: unknown };
+/** The older 3.4.0 server's drive bonus sources (regeneration sends them as the source itself, regenerationElection). */
+const LEGACY_DRIVE_BONUS_SOURCES: ReadonlySet<string> = new Set(['Brilliant Coaching ReRoll', 'Pump up the Crowd', 'Star of the Show']);
+/** The Pro skill icon (null when the icon set has none: the Pro control then keeps its visible name, the only fallback). */
+const proIconUrl = computed(() => skillIconUrl('Pro', effectiveIconStyle.value) || null);
+/** The icon of a first-panel answer that is a reroll source; null = not a source (drawn as before). */
+function rerollSourceIcon(opt: RerollSourceLike): RerollSourceIcon | null {
+  const source = opt.source;
+  if (!source) return null;
+  if (opt.mascotFallback === 'none' || source === 'Team Mascot') return 'mascot';
+  if (opt.proPart === 'none' || source === 'Pro') return proIconUrl.value ? 'pro' : null;
+  if (opt.teamKind || opt.badgeSkill === 'Leader' || source === 'Drive Bonus ReRoll' || LEGACY_DRIVE_BONUS_SOURCES.has(source)) return 'named';
+  if (source === 'Team ReRoll') return 'team';
+  return null;
+}
+function rerollSourceArt(icon: RerollSourceIcon | null): string {
+  if (icon === 'mascot') return resourceIcon('team_mascot');
+  if (icon === 'pro') return proIconUrl.value ?? '';
+  return resourceIcon('re_roll');
+}
+/** The source's name in plain words (title / aria-label only; existing strings). */
+function rerollSourceName(icon: RerollSourceIcon, opt: RerollSourceLike): string {
+  if (icon === 'mascot') return $t('hud.teamMascot');
+  if (icon === 'pro') return $t('hud.blockPartialOptions.pro');
+  if (icon === 'team') return $t('hud.teamReroll');
+  const name = opt.badgeName ?? (opt.badgeSkill === 'Leader' ? terms('Leader') : opt.source && LEGACY_DRIVE_BONUS_SOURCES.has(opt.source) ? opt.source : null);
+  return name ? $t('dialogs.reroll.text.teamRerollNamed', { name }) : (opt.label ?? $t('hud.teamReroll'));
+}
+/** A regeneration answer as a reroll source (its wire source; the store's rerollSource), or null (inducement / card). */
+function regenSourceOpt(option: InducementUseOption): RerollSourceLike | null {
+  const source = option.rerollSource ?? option.source;
+  if (option.kind !== 'regeneration' || !source) return null;
+  return { ...option, source };
+}
+function regenSourceIcon(option: InducementUseOption): RerollSourceIcon | null {
+  const opt = regenSourceOpt(option);
+  return opt ? rerollSourceIcon(opt) : null;
+}
+function regenSourceName(option: InducementUseOption): string {
+  const icon = regenSourceIcon(option)!;
+  const name = rerollSourceName(icon, regenSourceOpt(option)!);
+  return option.playerLabel ? `${option.playerLabel} — ${name}` : name;
+}
+/** Regeneration: a player's name heads that player's answers (the answers no longer carry it). True for the first
+ *  answer of each player (the store lists one player's answers together, in the dialog's player order). */
+function regenPlayerHead(index: number): boolean {
+  const list = inducementFirstQuestion.value;
+  const option = list[index];
+  if (!option?.playerLabel) return false;
+  return index === 0 || list[index - 1]?.regenPlayerId !== option.regenPlayerId;
+}
+const regenPlayerCount = computed(() => new Set(inducementFirstQuestion.value.map((o) => o.regenPlayerId).filter(Boolean)).size);
+/** A follow-up answer: Pro's Team Mascot opens the Mascot's own fallbacks when there are any (level 2); every other
+ *  answer is the final pick, sent by the card's own sender (byte-identical to the old flat button). */
+function askPick(surface: string, opt: AskOption): void {
+  if (askLevel() === 'pro' && opt.proPart === 'mascot' && proMascotFollowUp(askPool(surface))) {
+    if (mascotCardLocked(mascotCardOf(surface))) return;
+    mascotAsk.value = { ...mascotAsk.value!, level: 'proMascot' };
+    return;
+  }
+  const level = askLevel();
+  const proIndex = mascotAsk.value?.proIndex ?? 0;
+  mascotAnswer(() => askSend(surface, opt, level, proIndex));
+}
+function askSend(surface: string, opt: AskOption, level: 'mascot' | 'pro' | 'proMascot', proIndex: number): void {
+  const source = opt.source;
+  if (surface === 'reroll') { gameStore.resolveReRoll(source); return; }
+  if (surface === 'bloodlust') { gameStore.resolveBloodlustReroll(source); return; }
+  if (surface.startsWith('rft:')) { gameStore.resolveReRollForTargets(source, surface.slice(4)); return; }
+  if (surface.startsWith('regen:')) { if (opt.kind && opt.value) gameStore.resolveUseInducement(opt.kind as 'regeneration', opt.value); return; }
+  if (surface === 'block') {
+    if (level === 'mascot') { answerBlockMascot(source); return; }
+    // the plain Pro answer exactly as the Pro button sent it (clientUseProReRollForBlock{proIndex}); a composite with its kind
+    if (source === 'Pro') { gameStore.resolveBlockPartial('pro', proIndex); return; }
+    const kind = gameStore.state.blockPartial?.proComposite?.find((o) => o.source === source)?.kind;
+    if (kind) gameStore.resolveBlockPartial(kind, proIndex);
+    return;
+  }
+  if (surface.startsWith('mbr:')) {
+    const targetId = surface.slice(4);
+    const row = gameStore.state.multiBlockResolution?.rolls.find((r) => r.targetId === targetId);
+    if (!row) return;
+    if (level === 'mascot') { answerMultiBlockMascot(targetId, source, row.dice.length); return; }
+    if (source === 'Pro') { gameStore.sendMultiBlockChoiceForTarget(targetId, -1, 'Pro', proIndex); return; }
+    const kind = row.proComposite.find((o) => o.source === source)?.kind;
+    if (kind) gameStore.sendMultiBlockProComposite(targetId, kind, proIndex);
+  }
+}
+/** Owner 11-25: the one Pro button (after its die, on block cards): opens Pro's follow-up, or under the skip rule (no
+ *  fallback offered) sends Pro alone at once (`sendPlain`, the old Pro button's own sender). */
+function pickPro(surface: string, proIndex: number, sendPlain: () => void): void {
+  const card = mascotCardOf(surface);
+  if (mascotCardLocked(card)) return;
+  if (!proFollowUp(askPool(surface))) { mascotCardAction(card, sendPlain); return; }
+  const token = mascotSurfaceToken(surface);
+  if (token === null) return;
+  if (surface === 'block') { bpDieMode.value = null; bpSelectedDice.value = new Set(); }
+  if (surface.startsWith('mbr:')) mbrDieMode.value = null;
+  mascotAsk.value = { surface, token, level: 'pro', proIndex };
+}
+const isProAlone = (o: { proPart?: unknown }) => o.proPart === 'none';
+/** Owner 11-25 (rig): a follow-up answer reads as plain text; the Team reroll answer carries the team reroll count
+ *  "(n)" wherever the card knows it (Leader and drive bonus are not taken from the team reroll count). */
+const isMascotAlone = (o: { mascotFallback?: unknown }) => o.mascotFallback === 'none';
+// Reroll card (reRollProperties / reRoll / reRollModifierChoice).
+// Owner 11-25 ("Panel 1: Mascot / Pro / TRR"): one control per source on every reroll card, the coach's AND a spectator's
+// (decided: no composite answer is drawn anywhere; a spectator sees the same three sources the coach chooses from, read-only,
+// and never the coach's local follow-up).
+const rerollFirstQuestion = computed(() => proFirstQuestion(mascotFirstQuestion(rerollOptionsShown.value)));
+const rerollMascotFollowUp = computed(() => gameStore.state.reRollPrompt?.mine ? mascotFollowUp(gameStore.state.reRollPrompt.options) : null);
+function rerollOptLabel(opt: { label: string; mascotFallback?: unknown }): string {
+  return isMascotAlone(opt) ? $t('hud.teamMascot') : opt.label;
+}
+function clickRerollOption(opt: { source: string; mascotFallback?: unknown; proPart?: unknown }): void {
+  if (isMascotAlone(opt)) pickMascot('reroll', rerollMascotFollowUp.value, () => gameStore.resolveReRoll(opt.source));
+  else if (isProAlone(opt) && gameStore.state.reRollPrompt?.mine) pickPro('reroll', 0, () => gameStore.resolveReRoll(opt.source));
+  else gameStore.resolveReRoll(opt.source);
+}
+// Block card: the Mascot rerolls every die (a team reroll). Answers go out exactly as the old buttons sent them.
+const blockMascotAnswers = computed(() => gameStore.state.blockPartial && blockDialogMine.value ? blockMascotFollowUp(gameStore.state.blockPartial) : null);
+const blockTeamChoicesShown = computed(() => mascotFirstQuestion(gameStore.state.blockPartial?.teamChoices ?? []));
+function answerBlockMascot(source: string): void {
+  if (source === 'Team Mascot') gameStore.resolveBlockPartial('mascot');
+  else if (source === 'Mascot TRR' && gameStore.state.blockPartial?.mascotTrr) gameStore.resolveBlockPartial('mascotTrr');
+  else gameStore.resolveBlockPartial('teamChoice', 0, source);
+}
+// Multiple Block rows: one follow-up per target.
+function answerMultiBlockMascot(targetId: string, source: string, diceLen: number): void {
+  if (source === 'Team Mascot') multiBlockRerollNow(targetId, 'mascot', diceLen); // mascotAnswer holds the card lock
+  else gameStore.sendMultiBlockTeamChoice(targetId, source);
+}
+// Bloodlust card, Foul Appearance / Dauntless reroll-for-targets card, regeneration card: the same split of their lists.
+const bloodlustFirstQuestion = computed(() => proFirstQuestion(mascotFirstQuestion(gameStore.state.bloodlust?.rerollOptions ?? [])));
+function clickBloodlustOption(opt: { source: string; mascotFallback?: unknown; proPart?: unknown }): void {
+  if (isMascotAlone(opt)) pickMascot('bloodlust', bloodlustMascotFollowUp.value, () => gameStore.resolveBloodlustReroll(opt.source));
+  else if (isProAlone(opt)) pickPro('bloodlust', 0, () => gameStore.resolveBloodlustReroll(opt.source));
+  else gameStore.resolveBloodlustReroll(opt.source);
+}
+const bloodlustMascotFollowUp = computed(() => mascotFollowUp(gameStore.state.bloodlust?.rerollOptions ?? []));
+/** The vampire's team reroll count (the count chip on the bloodlust card's Team reroll die). */
+const bloodlustTeamReRolls = computed(() => gameStore.state.bloodlust ? teamReRollsOf(gameStore.state.bloodlust.playerId) : null);
+const reRollForTargetsFirstQuestion = computed(() => proFirstQuestion(mascotFirstQuestion(gameStore.state.reRollForTargets?.options ?? [])));
+function clickReRollForTargetsOption(opt: { source: string; mascotFallback?: unknown; proPart?: unknown }, targetId: string): void {
+  if (isMascotAlone(opt)) pickMascot(`rft:${targetId}`, reRollForTargetsMascotFollowUp.value, () => gameStore.resolveReRollForTargets(opt.source, targetId));
+  else if (isProAlone(opt)) pickPro(`rft:${targetId}`, 0, () => gameStore.resolveReRollForTargets(opt.source, targetId));
+  else gameStore.resolveReRollForTargets(opt.source, targetId);
+}
+const reRollForTargetsMascotFollowUp = computed(() => mascotFollowUp(gameStore.state.reRollForTargets?.options ?? []));
+const reRollForTargetsTeamReRolls = computed(() => gameStore.state.reRollForTargets ? teamReRollsOf(gameStore.state.reRollForTargets.playerId) : null);
+const reRollForTargetsMascotAskOpen = computed(() => mascotAskLive.value && !!mascotAsk.value?.surface.startsWith('rft:'));
+type InducementUseOption = NonNullable<typeof gameStore.state.inducementUse>['options'][number];
+const inducementFirstQuestion = computed(() => (gameStore.state.inducementUse?.options ?? [])
+  .filter((o) => (!o.mascotFallback || o.mascotFallback === 'none') && (!o.proPart || o.proPart === 'none')));
+function regenMascotFollowUp(group: string | undefined): (InducementUseOption & MascotTaggedOption)[] | null {
+  return mascotFollowUp((gameStore.state.inducementUse?.options ?? [])
+    .filter((o): o is InducementUseOption & MascotTaggedOption => !!o.mascotFallback && !!o.source && o.mascotGroup === group));
+}
+/** The use-inducement card is the regeneration reroll election (its decline means "No Reroll"), not an inducement / card. */
+// Sol 11-28: identify it by the dialog (regenerationElectionKey 'reRollRegenerationMultiple:<nr>'), not by its answers:
+// a regeneration offer with no selectable reroll still comes with only its decline.
+const inducementUseIsRegen = computed(() => {
+  const u = gameStore.state.inducementUse;
+  return !!u && (u.key.startsWith('reRollRegenerationMultiple:') || u.options.some((o) => o.kind === 'regeneration'));
+});
+const regenMascotAskGroup = computed(() => mascotAskLive.value && mascotAsk.value!.surface.startsWith('regen:') ? mascotAsk.value!.surface.slice(6) : null);
+const reRollForTargetsAskTarget = computed(() => mascotAskLive.value && mascotAsk.value!.surface.startsWith('rft:') ? mascotAsk.value!.surface.slice(4) : null);
+function clickInducementOption(option: InducementUseOption): void {
+  if (option.proPart === 'none') {
+    pickPro(`regen:${option.mascotGroup}`, 0, () => gameStore.resolveUseInducement(option.kind, option.value));
+    return;
+  }
+  if (option.mascotFallback === 'none') {
+    pickMascot(`regen:${option.mascotGroup}`, regenMascotFollowUp(option.mascotGroup), () => gameStore.resolveUseInducement(option.kind, option.value));
+  } else mascotCardAction('regen', () => gameStore.resolveUseInducement(option.kind, option.value));
+}
+// Owner 11-24: Y keys the first question's own buttons (a Mascot fallback is not a button there).
+const rerollPadYSource = computed(() => padRerollYSource(rerollFirstQuestion.value));
 /** Owner 11-25: a card offering the Mascot buttons now also offers the plain Team reroll. Its controller default stays
  *  the 1.0.335 one: that card had no data-pad-primary control, so the default was its first answer in the shown order
  *  (padRerollOrder in controller mode). That answer is marked here; null on every other card (the base rule applies). */
@@ -12815,15 +13248,16 @@ const rerollBaseDefaultSource = computed<string | null>(() => {
   const shown = activeInput.value === 'controller' && gameStore.state.reRollPrompt?.mine ? padRerollOrder(base) : base;
   return shown[0]?.source ?? null;
 });
+/** Rig 11-27: on every other card the team reroll pool control is the controller default (as in 1.0.338). With two pool
+ *  controls shown (a drive bonus and the Leader) only the first in the shown order is: one default per panel. */
+const rerollPoolDefault = computed(() => (rerollBaseDefaultSource.value !== null ? null
+  : rerollFirstQuestion.value.find((o) => (o.source === 'Team ReRoll' && !o.teamKind) || !!o.teamKind) ?? null));
 /** S36: a single-skill reRollModifierChoice option takes that skill's icon; every other option keys the icon by its source. */
 /** Owner 11-21: "Pro, then Team reroll" (Pro TRR, and Pro Drive Bonus, which is presented as it) gets the blended Pro / Team
  *  reroll icon (ProTrrBlendIcon) wherever the Pro answer beside it shows the Pro icon. The block card and the Multiple
  *  Block rows show the Pro icon in the icon skill display only (as their Pro button does); the reroll card whenever the
  *  Pro icon resolves (as its Pro option does). Wire answers are unchanged. */
 const PRO_TRR_BLEND_SOURCES: ReadonlySet<string> = new Set(['Pro TRR', 'Pro Drive Bonus']);
-function proTrrBlendKind(kind: string): boolean {
-  return (kind === 'proTrr' || kind === 'proDriveBonus') && settings.skillDisplay === 'icons' && !!skillIconUrl('Pro', effectiveIconStyle.value);
-}
 function proTrrBlendSource(source: string): boolean {
   return PRO_TRR_BLEND_SOURCES.has(source) && !!skillIconUrl('Pro', effectiveIconStyle.value);
 }
@@ -12919,6 +13353,13 @@ let unregisterCameraStick: (() => void) | null = null;
 const telestratorRef = ref<InstanceType<typeof ReplayTelestrator> | null>(null);
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') { onKeydownInner(event); return; }
+  // Sol 11-27 (P1): the rest of an Escape press that already went Back does nothing (holdEscapeBack).
+  if (escapeBackHeld) { event.preventDefault(); return; }
+  escapeKeyActing = true;
+  try { onKeydownInner(event); } finally { escapeKeyActing = false; }
+}
+function onKeydownInner(event: KeyboardEvent) {
   // App-shell modals own the keyboard while open. In particular, Settings Esc must
   // run its transactional rollback path rather than this gameplay handler closing it.
   if (appShellModalOwnsKeyboard(ui.settingsOpen, ui.setupWizardRerunOpen)) return;
@@ -18389,16 +18830,62 @@ watch(() => [
              pad crosshair to aim and cast, B still reaches its Cancel. -->
         <div v-if="gameStore.state.inducementUse && !gameStore.state.wizardTargetConfirm" v-pad-focus="{ close: 'answer', pitch: gameStore.state.squarePick?.kind === 'wizard' }" class="yesno-card select-skill-card">
           <div class="yesno-text">{{ gameStore.state.inducementUse.prompt }}</div>
-          <div class="skill-select-list">
-            <span class="rr-badged" v-for="option in gameStore.state.inducementUse.options" :key="`${option.kind}:${option.value}`">
-              <button class="skill-select-opt"
-                @click="gameStore.resolveUseInducement(option.kind, option.value)">
-                <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.label) }}</span>
+          <!-- Owner 11-24: a regeneration Mascot is ONE choice per player; its fallback is asked in the follow-up below. -->
+          <!-- Owner 11-27 (icon-only reroll sources): a regeneration reroll answer is its source's icon control under the
+               player's name (the name heads that player's answers); an inducement / card answer keeps its text. -->
+          <div v-if="regenMascotAskGroup === null" class="skill-select-list rr-src-row">
+            <template v-for="(option, index) in inducementFirstQuestion" :key="`${option.kind}:${option.value}`">
+              <span v-if="regenPlayerHead(index) && regenPlayerCount > 1 && index > 0" class="regen-break" aria-hidden="true"></span>
+              <span v-if="regenPlayerHead(index)" class="regen-player">{{ option.playerLabel }}</span>
+              <span class="rr-badged" :class="{ 'rr-src': !!regenSourceIcon(option) }">
+                <button v-if="regenSourceIcon(option)" :class="regenSourceIcon(option) === 'pro' ? 'bp-opt bp-opt-icon-label' : ['bp-team', { 'bp-mascot': regenSourceIcon(option) === 'mascot' }]"
+                  :data-rr-source="regenSourceIcon(option)" :disabled="mascotCardLocked('regen')"
+                  :title="regenSourceName(option)" :aria-label="regenSourceName(option)"
+                  @click="clickInducementOption(option)">
+                  <img :src="rerollSourceArt(regenSourceIcon(option))" alt="" />
+                  <span v-if="regenSourceIcon(option) === 'team' && teamReRollsOf(option.regenPlayerId) !== null" class="rr-trr-num bp-trr-num"
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: teamReRollsOf(option.regenPlayerId) })">{{ teamReRollsOf(option.regenPlayerId) }}</span>
+                </button>
+                <button v-else class="skill-select-opt" :disabled="option.kind === 'regeneration' && mascotCardLocked('regen')"
+                  @click="clickInducementOption(option)">
+                  <span>{{ option.kind === 'card' ? $t('hud.yesnoCard.card') : '' }}{{ terms(option.mascotLabel ?? option.label) }}</span>
+                </button>
+                <!-- Owner 11-21: the drive bonus / Leader badge, on the die's corner. -->
+                <RerollInfoMarker v-if="option.info" :text="option.info" :tag="option.badgeTag" :icon="option.badgeSkill ? skillIconUrl(option.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
+            </template>
+            <!-- Owner 11-27: on the regeneration reroll card the decline ("No Reroll") is the prohibited reroll die, as every
+                 "No reroll", named by the existing translated "No reroll"; an inducement / card prompt keeps its text decline.
+                 Same handler and pad cancel either way. -->
+            <button v-if="inducementUseIsRegen" class="rr-none" data-rr-none data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
+              :aria-label="$t('hud.rerollBar.noReroll')" @click="gameStore.resolveUseInducement('decline')">
+              <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+            </button>
+            <button v-else class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
+          </div>
+          <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+               answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+          <!-- Owner 11-27: the fallback answers are icon controls, "No reroll" the prohibited reroll die; Back stays text, same row. -->
+          <div v-else class="skill-select-list mascot-ask mascot-ask-icons rr-src-row" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+            <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+            <!-- Sol 11-27 (P2): the player this follow-up is for heads its answers, as on the first panel; each icon is named
+                 with him ("Blitzer1 — Team reroll (Leader)"). The badge comes BEFORE its answer, as before the icon change
+                 (native Tab order unchanged). -->
+            <span v-if="regenPlayerLabel(regenMascotAskGroup)" class="regen-player">{{ regenPlayerLabel(regenMascotAskGroup) }}</span>
+            <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems(`regen:${regenMascotAskGroup}`)" :key="`mascot-${opt.source}`">
+              <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              <button v-if="askIcon(opt)" :class="['bp-team', { 'bp-mascot': askIcon(opt) === 'mascot' }]" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                :title="askAriaFor(opt, `regen:${regenMascotAskGroup}`)" :aria-label="askAriaFor(opt, `regen:${regenMascotAskGroup}`)" @click="askPick(`regen:${regenMascotAskGroup}`, opt)">
+                <img :src="rerollSourceArt(askIcon(opt))" alt="" />
+                <span v-if="askIcon(opt) === 'team' && teamReRollsOf(opt.mascotGroup) !== null" class="rr-trr-num bp-trr-num"
+                  :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: teamReRollsOf(opt.mascotGroup) })">{{ teamReRollsOf(opt.mascotGroup) }}</span>
               </button>
-              <!-- Owner 11-21: a regeneration reroll spending a drive bonus reads as the Team reroll; the "i" names it. -->
-              <RerollInfoMarker v-if="option.info" :text="option.info" :tag="option.badgeTag" :icon="option.badgeSkill ? skillIconUrl(option.badgeSkill, effectiveIconStyle) : undefined" />
+              <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick(`regen:${regenMascotAskGroup}`, opt)">
+                <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+              </button>
             </span>
-            <button class="rr-decline" data-pad-cancel @click="gameStore.resolveUseInducement('decline')">{{ gameStore.state.inducementUse.declineLabel }}</button>
+            <button class="rr-decline mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
           </div>
         </div>
 
@@ -18599,7 +19086,7 @@ watch(() => [
             <span class="bl-marker" aria-hidden="true">🩸</span> {{ $t('hud.rerollBar.vampireFailedBloodlust', { vampire: gameStore.state.bloodlust.vampire }) }}
           </div>
           <div v-else class="sc-title"><span class="bl-marker" aria-hidden="true">🩸</span> {{ $t('hud.rerollBar.bloodlustVampire', { vampire: gameStore.state.bloodlust.vampire }) }}</div>
-          <div class="bl-opts">
+          <div class="bl-opts" :class="{ 'bl-opts-reroll': gameStore.state.bloodlust.stage === 'reroll' }">
             <template v-if="gameStore.state.bloodlust.stage === 'reroll'">
               <div v-if="gameStore.state.bloodlust.roll != null" class="rr-prompt-line">
                 <D6Face class="sc-die rr-ctx-die" :value="gameStore.state.bloodlust.roll" :side="diceSideOfPlayer(gameStore.state.bloodlust.playerId)"
@@ -18608,20 +19095,58 @@ watch(() => [
               <div v-if="bloodlustTastyMorselAvailable" class="rr-prompt-line bl-special-available">
                 {{ TASTY_MORSEL_AVAILABLE_COPY }}
               </div>
-              <div class="rr-prompt-line rr-question bl-reroll-row">
-                <span class="rr-badged" v-for="opt in gameStore.state.bloodlust.rerollOptions" :key="opt.source">
-                  <button class="bl-opt"
-                    :title="$t('hud.rerollBar.reroll2') + opt.label" @click="gameStore.resolveBloodlustReroll(opt.source)">
-                    <img v-if="opt.kind === 'team'" :src="resourceIcon('re_roll')" :alt="$t('hud.rerollBar.teamReroll')" />
-                    <img v-else-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
-                      :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
-                    <span>{{ (opt.badgeSkill === 'Leader' && opt.source === 'Team ReRoll' ? $t('dialogs.reroll.text.teamReroll') : opt.label).replaceAll('reroll', 'Reroll') }}</span>
+              <!-- Owner 11-24: ONE Team Mascot answer; its fallback is asked in the follow-up below. -->
+              <!-- Owner 11-27 ("no text describing the reroll type. It's just the icon and the subicon."): every reroll source is its
+                   icon control (Team Mascot art, Pro icon, the reroll die with its corner badge or the team reroll count); its
+                   name is the title and aria-label only. A skill reroll keeps its look. -->
+              <div v-if="!mascotAskOpen('bloodlust')" class="rr-prompt-line rr-question bl-reroll-row rr-src-row">
+                <span class="rr-badged" :class="{ 'rr-src': !!rerollSourceIcon(opt) }" v-for="opt in bloodlustFirstQuestion" :key="opt.source">
+                  <button v-if="rerollSourceIcon(opt)" :class="rerollSourceIcon(opt) === 'pro' ? 'bp-opt bp-opt-icon-label' : ['bp-team', { 'bp-mascot': rerollSourceIcon(opt) === 'mascot' }]"
+                    :data-rr-source="rerollSourceIcon(opt)"
+                    :disabled="(opt.mascotFallback === 'none' || opt.proPart === 'none') && mascotCardLocked('bloodlust')"
+                    :title="$t('hud.rerollBar.reroll2') + rerollSourceName(rerollSourceIcon(opt)!, opt)" :aria-label="rerollSourceName(rerollSourceIcon(opt)!, opt)"
+                    @click="clickBloodlustOption(opt)">
+                    <img :src="rerollSourceArt(rerollSourceIcon(opt)!)" alt="" />
+                    <span v-if="rerollSourceIcon(opt) === 'team' && bloodlustTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                      :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: bloodlustTeamReRolls })">{{ bloodlustTeamReRolls }}</span>
                   </button>
-                  <!-- Owner 11-21: a drive bonus answer reads as the Team reroll; the "i" names the bonus. -->
+                  <button v-else class="bl-opt" :disabled="(opt.mascotFallback === 'none' || opt.proPart === 'none') && mascotCardLocked('bloodlust')"
+                    :title="$t('hud.rerollBar.reroll2') + opt.label"
+                    @click="clickBloodlustOption(opt)">
+                    <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)"
+                      :src="skillIconUrl(opt.kind === 'pro' ? 'Pro' : opt.source, effectiveIconStyle)!" :alt="opt.label" />
+                    <span>{{ opt.label.replaceAll('reroll', 'Reroll') }}</span>
+                  </button>
+                  <!-- Owner 11-21: the drive bonus / Leader badge, on the die's corner. -->
                   <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
                 </span>
-                <button class="bl-opt bl-decline rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.keepTheRoll')"
-                  @click="gameStore.resolveBloodlustReroll(null)">✕</button>
+                <!-- Owner 11-27 ("No reroll should just be the TRR with the prohibited symbol around it"): the decline is the
+                     prohibited reroll die, as the follow-ups' "No reroll"; same handler, title and pad cancel. -->
+                <button class="rr-none bl-decline rr-decline-chip" data-rr-none data-pad-cancel :title="$t('hud.rerollBar.keepTheRoll')"
+                  :aria-label="$t('hud.rerollBar.keepTheRoll')" @click="gameStore.resolveBloodlustReroll(null)">
+                  <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+                </button>
+              </div>
+              <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+                   answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+              <!-- Owner 11-27: the fallback answers are the first panel's icon controls; "No reroll" is the prohibited reroll die
+                   (owner 11-27); Back stays a compact text button on the same row. -->
+              <div v-else class="rr-prompt-line bl-reroll-row mascot-ask mascot-ask-icons rr-src-row" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+                <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+                <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems('bloodlust')" :key="`mascot-${opt.source}`">
+                  <button v-if="askIcon(opt)" :class="['bp-team', { 'bp-mascot': askIcon(opt) === 'mascot' }]" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                    :title="askIconTitle(opt, 'bloodlust')" :aria-label="askAria(opt)" @click="askPick('bloodlust', opt)">
+                    <img :src="rerollSourceArt(askIcon(opt)!)" alt="" />
+                    <span v-if="askIcon(opt) === 'team' && bloodlustTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                      :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: bloodlustTeamReRolls })">{{ bloodlustTeamReRolls }}</span>
+                  </button>
+                  <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                    :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick('bloodlust', opt)">
+                    <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+                  </button>
+                  <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+                </span>
+                <button class="bl-opt mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
               </div>
             </template>
             <template v-else-if="gameStore.state.bloodlust.stage === 'decision'">
@@ -19417,7 +19942,7 @@ watch(() => [
         <!-- Owner 2026-07-05: BB2025 block PARTIAL re-roll — options to the LEFT of the
              team-reroll logo; dice become clickable to accept, or (in Pro/Consummate
              mode) to choose which die to re-roll. -->
-        <div v-if="gameStore.state.blockPartial" v-pad-focus="blockDialogMine ? { mandatory: !!gameStore.state.blockPartial.pickable } : false" class="block-partial"
+        <div v-if="gameStore.state.blockPartial" v-pad-focus="blockDialogMine ? (mascotAskOpen('block') ? MASCOT_ASK_PAD : { mandatory: !!gameStore.state.blockPartial.pickable }) : false" class="block-partial"
           :style="reactivePromptStyle('blockPartial', blockRerollPos ?? undefined)"
           :title="$t('hud.dragToMove')" @pointerdown="startReactivePromptDrag('blockPartial', $event)">
           <BlockChooserCopy v-if="blockChooserCaptionTeamId != null" :game="gameStore.game.value"
@@ -19444,7 +19969,7 @@ watch(() => [
               class="bp-die bp-die-art" :class="{ 'bp-die-tumbling': bpDieTumbling(i), 'bp-die-3d': bpDice3dLive, 'bp-die-selected': !bpTumbling && bpSelectedDice.has(i), 'bp-die-choice': !bpTumbling && gameStore.state.blockPartial.choiceIndex === i }" :data-armed="!!bpDieMode"
               :aria-pressed="bpDieMode === 'multiBlockDice' ? bpSelectedDice.has(i) : undefined"
               :data-readonly="!blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
-              :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode)"
+              :disabled="bpTumbling || !blockDialogMine || (bpPhase1ReRollOnly && !bpDieMode) || mascotAskOpen('block')"
               :title="bpDieMode === 'multiBlockDice' ? (bpSelectedDice.has(i) ? $t('hud.removeThisDie') : $t('hud.selectThisDie')) : (bpDieMode ? $t('hud.rerollThisDie') : (bpUphillDecision ? blockFaceLabel(d) + $t('hud.awaitingTheChooser') : blockFaceLabel(d)))"
               @click="clickBlockPartialDie(i)">
               <img :src="blockFaceUrl(d, blockPartialSide)" :alt="blockFaceLabel(d)" />
@@ -19462,57 +19987,47 @@ watch(() => [
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num">{{ blockPartialTeamReRolls }}</span>
             </span>
           </div>
-          <div v-if="blockDialogMine" class="bp-actions">
+          <div v-if="blockDialogMine && !mascotAskOpen('block')" class="bp-actions">
             <!-- Owner 09-28 (Spec S8, UAT #8): every skill / source-map option's NAME is always visible text —
                  icon-only hid Lord Borak's Lord of Chaos from the coach who used it unaware. The icon (when
                  enabled) rides ABOVE the name. Team Re-roll and Team Mascot are separate, owner-tuned art
                  buttons below (their own count chip / "No TRR" caption) and are untouched. -->
-            <button v-for="opt in blockPartialOptions" :key="opt.kind" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }"
+            <!-- Owner 11-27 (icon-only reroll sources): Pro is a reroll source, so it is its icon in every skill display (name in
+                 the title and aria-label only); the other skill options keep the S8 rule above. -->
+            <button v-for="opt in blockPartialOptions" :key="opt.kind" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' || (opt.kind === 'pro' && !!proIconUrl) }"
+              :data-rr-source="opt.kind === 'pro' && proIconUrl ? 'pro' : undefined" :aria-label="opt.kind === 'pro' && proIconUrl ? opt.label : undefined"
               :data-active="bpDieMode === opt.kind" :title="opt.label" @click="useBlockPartialOption(opt.kind)">
-              <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle)"
+              <img v-if="(settings.skillDisplay === 'icons' || opt.kind === 'pro') && skillIconUrl(opt.skill, effectiveIconStyle)"
                 :src="skillIconUrl(opt.skill, effectiveIconStyle)!" :alt="opt.label" />
-              <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(opt.skill, effectiveIconStyle))" class="bp-opt-label">{{ opt.label }}</span>
+              <span v-if="!((settings.skillDisplay === 'icons' || opt.kind === 'pro') && skillIconUrl(opt.skill, effectiveIconStyle))" class="bp-opt-label">{{ opt.label }}</span>
             </button>
-            <!-- Owner 10-10: Pro with a fallback, as upstream's block dialog offers it (its "ReRoll" / "Mascot" /
-                 "TRR fallback" boxes under the Pro button). See blockProCompositeOptions. -->
-            <span class="rr-badged" v-for="opt in gameStore.state.blockPartial.proComposite ?? []" :key="opt.kind">
-              <!-- Owner 11-21: Pro + RR (and Pro + drive bonus) is the blended Pro / Team reroll icon; the name rides the title
-                   and the accessible name. -->
-              <button class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
-                :data-active="bpDieMode === opt.kind" :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
-                @click="useBlockProComposite(opt.kind)">
-                <ProTrrBlendIcon v-if="proTrrBlendKind(opt.kind)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
-                <span v-else>{{ opt.label }}</span>
-              </button>
-              <!-- Owner 11-21: a fallback that spends a drive bonus reads "Team Reroll"; the "i" names the bonus. -->
-              <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
-            </span>
+            <!-- Owner 11-25: the Pro-with-fallback answers (proComposite) are Pro's follow-up now (askItems), not buttons. -->
             <!-- team re-roll LOGO (inducement art), to the RIGHT of the options. Owner 2026-07-12: a MASCOT
                  SUPERSEDES the plain team button (upstream DialogReRollProperties) — suppress it when present. -->
+            <!-- Owner 11-25 (supersedes 07-12): the plain Team reroll stands beside the Team Mascot when TRR is offered (upstream
+                 DialogBlockRollProperties:196-205, teamReRollSources(includeMascot = true)); mascotTrr = MASCOT + TRR. -->
             <button v-if="gameStore.state.blockPartial.teamRR && !gameStore.state.blockPartial.mascot && !gameStore.state.blockPartial.namedTeam"
-              class="bp-team" :title="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
+              class="bp-team" data-rr-source="team" :title="$t('hud.teamReroll')" :aria-label="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
               <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
               <!-- #205: acting coach's team-reroll count, immediately beside the die icon (owner idiom).
                    Display-only chip; the resolve('team') answer path is untouched. -->
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                 :title="$t('hud.teamRerollsAvailableBlockpartialteamrero', { blockPartialTeamReRolls })">{{ blockPartialTeamReRolls }}</span>
             </button>
-            <!-- Owner 2026-07-12: distinct Team Mascot re-roll (own art) + the Mascot-then-TRR variant. -->
-            <button v-if="gameStore.state.blockPartial.mascot" class="bp-team bp-mascot"
-              :title="$t('hud.teamMascotNoReroll')" @click="gameStore.resolveBlockPartial('mascot')">
+            <!-- Owner 2026-07-12: distinct Team Mascot re-roll (own art). Owner 11-24: the ONE Mascot button; when a fallback
+                 is offered (Mascot + RR, drive bonus, Leader) it opens the follow-up, else it answers Team Mascot at once
+                 ("No TRR" then still applies). -->
+            <!-- Owner 11-27 (icon-only): the old "No TRR" caption is gone; the Mascot is its art alone. -->
+            <button v-if="gameStore.state.blockPartial.mascot" class="bp-team bp-mascot" data-rr-source="mascot"
+              :title="$t('hud.teamMascot')" :aria-label="$t('hud.teamMascot')" :disabled="mascotCardLocked('block')" @click="pickMascot('block', blockMascotAnswers, () => gameStore.resolveBlockPartial('mascot'))">
               <img :src="resourceIcon('team_mascot')" :alt="$t('hud.teamMascot')" />
-              <span class="bp-sub">{{ $t('hud.noTrr') }}</span>
-            </button>
-            <button v-if="gameStore.state.blockPartial.mascotTrr" class="bp-opt"
-              :title="$t('hud.teamMascotThenTeam')" @click="gameStore.resolveBlockPartial('mascotTrr')">
-              <span>{{ $t('hud.mascotRr') }}</span>
             </button>
             <!-- Owner 11-25 (supersedes 07-12): the plain Team reroll beside the Mascot buttons when TRR is offered too
                  (mascotTrr = MASCOT + TRR), as upstream's block dialog offers it (DialogBlockRollProperties :196-205,
                  teamReRollSources(includeMascot = true)). AFTER them, so the card's default control (the first enabled one,
                  cardFocus defaultControl) stays what it was in 1.0.335. Same answer as the Team reroll button above. -->
-            <button v-if="gameStore.state.blockPartial.teamRR && gameStore.state.blockPartial.mascotTrr" class="bp-team bp-team-beside-mascot"
-              :title="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
+            <button v-if="gameStore.state.blockPartial.teamRR && gameStore.state.blockPartial.mascotTrr" class="bp-team bp-team-beside-mascot" data-rr-source="team"
+              :title="$t('hud.teamReroll')" :aria-label="$t('hud.teamReroll')" @click="gameStore.resolveBlockPartial('team')">
               <img :src="resourceIcon('re_roll')" :alt="$t('hud.teamReroll')" />
               <span v-if="blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                 :title="$t('hud.teamRerollsAvailableBlockpartialteamrero', { blockPartialTeamReRolls })">{{ blockPartialTeamReRolls }}</span>
@@ -19521,9 +20036,9 @@ watch(() => [
                  falls back to it (upstream ReRollSourceComposer.teamReRollSources + the fallback question). -->
             <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button (its art, its title),
                  with an "i" naming the bonus; it still answers Drive Bonus ReRoll. -->
-            <span class="rr-badged" v-for="c in gameStore.state.blockPartial.teamChoices ?? []" :key="c.source">
-              <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" class="bp-team"
-                :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })"
+            <span class="rr-badged" :class="{ 'rr-src': c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader' }" v-for="c in blockTeamChoicesShown" :key="c.source">
+              <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" class="bp-team" data-rr-source="named"
+                :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" :aria-label="rerollSourceName('named', c)"
                 @click="gameStore.resolveBlockPartial('teamChoice', 0, c.source)">
                 <img :src="resourceIcon('re_roll')" :alt="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" />
               </button>
@@ -19541,6 +20056,27 @@ watch(() => [
               <span>{{ $t('hud.declineReroll') }}</span>
             </button>
           </div>
+          <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+               answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+          <!-- Owner 11-27: the first panel is icons, so the follow-up's fallback answers are the same icon controls (Mascot art,
+               reroll die with its corner badge or count); "No reroll" is the prohibited reroll die (owner 11-27); Back stays text. -->
+          <div v-else-if="blockDialogMine" class="bp-actions mascot-ask mascot-ask-icons" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+            <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+            <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems('block')" :key="`mascot-${opt.source}`">
+              <button v-if="askIcon(opt)" class="bp-team" :class="{ 'bp-mascot': askIcon(opt) === 'mascot' }" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source"
+                :disabled="mascotAskSent" :title="askIconTitle(opt, 'block')" :aria-label="askAria(opt)" @click="askPick('block', opt)">
+                <img :src="rerollSourceArt(askIcon(opt)!)" alt="" />
+                <span v-if="askIcon(opt) === 'team' && blockPartialTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                  :title="$t('hud.teamRerollsAvailableBlockpartialteamrero', { blockPartialTeamReRolls })">{{ blockPartialTeamReRolls }}</span>
+              </button>
+              <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick('block', opt)">
+                <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+              </button>
+              <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+            </span>
+            <button class="bp-opt mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
+          </div>
           <div v-if="blockDialogMine && bpDieMode === 'multiBlockDice'" class="bp-hint bp-multi-select">
             <span>{{ bpMultiSelectHintText ?? $t('hud.multiblockdice.selectOneOrMore') }}</span>
             <button class="bp-opt" :disabled="bpSelectedDice.size < 1" @click="commitMultiBlockDice">{{ $t('hud.multiblockdice.rerollSelected') }}</button>
@@ -19556,7 +20092,7 @@ watch(() => [
              cbd0f598). A click on a die for a coach-pickable target sends the plain choice → resolves that target
              (answers the reRollBlockForTargets dialog TK g748 wedged on). Reuses the .bp-die block-face art. The
              re-roll affordances (team/pro/brawler/consummate) are a fast-follow — invocation being pinned w/ Tarkin. -->
-        <div v-if="gameStore.state.multiBlockResolution" v-pad-focus="multiBlockDialogMine ? { mandatory: gameStore.state.multiBlockResolution.rolls.some((r) => r.isOwnChoice === true) } : false" class="multi-block-resolution"
+        <div v-if="gameStore.state.multiBlockResolution" v-pad-focus="multiBlockDialogMine ? (multiBlockMascotAskOpen ? MASCOT_ASK_PAD : { mandatory: gameStore.state.multiBlockResolution.rolls.some((r) => r.isOwnChoice === true) }) : false" class="multi-block-resolution"
           :style="reactivePromptStyle('multiBlock')" :title="$t('hud.dragToMove')"
           @pointerdown="startReactivePromptDrag('multiBlock', $event)">
           <div class="mbr-title">{{ $t('hud.multipleBlock') }}</div>
@@ -19570,7 +20106,7 @@ watch(() => [
                 :class="{ 'bp-die-tumbling': !!mbrRowTumble(row)?.tumbling.includes(i), 'mbr-picked': row.selectedIndex === i }"
                 :data-armed="mbrDieMode?.targetId === row.targetId"
                 :data-readonly="mbrDieState(row).readonly"
-                :disabled="mbrDieState(row).disabled || mbrLatched"
+                :disabled="mbrDieState(row).disabled || mascotAskOpen(`mbr:${row.targetId}`) || mascotCardLocked('mbr')"
                 :title="mbrDieMode?.targetId === row.targetId ? $t('hud.mbrRow.rerollThisDie') : (row.isOwnChoice === true && row.pickable ? blockFaceLabel(d) : blockFaceLabel(d) + $t('hud.mbrRow.notSelectableInThis'))"
                 @click="multiBlockPickDie(row, i)">
                 <img :src="blockFaceUrl(d, diceSideOfTeam(liveMultiBlockChoosingTeamId))" :alt="blockFaceLabel(d)" />
@@ -19580,33 +20116,26 @@ watch(() => [
                  fires at once. Owner 09-28 (Spec S8): every skill / source-map option's name is ALWAYS visible
                  text (icon rides above it when icons are enabled) — same rule as the single-block blockPartial
                  options. Team Re-roll and Team Mascot below keep their existing art + count chip / caption. -->
-            <div v-if="multiBlockDialogMine" class="mbr-actions">
-              <button v-if="row.brawler" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
+            <div v-if="multiBlockDialogMine && !mascotAskOpen(`mbr:${row.targetId}`)" class="mbr-actions">
+              <button v-if="row.brawler" :disabled="mascotCardLocked('mbr')" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="$t('hud.mbrRow.brawler')" @click="multiBlockReroll(row.targetId, 'brawler', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle)" :src="skillIconUrl('Brawler', effectiveIconStyle)!" :alt="$t('hud.mbrRow.brawler')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Brawler', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.brawler') }}</span>
               </button>
               <!-- Hatred (Single Skull → Hatred, upstream Hatred.java): fires immediately like Brawler above —
                    answered CLIENT_USE_HATRED via sendMultiBlockHatred, not the generic reRollSource path. -->
-              <button v-if="row.singleSkullLabel" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="mbrSubmit(() => gameStore.sendMultiBlockHatred(row.targetId))">
+              <button v-if="row.singleSkullLabel" :disabled="mascotCardLocked('mbr')" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :title="row.singleSkullLabel" @click="mascotCardAction('mbr', () => gameStore.sendMultiBlockHatred(row.targetId))">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)" :src="skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle)!" :alt="row.singleSkullLabel" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl(row.singleSkull ?? row.singleSkullLabel, effectiveIconStyle))" class="bp-opt-label">{{ row.singleSkullLabel }}</span>
               </button>
-              <button v-if="row.pro" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
+              <!-- Owner 11-27 (icon-only reroll sources): Pro is its icon in every skill display. -->
+              <button v-if="row.pro" :disabled="mascotCardLocked('mbr')" class="bp-opt" :class="{ 'bp-opt-icon-label': !!proIconUrl }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'pro'"
+                :data-rr-source="proIconUrl ? 'pro' : undefined" :aria-label="proIconUrl ? $t('hud.mbrRow.pro') : undefined"
                 :title="$t('hud.mbrRow.pro')" @click="multiBlockReroll(row.targetId, 'pro', row.dice.length)">
-                <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle)" :src="skillIconUrl('Pro', effectiveIconStyle)!" :alt="$t('hud.mbrRow.pro')" />
-                <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Pro', effectiveIconStyle))" class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
+                <img v-if="proIconUrl" :src="proIconUrl" :alt="$t('hud.mbrRow.pro')" />
+                <span v-else class="bp-opt-label">{{ $t('hud.mbrRow.pro') }}</span>
               </button>
-              <span class="rr-badged" v-for="opt in row.proComposite" :key="opt.kind">
-                <button :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label bp-opt-blend': proTrrBlendKind(opt.kind) }"
-                  :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'proComposite' && mbrDieMode?.composite === opt.kind"
-                  :title="opt.title" :aria-label="proTrrBlendKind(opt.kind) ? opt.title : undefined"
-                  @click="multiBlockProComposite(row.targetId, opt.kind, row.dice.length)">
-                  <ProTrrBlendIcon v-if="proTrrBlendKind(opt.kind)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
-                  <span v-else>{{ opt.label }}</span>
-                </button>
-                <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
-              </span>
-              <button v-if="row.consummate" :disabled="mbrLatched" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
+              <!-- Owner 11-25: the row's Pro-with-fallback answers are Pro's follow-up now (askItems). -->
+              <button v-if="row.consummate" :disabled="mascotCardLocked('mbr')" class="bp-opt" :class="{ 'bp-opt-icon-label': settings.skillDisplay === 'icons' }" :data-active="mbrDieMode?.targetId === row.targetId && mbrDieMode?.kind === 'consummate'"
                 :title="row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional')" @click="multiBlockReroll(row.targetId, 'consummate', row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle)" :src="skillIconUrl('Consummate Professional', effectiveIconStyle)!" :alt="row.consummateLabel ?? $t('hud.mbrRow.consummate')" />
                 <span v-if="!(settings.skillDisplay === 'icons' && skillIconUrl('Consummate Professional', effectiveIconStyle))" class="bp-opt-label">{{ row.consummateLabel ?? $t('hud.mbrRow.consummateProfessional') }}</span>
@@ -19617,7 +20146,7 @@ watch(() => [
                    Tarkin 8dde2dec); reuses the send via multiBlockRerollAllDice (source verbatim, zero new wire).
                    Owner 09-28 (Spec S8): the source's NAME is visible text too — the "ALL" badge alone did not
                    name the rule, only the icon and hover title did. -->
-              <button v-if="row.multiBlockDiceLabel" :disabled="mbrLatched" class="bp-opt bp-savage bp-opt-icon-label"
+              <button v-if="row.multiBlockDiceLabel" :disabled="mascotCardLocked('mbr')" class="bp-opt bp-savage bp-opt-icon-label"
                 :title="$t('hud.mbrRow.multiblockdicelabelRerollAllDice', { multiBlockDiceLabel: row.multiBlockDiceLabel })"
                 @click="multiBlockRerollAllDice(row.targetId, row.multiBlockDice, row.dice.length)">
                 <img v-if="settings.skillDisplay === 'icons' && skillIconUrl(row.multiBlockDice ?? row.multiBlockDiceLabel, effectiveIconStyle)"
@@ -19626,38 +20155,59 @@ watch(() => [
                 <span class="bp-opt-label">{{ row.multiBlockDiceLabel }}</span>
                 <span class="bp-sub">{{ $t('hud.mbrRow.all') }}</span>
               </button>
-              <button v-if="row.teamRR && !row.mascot && !row.namedTeam" :disabled="mbrLatched" class="bp-team" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+              <button v-if="row.teamRR && !row.mascot && !row.namedTeam" :disabled="mbrLatched" class="bp-team" data-rr-source="team" :title="$t('hud.mbrRow.teamReroll')" :aria-label="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
                 <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
                 <!-- #205: acting coach's team-reroll count beside the die icon (owner idiom). Display-only;
                      the multiBlockReroll('team') answer path is untouched. -->
                 <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                   :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
               </button>
-              <button v-if="row.mascot" :disabled="mbrLatched" class="bp-team bp-mascot" :title="$t('hud.mbrRow.teamMascotNoReroll')" @click="multiBlockReroll(row.targetId, 'mascot', row.dice.length)">
+              <!-- Owner 11-24: the ONE Mascot button of this target (its follow-up replaces this row's actions). -->
+              <button v-if="row.mascot" :disabled="mascotCardLocked('mbr')" class="bp-team bp-mascot" data-rr-source="mascot" :title="$t('hud.mbrRow.teamMascot')" :aria-label="$t('hud.mbrRow.teamMascot')"
+                @click="pickMascot(`mbr:${row.targetId}`, blockMascotFollowUp(row), () => multiBlockRerollNow(row.targetId, 'mascot', row.dice.length))">
                 <img :src="resourceIcon('team_mascot')" :alt="$t('hud.mbrRow.teamMascot')" />
-                <span class="bp-sub">{{ $t('hud.mbrRow.noTrr') }}</span>
               </button>
               <!-- Owner 11-25: the plain Team reroll beside the row's Mascot when TRR is offered too (upstream
                    DialogReRollBlockForTargetsProperties :84-90), AFTER it so the card's default control is unchanged. -->
-              <button v-if="row.mascot && row.trr && !row.namedTeam" :disabled="mbrLatched" class="bp-team bp-team-beside-mascot" :title="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
+              <button v-if="row.mascot && row.trr && !row.namedTeam" :disabled="mbrLatched" class="bp-team bp-team-beside-mascot" data-rr-source="team" :title="$t('hud.mbrRow.teamReroll')" :aria-label="$t('hud.mbrRow.teamReroll')" @click="multiBlockReroll(row.targetId, 'team', row.dice.length)">
                 <img :src="resourceIcon('re_roll')" :alt="$t('hud.mbrRow.teamReroll')" />
                 <span v-if="multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
                   :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
               </button>
               <!-- Current server: drive bonus / Leader rerolls for this target (and the Mascot falling back to them). -->
-              <span class="rr-badged" v-for="c in row.teamChoices" :key="c.source">
+              <span class="rr-badged" :class="{ 'rr-src': c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader' }" v-for="c in mascotFirstQuestion(row.teamChoices)" :key="c.source">
                 <!-- Owner 11-21: the direct drive bonus reroll looks exactly like the Team reroll button, plus the "i". -->
-                <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" :disabled="mbrLatched" class="bp-team"
-                  :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })"
-                  @click="mbrSubmit(() => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
+                <button v-if="c.source === 'Drive Bonus ReRoll' || c.badgeSkill === 'Leader'" :disabled="mascotCardLocked('mbr')" class="bp-team" data-rr-source="named"
+                  :title="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" :aria-label="rerollSourceName('named', c)"
+                  @click="mascotCardAction('mbr', () => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
                   <img :src="resourceIcon('re_roll')" :alt="$t('dialogs.reroll.text.teamRerollNamed', { name: c.badgeName ?? '' })" />
                 </button>
-                <button :disabled="mbrLatched" v-else class="bp-opt" :title="c.label"
-                  @click="mbrSubmit(() => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
+                <button :disabled="mascotCardLocked('mbr')" v-else class="bp-opt" :title="c.label"
+                  @click="mascotCardAction('mbr', () => gameStore.sendMultiBlockTeamChoice(row.targetId, c.source))">
                   <span class="bp-opt-label">{{ c.label }}</span>
                 </button>
                 <RerollInfoMarker v-if="c.info" :text="c.info" :tag="c.badgeTag" :icon="c.badgeSkill ? skillIconUrl(c.badgeSkill, effectiveIconStyle) : undefined" />
               </span>
+            </div>
+            <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+                 answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+            <!-- Owner 11-27: icon answers, as this row's first panel (see the block card's follow-up). -->
+            <div v-else-if="multiBlockDialogMine" class="mbr-actions mascot-ask mascot-ask-icons" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+              <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+              <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems(`mbr:${row.targetId}`)" :key="`mascot-${opt.source}`">
+                <button v-if="askIcon(opt)" class="bp-team" :class="{ 'bp-mascot': askIcon(opt) === 'mascot' }" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source"
+                  :disabled="mascotAskSent" :title="askIconTitle(opt, `mbr:${row.targetId}`)" :aria-label="askAria(opt)" @click="askPick(`mbr:${row.targetId}`, opt)">
+                  <img :src="rerollSourceArt(askIcon(opt)!)" alt="" />
+                  <span v-if="askIcon(opt) === 'team' && multiBlockTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                    :title="$t('hud.mbrRow.teamRerollsAvailableMultiblockteamreroll', { multiBlockTeamReRolls })">{{ multiBlockTeamReRolls }}</span>
+                </button>
+                <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick(`mbr:${row.targetId}`, opt)">
+                  <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+                </button>
+                <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
+              <button class="bp-opt mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
             </div>
           </div>
           <div v-if="multiBlockDialogMine && mbrDieMode" class="bp-hint">{{ mbrArmedHintText }}</div>
@@ -19693,20 +20243,59 @@ watch(() => [
           <div v-if="gameStore.state.reRollForTargets.loner" class="rr-prompt-line rr-loner-line">{{ $t('hud.thisPlayerHasLoner') }}</div>
           <div v-for="t in gameStore.state.reRollForTargets.targets" :key="t.targetId" class="mbr-row">
             <span class="mbr-name">{{ $t('hud.mbrRow.theRollAgainstTarget', { target: t.target }) }}<template v-if="t.minimumRoll != null">{{ $t('hud.mbrRow.needsMinimumroll', { minimumRoll: t.minimumRoll }) }}</template></span>
-            <div class="mbr-actions">
-              <span class="rr-badged" v-for="opt in gameStore.state.reRollForTargets.options" :key="opt.source">
-                <button class="bp-opt"
-                  :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })" @click="gameStore.resolveReRollForTargets(opt.source, t.targetId)">
-                  <span class="bp-opt-label">{{ opt.badgeSkill === 'Leader' && opt.source === 'Team ReRoll' ? $t('dialogs.reroll.text.teamReroll') : opt.label }}</span>
+            <!-- Owner 11-27 (icon-only reroll sources): every source is its icon control (Team Mascot art, Pro icon, the
+                 reroll die with its corner badge or the team reroll count); its name is the title and aria-label only. -->
+            <div v-if="!mascotAskOpen(`rft:${t.targetId}`)" class="mbr-actions rr-src-row">
+              <span class="rr-badged" :class="{ 'rr-src': !!rerollSourceIcon(opt) }" v-for="opt in reRollForTargetsFirstQuestion" :key="opt.source">
+                <!-- Owner 11-24: the ONE Team Mascot answer of this target opens the follow-up (skip rule: no fallback -> sent). -->
+                <button v-if="rerollSourceIcon(opt)" :class="rerollSourceIcon(opt) === 'pro' ? 'bp-opt bp-opt-icon-label' : ['bp-team', { 'bp-mascot': rerollSourceIcon(opt) === 'mascot' }]"
+                  :data-rr-source="rerollSourceIcon(opt)"
+                  :disabled="(opt.mascotFallback === 'none' || opt.proPart === 'none') && mascotCardLocked('rft')"
+                  :title="$t('hud.mbrRow.labelOnTarget', { label: rerollSourceName(rerollSourceIcon(opt)!, opt), target: t.target })"
+                  :aria-label="$t('hud.mbrRow.labelOnTarget', { label: rerollSourceName(rerollSourceIcon(opt)!, opt), target: t.target })"
+                  @click="clickReRollForTargetsOption(opt, t.targetId)">
+                  <img :src="rerollSourceArt(rerollSourceIcon(opt)!)" alt="" />
+                  <span v-if="rerollSourceIcon(opt) === 'team' && reRollForTargetsTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: reRollForTargetsTeamReRolls })">{{ reRollForTargetsTeamReRolls }}</span>
                 </button>
-                <!-- Owner 11-21: an answer spending a drive bonus / Leader reads as the Team reroll; the badge names it. -->
+                <button v-else class="bp-opt" :disabled="(opt.mascotFallback === 'none' || opt.proPart === 'none') && mascotCardLocked('rft')"
+                  :title="$t('hud.mbrRow.labelOnTarget', { label: opt.label, target: t.target })"
+                  @click="clickReRollForTargetsOption(opt, t.targetId)">
+                  <span class="bp-opt-label">{{ opt.label }}</span>
+                </button>
+                <!-- Owner 11-21: the drive bonus / Leader badge, on the die's corner. -->
                 <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
               </span>
             </div>
+            <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+                 answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+            <!-- Owner 11-27: the fallback answers are icon controls, "No reroll" the prohibited reroll die; Back stays text, same row. -->
+            <div v-else class="mbr-actions mascot-ask mascot-ask-icons rr-src-row" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+              <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+              <!-- Sol 11-27 (P2): each icon is named with the target ("Team reroll (Leader) on Blitzer1", as the first panel); the
+                   target line above stays; the badge comes BEFORE its answer, as before the icon change (Tab order). -->
+              <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems(`rft:${t.targetId}`)" :key="`mascot-${opt.source}`">
+                <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+                <button v-if="askIcon(opt)" :class="['bp-team', { 'bp-mascot': askIcon(opt) === 'mascot' }]" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askAriaFor(opt, `rft:${t.targetId}`)" :aria-label="askAriaFor(opt, `rft:${t.targetId}`)" @click="askPick(`rft:${t.targetId}`, opt)">
+                  <img :src="rerollSourceArt(askIcon(opt))" alt="" />
+                  <span v-if="askIcon(opt) === 'team' && reRollForTargetsTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls: reRollForTargetsTeamReRolls })">{{ reRollForTargetsTeamReRolls }}</span>
+                </button>
+                <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick(`rft:${t.targetId}`, opt)">
+                  <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+                </button>
+              </span>
+              <button class="bp-opt mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
+            </div>
           </div>
-          <div class="bp-actions">
-            <button class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rrDeclineChip.noReroll')"
-              @click="gameStore.resolveReRollForTargets(null)">{{ $t('hud.rrDeclineChip.noReroll') }}</button>
+          <div v-if="!reRollForTargetsMascotAskOpen" class="bp-actions">
+            <!-- Owner 11-27: the decline is the prohibited reroll die (as every "No reroll"); same handler, title, pad cancel. -->
+            <button class="rr-none rr-decline-chip" data-rr-none data-pad-cancel :title="$t('hud.rrDeclineChip.noReroll')"
+              :aria-label="$t('hud.rrDeclineChip.noReroll')" @click="gameStore.resolveReRollForTargets(null)">
+              <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+            </button>
           </div>
         </div>
 
@@ -19803,8 +20392,10 @@ watch(() => [
               <span v-for="(message, i) in gameStore.state.reRollPrompt.messages" :key="i">{{ message }}</span>
               <span v-if="gameStore.state.reRollPrompt.loner" class="rr-loner-line">{{ rerollLonerCopy }}</span>
             </div>
-            <div class="bp-actions" :class="{ 'pad-list': activeInput === 'controller' && gameStore.state.reRollPrompt.mine }">
-              <span class="rr-badged" v-for="opt in rerollOptionsShown" :key="opt.source">
+            <!-- Owner 11-24: the coach's own card shows ONE Team Mascot button (rerollFirstQuestion); its fallback is asked
+                 in the follow-up below. A spectator / opponent card is unchanged. -->
+            <div v-if="!mascotAskOpen('reroll')" class="bp-actions rr-src-row" :class="{ 'pad-list': activeInput === 'controller' && gameStore.state.reRollPrompt.mine }">
+              <span class="rr-badged" :class="{ 'rr-src': !!rerollSourceIcon(opt) }" v-for="opt in rerollFirstQuestion" :key="opt.source">
                 <!-- Owner 11-21: the direct drive bonus reroll (teamKind driveBonus) looks exactly like the Team reroll button;
                      its label already reads "Team reroll" and the "i" after it names the bonus. It still sends Drive Bonus ReRoll. -->
                 <!-- Owner 11-21: a Leader reroll (teamKind leader) too: the Team reroll art with the Leader icon badge. The cause of
@@ -19813,10 +20404,11 @@ watch(() => [
                 <!-- Owner 11-25: beside the Mascot buttons the plain Team reroll is NOT the controller default: the card keeps its
                      1.0.335 default (rerollBaseDefaultSource). Everywhere else it is, as before. -->
                 <button v-if="(opt.source === 'Team ReRoll' && !opt.teamKind) || !!opt.teamKind" class="bp-team"
-                  :data-pad-primary="rerollBaseDefaultSource === null ? '' : undefined"
+                  :data-pad-primary="opt === rerollPoolDefault ? '' : undefined" :data-rr-source="opt.teamKind ? 'named' : 'team'"
                   :title="opt.teamKind ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName ?? '' }) : opt.label"
+                  :aria-label="rerollSourceName(opt.teamKind ? 'named' : 'team', opt)"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
-                  @click="gameStore.resolveReRoll(opt.source)">
+                  @click="clickRerollOption(opt)">
                   <img :src="resourceIcon('re_roll')" :alt="opt.teamKind ? $t('dialogs.reroll.text.teamRerollNamed', { name: opt.badgeName ?? '' }) : opt.label" />
                   <!-- #205: the count numeral rides the die icon (owner idiom), identical to the block chooser. Not on a drive
                        bonus button: that reroll does not come out of the team reroll count. -->
@@ -19826,15 +20418,17 @@ watch(() => [
                 <!-- Owner 09-28 (Spec S8): the source's NAME is always visible text — an icon match used to hide it
                      entirely (the label existed only as a hover title), the same gap that hid Lord of Chaos. -->
                 <button v-else class="bp-opt" :class="{ 'bp-opt-icon-label': proTrrBlendSource(opt.source) || !!rerollOptIcon(opt), 'bp-opt-blend': proTrrBlendSource(opt.source) }"
-                  :aria-label="proTrrBlendSource(opt.source) ? opt.label : undefined"
+                  :aria-label="proTrrBlendSource(opt.source) ? opt.label : rerollSourceIcon(opt) && rerollOptIcon(opt) ? rerollSourceName(rerollSourceIcon(opt)!, opt) : undefined"
+                  :data-rr-source="rerollOptIcon(opt) ? rerollSourceIcon(opt) ?? undefined : undefined"
                   :data-pad-key="opt.source === rerollPadYSource ? 'Y' : undefined"
+                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: rerollOptLabel(opt) })"
                   :data-pad-primary="opt.source === rerollBaseDefaultSource ? '' : undefined"
-                  :title="opt.response === 'primal-savagery' || opt.role === 'modifier' ? $t('hud.rerollBar.useLabel', { label: opt.label }) : $t('hud.rerollBar.rerollWithLabel', { label: opt.label })"
                   :data-chosen="gameStore.state.reRollPrompt.chosen === opt.source"
-                  @click="gameStore.resolveReRoll(opt.source)">
+                  :disabled="(isMascotAlone(opt) || isProAlone(opt)) && mascotCardLocked('reroll')"
+                  @click="clickRerollOption(opt)">
                   <!-- Owner 11-21: Pro, then Team reroll = the blended Pro / Team reroll icon (the Pro option's art + the Team reroll art). -->
                   <ProTrrBlendIcon v-if="proTrrBlendSource(opt.source)" :pro-src="skillIconUrl('Pro', effectiveIconStyle)" :trr-src="resourceIcon('re_roll')" />
-                  <img v-else-if="rerollOptIcon(opt)" :src="rerollOptIcon(opt)!" :alt="opt.label" />
+                  <img v-else-if="rerollOptIcon(opt)" :src="rerollOptIcon(opt)!" :alt="rerollOptLabel(opt)" />
                   <!-- Owner 11-10 (supersedes S8 for icon buttons): a reroll source with an icon shows the icon only; its name stays in
                        the tooltip and the icon alt. A source without an icon keeps its visible name. -->
                   <span v-if="!proTrrBlendSource(opt.source) && !rerollOptIcon(opt)" class="bp-opt-label">{{ opt.label }}</span>
@@ -19850,8 +20444,38 @@ watch(() => [
                 </button>
                 <RerollInfoMarker v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
               </span>
-              <button v-if="gameStore.state.reRollPrompt.mine" class="bp-opt rr-decline-chip" data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
-                @click="gameStore.resolveReRoll(null)">✕</button>
+              <!-- Owner 11-27: the decline is the prohibited reroll die (as every "No reroll"); same handler, title, pad cancel. -->
+              <button v-if="gameStore.state.reRollPrompt.mine" class="rr-none rr-decline-chip" data-rr-none data-pad-cancel :title="$t('hud.rerollBar.noReroll')"
+                :aria-label="$t('hud.rerollBar.noReroll')" @click="gameStore.resolveReRoll(null)">
+                <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+              </button>
+            </div>
+            <!-- Owner 11-24: the Mascot follow-up (local; nothing is sent until a pick). Upstream DialogReRollFallback: one
+                 answer per fallback (drive bonus, Leader, Team reroll), then "No reroll" (the Mascot alone). Back = first question. -->
+            <!-- Owner 11-27: the first panel is icon controls, so the follow-up's fallback answers are those same controls (the
+                 Team Mascot icon button, the reroll die with its corner badge or count); "No reroll" is the prohibited reroll die
+                 (owner 11-27) and Back stays text. "No reroll" here sends the Mascot / Pro alone; the first panel's decline, drawn
+                 the same, declines the reroll altogether (each panel has exactly one, so they never sit side by side). -->
+            <div v-else class="bp-actions mascot-ask mascot-ask-icons rr-src-row" :key="`mascot-ask-${askLevel()}`" data-testid="mascot-follow-up">
+              <div class="rr-prompt-line rr-question mascot-ask-question">{{ askQuestion() }}</div>
+              <span class="rr-badged rr-src mascot-ask-answer" v-for="opt in askItems('reroll')" :key="`mascot-${opt.source}`">
+                <button v-if="askIcon(opt) === 'mascot'" class="bp-opt bp-opt-icon-label" data-rr-source="mascot" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askIconTitle(opt, 'reroll')" :aria-label="askAria(opt)" @click="askPick('reroll', opt)">
+                  <img :src="resourceIcon('team_mascot')" alt="" />
+                </button>
+                <button v-else-if="askIcon(opt)" class="bp-team" :data-rr-source="askIcon(opt)" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askIconTitle(opt, 'reroll')" :aria-label="askAria(opt)" @click="askPick('reroll', opt)">
+                  <img :src="resourceIcon('re_roll')" alt="" />
+                  <span v-if="askIcon(opt) === 'team' && rerollPromptTeamReRolls !== null" class="rr-trr-num bp-trr-num"
+                    :title="$t('hud.rerollBar.teamRerollsAvailableRerollpromptteamrero', { rerollPromptTeamReRolls })">{{ rerollPromptTeamReRolls }}</span>
+                </button>
+                <button v-else class="rr-none" data-rr-none :data-pad-primary="askNone(opt) ? '' : undefined" :data-mascot-answer="opt.source" :disabled="mascotAskSent"
+                  :title="askLabel(opt, null)" :aria-label="askLabel(opt, null)" @click="askPick('reroll', opt)">
+                  <NoRerollIcon :trr-src="resourceIcon('re_roll')" />
+                </button>
+                <RerollInfoMarker escape-passes v-if="opt.info" :text="opt.info" :tag="opt.badgeTag" :icon="opt.badgeSkill ? skillIconUrl(opt.badgeSkill, effectiveIconStyle) : undefined" />
+              </span>
+              <button class="bp-opt mascot-ask-back mascot-ask-text" data-pad-cancel data-mascot-back :title="$t('hud.back')" @click="closeMascotAsk()">{{ $t('hud.back') }}</button>
             </div>
           </div>
         </template>
@@ -24790,6 +25414,79 @@ watch(() => [
 .rr-combo { padding-left: 10px; opacity: 0.85; }
 .rr-combo::before { content: '\2022\00a0'; }
 .bp-opt-target { margin-left: 6px; opacity: 0.8; font-size: 0.9em; }
+/* Owner 11-24: the Mascot follow-up: its question on its own line above the answers and Back. */
+.mascot-ask { flex-wrap: wrap; }
+.mascot-ask-question { flex-basis: 100%; text-align: center; }
+.mascot-ask .bp-opt-label { max-width: none; white-space: nowrap; }
+/* Owner 11-27: an icon follow-up (block card, Multiple Block rows) keeps the first panel's corner badge on its icons; its
+   answers sit on one row, "No reroll" and Back as compact text buttons after the icons. */
+.mascot-ask.mascot-ask-icons { align-items: center; }
+.mascot-ask.mascot-ask-icons .mascot-ask-text { padding: 3px 8px; min-height: 0; align-self: center; }
+/* Owner 11-27 ("No reroll should just be the TRR with the prohibited symbol around it"): every "No reroll" answer and
+   every first-panel decline is the prohibited reroll die (NoRerollIcon), drawn as the reroll die controls are (.bp-team):
+   no box, the same art size per card (the sizes beside each .bp-team img rule), centred on the row. */
+.rr-none {
+  background: transparent; border: none; cursor: pointer; padding: 2px; position: relative; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; align-self: center; min-width: 0;
+}
+.rr-none:disabled { cursor: default; }
+/* Its art size per card = that card's reroll die: 46 px on the reroll card, 44 px on the block card, the Multiple Block
+   rows, the bloodlust, Foul Appearance / Dauntless and regeneration cards (37 px elsewhere, NoRerollIcon's default). */
+.block-partial.reroll-bar .bp-actions .rr-none .no-rr { width: 46px; height: 46px; }
+.block-partial:not(.reroll-bar) .bp-actions .rr-none .no-rr,
+.multi-block-resolution .rr-none .no-rr,
+.bloodlust-card .rr-none .no-rr,
+.select-skill-card .rr-none .no-rr { width: 44px; height: 44px; }
+/* The reroll card's text-decline padding does not apply to the icon decline. */
+.block-partial.reroll-bar .bp-actions .rr-decline-chip.rr-none { padding: 2px; font-size: inherit; }
+/* Owner 11-27 ("no text describing the reroll type. It's just the icon and the subicon."; "the choices must be CENTERED
+   in the panel"): every reroll source is an icon control (.rr-src). Its corner badge (Leader icon / drive bonus tag) sits
+   ON the icon's corner INSIDE the control's box, so the box is the icon's width: a badge never widens the row, never
+   overhangs a neighbour and never pushes the row off-centre. Every choices row (first panel and follow-up, every reroll
+   card) is centred in its card, each wrapped line too. */
+.rr-badged.rr-src > .rr-info { top: 1px; right: 1px; }
+.rr-badged.rr-src { flex: none; }
+.rr-badged.rr-src > button { flex: none; }
+/* Sol 11-27 (P2): in the controller list (.pad-list stretches every answer box across the card) an icon control's box
+   stays the icon's size, centred, so its corner badge rides the icon, not the row's far edge. */
+.bp-actions.pad-list > .rr-badged.rr-src { display: inline-flex; align-self: center; width: fit-content; }
+.bp-actions.pad-list > .rr-badged.rr-src > button { flex: none; justify-content: center; }
+.block-partial .bp-actions,
+.mbr-actions,
+.mascot-ask,
+.rr-src-row { justify-content: center; }
+.block-partial > .bp-actions { align-self: stretch; }
+/* The bloodlust, Foul Appearance / Dauntless and regeneration cards take the block card's icon sizes (44 px art, the Pro
+   icon 32 px in a 44 px box) and its count chip. */
+.bloodlust-card .rr-src-row .bp-team img,
+.reroll-for-targets .rr-src-row .bp-team img,
+.select-skill-card .rr-src-row .bp-team img { width: 44px; height: 44px; }
+.bloodlust-card .rr-src-row .bp-opt-icon-label,
+.reroll-for-targets .rr-src-row .bp-opt-icon-label,
+.select-skill-card .rr-src-row .bp-opt-icon-label { padding: 5px; }
+.bloodlust-card .rr-src-row .bp-opt-icon-label img,
+.reroll-for-targets .rr-src-row .bp-opt-icon-label img,
+.select-skill-card .rr-src-row .bp-opt-icon-label img { width: 32px; height: 32px; }
+.bloodlust-card .rr-src-row .bp-trr-num,
+.reroll-for-targets .rr-src-row .bp-trr-num,
+.select-skill-card .rr-src-row .bp-trr-num {
+  right: -3px; bottom: -3px; min-width: 16px; font-size: max(var(--ui-min-text-size, 12px), 0.8rem); line-height: 1.35;
+}
+.skill-select-list > .rr-badged.rr-src { display: inline-flex; }
+/* Regeneration: the player's name heads that player's icons; with several players each starts its own centred line. */
+.regen-player { align-self: center; font-weight: 700; color: var(--ui-text); }
+.regen-break { flex-basis: 100%; height: 0; }
+/* Sol 11-27: in a follow-up the player's name is its own centred line under the question, so the answers, "No reroll"
+   and Back keep one row. */
+.mascot-ask > .regen-player { flex-basis: 100%; text-align: center; }
+/* Multiple Block: a row's follow-up takes its own centred line under the target's name and dice (the card's width). */
+.multi-block-resolution:not(.reroll-for-targets) .mbr-row { flex-wrap: wrap; justify-content: center; }
+.multi-block-resolution:not(.reroll-for-targets) .mbr-row:has(> .mascot-ask) { align-self: stretch; row-gap: 6px; }
+.multi-block-resolution:not(.reroll-for-targets) .mbr-row > .mbr-actions.mascot-ask { flex-basis: 100%; }
+/* Foul Appearance / Dauntless: the target line, then its choices centred under it. */
+.reroll-for-targets .mbr-row { flex-direction: column; gap: 6px; align-self: stretch; }
+.reroll-for-targets .mbr-name { min-width: 0; text-align: center; }
+.reroll-for-targets .mbr-actions { align-self: stretch; }
 .rr-ctx-label { font-weight: 800; font-size: max(var(--ui-min-primary-text-size, 16px), 0.85rem); color: var(--ui-text); }
 .rr-question { color: var(--ui-heading); font-weight: 800; }
 .rr-context-spectator { flex-direction: row; align-items: center; padding-bottom: 8px; }
@@ -24870,6 +25567,9 @@ watch(() => [
      anchor clamp (trackBlockReroll) keeps the panel's POSITION on-screen; this keeps its SIZE from ever
      exceeding the viewport regardless of anchor. */
   max-width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
+  /* Rig 11-27: anchored near the right edge, the shrink-to-fit width was only the room left of the anchor, so the card
+     squeezed and wrapped (the follow-up question on three lines, its answers on extra rows). Its own width, capped above. */
+  width: max-content;
 }
 /* Owner 09-08: die buttons grown linearly 50 -> 60 px (gap 6 -> 7 px, art overscale and 3D cube fill unchanged). */
 .bp-dice { position: relative; isolation: isolate; display: flex; gap: 7px; }
@@ -25007,6 +25707,12 @@ watch(() => [
   border: 1px solid var(--ui-accent);
   border-radius: 8px;
   box-shadow: 0 7px 20px #000c, inset 0 1px 0 color-mix(in srgb, var(--ui-accent) 28%, transparent);
+  /* Sol 11-27 (P2): the block card's size safety net. High UI zoom / text size or a long localised follow-up can make the
+     card taller than the pitch; it is then pinned at the top edge (the placement clamp) and scrolls inside, so every
+     answer stays reachable (.skill-choice clips its overflow otherwise). The cap is on the content box, so it also
+     takes off the card's own 22px of padding and 2px of border: the whole card stays 16px inside the pitch. */
+  max-height: calc(100% - 40px);
+  overflow: auto;
 }
 .bloodlust-card .bl-title,
 .bloodlust-card > .sc-title {
@@ -25034,6 +25740,10 @@ watch(() => [
 /* Owner W37 mock: line-3 "Reroll?" + source buttons + ✕ share one wrapping row (rr-prompt-line's flex
    center gives the text/buttons alignment; this adds the wrap + gap the button row needs). */
 .bloodlust-card .bl-reroll-row { flex-wrap: wrap; gap: 6px; max-width: 240px; }
+/* Owner 11-27: the reroll beat's choices are icons on ONE centred row (first panel and follow-up); the row may use the
+   card's full width (the 240 px cap made the follow-up stack). The decision beat keeps its cap. */
+.bloodlust-card .bl-opts.bl-opts-reroll { max-width: none; width: 100%; flex-direction: column; align-items: stretch; }
+.bloodlust-card .bl-opts-reroll .bl-reroll-row { max-width: none; width: 100%; }
 .bl-opt {
   display: flex; align-items: center; justify-content: center; gap: 4px;
   background: var(--ui-surface); color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 5px;
